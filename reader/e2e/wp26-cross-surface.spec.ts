@@ -358,7 +358,15 @@ test('Issue 141 live thought deletion confirms from the keyboard and sends one d
   await acceptPressPromise
 
   await expect(page.getByText('Keep this captured idea.')).not.toBeVisible()
-  await expect(page.getByRole('button', { name: '当前' })).toBeFocused()
+  // 查 document.activeElement 而不是 toBeFocused()：确认原生 dialog 之后，
+  // chromium-headless-shell 不会把页面重新标记为 active，toBeFocused() 会以
+  // "Received: inactive" 失败，而完整 Chrome 不会。CI runner 上没有
+  // /usr/bin/google-chrome（见 playwright.config.ts 的 executablePath 回退），
+  // 于是同一个断言本地过、CI 挂。activeElement 在两种构建里都正确维护，
+  // 断言的语义——删除确认后焦点回到「当前」按钮——保持不变。
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim() ?? ''))
+    .toBe('当前')
   await expect.poll(() => backend.calls.filter((call) => call.path === '/api/annotations/ops').length).toBe(1)
   expect(backend.calls.find((call) => call.path === '/api/annotations/ops')?.body).toMatchObject({
     ops: [expect.objectContaining({
