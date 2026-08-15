@@ -30,7 +30,7 @@ jobs:
       image: ${{ steps.release.outputs.image }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -136,7 +136,7 @@ jobs:
       CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -403,7 +403,7 @@ jobs:
       CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Download candidate assets
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
@@ -462,7 +462,7 @@ jobs:
       CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Login to GHCR
         env:
@@ -489,7 +489,7 @@ jobs:
       CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Publish the complete draft
         env:
@@ -513,7 +513,7 @@ jobs:
       CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
     steps:
       - name: Checkout all Core tags
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
