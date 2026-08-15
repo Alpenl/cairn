@@ -6,8 +6,18 @@ on:
     tags:
       - 'v*.*.*'
 
+# 必须是下面每个 job 权限的并集：job 可以收窄 workflow 级授权，但永远不能扩大，
+# 超出会让 GitHub 在启动时直接拒绝整个文件（startup_failure），而不是在越权的那个
+# job 上报错。codeql.yml 与 trivy.yml 出于同样的原因各自声明了并集。
+#
+# 各 job 的来源：codeql 要 actions:read + security-events:write；candidate、
+# trivy-images、promote-channels 要 packages:write；prepare-draft 与
+# publish-release 要 contents:write；其余只要 contents:read。
 permissions:
-  contents: read
+  actions: read
+  contents: write
+  packages: write
+  security-events: write
 
 # All Core releases share one non-cancelling promotion queue. A newer tag can
 # arrive while an older candidate is being verified, but mutable channels are
@@ -113,6 +123,9 @@ jobs:
     needs: validate
     permissions:
       contents: read
+      # image-scan 在只做源码扫描时被跳过，但调用方仍要覆盖被调用 workflow 里
+      # 声明过的权限，否则调度阶段就可能因为无法满足而拒绝。
+      packages: read
     uses: ./.github/workflows/trivy.yml
 
   candidate:
