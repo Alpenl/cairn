@@ -7,7 +7,7 @@ COMMIT="${COMMIT:-}"
 # pgvector/pgvector:pg16 (stock postgres:16 + pgvector extension) is required
 # since the Phase 5 (v3.0) migration runs CREATE EXTENSION vector. Keep in
 # sync with test/dbintegration/postgres.go and the migration smoke script.
-pg_container="$(docker run -d --rm --name webtag-app-smoke-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=webtag -p 5432 pgvector/pgvector:pg16)"
+pg_container="$(docker run -d --name webtag-app-smoke-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=webtag -p 5432 pgvector/pgvector:pg16)"
 
 cleanup() {
 	docker rm -f webtag-app-smoke >/dev/null 2>&1 || true
@@ -23,7 +23,7 @@ done
 
 DATABASE_URL="postgres://postgres:postgres@127.0.0.1:${pg_port}/webtag?sslmode=disable" make migrate-fresh
 
-app_container="$(docker run -d --rm \
+app_container="$(docker run -d \
 	--name webtag-app-smoke \
 	--add-host=host.docker.internal:host-gateway \
 	-p 127.0.0.1::8000 \
@@ -33,6 +33,19 @@ app_container="$(docker run -d --rm \
 	-e AI_MODEL=smoke-model \
 	webtag:${VERSION})"
 app_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8000/tcp") 0).HostPort}}' "$app_container")"
+
+# 失败时把两个容器的状态与日志一次性打出来。容器可能已经退出，
+# docker ps 看不到，但 docker inspect / logs 仍然可用（前提是没有 --rm）。
+dump_smoke_diagnostics() {
+	echo "--- docker ps -a ---" >&2
+	docker ps -a >&2 || true
+	for c in webtag-app-smoke webtag-app-smoke-pg; do
+		echo "--- inspect ${c} ---" >&2
+		docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}} err={{.State.Error}}' "$c" >&2 || true
+		echo "--- logs ${c} ---" >&2
+		docker logs "$c" >&2 || true
+	done
+}
 
 wait_for_http() {
 	path="$1"
@@ -46,7 +59,7 @@ wait_for_http() {
 		sleep 1
 	done
 
-	docker logs webtag-app-smoke >&2 || true
+	dump_smoke_diagnostics
 	echo "expected HTTP ${expected} from ${path}" >&2
 	exit 1
 }
@@ -56,13 +69,13 @@ wait_for_http /ready 200
 
 health_body="$(curl -fsS "http://127.0.0.1:${app_port}/health")"
 if ! printf '%s' "$health_body" | grep -Fq "\"version\":\"${VERSION}\""; then
-	docker logs webtag-app-smoke >&2 || true
+	dump_smoke_diagnostics
 	echo "expected /health version to equal '${VERSION}'" >&2
 	printf 'actual: %s\n' "$health_body" >&2
 	exit 1
 fi
 if [ -n "$COMMIT" ] && ! printf '%s' "$health_body" | grep -Fq "\"commit\":\"${COMMIT}\""; then
-	docker logs webtag-app-smoke >&2 || true
+	dump_smoke_diagnostics
 	echo "expected /health commit to equal '${COMMIT}'" >&2
 	printf 'actual: %s\n' "$health_body" >&2
 	exit 1
@@ -76,7 +89,7 @@ assert_status() {
 	expected="$2"
 	code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${app_port}${path}" || true)"
 	if [ "$code" != "$expected" ]; then
-		docker logs webtag-app-smoke >&2 || true
+		dump_smoke_diagnostics
 		echo "expected HTTP ${expected} from ${path}, got ${code}" >&2
 		exit 1
 	fi
@@ -87,7 +100,7 @@ assert_body_contains() {
 	needle="$2"
 	body="$(curl -s "http://127.0.0.1:${app_port}${path}" || true)"
 	if ! printf '%s' "$body" | grep -q "$needle"; then
-		docker logs webtag-app-smoke >&2 || true
+		dump_smoke_diagnostics
 		echo "expected ${path} body to contain '${needle}'" >&2
 		printf 'actual (first 400 chars): %s\n' "$(printf '%s' "$body" | head -c 400)" >&2
 		exit 1
@@ -107,7 +120,7 @@ assert_body_contains /reader/ '/reader/assets/'
 reader_html="$(curl -fsS "http://127.0.0.1:${app_port}/reader/")"
 reader_js_path="$(printf '%s' "$reader_html" | grep -oE "/reader/assets/[^\"'[:space:]<>]+\\.js" | head -n 1)"
 if [ -z "$reader_js_path" ]; then
-	docker logs webtag-app-smoke >&2 || true
+	dump_smoke_diagnostics
 	echo "expected /reader/ to reference a /reader/assets/*.js file" >&2
 	printf 'actual (first 400 chars): %s\n' "$(printf '%s' "$reader_html" | head -c 400)" >&2
 	exit 1

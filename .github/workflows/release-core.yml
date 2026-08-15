@@ -65,11 +65,13 @@ jobs:
           build_time="$(git show -s --format=%cI "$commit")"
           build_epoch="$(git show -s --format=%ct "$commit")"
           image="$(printf 'ghcr.io/%s/cairn' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-          echo "build_time=$build_time" >> "$GITHUB_OUTPUT"
-          echo "build_epoch=$build_epoch" >> "$GITHUB_OUTPUT"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$version"
+            echo "commit=$commit"
+            echo "build_time=$build_time"
+            echo "build_epoch=$build_epoch"
+            echo "image=$image"
+          } >> "$GITHUB_OUTPUT"
 
   go:
     needs: validate
@@ -254,12 +256,14 @@ jobs:
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           done
 
-          echo "full_index_digest=$FULL_INDEX_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "full_amd64_digest=$full_amd64" >> "$GITHUB_OUTPUT"
-          echo "full_arm64_digest=$full_arm64" >> "$GITHUB_OUTPUT"
-          echo "slim_index_digest=$SLIM_INDEX_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "slim_amd64_digest=$slim_amd64" >> "$GITHUB_OUTPUT"
-          echo "slim_arm64_digest=$slim_arm64" >> "$GITHUB_OUTPUT"
+          {
+            echo "full_index_digest=$FULL_INDEX_DIGEST"
+            echo "full_amd64_digest=$full_amd64"
+            echo "full_arm64_digest=$full_arm64"
+            echo "slim_index_digest=$SLIM_INDEX_DIGEST"
+            echo "slim_amd64_digest=$slim_amd64"
+            echo "slim_arm64_digest=$slim_arm64"
+          } >> "$GITHUB_OUTPUT"
 
           jq -n \
             --arg commit "$COMMIT" \
