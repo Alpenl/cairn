@@ -45,6 +45,16 @@ func (v Vector) String() string {
 
 // Parse parses a string representation of a vector.
 func (v *Vector) Parse(s string) error {
+	// TODO check brackets in 0.5.0
+	if len(s) < 2 {
+		return fmt.Errorf("malformed vector literal")
+	}
+
+	if len(s) == 2 {
+		v.vec = []float32{}
+		return nil
+	}
+
 	sp := strings.Split(s[1:len(s)-1], ",")
 	v.vec = make([]float32, 0, len(sp))
 	for i := 0; i < len(sp); i++ {
@@ -71,10 +81,22 @@ func (v Vector) EncodeBinary(buf []byte) (newBuf []byte, err error) {
 
 // DecodeBinary decodes a binary representation of a vector.
 func (v *Vector) DecodeBinary(buf []byte) error {
+	if len(buf) < 4 {
+		return fmt.Errorf("invalid length")
+	}
+
 	dim := int(binary.BigEndian.Uint16(buf[0:2]))
+	if dim < 0 {
+		return fmt.Errorf("vector cannot have negative dimensions")
+	}
+
 	unused := binary.BigEndian.Uint16(buf[2:4])
 	if unused != 0 {
 		return fmt.Errorf("expected unused to be 0")
+	}
+
+	if (len(buf)-4)/4 != dim || len(buf)%4 != 0 {
+		return fmt.Errorf("invalid length")
 	}
 
 	v.vec = make([]float32, 0, dim)

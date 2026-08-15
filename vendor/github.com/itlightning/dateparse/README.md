@@ -1,4 +1,4 @@
-Go Date Parser
+Go Date Parser 
 ---------------------------
 [![GoDoc](https://godoc.org/github.com/itlightning/dateparse?status.svg)](http://godoc.org/github.com/itlightning/dateparse)
 ![Test Status](https://github.com/itlightning/dateparse/actions/workflows/test.yaml/badge.svg)
@@ -32,7 +32,7 @@ t, err := dateparse.ParseAny("3/1/2014")
 
 // Parse Strict, error on ambigous mm/dd vs dd/mm dates
 t, err := dateparse.ParseStrict("3/1/2014")
-> returns error
+> returns error 
 
 // Return a string that represents the layout to parse the given date-time.
 // For certain highly complex date formats, ParseFormat's return value may
@@ -64,7 +64,7 @@ The location that your server is configured to affects the results! See example 
 Important points to understand:
 * If you are parsing a date string that does *not* reference a timezone, if you use `Parse` it will assume UTC, or for `ParseIn` it will use the specified location.
 * If you are parsing a date string that *does* reference a timezone and *does* specify an explicit offset (e.g., `2012-08-03 13:31:59 -0600 MST`), then it will return a time object with a location that represents a fixed timezone that has the given offset and name (it will not validate that the timezone abbreviation specified in the date string is a potential valid match for the given offset).
-  * This can lead to some potentially unexpected results, for example consider the date string `2012-08-03 18:31:59.000+00:00 PST` -- this string has an explicit offset of `+00:00` (UTC), and so the returned time will have a location with a zero offset (18:31:59.000 UTC) even though the name of the fixed time zone associated with the returned time is `PST`. Essentially, it will always prioritize an explicit offset as accurate over an explicit
+  * This can lead to some potentially unexpected results, for example consider the date string `2012-08-03 18:31:59.000+00:00 PST` -- this string has an explicit offset of `+00:00` (UTC), and so the returned time will have a location with a zero offset (18:31:59.000 UTC) even though the name of the fixed time zone associated with the returned time is `PST`. Essentially, it will always prioritize an explicit offset as accurate over an explicit 
 * If you are parsing a date string that *does* reference a timezone but *without* an explicit offset (e.g., `2012-08-03 14:32:59 MST`), then it will only recognize and map the timezone name and add an offset if you are using `ParseIn` and specify a location that knows about the given time zone abbreviation (e.g., in this example, you would need to pass the `America/Denver` location and it will recognize the `MST` and `MDT` time zone names)
   * If a time zone abbreviation is recognized based on the passed location, then it will use the appropriate offset, and make any appropriate adjustment for daylight saving time (e.g., in the above example, the parsed time would actually contain a zone name of `MDT` because the date is within the range when daylight savings time is active).
   * If a time zone abbreviation is *not* recognized for the passed location, then it will create a fake time zone with a *zero* offset but with the specified name. This requires further processing if you are trying to actually get the correct absolute time in the UTC time zone.

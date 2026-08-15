@@ -43,13 +43,15 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	// semconv 选 v1.40.0：与 resource.Default() 在 otel SDK v1.43.0
-	// 内部使用的 schema URL 对齐，避免 resource.Merge 报
-	// "conflicting Schema URL" 错。Task 原计划用 v1.30.0，但 vendor 已
-	// 经间接拉到 v1.40.0，且 v1.40.0 包含同名的 ServiceName /
-	// ServiceVersion / ServiceInstanceID / DeploymentEnvironmentName，
-	// 升级是平滑的；选 v1.30.0 反而会引入 schema 冲突。
-	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
+	// semconv 必须与 resource.Default() 使用的 schema URL 完全一致，否则
+	// resource.Merge 会直接报 "conflicting Schema URL" 而不是自行取舍。
+	// 这一版跟随 otel SDK 升级从 v1.40.0 移到 v1.43.0——SDK 一升，
+	// resource.Default() 的 schema 就跟着走，semconv 落后就会让链路追踪
+	// 初始化整体失败。
+	//
+	// v1.43.0 起不再提供 DeploymentEnvironmentName() 这个 helper，只保留
+	// DeploymentEnvironmentNameKey，下面相应改用 Key.String()。
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -152,7 +154,7 @@ func InitTracer(ctx context.Context, opts InitTracerOptions) (TracerShutdown, er
 			semconv.ServiceName(serviceName),
 			semconv.ServiceVersion(serviceVersion),
 			semconv.ServiceInstanceID(hostname),
-			semconv.DeploymentEnvironmentName(appEnv),
+			semconv.DeploymentEnvironmentNameKey.String(appEnv),
 		),
 	)
 	if err != nil {

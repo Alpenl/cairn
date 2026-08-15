@@ -7,6 +7,7 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -21,10 +22,13 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, rivercommon.HotOperationTimeout)
-	defer cancel()
+	return timeoututil.WithTimeoutV(ctx, rivercommon.HotOperationTimeout, "StandardPilot.JobGetAvailable", func(ctx context.Context) ([]*rivertype.JobRow, error) {
+		return exec.JobGetAvailable(ctx, params)
+	})
+}
 
-	return exec.JobGetAvailable(ctx, params)
+func (p *StandardPilot) JobGetStuck(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
+	return exec.JobGetStuck(ctx, params)
 }
 
 func (p *StandardPilot) JobCancel(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
@@ -37,6 +41,10 @@ func (p *StandardPilot) JobInsertMany(
 	params *riverdriver.JobInsertFastManyParams,
 ) ([]*riverdriver.JobInsertFastResult, error) {
 	return exec.JobInsertFastMany(ctx, params)
+}
+
+func (p *StandardPilot) JobRescueMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
+	return exec.JobRescueMany(ctx, params)
 }
 
 func (p *StandardPilot) JobRetry(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRetryParams) (*rivertype.JobRow, error) {
