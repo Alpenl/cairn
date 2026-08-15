@@ -1,0 +1,42 @@
+# Cairn __VERSION__
+
+单安装、自托管的阅读与知识管理系统。从浏览器扩展、Android、iOS 或 HTTP API 接收链接与页面内容，用 PostgreSQL 持久化，经正文提取与 AI 分析完成整理，再由内嵌 Reader 提供阅读、搜索、批注、订阅源、待办与归档。
+
+一个服务加一个数据库代表一个安装、一个数据所有者。不包含多租户、账号开通、商业套餐、付费配额或 OIDC。
+
+## 下载哪个
+
+| 你想做的事 | 用这个 |
+| --- | --- |
+| 部署服务端（推荐，含视频解析） | 容器镜像 `ghcr.io/alpenl/cairn:__VERSION__` |
+| 部署服务端（不需要视频解析，体积更小） | 容器镜像 `ghcr.io/alpenl/cairn:__VERSION__-slim` |
+| 不用容器，直接跑二进制 | `cairn___VERSION___linux_amd64.tar.gz` 或 `_arm64.tar.gz` |
+| 在 Chrome / Edge 里采集网页 | `cairn-extension-chrome-__VERSION__.zip` |
+| 在 Firefox 里采集网页 | `cairn-extension-firefox-__VERSION__.zip` |
+| 在 Android 上用系统分享收藏 | `cairn-android-__VERSION__-debug.apk` |
+
+iOS 应用本次不随版本发布。
+
+## 安装要点
+
+**服务端。** 先用镜像里的 `/app/migrate` 对空库执行迁移，再启动 `/app/webtag`。至少需要设置 `DATABASE_URL`、`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL`、`EXTENSION_API_TOKEN`、`SESSION_SIGNING_KEY`，以及非开发环境必填的 `CURSOR_SIGNING_KEY`。完整配置见仓库内 `.env.example`。服务只读取进程环境，不会自动加载 `.env` 文件。
+
+公开 API 默认失败关闭：客户端需携带 `Authorization: Bearer <EXTENSION_API_TOKEN>`。只有在可信内网、或前置代理已完成访问控制时，才可显式设置 `PUBLIC_API_OPEN=true`。
+
+**浏览器扩展。** 解压后在扩展管理页用「加载已解压的扩展程序」安装，然后在设置页填入后端地址与访问令牌。扩展以 GPL-3.0-only 分发（详见包内 LICENSE 与 NOTICE），与主仓库的 MIT 不同。
+
+**Android。** 这是用 Android 默认调试密钥签名的 debug 包，可直接侧载安装，但**不是**商店发布包：它与正式签名的应用互不覆盖升级，安装前需要允许「安装未知来源应用」。安装后在应用内填入后端地址与访问令牌，之后即可从任意应用的系统分享菜单收藏链接。
+
+## 校验产物
+
+`SHA256SUMS` 覆盖本页除它自身以外的全部文件：
+
+```bash
+sha256sum --check SHA256SUMS
+```
+
+容器镜像请按不可变 digest 部署，不要依赖可变的 `latest` / `full` / `slim` 频道标签。各变体与各架构的精确 digest 见 `IMAGE-DIGESTS.json`；`CHANNEL-ROLLBACK.json` 记录了本次发布之前各频道所指向的 digest，可用于回滚。`core-security-evidence-__VERSION__.tar.gz` 内含镜像漏洞扫描报告、SBOM 与依赖公告证据。
+
+## 许可证
+
+主仓库 MIT；浏览器扩展 GPL-3.0-only 并保留 NOTICE；OpenCC 词典与 vendored 依赖各自保留原许可证与归属材料。

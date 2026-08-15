@@ -92,10 +92,16 @@ verify_remote_asset() {
 }
 
 release_asset_names() {
+	# 客户端交付物与 Core 同 tag 发布：浏览器扩展两个商店包、Android debug APK。
+	# iOS 暂不纳入（需要 macOS runner 与签名身份）。这个集合是严格的——多一个
+	# 或少一个文件都会让 prepare-draft 失败，避免 Release 里出现半套产物。
 	printf '%s\n' \
 		"cairn_${VERSION}_linux_amd64.tar.gz" \
 		"cairn_${VERSION}_linux_arm64.tar.gz" \
 		"core-security-evidence-${VERSION}.tar.gz" \
+		"cairn-extension-chrome-${VERSION}.zip" \
+		"cairn-extension-firefox-${VERSION}.zip" \
+		"cairn-android-${VERSION}-debug.apk" \
 		CHANNEL-ROLLBACK.json \
 		IMAGE-DIGESTS.json \
 		SHA256SUMS | sort
@@ -246,8 +252,15 @@ prepare_draft() {
 	if draft=$(release_is_draft 2>/dev/null); then
 		[[ $draft == true || $draft == false ]] || fail 'GitHub returned an invalid draft state'
 	else
+		# 中文说明正文 + GitHub 自动生成的变更列表。--generate-notes 单用会
+		# 得到一份纯英文的 PR 列表，对本项目的读者没有意义；两者同时给出时
+		# GitHub 会把自动生成的内容接在 notes 之后。
+		local notes_file
+		notes_file=$(mktemp)
+		sed "s/__VERSION__/${VERSION}/g" "$ROOT/scripts/release/notes-zh.md" >"$notes_file"
 		"$GH_BIN" release create "$TAG" --repo "$REPOSITORY" --verify-tag --draft \
-			--generate-notes --title "Cairn $TAG"
+			--notes-file "$notes_file" --generate-notes --title "Cairn $TAG"
+		rm -f "$notes_file"
 		draft=true
 	fi
 
