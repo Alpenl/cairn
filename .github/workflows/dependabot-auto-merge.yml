@@ -42,7 +42,8 @@ jobs:
       - name: 对 patch / minor 启用 auto-merge
         if: |
           steps.meta.outputs.update-type == 'version-update:semver-patch' ||
-          steps.meta.outputs.update-type == 'version-update:semver-minor'
+          (steps.meta.outputs.update-type == 'version-update:semver-minor' &&
+           !startsWith(steps.meta.outputs.previous-version, '0.'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -56,3 +57,18 @@ jobs:
         run: |
           gh pr comment "$PR_URL" --body \
             "major 升级不自动合并。请确认 changelog 中的破坏性变更后手动合入。"
+
+      # 0.x 的 minor 在 SemVer 下等价于 major：0.y.z 的整个 y 位都允许破坏性变更。
+      # eslint-plugin-react-refresh 0.4.16 → 0.5.4 就是这么进来的——它把插件改成
+      # ESM-only 导出，reader 的 .eslintrc.cjs 直接加载不到规则，324 个文件全报
+      # "rule not found"。归到 minor 组自动合并会让这类变更绕过人工确认。
+      - name: 0.x 的 minor 升级按 major 处理
+        if: |
+          steps.meta.outputs.update-type == 'version-update:semver-minor' &&
+          startsWith(steps.meta.outputs.previous-version, '0.')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr comment "$PR_URL" --body \
+            "0.x 依赖的 minor 升级不自动合并：SemVer 允许 0.y 版本在 minor 位引入破坏性变更。请人工确认后合入。"
