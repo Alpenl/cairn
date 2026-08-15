@@ -124,7 +124,11 @@ for variant in full slim; do
 		jq -n '{components: [{purl: "pkg:apk/alpine/ca-certificates@1"}]}' >"$directory/sbom.cdx.json"
 		if [[ $variant == full ]]; then
 			printf '[]\n' >"$directory/yt-dlp-advisories.json"
-			jq -n '{version: "2026.03.17", coverage: "test advisory boundary"}' >"$directory/yt-dlp-coverage.json"
+			# 版本取自 Dockerfile 而不是写死：promote 会拿 coverage 里的版本与
+			# ARG YTDLP_VERSION 对账（core-release-promote.sh 的 yt_dlp_version），
+			# 写死会让每次升级 pin 都在这里假失败。
+			jq -n --arg version "$(sed -n 's/^ARG YTDLP_VERSION=//p' "$ROOT/Dockerfile")" \
+				'{version: $version, coverage: "test advisory boundary"}' >"$directory/yt-dlp-coverage.json"
 		fi
 	done
 done

@@ -1,7 +1,7 @@
 yt-dlp static executable source
 
-Version: 2026.03.17
-Release: https://github.com/yt-dlp/yt-dlp/releases/tag/2026.03.17
+Version: 2026.07.04
+Release: https://github.com/yt-dlp/yt-dlp/releases/tag/2026.07.04
 Assets: yt-dlp_musllinux (amd64), yt-dlp_musllinux_aarch64 (arm64)
 License: Unlicense; see YT_DLP_LICENSE.txt
 Integrity: per-architecture SHA-256 values are pinned in Dockerfile.

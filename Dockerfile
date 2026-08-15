@@ -146,15 +146,15 @@ FROM slim AS full
 # Switch back to root for the install layer (slim already set USER webtag).
 USER root
 
-ARG YTDLP_VERSION=2026.03.17
+ARG YTDLP_VERSION=2026.07.04
 ARG YTDLP_BASE_URL=https://github.com/yt-dlp/yt-dlp/releases/download
 # 按目标架构选 musllinux 资产与配套 SHA（来源：上游 release 的 SHA2-256SUMS，
 # 升级 YTDLP_VERSION 时两个 SHA 一起换）。TARGETARCH 由 BuildKit 注入：
 # amd64 → yt-dlp_musllinux，arm64 → yt-dlp_musllinux_aarch64。
 # 必须是裸 ARG（见 builder stage 同名注释——带默认值会架空注入）。
 ARG TARGETARCH
-ARG YTDLP_SHA256_AMD64=d2f449e66131d914f1f5e9a7881cdb5203b091a3cb356d43c4e286e03384f0b7
-ARG YTDLP_SHA256_ARM64=27c3dd8180c9f40796eee8e28db5ae9037de2b0f156701d580c4c84ddd7615f7
+ARG YTDLP_SHA256_AMD64=f7439ec2e3ffe69e06ac233f83f0d9687b89105939129bddcbf74e5de0f2b40e
+ARG YTDLP_SHA256_ARM64=9a6a4de88f35dc68c1763945fbb417e092ebd9afc5d66052ac31b68d405a12a7
 RUN case "${TARGETARCH}" in \
 		arm64) YTDLP_ASSET="yt-dlp_musllinux_aarch64"; YTDLP_SHA256="${YTDLP_SHA256_ARM64}" ;; \
 		amd64) YTDLP_ASSET="yt-dlp_musllinux"; YTDLP_SHA256="${YTDLP_SHA256_AMD64}" ;; \
