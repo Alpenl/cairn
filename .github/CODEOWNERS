@@ -1,0 +1,11 @@
+# Default owner for everything in the repo.
+# GitHub picks the *last* matching pattern, so the catch-all goes first
+# and more specific rules can override below as the team grows.
+*       @Alpenl
+
+# Workflow / supply chain changes are sensitive — keep them on the
+# default owner explicitly so a future ruleset override doesn't lose them.
+/.github/                       @Alpenl
+/.github/workflows/             @Alpenl
+/Dockerfile                     @Alpenl
+/scripts/                       @Alpenl

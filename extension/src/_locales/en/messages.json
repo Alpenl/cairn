@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Cairn Capture"
+  },
+  "appDesc": {
+    "message": "Capture the current page to Cairn from the popup or context menu, and configure the backend URL and access token in the options page."
+  }
+}

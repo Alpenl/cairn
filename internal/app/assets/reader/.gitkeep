@@ -1,0 +1,5 @@
+# Reader 构建产物的挂载点。
+# `make reader-build`（或 Dockerfile 的 reader-builder 阶段）把 reader/dist 的
+# 内容拷进本目录，internal/app/reader.go 用 //go:embed all:assets/reader 嵌入。
+# 产物本身不进版本控制（见根 .gitignore），因此干净检出下这里只有本文件，
+# 此时后端在 /reader/ 返回一页「Reader 尚未构建」的说明页而不是 404。

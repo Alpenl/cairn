@@ -1,0 +1,21 @@
+{
+  "name": "main gate",
+  "target": "branch",
+  "enforcement": "active",
+  "include": ["~DEFAULT_BRANCH"],
+  "required_rules": [
+    "deletion",
+    "non_fast_forward",
+    "required_linear_history",
+    "pull_request",
+    "required_status_checks"
+  ],
+  "allowed_merge_methods": ["squash", "rebase"],
+  "required_status_checks": ["gate", "lint-pr-commits"],
+  "forbidden_bypasses": [
+    {
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
+  ]
+}

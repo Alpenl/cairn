@@ -1,0 +1,179 @@
+[
+  {
+    "name": "plain ASCII",
+    "format": "plain",
+    "source": "Alpha beta gamma",
+    "projection": "Alpha beta gamma",
+    "selection": {
+      "start": 6,
+      "end": 10,
+      "text": "beta"
+    }
+  },
+  {
+    "name": "plain CJK",
+    "format": "plain",
+    "source": "前言中文选择后记",
+    "projection": "前言中文选择后记",
+    "selection": {
+      "start": 2,
+      "end": 6,
+      "text": "中文选择"
+    }
+  },
+  {
+    "name": "plain astral character uses two UTF-16 code units",
+    "format": "plain",
+    "source": "A😀B rocket🚀done",
+    "projection": "A😀B rocket🚀done",
+    "selection": {
+      "start": 1,
+      "end": 4,
+      "text": "😀B"
+    }
+  },
+  {
+    "name": "plain single astral selection has the Reader minimum two UTF-16 units",
+    "format": "plain",
+    "source": "A😀Z",
+    "projection": "A😀Z",
+    "selection": {
+      "start": 1,
+      "end": 3,
+      "text": "😀"
+    }
+  },
+  {
+    "name": "plain ECMAScript trim keeps U+0085 next-line characters",
+    "format": "plain",
+    "source": "A\u0085\u0085Z",
+    "projection": "A\u0085\u0085Z",
+    "selection": {
+      "start": 1,
+      "end": 3,
+      "text": "\u0085\u0085"
+    }
+  },
+  {
+    "name": "plain ECMAScript trim removes U+FEFF byte-order marks",
+    "format": "plain",
+    "source": "A\uFEFF\uFEFFZ",
+    "projection": "A\uFEFF\uFEFFZ",
+    "selection": {
+      "start": 1,
+      "end": 3,
+      "text": "\uFEFF\uFEFF",
+      "rejected_by_reader_minimum": true
+    }
+  },
+  {
+    "name": "markdown emphasis and link syntax is not rendered text",
+    "format": "markdown",
+    "source": "Read **bold** and [docs](https://example.com).",
+    "projection": "Read bold and docs.",
+    "selection": {
+      "start": 5,
+      "end": 18,
+      "text": "bold and docs"
+    }
+  },
+  {
+    "name": "markdown heading and tight list preserve HAST newline nodes",
+    "format": "markdown",
+    "source": "# Guide\n\n- First\n- 第二项\n\nTail",
+    "projection": "Guide\n\nFirst\n第二项\n\nTail",
+    "selection": {
+      "start": 7,
+      "end": 16,
+      "text": "First\n第二项"
+    }
+  },
+  {
+    "name": "markdown GFM table excludes HTML serializer formatting whitespace",
+    "format": "markdown",
+    "source": "| A | B |\n| - | - |\n| x | y |",
+    "projection": "ABxy",
+    "selection": {
+      "start": 1,
+      "end": 4,
+      "text": "Bxy"
+    }
+  },
+  {
+    "name": "markdown malformed GFM table remains literal paragraph text",
+    "format": "markdown",
+    "source": "| a | b |\n| --- | --- | --- |\n| x | y |",
+    "projection": "| a | b |\n| --- | --- | --- |\n| x | y |",
+    "selection": {
+      "start": 30,
+      "end": 39,
+      "text": "| x | y |"
+    }
+  },
+  {
+    "name": "markdown footnote includes generated label body and backlink text",
+    "format": "markdown",
+    "source": "a[^a]b\n\n[^a]: one",
+    "projection": "a1b\nFootnotes\n\n\none ↩\n\n\n",
+    "selection": {
+      "start": 16,
+      "end": 19,
+      "text": "one"
+    }
+  },
+  {
+    "name": "markdown fenced code preserves its terminal newline and astral width",
+    "format": "markdown",
+    "source": "Before\n\n```js\nconst x = \"😀\"\n```\n\nAfter",
+    "projection": "Before\nconst x = \"😀\"\n\nAfter",
+    "selection": {
+      "start": 7,
+      "end": 21,
+      "text": "const x = \"😀\""
+    }
+  },
+  {
+    "name": "markdown unterminated fenced code at EOF still has a code newline",
+    "format": "markdown",
+    "source": "Before\n\n```txt\nlast 😀",
+    "projection": "Before\nlast 😀\n",
+    "selection": {
+      "start": 7,
+      "end": 14,
+      "text": "last 😀"
+    }
+  },
+  {
+    "name": "markdown raw HTML block is visible escaped text",
+    "format": "markdown",
+    "source": "Before\n\n<script>hidden</script>\n\nAfter",
+    "projection": "Before\n<script>hidden</script>\nAfter",
+    "selection": {
+      "start": 7,
+      "end": 30,
+      "text": "<script>hidden</script>"
+    }
+  },
+  {
+    "name": "markdown multiline raw HTML block preserves closure text",
+    "format": "markdown",
+    "source": "<script>\nx\n</script>",
+    "projection": "<script>\nx\n</script>",
+    "selection": {
+      "start": 0,
+      "end": 20,
+      "text": "<script>\nx\n</script>"
+    }
+  },
+  {
+    "name": "markdown inline raw HTML tags remain literal text",
+    "format": "markdown",
+    "source": "Hello <u>world</u>!",
+    "projection": "Hello <u>world</u>!",
+    "selection": {
+      "start": 6,
+      "end": 18,
+      "text": "<u>world</u>"
+    }
+  }
+]

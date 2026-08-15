@@ -1,0 +1,103 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly.
+title: "bug: <short description>"
+labels:
+  - bug
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please fill in as much of the form as you can —
+        partial reports get triaged slower than complete ones.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One paragraph describing the problem.
+      placeholder: Cairn returns 500 when submitting a link with a unicode title…
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered list of the exact steps.
+      placeholder: |
+        1. `make run` with DATABASE_URL=…
+        2. `curl -X POST http://localhost:8000/api/links …`
+        3. Observe 500 response
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happened instead? Include error messages / stack traces / log lines.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Cairn version / commit
+      description: Output of `webtag --version` or the git SHA you're running.
+      placeholder: v0.4.2 (or sha 3b49d29)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime
+      options:
+        - Local `go run` / `make run`
+        - Locally built Docker full image
+        - Locally built Docker slim image
+        - Other (describe in environment)
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go version, Postgres version, relevant env vars (redact secrets).
+      placeholder: |
+        OS: Ubuntu 24.04
+        Go: 1.26.6
+        Postgres: 16.4
+        AI_MODEL: gpt-4o-mini
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Server logs around the failure. Use code fences. Redact tokens.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: I can reproduce this on the latest `main` (or noted otherwise above).
+          required: false

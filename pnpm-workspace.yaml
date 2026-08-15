@@ -1,0 +1,4 @@
+packages:
+  - reader
+  - extension
+  - packages/*

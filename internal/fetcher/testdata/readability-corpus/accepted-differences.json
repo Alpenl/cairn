@@ -1,0 +1,44 @@
+[
+  {
+    "case_id": "news-report",
+    "field": "body",
+    "v1_sha256": "1507f9106f5c558b21745d3b65c3f0ed9d6de0be47b30bbb12bf87596a8affb0",
+    "v2_sha256": "bca32abfd059677ca345e60ffaa967f075758bda02c861b8e0bf37655d7673d8",
+    "reason": "Accepted: v2 preserves the visible dateline at the start of the article; no v1 text is removed."
+  },
+  {
+    "case_id": "news-report",
+    "field": "document_html",
+    "v1_sha256": "d8fa02f7d49b4ffe80a01700f21ae8b9516a6cc85b2fb930dc040bc86281546d",
+    "v2_sha256": "6de3b60d955481e02d9d87040bde3c094ca7f51bb24858322545dd1ba20e43a7",
+    "reason": "Accepted: the HTML change is limited to retaining the same visible dateline node included in the approved body."
+  },
+  {
+    "case_id": "scientific-abstract",
+    "field": "body",
+    "v1_sha256": "9686885f6744a2c01e55bd87683d30c33ea909ecfb84030278d5a41e12d0eaba",
+    "v2_sha256": "d592f291243b586bae3b3a3da305db021c89645a782422c581a3a8a1b48d1e90",
+    "reason": "Accepted: v2 preserves the visible author line before the abstract; no v1 text is removed."
+  },
+  {
+    "case_id": "scientific-abstract",
+    "field": "document_html",
+    "v1_sha256": "c6270cc16b3dcef5f6e9bb9e3e850893ff755d04f2a2ed68cc680473147cb068",
+    "v2_sha256": "973ab655e1ebd496ca336cd3c395e25790fd884b3642a6e90ef0662f792b1218",
+    "reason": "Accepted: the HTML change is limited to retaining the same visible author node included in the approved body."
+  },
+  {
+    "case_id": "standard-blog",
+    "field": "body",
+    "v1_sha256": "a9b3a85345d3bef3b9101fa47ffdd786cb8dba79456ea2cdb3e1bc931ce95cd5",
+    "v2_sha256": "c980ea47bf3a6fcad51a903801bec94c31224fbc09eec0e0ef9f0b6b6d961cfe",
+    "reason": "Accepted: v2 preserves the visible byline before the article paragraphs; no v1 text is removed."
+  },
+  {
+    "case_id": "standard-blog",
+    "field": "document_html",
+    "v1_sha256": "9f5cb17958f8958b08f4c3208afcb6389a87a685efb8496ec8cf3cdf6b4ab7f9",
+    "v2_sha256": "b789957d0bfb7c1dc1e6536e2e81e8dc866d3ee41dd24474498fa30f6c93e669",
+    "reason": "Accepted: the HTML change is limited to retaining the same visible byline node included in the approved body."
+  }
+]

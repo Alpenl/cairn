@@ -1,0 +1,25 @@
+{
+  "name": "@webtag/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./generated": "./src/generated.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "api:generate": "openapi-typescript ../../internal/app/assets/openapi.json -o src/generated.ts --root-types --root-types-no-schema-prefix",
+    "api:check": "openapi-typescript ../../internal/app/assets/openapi.json -o src/generated.ts --root-types --root-types-no-schema-prefix --check",
+    "test": "vitest run src/case-fold.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "unicode-case-folding": "1.1.1"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3",
+    "vitest": "3.2.6"
+  }
+}

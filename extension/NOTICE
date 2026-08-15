@@ -1,0 +1,10 @@
+Cairn browser extension
+
+This directory contains modified portions of NaiveTab:
+https://github.com/GXFG/newtab-naivetab
+
+Upstream baseline: main commit c19eca2 (2026-05-16).
+This public snapshot was modified for Cairn and prepared on 2026-08-14.
+
+The extension is distributed under GPL-3.0-only. See LICENSE in this
+directory for the complete license text.

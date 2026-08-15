@@ -1,0 +1,275 @@
+{
+  "library": "github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0",
+  "cases": {
+    "ad-heavy": {
+      "body": "Commercial pages surround a story with navigation, recommendations, and repeated calls to action. Extraction is useful only when the central narrative remains coherent after that furniture is removed.\n\nThis article explains a small interface that hides retry policy, transaction ownership, and queue semantics. Callers provide intent and receive a result without coordinating those mechanisms themselves.\n\nThe implementation can change adapters while the observable contract remains stable. That locality is what makes the module valuable rather than merely adding another forwarding layer.",
+      "title": "The quiet core of a busy page",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003carticle\u003e\u003cp\u003eCommercial pages surround a story with navigation, recommendations, and repeated calls to action. Extraction is useful only when the central narrative remains coherent after that furniture is removed.\u003c/p\u003e\u003cp\u003eThis article explains a small interface that hides retry policy, transaction ownership, and queue semantics. Callers provide intent and receive a result without coordinating those mechanisms themselves.\u003c/p\u003e\u003cp\u003eThe implementation can change adapters while the observable contract remains stable. That locality is what makes the module valuable rather than merely adding another forwarding layer.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e",
+      "author": "Nia Brooks",
+      "excerpt": "Separating editorial content from commercial page furniture.",
+      "site_name": "Daily Example",
+      "language": "en"
+    },
+    "arabic-rtl": {
+      "body": "حفظ السجل يجعل العمل قابلا للاستعادة\n\nتحتاج المهمة الخلفية الموثوقة إلى سجل واضح يربط حالة المنتج بمحاولة التنفيذ الحالية. عندما يتوقف البرنامج فجأة، يستطيع النظام متابعة العمل من حقائق محفوظة بدلا من التخمين.\n\nيجب أن يملك جزء واحد من النظام تغيير قاعدة البيانات وإضافة المهمة إلى الطابور ضمن معاملة واحدة. بهذه الطريقة لا يرى المستدعي نصف عملية ناجحة ونصفا آخر مفقودا.\n\nيمكن حذف السجلات النهائية بعد مدة محددة، لكن هذه المدة يجب أن تتجاوز زمن الاكتشاف والمصالحة وأطول توقف مدعوم. وتوضح المقاييس اقتراب النظام من الحد قبل أن يصبح الحذف خطرا.",
+      "title": "حفظ السجل يجعل العمل قابلا للاستعادة",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003ch2\u003eحفظ السجل يجعل العمل قابلا للاستعادة\u003c/h2\u003e\u003cp\u003eتحتاج المهمة الخلفية الموثوقة إلى سجل واضح يربط حالة المنتج بمحاولة التنفيذ الحالية. عندما يتوقف البرنامج فجأة، يستطيع النظام متابعة العمل من حقائق محفوظة بدلا من التخمين.\u003c/p\u003e\u003cp\u003eيجب أن يملك جزء واحد من النظام تغيير قاعدة البيانات وإضافة المهمة إلى الطابور ضمن معاملة واحدة. بهذه الطريقة لا يرى المستدعي نصف عملية ناجحة ونصفا آخر مفقودا.\u003c/p\u003e\u003cp\u003eيمكن حذف السجلات النهائية بعد مدة محددة، لكن هذه المدة يجب أن تتجاوز زمن الاكتشاف والمصالحة وأطول توقف مدعوم. وتوضح المقاييس اقتراب النظام من الحد قبل أن يصبح الحذف خطرا.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "ليلى منصور",
+      "excerpt": "مقال تجريبي عن حفظ حالة المهام الخلفية.",
+      "site_name": "دفتر الهندسة",
+      "language": "ar"
+    },
+    "blockquote-essay": {
+      "body": "A feature is not complete when its happy path works. Operators also need to know how evidence ages, which failures are retried, and what must happen before an old binary can be restored.\n\nA system's interface includes the facts a caller and an operator must know to use it correctly, not only the names and types accepted by a function.\n\nThat observation changes where cleanup belongs. Retention is coupled to recovery guarantees, so its lower bound should be validated next to the timing settings that define those guarantees.\n\nIt also changes testing. A test that injects failure before and after the durable effect demonstrates ownership more convincingly than a diagram that merely labels a transaction module.",
+      "title": "Maintenance is part of the design",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eA feature is not complete when its happy path works. Operators also need to know how evidence ages, which failures are retried, and what must happen before an old binary can be restored.\u003c/p\u003e\u003cblockquote\u003e\u003cp\u003eA system\u0026#39;s interface includes the facts a caller and an operator must know to use it correctly, not only the names and types accepted by a function.\u003c/p\u003e\u003c/blockquote\u003e\u003cp\u003eThat observation changes where cleanup belongs. Retention is coupled to recovery guarantees, so its lower bound should be validated next to the timing settings that define those guarantees.\u003c/p\u003e\u003cp\u003eIt also changes testing. A test that injects failure before and after the durable effect demonstrates ownership more convincingly than a diagram that merely labels a transaction module.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Kai North",
+      "excerpt": "Why cleanup and observability belong in the original interface.",
+      "site_name": "Long View Essays",
+      "language": "en"
+    },
+    "chinese-longform": {
+      "body": "把后台任务做成可恢复的流程\n\n一个可靠的后台任务，不只是能够进入队列。系统还要明确记录任务属于哪个租户、当前是哪一次尝试，以及业务对象是否仍然等待这次结果。\n\n数据库状态和队列写入应当由同一个事务所有者协调。这样，无论进程在提交前还是提交后退出，重试都不会制造重复的有效状态转换。\n\n终态记录可以清理，但清理窗口必须覆盖检测延迟、调和周期和最长恢复停机时间。监控还要同时观察终态数量、最老记录年龄和表索引体积。\n\n这些约束写进测试和运行手册以后，值班人员面对缺失任务时不再需要猜测，系统也能在有限时间内收敛到明确结果。",
+      "title": "把后台任务做成可恢复的流程",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003carticle\u003e\u003ch2\u003e把后台任务做成可恢复的流程\u003c/h2\u003e\u003cp\u003e一个可靠的后台任务，不只是能够进入队列。系统还要明确记录任务属于哪个租户、当前是哪一次尝试，以及业务对象是否仍然等待这次结果。\u003c/p\u003e\u003cp\u003e数据库状态和队列写入应当由同一个事务所有者协调。这样，无论进程在提交前还是提交后退出，重试都不会制造重复的有效状态转换。\u003c/p\u003e\u003cp\u003e终态记录可以清理，但清理窗口必须覆盖检测延迟、调和周期和最长恢复停机时间。监控还要同时观察终态数量、最老记录年龄和表索引体积。\u003c/p\u003e\u003cp\u003e这些约束写进测试和运行手册以后，值班人员面对缺失任务时不再需要猜测，系统也能在有限时间内收敛到明确结果。\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e",
+      "author": "林舟",
+      "excerpt": "从状态、事务和保留策略三个方面讨论后台任务。",
+      "site_name": "工程札记",
+      "language": "zh-CN"
+    },
+    "code-tutorial": {
+      "body": "Long-running operations should accept a context from their caller. The context carries cancellation and deadline signals through the call tree without introducing a separate stop channel for every function.\n\nAccept the caller's context\n\nfunc Reconcile(ctx context.Context) error {\n    return scanCandidates(ctx)\n}\n\nDo not replace the context with a background context inside the operation. Doing so disconnects database calls from shutdown and request deadlines.\n\nReserve time for every pass\n\nroundCtx, cancel := context.WithTimeout(ctx, roundTimeout)\ndefer cancel()\n\nIf a round has multiple passes, budget each pass so an expensive first query cannot consume the entire deadline and starve recovery work.",
+      "title": "Propagating cancellation with Go contexts",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eLong-running operations should accept a context from their caller. The context carries cancellation and deadline signals through the call tree without introducing a separate stop channel for every function.\u003c/p\u003e\u003ch2\u003eAccept the caller\u0026#39;s context\u003c/h2\u003e\u003cpre\u003e\u003ccode\u003efunc Reconcile(ctx context.Context) error {\n    return scanCandidates(ctx)\n}\u003c/code\u003e\u003c/pre\u003e\u003cp\u003eDo not replace the context with a background context inside the operation. Doing so disconnects database calls from shutdown and request deadlines.\u003c/p\u003e\u003ch2\u003eReserve time for every pass\u003c/h2\u003e\u003cpre\u003e\u003ccode\u003eroundCtx, cancel := context.WithTimeout(ctx, roundTimeout)\ndefer cancel()\u003c/code\u003e\u003c/pre\u003e\u003cp\u003eIf a round has multiple passes, budget each pass so an expensive first query cannot consume the entire deadline and starve recovery work.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Example Learning Team",
+      "excerpt": "A small tutorial on bounded operations in Go.",
+      "site_name": "Learn Example",
+      "language": "en"
+    },
+    "data-table": {
+      "body": "We measured a wide row and a use-case-specific projection against fixed light and heavy fixtures. Warm runs followed a fixed warmup; cold runs restarted the database between samples.\n\nFixture\n\nProjection\n\nTuple bytes\n\nP95 ms\n\nLight\n\nWide\n\n640\n\n1.8\n\nLight\n\nNarrow\n\n192\n\n1.7\n\nHeavy\n\nWide\n\n8192\n\n3.6\n\nHeavy\n\nNarrow\n\n224\n\n1.9\n\nThe numbers are invented for extraction testing and are not evidence about WebTag. A real report must include the seed, PostgreSQL version, buffer counters, allocations, concurrency, and exact reproduction command.",
+      "title": "Controlled cache study",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eWe measured a wide row and a use-case-specific projection against fixed light and heavy fixtures. Warm runs followed a fixed warmup; cold runs restarted the database between samples.\u003c/p\u003e\u003ctable\u003e\u003cthead\u003e\u003ctr\u003e\u003cth\u003eFixture\u003c/th\u003e\u003cth\u003eProjection\u003c/th\u003e\u003cth\u003eTuple bytes\u003c/th\u003e\u003cth\u003eP95 ms\u003c/th\u003e\u003c/tr\u003e\u003c/thead\u003e\u003ctbody\u003e\u003ctr\u003e\u003ctd\u003eLight\u003c/td\u003e\u003ctd\u003eWide\u003c/td\u003e\u003ctd\u003e640\u003c/td\u003e\u003ctd\u003e1.8\u003c/td\u003e\u003c/tr\u003e\u003ctr\u003e\u003ctd\u003eLight\u003c/td\u003e\u003ctd\u003eNarrow\u003c/td\u003e\u003ctd\u003e192\u003c/td\u003e\u003ctd\u003e1.7\u003c/td\u003e\u003c/tr\u003e\u003ctr\u003e\u003ctd\u003eHeavy\u003c/td\u003e\u003ctd\u003eWide\u003c/td\u003e\u003ctd\u003e8192\u003c/td\u003e\u003ctd\u003e3.6\u003c/td\u003e\u003c/tr\u003e\u003ctr\u003e\u003ctd\u003eHeavy\u003c/td\u003e\u003ctd\u003eNarrow\u003c/td\u003e\u003ctd\u003e224\u003c/td\u003e\u003ctd\u003e1.9\u003c/td\u003e\u003c/tr\u003e\u003c/tbody\u003e\u003c/table\u003e\u003cp\u003eThe numbers are invented for extraction testing and are not evidence about WebTag. A real report must include the seed, PostgreSQL version, buffer counters, allocations, concurrency, and exact reproduction command.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Example Performance Lab",
+      "excerpt": "A synthetic report comparing wide and narrow database projections.",
+      "site_name": "Example Performance Lab",
+      "language": "en"
+    },
+    "forum-thread": {
+      "body": "I am implementing a batch command that updates several saved links and inserts one durable job per link. Two requests can contain the same identifiers in a different order.\n\nShould the command preserve request order, or should it sort identifiers before acquiring row locks? I want the response to preserve input order while the transaction uses one canonical lock order.\n\nThe current design sorts a copy of the identifiers for locking, stores results by identifier, and then reconstructs the response in request order. Is there another invariant I should document?",
+      "title": "Deterministic lock ordering - Systems Forum",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eI am implementing a batch command that updates several saved links and inserts one durable job per link. Two requests can contain the same identifiers in a different order.\u003c/p\u003e\u003cp\u003eShould the command preserve request order, or should it sort identifiers before acquiring row locks? I want the response to preserve input order while the transaction uses one canonical lock order.\u003c/p\u003e\u003cp\u003eThe current design sorts a copy of the identifiers for locking, stores results by identifier, and then reconstructs the response in request order. Is there another invariant I should document?\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "queue-reader",
+      "excerpt": "Question about ordering locks for a batch command.",
+      "site_name": "",
+      "language": "en"
+    },
+    "image-captions": {
+      "body": "The workshop opens before the street becomes busy. Tools are arranged by the sequence of work, with inspection equipment nearest the intake bench and cleaning supplies beside the sink.\n\nEach item receives a paper tag before it moves beyond the intake bench.\n\nTechnicians record the original condition before removing a fastener. That record lets another person resume the repair without guessing which marks were already present.\n\nShallow drawers keep commonly used tools visible and easy to return.\n\nAt closing time, incomplete work is stored with its notes. The process values a recoverable state over the appearance of an empty bench.",
+      "title": "Inside a small repair workshop",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eThe workshop opens before the street becomes busy. Tools are arranged by the sequence of work, with inspection equipment nearest the intake bench and cleaning supplies beside the sink.\u003c/p\u003e\u003cfigure\u003e\u003cimg src=\"https://photo.example.test/images/intake.jpg\" alt=\"A labeled intake bench\"/\u003e\u003cfigcaption\u003eEach item receives a paper tag before it moves beyond the intake bench.\u003c/figcaption\u003e\u003c/figure\u003e\u003cp\u003eTechnicians record the original condition before removing a fastener. That record lets another person resume the repair without guessing which marks were already present.\u003c/p\u003e\u003cfigure\u003e\u003cimg src=\"https://photo.example.test/images/tools.jpg\" alt=\"Hand tools in shallow drawers\"/\u003e\u003cfigcaption\u003eShallow drawers keep commonly used tools visible and easy to return.\u003c/figcaption\u003e\u003c/figure\u003e\u003cp\u003eAt closing time, incomplete work is stored with its notes. The process values a recoverable state over the appearance of an empty bench.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Parker Lane",
+      "excerpt": "A fictional photo essay about careful repair work.",
+      "site_name": "Frame Stories",
+      "language": "en"
+    },
+    "interview": {
+      "body": "Interviewer: What usually makes a background workflow hard to operate?\n\nGuest: The hardest cases are not ordinary failures. They are ambiguous outcomes where the process disappeared between changing product state and recording queue state.\n\nInterviewer: How do you reduce that ambiguity?\n\nGuest: Put both effects under one transaction owner, use stable attempt identities, and reconcile product rows against durable evidence after a bounded delay.\n\nInterviewer: What should an operator see?\n\nGuest: They need counts by terminal state, the oldest retained evidence, storage size, cleanup backlog, and a signal that the observation query itself succeeded.",
+      "title": "How reliable work stays understandable",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003e\u003cstrong\u003eInterviewer:\u003c/strong\u003e What usually makes a background workflow hard to operate?\u003c/p\u003e\u003cp\u003e\u003cstrong\u003eGuest:\u003c/strong\u003e The hardest cases are not ordinary failures. They are ambiguous outcomes where the process disappeared between changing product state and recording queue state.\u003c/p\u003e\u003cp\u003e\u003cstrong\u003eInterviewer:\u003c/strong\u003e How do you reduce that ambiguity?\u003c/p\u003e\u003cp\u003e\u003cstrong\u003eGuest:\u003c/strong\u003e Put both effects under one transaction owner, use stable attempt identities, and reconcile product rows against durable evidence after a bounded delay.\u003c/p\u003e\u003cp\u003e\u003cstrong\u003eInterviewer:\u003c/strong\u003e What should an operator see?\u003c/p\u003e\u003cp\u003e\u003cstrong\u003eGuest:\u003c/strong\u003e They need counts by terminal state, the oldest retained evidence, storage size, cleanup backlog, and a signal that the observation query itself succeeded.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Iris Bell",
+      "excerpt": "An interview about durable workflows and operational clarity.",
+      "site_name": "People at Work",
+      "language": "en"
+    },
+    "japanese-article": {
+      "body": "キャッシュと整合性を両立する設計\n\n読み取りを高速化するためのキャッシュは、更新の順序を明確にしなければ古い結果を長く残してしまいます。まず、どの変更が世代を進めるのかを一つの場所で定義します。\n\n次に、複数のプロセスが同じデータを見る場合でも、ローカルな通知だけに依存しない仕組みを用意します。共有された世代番号を比較すれば、取りこぼした通知があっても次の読み取りで回復できます。\n\n最後に、失敗時の挙動をテストします。更新前、更新中、更新後のそれぞれで停止させ、古い値が新しい値を上書きしないことを確認します。",
+      "title": "キャッシュと整合性を両立する設計",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003ch2\u003eキャッシュと整合性を両立する設計\u003c/h2\u003e\u003cp\u003e読み取りを高速化するためのキャッシュは、更新の順序を明確にしなければ古い結果を長く残してしまいます。まず、どの変更が世代を進めるのかを一つの場所で定義します。\u003c/p\u003e\u003cp\u003e次に、複数のプロセスが同じデータを見る場合でも、ローカルな通知だけに依存しない仕組みを用意します。共有された世代番号を比較すれば、取りこぼした通知があっても次の読み取りで回復できます。\u003c/p\u003e\u003cp\u003e最後に、失敗時の挙動をテストします。更新前、更新中、更新後のそれぞれで停止させ、古い値が新しい値を上書きしないことを確認します。\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "佐藤ユキ",
+      "excerpt": "分散した読み取りキャッシュを安全に更新する方法。",
+      "site_name": "技術ジャーナル",
+      "language": "ja"
+    },
+    "legal-analysis": {
+      "body": "This synthetic analysis is not legal advice. It examines the engineering meaning of a system that promises to recover asynchronous work after a stated outage.\n\nEvidence. Terminal job records provide facts used to distinguish completed, failed, and missing work.\nDuration. The evidence must remain available longer than detection, reconciliation, and supported recovery delays combined.\nDisclosure. Deployment documentation should state when finite cleanup is enabled and how rollback changes the required retention setting.\n\nA configuration validator can enforce the arithmetic at startup. An alert should fire before the oldest retained row approaches the minimum safe duration, leaving time for an operator to pause cleanup.\n\nFootnote 1: all names and scenarios in this fixture are fictional.",
+      "title": "Retention windows and operational promises",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eThis synthetic analysis is not legal advice. It examines the engineering meaning of a system that promises to recover asynchronous work after a stated outage.\u003c/p\u003e\u003col\u003e\u003cli\u003e\u003cstrong\u003eEvidence.\u003c/strong\u003e Terminal job records provide facts used to distinguish completed, failed, and missing work.\u003c/li\u003e\u003cli\u003e\u003cstrong\u003eDuration.\u003c/strong\u003e The evidence must remain available longer than detection, reconciliation, and supported recovery delays combined.\u003c/li\u003e\u003cli\u003e\u003cstrong\u003eDisclosure.\u003c/strong\u003e Deployment documentation should state when finite cleanup is enabled and how rollback changes the required retention setting.\u003c/li\u003e\u003c/ol\u003e\u003cp\u003eA configuration validator can enforce the arithmetic at startup. An alert should fire before the oldest retained row approaches the minimum safe duration, leaving time for an operator to pause cleanup.\u003c/p\u003e\u003cp id=\"fn1\"\u003eFootnote 1: all names and scenarios in this fixture are fictional.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Example Legal Lab",
+      "excerpt": "A synthetic analysis of how configured retention expresses an operational promise.",
+      "site_name": "Example Legal Lab",
+      "language": "en"
+    },
+    "malformed-noise": {
+      "body": "Older pages often contain layout tables, missing closing tags, and inline scripts. A tolerant parser can still produce a tree that lets the extraction algorithm find the central sequence of paragraphs.\n\nThe production path decodes bytes before parsing so a declared character set does not become mojibake. It then parses once and shares the immutable source tree with extraction and metadata fallback.\n\nMalformed input should lead to a weak result or a clean error, never a process crash. This fixture deliberately omits several closing elements.",
+      "title": "Legacy pages still carry useful text",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003ctbody\u003e\u003ctr\u003e\u003ctd\u003eHOME ARCHIVE SEARCH\u003cdiv\u003e\u003cmain\u003e\u003carticle\u003e\u003cp\u003eOlder pages often contain layout tables, missing closing tags, and inline scripts. A tolerant parser can still produce a tree that lets the extraction algorithm find the central sequence of paragraphs.\u003c/p\u003e\u003cdiv\u003e\u003cp\u003eThe production path decodes bytes before parsing so a declared character set does not become mojibake. It then parses once and shares the immutable source tree with extraction and metadata fallback.\u003c/p\u003e\u003cp\u003eMalformed input should lead to a weak result or a clean error, never a process crash. This fixture deliberately omits several closing elements.\u003c/p\u003e\u003c/div\u003e\u003c/article\u003e\u003c/main\u003e\u003c/div\u003e\u003c/td\u003e\u003c/tr\u003e\u003c/tbody\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Archive Team",
+      "excerpt": "Parser recovery for old and malformed markup.",
+      "site_name": "",
+      "language": "en"
+    },
+    "microformats-byline": {
+      "body": "Published by on 8 August 2026.\n\nPublishing tools feel simple when drafts, uploads, and delivery are represented by durable state. A browser may close, a worker may restart, and the intent should still be inspectable.\n\nThe implementation does not need to be visible to every caller. A small command interface can hide retries and storage coordination while still returning enough information for the page to render a precise outcome.\n\nThat kind of reliability is deliberately boring. It replaces recovery folklore with a state transition that tests and operators can observe.",
+      "title": "The open web needs boring durability",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cp\u003ePublished by  on \u003ctime datetime=\"2026-08-08\"\u003e8 August 2026\u003c/time\u003e.\u003c/p\u003e\u003cdiv\u003e\u003cp\u003ePublishing tools feel simple when drafts, uploads, and delivery are represented by durable state. A browser may close, a worker may restart, and the intent should still be inspectable.\u003c/p\u003e\u003cp\u003eThe implementation does not need to be visible to every caller. A small command interface can hide retries and storage coordination while still returning enough information for the page to render a precise outcome.\u003c/p\u003e\u003cp\u003eThat kind of reliability is deliberately boring. It replaces recovery folklore with a state transition that tests and operators can observe.\u003c/p\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Juniper Ray",
+      "excerpt": "A short IndieWeb note about reliable publishing.",
+      "site_name": "Indie Example",
+      "language": "en"
+    },
+    "navigation-heavy": {
+      "body": "A durable command may lock rows, update product state, insert or cancel queue jobs, classify constraint failures, and preserve idempotency. Exposing those mechanics to callers creates a wide interface even when each method is short.\n\nA deeper module accepts the application intent and owns the coordination. Production uses database and queue adapters; tests use fault-injecting adapters at internal seams to prove rollback before and after each effect.\n\nThe deletion test is useful: if removing the module would spread transaction rules back across several callers, the module is earning its place. If nothing but forwarding calls reappears, the interface remains shallow.",
+      "title": "A small interface for a complicated command",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eA durable command may lock rows, update product state, insert or cancel queue jobs, classify constraint failures, and preserve idempotency. Exposing those mechanics to callers creates a wide interface even when each method is short.\u003c/p\u003e\u003cp\u003eA deeper module accepts the application intent and owns the coordination. Production uses database and queue adapters; tests use fault-injecting adapters at internal seams to prove rollback before and after each effect.\u003c/p\u003e\u003cp\u003eThe deletion test is useful: if removing the module would spread transaction rules back across several callers, the module is earning its place. If nothing but forwarding calls reappears, the interface remains shallow.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Rhea Stone",
+      "excerpt": "Designing a deep module around durable work.",
+      "site_name": "Engineering Portal",
+      "language": "en"
+    },
+    "nested-article": {
+      "body": "Deeply nested markup does not necessarily imply deeply nested responsibility. The useful question is which module owns the behavior and which interface a caller must understand.\n\nWhen transaction policy leaks through several layers, every caller learns database details. Moving that policy behind one durable command interface reduces the facts that handlers and application logic need to coordinate.\n\nTests should cross the same seam as production callers. Internal adapters can still be replaced for fault injection without exposing their mechanics in the external interface.",
+      "title": "Finding ownership in nested systems",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv class=\"page\"\u003e\u003cheader\u003eEssay Archive\u003c/header\u003e\u003cdiv\u003e\u003cmain\u003e\u003csection\u003e\u003carticle\u003e\u003cp\u003eDeeply nested markup does not necessarily imply deeply nested responsibility. The useful question is which module owns the behavior and which interface a caller must understand.\u003c/p\u003e\u003cp\u003eWhen transaction policy leaks through several layers, every caller learns database details. Moving that policy behind one durable command interface reduces the facts that handlers and application logic need to coordinate.\u003c/p\u003e\u003cp\u003eTests should cross the same seam as production callers. Internal adapters can still be replaced for fault injection without exposing their mechanics in the external interface.\u003c/p\u003e\u003c/article\u003e\u003c/section\u003e\u003c/main\u003e\u003c/div\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Avery Moss",
+      "excerpt": "A note on module ownership in layered applications.",
+      "site_name": "",
+      "language": "en"
+    },
+    "news-report": {
+      "body": "The city council approved a six-month overnight transit pilot after a public hearing on Friday. Two bus routes will operate every forty minutes between the central station and the hospital district.\n\n\"The goal is to measure demand before making a permanent timetable change,\" transit director Lena Ortiz said.\n\nThe agency will publish ridership, missed-trip, and on-time performance data each month. Funding comes from an existing service reliability reserve, according to the adopted resolution.\n\nCouncil members requested a formal review after the first ninety days. The pilot begins in September and does not change daytime service.",
+      "title": "City approves overnight transit pilot",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eThe city council approved a six-month overnight transit pilot after a public hearing on Friday. Two bus routes will operate every forty minutes between the central station and the hospital district.\u003c/p\u003e\u003cblockquote\u003e\u0026#34;The goal is to measure demand before making a permanent timetable change,\u0026#34; transit director Lena Ortiz said.\u003c/blockquote\u003e\u003cp\u003eThe agency will publish ridership, missed-trip, and on-time performance data each month. Funding comes from an existing service reliability reserve, according to the adopted resolution.\u003c/p\u003e\u003cp\u003eCouncil members requested a formal review after the first ninety days. The pilot begins in September and does not change daytime service.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Mara Chen",
+      "excerpt": "The six-month pilot adds two overnight routes.",
+      "site_name": "Local Wire",
+      "language": "en"
+    },
+    "newsletter": {
+      "body": "Evidence has a lifetime\n\nA reconciler depends on terminal queue rows as evidence. Retention can be finite, but only when its configured lifetime exceeds every supported detection and recovery delay.\n\nRead only what you use\n\nA narrow database projection is valuable when it reduces transfer and scan work or when its interface removes facts a caller does not need. Measure both claims with fixed light and heavy rows.\n\nOne practical question\n\nCan a new caller add a field to a projection without naming the behavior that consumes it? A field-to-consumer guard turns that design question into a reviewable test.",
+      "title": "Systems Letter No. 27",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003ch2\u003eEvidence has a lifetime\u003c/h2\u003e\u003cp\u003eA reconciler depends on terminal queue rows as evidence. Retention can be finite, but only when its configured lifetime exceeds every supported detection and recovery delay.\u003c/p\u003e\u003ch2\u003eRead only what you use\u003c/h2\u003e\u003cp\u003eA narrow database projection is valuable when it reduces transfer and scan work or when its interface removes facts a caller does not need. Measure both claims with fixed light and heavy rows.\u003c/p\u003e\u003ch2\u003eOne practical question\u003c/h2\u003e\u003cp\u003eCan a new caller add a field to a projection without naming the behavior that consumes it? A field-to-consumer guard turns that design question into a reviewable test.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "The Systems Letter",
+      "excerpt": "This issue covers observable cleanup and narrow projections.",
+      "site_name": "Systems Letter",
+      "language": "en"
+    },
+    "og-title-conflict": {
+      "body": "An ignored visual headline\n\nStorage limits are not a housekeeping detail when terminal records are evidence used by recovery logic. A cleanup policy that deletes evidence too early can turn a resolvable crash into a permanent ambiguous state.\n\nThe safe window includes detection latency, reconciliation cadence, timeout budget, and the longest supported recovery outage. Monitoring must warn while enough evidence still exists to act.\n\nBy treating the retention equation as configuration validation, the application refuses combinations that cannot meet its own recovery contract.",
+      "title": "Storage limits are part of correctness",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003ch2\u003eAn ignored visual headline\u003c/h2\u003e\u003cp\u003eStorage limits are not a housekeeping detail when terminal records are evidence used by recovery logic. A cleanup policy that deletes evidence too early can turn a resolvable crash into a permanent ambiguous state.\u003c/p\u003e\u003cp\u003eThe safe window includes detection latency, reconciliation cadence, timeout budget, and the longest supported recovery outage. Monitoring must warn while enough evidence still exists to act.\u003c/p\u003e\u003cp\u003eBy treating the retention equation as configuration validation, the application refuses combinations that cannot meet its own recovery contract.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "",
+      "excerpt": "Why retention and capacity must be designed together.",
+      "site_name": "Systems Magazine",
+      "language": "en"
+    },
+    "press-release": {
+      "body": "HARBOR CITY, Aug. 8, 2026 - Northwind Tools today announced Queue Glass, a fictional command-line utility for inspecting exported durable-work records without connecting to a production database.\n\nThe utility validates attempt identities, displays terminal retention windows, and highlights product rows whose queue evidence is absent. Reports can be saved as structured JSON for incident review.\n\n\"Operators should be able to explain a transition from durable facts,\" said product lead Morgan Vale. \"The inspector keeps those facts readable during an investigation.\"\n\nAbout Northwind Tools\n\nNorthwind Tools is a fictional company used only for this synthetic readability fixture. It does not offer products or collect customer information.",
+      "title": "Northwind Tools launches offline queue inspector",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003e\u003cstrong\u003eHARBOR CITY, Aug. 8, 2026\u003c/strong\u003e - Northwind Tools today announced Queue Glass, a fictional command-line utility for inspecting exported durable-work records without connecting to a production database.\u003c/p\u003e\u003cp\u003eThe utility validates attempt identities, displays terminal retention windows, and highlights product rows whose queue evidence is absent. Reports can be saved as structured JSON for incident review.\u003c/p\u003e\u003cp\u003e\u0026#34;Operators should be able to explain a transition from durable facts,\u0026#34; said product lead Morgan Vale. \u0026#34;The inspector keeps those facts readable during an investigation.\u0026#34;\u003c/p\u003e\u003ch2\u003eAbout Northwind Tools\u003c/h2\u003e\u003cp\u003eNorthwind Tools is a fictional company used only for this synthetic readability fixture. It does not offer products or collect customer information.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Northwind Tools",
+      "excerpt": "The fictional utility renders durable queue state without network access.",
+      "site_name": "Northwind Tools Newsroom",
+      "language": "en"
+    },
+    "product-review": {
+      "body": "The fictional Fieldnote R2 is a compact recorder designed around physical controls. Its display remains readable outdoors, and recordings can be copied over a standard storage interface.\n\nScore: 8/10\n\nWhat works\n\nClear gain controls with useful detents\nPredictable file naming\nReplaceable battery pack\n\nWhat does not\n\nSlow waveform previews\nNo marker export in the first firmware release\n\nVerdict\n\nThe recorder is easy to understand and dependable for basic field work. Buyers who need extensive metadata editing should wait for a software update.",
+      "title": "Fieldnote R2 recorder review",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eThe fictional Fieldnote R2 is a compact recorder designed around physical controls. Its display remains readable outdoors, and recordings can be copied over a standard storage interface.\u003c/p\u003e\u003cp\u003e\u003cstrong\u003eScore: 8/10\u003c/strong\u003e\u003c/p\u003e\u003ch2\u003eWhat works\u003c/h2\u003e\u003cul\u003e\u003cli\u003eClear gain controls with useful detents\u003c/li\u003e\u003cli\u003ePredictable file naming\u003c/li\u003e\u003cli\u003eReplaceable battery pack\u003c/li\u003e\u003c/ul\u003e\u003ch2\u003eWhat does not\u003c/h2\u003e\u003cul\u003e\u003cli\u003eSlow waveform previews\u003c/li\u003e\u003cli\u003eNo marker export in the first firmware release\u003c/li\u003e\u003c/ul\u003e\u003ch2\u003eVerdict\u003c/h2\u003e\u003cp\u003eThe recorder is easy to understand and dependable for basic field work. Buyers who need extensive metadata editing should wait for a software update.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Devon Gray",
+      "excerpt": "A review of the fictional Fieldnote R2 portable recorder.",
+      "site_name": "Bench Reviews",
+      "language": "en"
+    },
+    "recipe": {
+      "body": "This soup uses pantry ingredients and tolerates substitutions. Browning the vegetables first gives the broth enough depth without a long simmer.\n\nIngredients\n\nOne cup brown lentils\nTwo carrots, diced\nOne onion, diced\nFour cups vegetable stock\n\nMethod\n\nCook the onion and carrots until their edges begin to color.\nAdd lentils and stock, then simmer until tender.\nSeason with lemon, salt, and black pepper before serving.\n\nLeftovers keep for three days. Add a small amount of water when reheating because the lentils continue to absorb broth.",
+      "title": "Weeknight lentil soup",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle itemscope=\"\" itemtype=\"https://schema.org/Recipe\"\u003e\u003cp itemprop=\"description\"\u003eThis soup uses pantry ingredients and tolerates substitutions. Browning the vegetables first gives the broth enough depth without a long simmer.\u003c/p\u003e\u003ch2\u003eIngredients\u003c/h2\u003e\u003cul\u003e\u003cli\u003eOne cup brown lentils\u003c/li\u003e\u003cli\u003eTwo carrots, diced\u003c/li\u003e\u003cli\u003eOne onion, diced\u003c/li\u003e\u003cli\u003eFour cups vegetable stock\u003c/li\u003e\u003c/ul\u003e\u003ch2\u003eMethod\u003c/h2\u003e\u003col\u003e\u003cli\u003eCook the onion and carrots until their edges begin to color.\u003c/li\u003e\u003cli\u003eAdd lentils and stock, then simmer until tender.\u003c/li\u003e\u003cli\u003eSeason with lemon, salt, and black pepper before serving.\u003c/li\u003e\u003c/ol\u003e\u003cp\u003eLeftovers keep for three days. Add a small amount of water when reheating because the lentils continue to absorb broth.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Mina Field",
+      "excerpt": "A forgiving lentil soup for a weeknight meal.",
+      "site_name": "Example Kitchen",
+      "language": "en"
+    },
+    "schema-org": {
+      "body": "A product row that remains pending does not prove its queue job still exists. Reconciliation must identify the exact attempt and verify that no active replacement now owns the product state.\n\nInstallation-wide discovery should reveal only stable job identifiers to the reconciler. Candidate details are then read through the ordinary repository path so every repair observes the current application state.\n\nQuery errors fail closed. A missing result is not evidence of a missing job, and one failed candidate should not prevent later candidates from being checked in the next bounded pass.",
+      "title": "Queue evidence and product state",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv itemprop=\"articleBody\"\u003e\u003cp\u003eA product row that remains pending does not prove its queue job still exists. Reconciliation must identify the exact attempt and verify that no active replacement now owns the product state.\u003c/p\u003e\u003cp\u003eInstallation-wide discovery should reveal only stable job identifiers to the reconciler. Candidate details are then read through the ordinary repository path so every repair observes the current application state.\u003c/p\u003e\u003cp\u003eQuery errors fail closed. A missing result is not evidence of a missing job, and one failed candidate should not prevent later candidates from being checked in the next bounded pass.\u003c/p\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Sam River",
+      "excerpt": "How exact attempt identity supports terminal reconciliation.",
+      "site_name": "Schema Daily",
+      "language": "en"
+    },
+    "scientific-abstract": {
+      "body": "Abstract\n\nAsynchronous workflows can deliver results after the product state that requested them has changed. We describe a monotonically increasing attempt generation that binds each result to a specific request state.\n\nOur model rejects results when the stored generation differs from the job generation, even if an older child record was deleted and recreated. The generation owner remains on the aggregate root to prevent an ABA reset.\n\nControlled schedules demonstrate that the rule is preserved under retries, cancellation, and concurrent replacement. The fixture contains no real experimental claim; it exists to test extraction of scientific markup.",
+      "title": "Monotonic Generations in Retried Workflows",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003ch2\u003eAbstract\u003c/h2\u003e\u003cp\u003eAsynchronous workflows can deliver results after the product state that requested them has changed. We describe a monotonically increasing attempt generation that binds each result to a specific request state.\u003c/p\u003e\u003cp\u003eOur model rejects results when the stored generation differs from the job generation, even if an older child record was deleted and recreated. The generation owner remains on the aggregate root to prevent an ABA reset.\u003c/p\u003e\u003cp\u003eControlled schedules demonstrate that the rule is preserved under retries, cancellation, and concurrent replacement. The fixture contains no real experimental claim; it exists to test extraction of scientific markup.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "A. Example; B. Sample",
+      "excerpt": "A synthetic abstract about preventing stale asynchronous results.",
+      "site_name": "Example Papers",
+      "language": "en"
+    },
+    "short-article": {
+      "body": "The scheduled database maintenance completed at 03:18 UTC. Queue processing resumed automatically, and the reconciliation backlog returned to zero.\n\nNo customer action is required. Metrics and delayed jobs will remain under observation for the next hour.",
+      "title": "Maintenance window complete",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eThe scheduled database maintenance completed at 03:18 UTC. Queue processing resumed automatically, and the reconciliation backlog returned to zero.\u003c/p\u003e\u003cp\u003eNo customer action is required. Metrics and delayed jobs will remain under observation for the next hour.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Operations",
+      "excerpt": "A short synthetic operational update.",
+      "site_name": "Status Notes",
+      "language": "en"
+    },
+    "spa-shell": {
+      "body": "This application requires JavaScript to display the requested article.window.__BOOTSTRAP__={route:\"/article/empty\"}",
+      "title": "Reader",
+      "document_html": "\u003cdiv id=\"app\"\u003e\u003cnoscript\u003eThis application requires JavaScript to display the requested article.\u003c/noscript\u003e\u003c/div\u003e\u003cscript\u003ewindow.__BOOTSTRAP__={route:\"/article/empty\"}\u003c/script\u003e",
+      "author": "",
+      "excerpt": "A client-rendered reading application.",
+      "site_name": "",
+      "language": "en"
+    },
+    "standard-blog": {
+      "body": "A calm system makes its important transitions visible. Operators can tell whether work was accepted, whether it is still running, and which terminal result was recorded without reconstructing the story from unrelated logs.\n\nDurable work also needs one owner for the database change and the queue action. Keeping those effects together makes retries ordinary and turns ambiguous crashes into states that a reconciler can resolve.\n\nThe final ingredient is a bounded retention policy with enough recovery time. Capacity metrics then show whether the bound is being honored before storage pressure becomes an incident.",
+      "title": "Calm Systems - Rowan's Notes",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eA calm system makes its important transitions visible. Operators can tell whether work was accepted, whether it is still running, and which terminal result was recorded without reconstructing the story from unrelated logs.\u003c/p\u003e\u003cp\u003eDurable work also needs one owner for the database change and the queue action. Keeping those effects together makes retries ordinary and turns ambiguous crashes into states that a reconciler can resolve.\u003c/p\u003e\u003cp\u003eThe final ingredient is a bounded retention policy with enough recovery time. Capacity metrics then show whether the bound is being honored before storage pressure becomes an incident.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Rowan Hale",
+      "excerpt": "A practical note about keeping background work observable.",
+      "site_name": "Rowan's Notes",
+      "language": "en"
+    },
+    "technical-docs": {
+      "body": "A durable command records the product transition and its queue operation in one transaction. Callers submit intent and receive a stable result; they do not manage transaction handles.\n\nRequirements\n\nUse a stable idempotency key.\nLock multiple records in deterministic key order.\nReturn a classified error for conflicts.\n\nExample\n\nresult, err := commands.Submit(ctx, SubmitCommand{LinkID: id})\nif errors.Is(err, ErrConflict) { return retryLater }\n\nRetry the whole command after an ambiguous transport failure. The adapter will observe the existing idempotency key and return the committed result.",
+      "title": "Retrying durable commands - Example Docs",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eA durable command records the product transition and its queue operation in one transaction. Callers submit intent and receive a stable result; they do not manage transaction handles.\u003c/p\u003e\u003ch2\u003eRequirements\u003c/h2\u003e\u003cul\u003e\u003cli\u003eUse a stable idempotency key.\u003c/li\u003e\u003cli\u003eLock multiple records in deterministic key order.\u003c/li\u003e\u003cli\u003eReturn a classified error for conflicts.\u003c/li\u003e\u003c/ul\u003e\u003ch2\u003eExample\u003c/h2\u003e\u003cpre\u003e\u003ccode\u003eresult, err := commands.Submit(ctx, SubmitCommand{LinkID: id})\nif errors.Is(err, ErrConflict) { return retryLater }\u003c/code\u003e\u003c/pre\u003e\u003cp\u003eRetry the whole command after an ambiguous transport failure. The adapter will observe the existing idempotency key and return the committed result.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "",
+      "excerpt": "How to retry an idempotent durable command safely.",
+      "site_name": "Example Docs",
+      "language": "en"
+    },
+    "travel-guide": {
+      "body": "North Harbor is fictional, but its compact waterfront makes a useful guide fixture. Begin at the old signal station, where a public path follows the disused rail line toward the market.\n\nMorning\n\nArrive before the market becomes busy and take the upper walkway for an unobstructed view of the working docks. The small maritime room opens at nine.\n\nAfternoon\n\nCross the pedestrian bridge and follow signs to the community garden. Cafes around the square serve lunch without requiring a reservation.\n\nEvening\n\nReturn along the lower path as the harbor lights come on. The final ferry leaves from the central pier, a ten-minute walk from the station.",
+      "title": "A walking day in North Harbor",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003carticle\u003e\u003cp\u003eNorth Harbor is fictional, but its compact waterfront makes a useful guide fixture. Begin at the old signal station, where a public path follows the disused rail line toward the market.\u003c/p\u003e\u003ch2\u003eMorning\u003c/h2\u003e\u003cp\u003eArrive before the market becomes busy and take the upper walkway for an unobstructed view of the working docks. The small maritime room opens at nine.\u003c/p\u003e\u003ch2\u003eAfternoon\u003c/h2\u003e\u003cp\u003eCross the pedestrian bridge and follow signs to the community garden. Cafes around the square serve lunch without requiring a reservation.\u003c/p\u003e\u003ch2\u003eEvening\u003c/h2\u003e\u003cp\u003eReturn along the lower path as the harbor lights come on. The final ferry leaves from the central pier, a ten-minute walk from the station.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e",
+      "author": "Sana Reed",
+      "excerpt": "A fictional waterfront itinerary without booking links.",
+      "site_name": "Near and Far",
+      "language": "en"
+    },
+    "truncated-html": {
+      "body": "A range fetch may stop before the closing tags arrive, but the parser can still recover a document tree. The extractor should retain complete paragraphs that were received before the byte limit.\n\nThe caller records that the capture was bounded and can schedule a full fetch when quality is too weak. It should not crash merely because an article, body, or html element is left open.\n\nThis final paragraph is intentionally cut in the middle so the fixture resembles a real bounded response whose last network chunk ended before the document was complete",
+      "title": "Partial responses can still be useful",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003cp\u003eA range fetch may stop before the closing tags arrive, but the parser can still recover a document tree. The extractor should retain complete paragraphs that were received before the byte limit.\u003c/p\u003e\u003cp\u003eThe caller records that the capture was bounded and can schedule a full fetch when quality is too weak. It should not crash merely because an article, body, or html element is left open.\u003c/p\u003e\u003cp\u003eThis final paragraph is intentionally cut in the middle so the fixture resembles a real bounded response whose last network chunk ended before the document was complete\n\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "Edge Team",
+      "excerpt": "Recovering readable text from a bounded response.",
+      "site_name": "",
+      "language": "en"
+    },
+    "wiki-reference": {
+      "body": "Scope\n\nBackground processing\n\nKey property\n\nRecoverable intent\n\nDurable work is background activity whose intent survives process failure. A system commonly stores product state and a queue record so another process can resume the activity.\n\nAtomic coordination\n\nWhen the database and queue share a transaction, a command can commit both the state transition and job insertion together. A caller does not need to infer which half succeeded.\n\nReconciliation\n\nRetention and reconciliation complement atomic submission. A reconciler detects records that remain nonterminal after their exact queue evidence is missing and records a stable terminal reason.\n\nSee also\n\nIdempotency, monotonic generation, deterministic lock ordering, and bounded retention.",
+      "title": "Durable work - Example Reference",
+      "document_html": "\u003cdiv id=\"readability-page-1\" class=\"page\"\u003e\u003cdiv\u003e\u003carticle\u003e\u003ctable\u003e\u003ctbody\u003e\u003ctr\u003e\u003cth\u003eScope\u003c/th\u003e\u003ctd\u003eBackground processing\u003c/td\u003e\u003c/tr\u003e\u003ctr\u003e\u003cth\u003eKey property\u003c/th\u003e\u003ctd\u003eRecoverable intent\u003c/td\u003e\u003c/tr\u003e\u003c/tbody\u003e\u003c/table\u003e\u003cp\u003eDurable work is background activity whose intent survives process failure. A system commonly stores product state and a queue record so another process can resume the activity.\u003c/p\u003e\u003ch2\u003eAtomic coordination\u003c/h2\u003e\u003cp\u003eWhen the database and queue share a transaction, a command can commit both the state transition and job insertion together. A caller does not need to infer which half succeeded.\u003c/p\u003e\u003ch2\u003eReconciliation\u003c/h2\u003e\u003cp\u003eRetention and reconciliation complement atomic submission. A reconciler detects records that remain nonterminal after their exact queue evidence is missing and records a stable terminal reason.\u003c/p\u003e\u003ch2\u003eSee also\u003c/h2\u003e\u003cp\u003eIdempotency, monotonic generation, deterministic lock ordering, and bounded retention.\u003c/p\u003e\u003c/article\u003e\u003c/div\u003e\u003c/div\u003e",
+      "author": "",
+      "excerpt": "An overview of durable work coordination.",
+      "site_name": "Example Reference",
+      "language": "en"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+.git
+.github
+.claude
+bin
+docs
+.env
+.env.*
+!.env.example
+**/*_test.go
+**/testdata/
+
+# 依赖目录一律不进构建上下文：Reader 与共享 API 包的依赖由
+# reader-builder 阶段按根 workspace lockfile 安装；Extension 不参与镜像构建。
+**/node_modules
+
+# reader/dist 由 reader-builder 阶段现场产出；把开发机上的旧产物带进上下文
+# 只会造成困惑（构建用的到底是哪一份）。
+reader/dist
+
+# 同理，本机 `make reader-build` 注入的产物不进上下文——镜像里的 Reader 必须
+# 来自 reader-builder 阶段这一条确定路径。挂载点自身要留着（go:embed 需要它
+# 存在），所以只排除内容。
+internal/app/assets/reader/*
+!internal/app/assets/reader/.gitkeep
+
+# 镜像构建用不到的目录：浏览器扩展、设计稿原型、离线 eval 用例、
+# dbintegration 独立 module、本地调研工件。
+extension
+design
+evals
+test
+artifacts

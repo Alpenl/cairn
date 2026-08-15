@@ -1,0 +1,47 @@
+[
+  {
+    "name": "basic success article",
+    "url": "https://example.com/articles/12345",
+    "fetcher_type": "basic",
+    "fetch_body": "Fetched body",
+    "summary": "分析摘要",
+    "tags": ["Go", "AI"],
+    "want_status": "done",
+    "want_run_result": "success",
+    "want_content_type": "article"
+  },
+  {
+    "name": "search fallback low confidence",
+    "url": "https://example.com/posts/12345",
+    "fetcher_type": "basic+search",
+    "fetch_body": "Recovered from search",
+    "summary": "低置信摘要",
+    "tags": ["Go"],
+    "want_status": "done",
+    "want_run_result": "low_confidence",
+    "want_low_confidence_reason": "search_fallback",
+    "want_content_type": "article"
+  },
+  {
+    "name": "thin content low confidence",
+    "url": "https://example.com/posts/67890",
+    "fetcher_type": "jina+thin",
+    "fetch_body": "Thin body",
+    "summary": "薄内容摘要",
+    "tags": ["Docs"],
+    "want_status": "done",
+    "want_run_result": "low_confidence",
+    "want_low_confidence_reason": "thin_content",
+    "want_content_type": "article"
+  },
+  {
+    "name": "fetch network failure",
+    "url": "https://example.com/fail",
+    "fetch_error": "dial tcp: lookup example.com: no such host",
+    "want_status": "failed",
+    "want_run_result": "failed",
+    "want_failure_stage": "fetch",
+    "want_error_category": "network",
+    "want_content_type": "unknown"
+  }
+]

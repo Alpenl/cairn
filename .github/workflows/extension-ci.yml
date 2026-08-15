@@ -1,0 +1,96 @@
+name: extension-ci
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+
+      # pnpm must be installed before setup-node so the ordinary root install
+      # can use setup-node's cache. Source verification still passes a fresh
+      # absolute --store-dir and cannot read this cached store.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+        with:
+          package_json_file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # One root audit policy covers both consumers and the shared package.
+      - name: Audit dependencies
+        run: pnpm audit:ci
+
+      - name: Check generated API contract
+        run: pnpm --filter webtag-extension api:check
+
+      # Consumer typechecks include DOM libraries. Run the shared package's
+      # own tsconfig so accidental browser globals cannot enter its API.
+      - name: Typecheck shared API package (no DOM)
+        run: pnpm api:typecheck
+
+      # ESLint check mode (no --fix, zero-warning gate). Catches
+      # prettier/prettier drift and lint regressions before merge; the
+      # auto-fixer is `pnpm lint:fix`.
+      - name: Lint
+        run: pnpm --filter webtag-extension lint
+
+      # Build first: Vite (unplugin-auto-import) generates the
+      # auto-imports.d.ts / components.d.ts that vue-tsc relies on. A fresh CI
+      # checkout has neither (they are gitignored), so typecheck MUST run
+      # after a build or it fails with "Cannot find name 'ref'" etc.
+      - name: Build (Chrome + Firefox)
+        run: pnpm --filter webtag-extension build
+
+      - name: Verify build reachability
+        run: pnpm --filter webtag-extension verify:build
+
+      - name: Typecheck
+        run: pnpm --filter webtag-extension typecheck
+
+      - name: Test
+        run: pnpm --filter webtag-extension test
+
+      - name: Pack install and source artifacts
+        run: pnpm --filter webtag-extension run pack
+
+      - name: Verify packaged install artifacts
+        run: pnpm --filter webtag-extension verify:install
+
+      # The verifier proves the empty store cannot succeed offline, then uses
+      # network downloads to populate a separate isolated store for the
+      # frozen install and reproducible Firefox rebuild.
+      - name: Verify source artifact from an empty isolated store
+        run: pnpm --filter webtag-extension verify:source
+
+      - name: Upload verified artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: extension-release-artifacts
+          path: |
+            extension/extension-chrome
+            extension/extension-firefox
+            extension/dist/webtag-chrome.zip
+            extension/dist/webtag-firefox.zip
+            extension/dist/webtag-source.zip
+          if-no-files-found: error
+          retention-days: 7

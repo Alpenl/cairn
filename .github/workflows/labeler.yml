@@ -1,0 +1,32 @@
+name: labeler
+
+# 按 .github/labeler.yml 的路径规则给 PR 自动打 area:* 标签。
+#
+# 公开仓库的 fork PR 在 pull_request 事件下只能拿到只读 token，无法写标签。
+# 这里可以安全使用 pull_request_target：workflow 不 checkout、不执行 PR head 中的
+# 代码或配置，只让固定 SHA 的 labeler 读取基分支配置与 GitHub 的 changed-files API。
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13
+        with:
+          configuration-path: .github/labeler.yml
+          # 不删除人工加的标签：area:* 由路径推导，但维护者可能手工补了
+          # agent-ready 之类的标签，同步删除会把它们一并抹掉。
+          sync-labels: false

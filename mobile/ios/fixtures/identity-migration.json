@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "name": "cancel",
+      "source_revision": 1,
+      "target_revision": 2,
+      "active_revision_at_execute": 2,
+      "queue_ids": ["queue-a"],
+      "has_recent": true,
+      "todo_operation_ids": ["create-a", "patch-a", "delete-a"],
+      "actions": ["prepare", "cancel"],
+      "expected": {
+        "complete": false,
+        "target_changed": false,
+        "queue_writes": 0,
+        "recent_writes": 0,
+        "todo_writes": 0,
+        "network_sends": 0,
+        "drain": false
+      }
+    },
+    {
+      "name": "r1_to_r2",
+      "source_revision": 1,
+      "target_revision": 2,
+      "active_revision_at_execute": 2,
+      "queue_ids": ["queue-a", "queue-b"],
+      "has_recent": true,
+      "todo_operation_ids": ["create-a", "patch-a", "delete-a"],
+      "actions": ["prepare", "confirm"],
+      "expected": {
+        "complete": true,
+        "target_changed": false,
+        "queue_writes": 2,
+        "recent_writes": 1,
+        "todo_writes": 1,
+        "network_sends": 0,
+        "drain": true
+      }
+    },
+    {
+      "name": "a_b_a",
+      "source_revision": 1,
+      "target_revision": 3,
+      "active_revision_at_execute": 3,
+      "queue_ids": ["queue-a-r1"],
+      "foreign_queue_ids": ["queue-b-r2"],
+      "has_recent": false,
+      "todo_operation_ids": ["create-a-r1"],
+      "actions": ["prepare", "confirm"],
+      "expected": {
+        "complete": true,
+        "target_changed": false,
+        "queue_writes": 1,
+        "recent_writes": 0,
+        "todo_writes": 1,
+        "network_sends": 0,
+        "drain": true,
+        "foreign_queue_revision": 2
+      }
+    },
+    {
+      "name": "stale_target",
+      "source_revision": 1,
+      "target_revision": 2,
+      "active_revision_at_execute": 3,
+      "queue_ids": ["queue-a"],
+      "has_recent": true,
+      "todo_operation_ids": ["create-a"],
+      "actions": ["prepare", "confirm"],
+      "expected": {
+        "complete": false,
+        "target_changed": true,
+        "queue_writes": 0,
+        "recent_writes": 0,
+        "todo_writes": 0,
+        "network_sends": 0,
+        "drain": false
+      }
+    },
+    {
+      "name": "partial_retry",
+      "source_revision": 1,
+      "target_revision": 2,
+      "active_revision_at_execute": 2,
+      "queue_ids": ["queue-a", "queue-b"],
+      "has_recent": true,
+      "todo_operation_ids": ["create-a", "patch-a"],
+      "fail_once": ["recent"],
+      "actions": ["prepare", "confirm", "retry"],
+      "expected": {
+        "complete": true,
+        "target_changed": false,
+        "queue_writes": 2,
+        "recent_writes": 1,
+        "recent_attempts": 2,
+        "todo_writes": 1,
+        "network_sends": 0,
+        "drain": true
+      }
+    }
+  ]
+}

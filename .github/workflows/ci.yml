@@ -1,0 +1,233 @@
+name: ci
+run-name: ci / ${{ github.event_name }} / ${{ github.ref_name }}
+
+# 唯一的 PR 门禁入口。
+#
+# 这个文件本身不做任何验证——它只负责判断本次改动碰了哪些交付面，然后调用早已存在
+# 的 reusable workflow。之前那些 workflow 内容是好的，问题只是没有任何事件会触发
+# 它们：go-verify / lint / reader-ci / extension-ci / dbintegration 全部只声明了
+# workflow_call，于是 PR 上实际只跑 commitlint。
+#
+# ⚠ 关于 required check：行为门禁只认下面的 `gate`，不要把按路径过滤的组件 job
+# 设为 required。当前 ruleset 还要求 `lint-pr-commits`；这是下方 commitlint job 保留的
+# 兼容 context，同一次运行也由 `gate` 汇总。待本文件进入 main 后可再从 ruleset 移除。
+# 按路径过滤的 job 在不相关的 PR 上会是 skipped，而 GitHub 不把 skipped 当成
+# success——把 go 设为 required，一个只改 reader 的 PR 就会永远卡在等待。
+# `gate` 用 `if: always()` 保证自己一定执行，再去检查上游结果，这样才能既做路径
+# 过滤又有稳定的必需检查。
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+# Workflow 级 permissions 是所有 job（含被调用的 reusable workflow）的上限；
+# commitlint 要读 PR 元数据，其余验证只读仓库内容。
+# 任何 job 申请超过这个上限，GitHub 会在启动时直接拒绝整个文件——不是那一个 job
+# 失败，是所有 job 在 1 秒内全红。manual-verify.yml 踩过这个坑，注释也留在那边。
+permissions:
+  contents: read
+  pull-requests: read
+
+# 只有 PR 才取消在途运行：新推送让旧结论作废，跑完也没人看。
+#
+# push 到 main 和 merge_group 绝不能取消。main 上每个 commit 都需要自己的验证结论
+# ——如果后一次推送会取消前一次，那么连续推送时前面那些 commit 永远不会有结论，
+# 而「main 是绿的」这个判断恰恰是 merge queue 和发布的前提。这里踩过一次：#66 的
+# 推送把上一个 commit 的 run 取消了，reader 和 ios 的结果直接消失。
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------- 变更检测
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      go: ${{ steps.decide.outputs.go }}
+      lint: ${{ steps.decide.outputs.lint }}
+      reader: ${{ steps.decide.outputs.reader }}
+      extension: ${{ steps.decide.outputs.extension }}
+      android: ${{ steps.decide.outputs.android }}
+      ios: ${{ steps.decide.outputs.ios }}
+      database: ${{ steps.decide.outputs.database }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          # 需要完整历史才能和 base 求 diff。
+          fetch-depth: 0
+
+      - name: 判断本次改动涉及哪些交付面
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+
+          # merge_group 和 push to main 不做路径过滤，一律全跑。
+          # 合并队列检查的是「合并之后的结果」，此时省略任何一个面都失去意义;
+          # 而且 merge_group 事件没有可靠的 base 可比。
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "事件为 $EVENT_NAME，跳过路径过滤，全部执行"
+            for surface in go lint reader extension android ios database; do
+              emit "$surface" true
+            done
+            exit 0
+          fi
+
+          # pull_request：checkout 出来的 HEAD 是 base 与 head 的合并结果，
+          # 因此直接和 base.sha 两点比较即可得到本 PR 的净改动。
+          CHANGED="$(git diff --name-only "$BASE_SHA" HEAD)"
+          echo "本次改动文件："
+          printf '%s\n' "$CHANGED" | sed 's/^/  /'
+
+          touched() { printf '%s\n' "$CHANGED" | grep -qE "$1"; }
+
+          decide() {
+            local surface="$1" pattern="$2"
+            if touched "$pattern"; then emit "$surface" true; else emit "$surface" false; fi
+          }
+
+          # ci.yml 和 labeler.yml 是调度层，决定其他面跑不跑，改它们必须全部重验
+          # ——否则改坏门禁的那个 PR 恰好是唯一不受门禁检查的 PR。
+          #
+          # 但只对这两个文件全跑。早先的版本对 .github/workflows/ 下任何改动都全跑，
+          # 结果是任何一面红了就再也修不了 CI：改 lint.yml 也要等 iOS 模拟器通过。
+          # 其余 workflow 只强制它自己负责的那一面，见下面各 decide 里的 workflow 路径。
+          if touched '^\.github/workflows/(ci|labeler)\.yml$'; then
+            echo "调度层 workflow 有改动，全部执行"
+            for surface in go lint reader extension android ios database; do
+              emit "$surface" true
+            done
+            exit 0
+          fi
+
+          decide go        '^(cmd|internal|test)/|^go\.(mod|sum)$|^vendor/|^Makefile$|^Dockerfile$|^\.env\.example$|^scripts/(version(\.test)?|container_smoke|db_migrate_smoke|db-dump-schema)\.sh$|^\.github/workflows/go-verify\.yml$'
+          decide lint      '^(cmd|internal|test)/|^go\.(mod|sum)$|^vendor/|^Makefile$|^\.golangci|^\.github/workflows/'
+          decide reader    '^(reader|packages)/|^internal/app/assets/openapi\.json$|^pnpm-|^package\.json$|^\.github/workflows/reader-ci\.yml$'
+          decide extension '^(extension|packages)/|^internal/app/assets/openapi\.json$|^pnpm-|^package\.json$|^\.github/workflows/extension-ci\.yml$'
+          decide android   '^mobile/(android|shared)/|^scripts/mobile-|^\.github/workflows/mobile-android\.yml$'
+          decide ios       '^mobile/(ios|shared)/|^scripts/mobile-|^\.github/workflows/mobile-ios\.yml$'
+          # 真实 PG 上的集成测试。手写 SQL 必须跑在真实数据库上，mock 掉等于零覆盖，
+          # 所以只要碰到后端代码、迁移或 dbintegration 用例就必须跑，不能只留给定时任务
+          # ——定时任务是在合并之后才发现问题。
+          decide database  '^internal/|^test/dbintegration/|\.sql$|^go\.(mod|sum)$|^scripts/(db-dump-schema|db_migrate_smoke)\.sh$|^\.github/workflows/dbintegration\.yml$'
+
+  commitlint:
+    name: lint-pr-commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout PR commits
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Check Conventional Commits
+        uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed  # v6.2.1
+        with:
+          configFile: commitlint.config.mjs
+          failOnWarnings: false
+          helpURL: https://www.conventionalcommits.org/
+
+  # ---------------------------------------------------------------- 各交付面
+  go:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/go-verify.yml
+    with:
+      profile: full
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  lint:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/lint.yml
+    with:
+      profile: full
+
+  reader:
+    needs: changes
+    if: needs.changes.outputs.reader == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reader-ci.yml
+
+  extension:
+    needs: changes
+    if: needs.changes.outputs.extension == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/extension-ci.yml
+
+  android:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mobile-android.yml
+
+  ios:
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mobile-ios.yml
+
+  database:
+    needs: changes
+    if: needs.changes.outputs.database == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/dbintegration.yml
+
+  # ---------------------------------------------------------------- 汇总闸门
+  gate:
+    name: gate
+    # always() 是这个 job 的全部意义：上游被路径过滤跳过时它仍然执行，因而可以作为
+    # 一个稳定存在的 check 被 ruleset 要求。
+    #
+    # ⚠ 本文件里新增任何 job 都必须同时加进下面的 needs。不加不会报错——它只是不再
+    # 参与门禁，看起来仍然在跑，红了也照样能合。
+    if: always()
+    needs: [changes, commitlint, go, lint, reader, extension, android, ios, database]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: 任一上游失败或被取消则整体失败
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' "$RESULTS" | jq -r 'to_entries[] | "  \(.key): \(.value.result)"'
+
+          # skipped 是路径过滤的正常结果，放行；failure / cancelled 一律拦下。
+          BAD="$(printf '%s\n' "$RESULTS" \
+            | jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key')"
+
+          if [ -n "$BAD" ]; then
+            printf '%s\n' "$BAD" | while read -r job; do
+              echo "::error::必需检查未通过：$job"
+            done
+            exit 1
+          fi
+
+          echo "全部必需检查通过。"

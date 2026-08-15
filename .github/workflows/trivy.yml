@@ -1,0 +1,240 @@
+name: trivy
+
+on:
+  workflow_call:
+    inputs:
+      source_scan:
+        description: Run the repository/filesystem scan
+        required: false
+        type: boolean
+        default: true
+      image:
+        description: Registry repository containing immutable candidate digests
+        required: false
+        type: string
+        default: ''
+      full_index_digest:
+        description: Full multi-platform candidate index
+        required: false
+        type: string
+        default: ''
+      full_amd64_digest:
+        description: Full linux/amd64 candidate child
+        required: false
+        type: string
+        default: ''
+      full_arm64_digest:
+        description: Full linux/arm64 candidate child
+        required: false
+        type: string
+        default: ''
+      slim_index_digest:
+        description: Slim multi-platform candidate index
+        required: false
+        type: string
+        default: ''
+      slim_amd64_digest:
+        description: Slim linux/amd64 candidate child
+        required: false
+        type: string
+        default: ''
+      slim_arm64_digest:
+        description: Slim linux/arm64 candidate child
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  fs-scan:
+    if: ${{ inputs.source_scan }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+
+  image-scan:
+    if: ${{ inputs.image != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: full
+            arch: amd64
+            platform: linux/amd64
+            index_digest: ${{ inputs.full_index_digest }}
+            child_digest: ${{ inputs.full_amd64_digest }}
+          - variant: full
+            arch: arm64
+            platform: linux/arm64
+            index_digest: ${{ inputs.full_index_digest }}
+            child_digest: ${{ inputs.full_arm64_digest }}
+          - variant: slim
+            arch: amd64
+            platform: linux/amd64
+            index_digest: ${{ inputs.slim_index_digest }}
+            child_digest: ${{ inputs.slim_amd64_digest }}
+          - variant: slim
+            arch: arm64
+            platform: linux/arm64
+            index_digest: ${{ inputs.slim_index_digest }}
+            child_digest: ${{ inputs.slim_arm64_digest }}
+    env:
+      EVIDENCE: evidence/${{ matrix.variant }}-${{ matrix.arch }}
+      REFERENCE: ${{ inputs.image }}@${{ matrix.child_digest }}
+      TRIVY_PLATFORM: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Validate immutable scan coordinates
+        shell: bash
+        env:
+          INDEX_DIGEST: ${{ matrix.index_digest }}
+          CHILD_DIGEST: ${{ matrix.child_digest }}
+        run: |
+          set -euo pipefail
+          [[ "$INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$CHILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$REFERENCE" == *@sha256:* ]]
+          mkdir -p "$EVIDENCE"
+          jq -n \
+            --arg commit "$GITHUB_SHA" \
+            --arg image "${{ inputs.image }}" \
+            --arg variant "${{ matrix.variant }}" \
+            --arg platform "${{ matrix.platform }}" \
+            --arg index "$INDEX_DIGEST" \
+            --arg child "$CHILD_DIGEST" \
+            '{commit: $commit, image: $image, variant: $variant, platform: $platform, index_digest: $index, child_digest: $child}' \
+            > "$EVIDENCE/coordinates.json"
+
+      - name: Login to GHCR for candidate scan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Set up Docker Buildx for manifest verification
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+
+      - name: Prove child digest belongs to candidate index
+        shell: bash
+        env:
+          INDEX_DIGEST: ${{ matrix.index_digest }}
+          CHILD_DIGEST: ${{ matrix.child_digest }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect \
+            "${{ inputs.image }}@$INDEX_DIGEST" --format '{{json .Manifest}}' \
+            > "$EVIDENCE/index-manifest.json"
+          actual_child="$(jq -er --arg arch "$TARGET_ARCH" \
+            '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch)] |
+             if length == 1 then .[0].digest else error("expected exactly one platform child") end' \
+            "$EVIDENCE/index-manifest.json")"
+          [ "$actual_child" = "$CHILD_DIGEST" ] || {
+            echo "::error::$CHILD_DIGEST is not linux/$TARGET_ARCH in candidate index $INDEX_DIGEST"
+            exit 1
+          }
+          docker buildx imagetools inspect "$REFERENCE" --format '{{json .Image}}' \
+            > "$EVIDENCE/child-image.json"
+          jq -e --arg arch "$TARGET_ARCH" '.os == "linux" and .architecture == $arch' \
+            "$EVIDENCE/child-image.json" >/dev/null
+
+      - name: Trivy final child image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.REFERENCE }}
+          format: json
+          output: ${{ env.EVIDENCE }}/trivy.json
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Generate child digest SBOM
+        if: ${{ always() }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.REFERENCE }}
+          format: cyclonedx
+          output: ${{ env.EVIDENCE }}/sbom.cdx.json
+
+      - name: Normalize reproducible SBOM fields
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$EVIDENCE/sbom.cdx.json"
+          jq 'del(.serialNumber, .metadata.timestamp)' "$EVIDENCE/sbom.cdx.json" \
+            > "$EVIDENCE/sbom.cdx.json.tmp"
+          mv "$EVIDENCE/sbom.cdx.json.tmp" "$EVIDENCE/sbom.cdx.json"
+
+      - name: Verify Alpine runtime inventory and SBOM
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$EVIDENCE/trivy.json"
+          test -s "$EVIDENCE/sbom.cdx.json"
+          jq -e '[.Results[]? | select(.Class == "os-pkgs" and .Type == "alpine")] | length > 0' \
+            "$EVIDENCE/trivy.json" >/dev/null
+          jq -e 'any(.components[]?; ((.purl // "") | startswith("pkg:apk/alpine/")))' \
+            "$EVIDENCE/sbom.cdx.json" >/dev/null
+
+      - name: Verify full image yt-dlp and reviewed advisories
+        if: ${{ always() && matrix.variant == 'full' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected="$(sed -n 's/^ARG YTDLP_VERSION=//p' Dockerfile)"
+          actual="$(docker run --rm --platform '${{ matrix.platform }}' \
+            --entrypoint /usr/local/bin/yt-dlp "$REFERENCE" --version)"
+          [ "$actual" = "$expected" ] || {
+            echo "::error::yt-dlp version $actual does not match pin $expected"
+            exit 1
+          }
+          gh api --method GET \
+            "advisories?ecosystem=pip&affects=yt-dlp@$expected&type=reviewed&per_page=100" \
+            --jq '[.[] | {ghsa_id, severity, summary}]' > "$EVIDENCE/yt-dlp-advisories.json"
+          jq -e '[.[] | select(.severity == "high" or .severity == "critical")] | length == 0' \
+            "$EVIDENCE/yt-dlp-advisories.json" >/dev/null
+          jq -n \
+            --arg version "$expected" \
+            --arg coverage 'exact executable version plus GitHub reviewed PyPI advisories; Trivy may not identify a standalone upstream static executable' \
+            '{version: $version, coverage: $coverage}' > "$EVIDENCE/yt-dlp-coverage.json"
+
+      - name: Upload final image security evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: core-image-evidence-${{ matrix.variant }}-${{ matrix.arch }}
+          path: ${{ env.EVIDENCE }}/
+          if-no-files-found: error
+          retention-days: 90

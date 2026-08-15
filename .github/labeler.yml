@@ -1,0 +1,59 @@
+# 按改动路径自动给 PR 打交付面标签（actions/labeler v7 配置格式）。
+#
+# 这里的路径必须和 .github/workflows/ci.yml 里 changes job 的过滤正则保持一致
+# ——两处说的是同一件事「这次改动碰了哪个交付面」，说法不一致会让看板上的分布
+# 和实际跑过的门禁对不上。改一处就要改另一处。
+#
+# mobile/shared 同时属于 ios 和 android，两边都会命中，这是刻意的：共享 fixture
+# 的改动确实需要两端都重新验证。
+#
+# Android 与 iOS 各自的源码只触发自己的原生门禁；mobile/shared 和
+# scripts/mobile-* 同时触发两端，与下面两个标签的共同路径保持一致。
+
+"area:backend":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cmd/**"
+          - "internal/**"
+          - "test/**"
+          - "go.mod"
+          - "go.sum"
+          - "Dockerfile"
+
+"area:reader":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "reader/**"
+
+"area:extension":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extension/**"
+
+"area:ios":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "mobile/ios/**"
+          - "mobile/shared/**"
+          - "scripts/mobile-*"
+
+"area:android":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "mobile/android/**"
+          - "mobile/shared/**"
+          - "scripts/mobile-*"
+
+"area:shared-api":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "packages/**"
+          - "mobile/shared/**"
+          - "internal/app/assets/openapi.json"
+
+"area:ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "Makefile"
+          - "scripts/**"

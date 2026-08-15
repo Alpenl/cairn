@@ -1,0 +1,70 @@
+# 本机环境与密钥
+.env
+.env.*
+!.env.example
+.envrc
+.direnv/
+/.python-version
+.node-version
+
+# 系统、编辑器与临时文件
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 依赖、构建、测试与覆盖率产物
+/bin/
+/dist/
+/webtag
+node_modules/
+*.tsbuildinfo
+coverage/
+test-results/
+playwright-report/
+/cover.out
+extension/*.tgz
+
+# Python 本地缓存与虚拟环境
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# 移动端本机构建、签名与导出产物
+/mobile/android/.kotlin/
+*.apk
+*.aab
+*.ipa
+*.xcarchive/
+*.xcresult/
+*.dSYM/
+*.p12
+*.mobileprovision
+*.jks
+*.keystore
+
+# 本地产出的评审 / 调研工件与截图，不进版本控制。
+# 锚定到仓库根，避免忽略组件内同名的运行时资源。
+/artifacts/
+/image.png
+
+# Reader 前端（Vite + React）
+reader/dist/
+
+# Reader 构建产物在编译期被 //go:embed 注入二进制，不进版本控制。
+# 只保留挂载点自身的 .gitkeep，干净检出时后端在 /reader/ 返回「尚未构建」说明页。
+internal/app/assets/reader/*
+!internal/app/assets/reader/.gitkeep
+
+# Eval harness run outputs — commit specific baselines manually, ignore the rest
+evals/results/

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "fixture_id": "reader-vnext-wave0",
+  "fixture_status": "candidate-seeded",
+  "seed": "reader-vnext-wave0-2026-08-09",
+  "reader_journey": "reader-vnext-performance",
+  "postgres_plan_artifact_env": "READER_PERF_POSTGRES_PLAN_FILE",
+  "data_scale": {
+    "link_count": 10,
+    "thought_count": 3,
+    "note_count": 2,
+    "inbox_item_count": 3,
+    "feed_item_count": 5
+  }
+}

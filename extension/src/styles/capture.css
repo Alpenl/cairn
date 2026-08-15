@@ -1,0 +1,63 @@
+:root {
+  color-scheme: light dark;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --opacity-muted: 0.62;
+  --transition-fast: 150ms ease;
+  --gray-alpha-05: rgba(0, 0, 0, 0.05);
+  --gray-alpha-08: rgba(0, 0, 0, 0.08);
+  --gray-alpha-10: rgba(0, 0, 0, 0.1);
+  --gray-alpha-35: rgba(0, 0, 0, 0.35);
+  --gray-alpha-100: rgba(0, 0, 0, 0.08);
+  --color-success: #16803c;
+  --color-error: #c92a2a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --gray-alpha-05: rgba(255, 255, 255, 0.05);
+    --gray-alpha-08: rgba(255, 255, 255, 0.08);
+    --gray-alpha-10: rgba(255, 255, 255, 0.1);
+    --gray-alpha-35: rgba(255, 255, 255, 0.35);
+    --gray-alpha-100: rgba(255, 255, 255, 0.08);
+    --color-success: #4bc27a;
+    --color-error: #ff6b6b;
+  }
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: light-dark(#fff, #18181c);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}

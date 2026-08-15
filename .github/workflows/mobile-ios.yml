@@ -1,0 +1,43 @@
+name: mobile-ios
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  xctest:
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Validate shared fixtures
+        run: |
+          python3 mobile/shared/fixtures/validate.py
+          python3 mobile/shared/fixtures/compare.py
+          python3 mobile/ios/fixtures/validate_identity_migration.py
+
+      - name: Run Mobile static and wire gates
+        run: |
+          python3 scripts/mobile-x1-check.py
+          python3 scripts/mobile-wire-smoke.py
+
+      - name: Build and test iOS
+        run: xcodebuild -project mobile/ios/WebTagShare.xcodeproj -scheme WebTagShare -destination 'platform=iOS Simulator,name=iPhone 16' test
+
+      - name: Check whitespace and signing files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          ! rg --files mobile -g '*.p12' -g '*.mobileprovision' -g '*.jks' -g '*.keystore'

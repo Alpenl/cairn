@@ -1,0 +1,65 @@
+name: Feature request
+description: Propose a new capability or a change in behaviour.
+title: "feat: <short description>"
+labels:
+  - enhancement
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests work best when they describe the *problem* before
+        the solution. We are happy to push back on the proposed approach
+        if we see a simpler path.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What pain are you trying to solve? Who hits it and how often?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should Cairn do? Concrete user-facing behaviour, not implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did you think about, and why is the proposal better?
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Where does this change land?
+      options:
+        - HTTP API / handlers
+        - Service / pipeline behaviour
+        - Fetcher (new source or behaviour change)
+        - Analyzer / LLM integration
+        - Persistence / migration
+        - Ops / CI / Dockerfile
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Migration risk, breaking changes, perf implications, security surface.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true

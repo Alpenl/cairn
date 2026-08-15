@@ -1,0 +1,25 @@
+.DS_Store
+.idea/
+.qoder/
+.vite-ssg-dist
+.vite-ssg-temp
+.eslintcache
+*.crx
+*.local
+*.log
+*.pem
+*.xpi
+*.tsbuildinfo
+dist
+dist-ssr
+node_modules
+coverage
+extension-chrome
+extension-firefox
+src/auto-imports.d.ts
+src/components.d.ts
+stats.html
+
+# VitePress
+site/.vitepress/cache/
+site/.vitepress/dist/

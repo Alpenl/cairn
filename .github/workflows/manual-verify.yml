@@ -1,0 +1,133 @@
+name: manual-verify
+run-name: manual-verify / ${{ inputs.profile }} / ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Verification profile
+        required: true
+        default: quick
+        type: choice
+        options:
+          - quick
+          - full
+          - go
+          - reader
+          - extension
+          - mobile
+          - database
+          - security
+
+# Workflow-level permissions are the ceiling for every job, including reusable
+# workflows. CodeQL needs the wider grants below; each job narrows its own
+# permissions so unrelated profiles retain read-only access.
+#
+# Consequently every job below MUST declare its own permissions block. This
+# ceiling is deliberately wider than what all but two jobs need, so a job that
+# omits its own block silently inherits security-events: write.
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+concurrency:
+  group: manual-verify-${{ github.ref }}-${{ inputs.profile }}
+  cancel-in-progress: true
+
+jobs:
+  go_quick:
+    if: ${{ inputs.profile == 'quick' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/go-verify.yml
+    with:
+      profile: quick
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  go_full:
+    if: ${{ inputs.profile == 'full' || inputs.profile == 'go' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/go-verify.yml
+    with:
+      profile: full
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  lint_quick:
+    if: ${{ inputs.profile == 'quick' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/lint.yml
+    with:
+      profile: quick
+
+  lint_full:
+    if: ${{ inputs.profile == 'full' || inputs.profile == 'go' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/lint.yml
+    with:
+      profile: full
+
+  reader:
+    if: ${{ inputs.profile == 'full' || inputs.profile == 'reader' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reader-ci.yml
+
+  extension:
+    if: ${{ inputs.profile == 'full' || inputs.profile == 'extension' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/extension-ci.yml
+
+  mobile_android:
+    if: ${{ inputs.profile == 'full' || inputs.profile == 'mobile' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mobile-android.yml
+
+  mobile_ios:
+    if: ${{ inputs.profile == 'full' || inputs.profile == 'mobile' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mobile-ios.yml
+
+  database:
+    if: ${{ inputs.profile == 'full' || inputs.profile == 'database' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/dbintegration.yml
+
+  lint_security:
+    if: ${{ inputs.profile == 'security' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/lint.yml
+    with:
+      profile: security
+
+  codeql:
+    if: ${{ inputs.profile == 'security' }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+
+  trivy_filesystem:
+    if: ${{ inputs.profile == 'security' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/trivy.yml
+
+  fuzz_long:
+    if: ${{ inputs.profile == 'security' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fuzz-weekly.yml
+    with:
+      fuzztime: 10m

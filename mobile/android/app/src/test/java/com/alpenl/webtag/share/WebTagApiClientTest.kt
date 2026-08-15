@@ -1,0 +1,522 @@
+package com.alpenl.webtag.share
+
+import com.alpenl.webtag.share.contract.ErrorKind
+import com.alpenl.webtag.share.contract.REPRESENTATION_CONTRACT
+import com.alpenl.webtag.share.contract.SessionIdentity
+import com.alpenl.webtag.share.contract.UrlCandidateExtractor
+import com.alpenl.webtag.share.network.ApiResult
+import com.alpenl.webtag.share.network.WebTagApiClient
+import com.alpenl.webtag.share.todo.TodoCreate
+import com.alpenl.webtag.share.todo.TodoPatch
+import java.util.concurrent.TimeUnit
+import javax.net.ssl.HostnameVerifier
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.tls.HandshakeCertificates
+import okhttp3.tls.HeldCertificate
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.json.JSONObject
+
+class WebTagApiClientTest {
+    private lateinit var server: MockWebServer
+    private lateinit var certificates: HandshakeCertificates
+
+    @Before
+    fun setUp() {
+        val certificate = HeldCertificate.Builder()
+            .addSubjectAlternativeName("localhost")
+            .build()
+        certificates = HandshakeCertificates.Builder()
+            .heldCertificate(certificate)
+            .addTrustedCertificate(certificate.certificate)
+            .build()
+        server = MockWebServer()
+        server.useHttps(certificates.sslSocketFactory(), false)
+        server.start()
+    }
+
+    @After
+    fun tearDown() {
+        server.shutdown()
+    }
+
+    @Test
+    fun sessionRequiresMatchingNamespaceHeader() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody(sessionBody(namespace)),
+        )
+
+        val result = client().validateSession(origin(), "key")
+
+        assertTrue(result is ApiResult.Success)
+        assertEquals(namespace, (result as ApiResult.Success).value.clientDataNamespace)
+        val request = server.takeRequest(1, TimeUnit.SECONDS)
+        assertNotNull(request)
+        assertEquals("GET", request!!.method)
+        assertEquals("Bearer key", request.getHeader("Authorization"))
+    }
+
+    @Test
+    fun sessionRejectsNamespaceMismatchAndMissingHeader() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", otherNamespace)
+                .setBody(sessionBody(namespace)),
+        )
+        val mismatch = client().validateSession(origin(), "key")
+        assertEquals(ErrorKind.IDENTITY_MISMATCH, (mismatch as ApiResult.Failure).failure.kind)
+
+        server.enqueue(MockResponse().setResponseCode(200).setBody(sessionBody(namespace)))
+        val missing = client().validateSession(origin(), "key")
+        assertEquals(ErrorKind.IDENTITY_MISMATCH, (missing as ApiResult.Failure).failure.kind)
+    }
+
+    @Test
+    fun sessionRejectsInvalidNamespaceCharacters() {
+        val invalidNamespace = "n".repeat(42) + "!"
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", invalidNamespace)
+                .setBody(sessionBody(invalidNamespace)),
+        )
+
+        val result = client().validateSession(origin(), "key")
+
+        assertEquals(ErrorKind.INVALID_SUCCESS_PAYLOAD, (result as ApiResult.Failure).failure.kind)
+    }
+
+    @Test
+    fun sessionAcceptsInstallationIdentityWithoutScopes() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody(
+                    "{\"client_data_namespace\":\"$namespace\",\"representation_contract\":\"v3\"}",
+                ),
+        )
+
+        val result = client().validateSession(origin(), "key")
+
+        assertEquals(namespace, (result as ApiResult.Success).value.clientDataNamespace)
+    }
+
+    @Test
+    fun sessionRejectsBlankInstallationTokenBeforeCreatingARequest() {
+        val result = client().validateSession(origin(), "  \t")
+
+        assertEquals(ErrorKind.INVALID_CLIENT_RESPONSE, (result as ApiResult.Failure).failure.kind)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun submitUsesOnlyUrlBodyAndStableIdempotencyKey() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(202)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"link_id\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"pending\",\"job_id\":\"22222222-2222-2222-2222-222222222222\"}"),
+        )
+        val url = "https://example.com/a?x=1"
+
+        val result = client().submit(identity(), "key", url, "idem-1")
+
+        assertTrue(result is ApiResult.Success)
+        assertEquals("11111111-1111-1111-1111-111111111111", (result as ApiResult.Success).value.linkId)
+        val request = server.takeRequest(1, TimeUnit.SECONDS)!!
+        assertEquals("POST", request.method)
+        assertEquals("/api/links", request.path)
+        assertEquals("idem-1", request.getHeader("Idempotency-Key"))
+        assertEquals("{\"url\":\"https://example.com/a?x=1\"}", request.body.readUtf8())
+    }
+
+    @Test
+    fun submitSendsTheExtractedCandidateVerbatimAndNeverItsDisplayLabel() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(202)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"link_id\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"pending\",\"job_id\":null}"),
+        )
+        val shared = "HTTPS://Example.COM:8443/Keep%2FCase?utm=Aa%2Bb&x=1#Sect%20ion"
+        val candidate = UrlCandidateExtractor.extract(sharePayload(intentDataUrl = shared)).single()
+
+        val result = client().submit(identity(), "key", candidate.submissionValue, "idem-candidate")
+
+        assertTrue(result is ApiResult.Success)
+        assertEquals("example.com:8443/Keep%2FCase", candidate.displayLabel)
+        val request = server.takeRequest(1, TimeUnit.SECONDS)!!
+        // The wire body must carry the shared URL byte for byte: casing, port, percent-encoding,
+        // query and fragment all survive, and nothing was rebuilt from the label.
+        assertEquals("{\"url\":\"$shared\"}", request.body.readUtf8())
+    }
+
+    @Test
+    fun submitRejectsAnUnsupportedRepresentationBeforeCreatingARequest() {
+        val unsupportedIdentity = SessionIdentity(origin(), namespace, "v1")
+
+        val result = client().submit(unsupportedIdentity, "key", "https://example.com", "idem-unsupported")
+
+        assertEquals(ErrorKind.INVALID_CLIENT_RESPONSE, (result as ApiResult.Failure).failure.kind)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun classifiesAuthForbiddenRateLimitServerAndInvalidSuccessPayload() {
+        server.enqueue(error(401, "unauthorized"))
+        server.enqueue(error(403, "forbidden"))
+        server.enqueue(error(429, "rate_limit_exceeded", "90"))
+        server.enqueue(error(500, "internal_error"))
+        server.enqueue(MockResponse().setResponseCode(200).setHeader("X-WebTag-Data-Namespace", namespace).setBody("not-json"))
+
+        assertEquals(ErrorKind.HTTP_401, submitFailure().kind)
+        assertEquals(ErrorKind.HTTP_403, submitFailure().kind)
+        assertEquals(ErrorKind.HTTP_429_RATE_LIMIT, submitFailure().kind)
+        assertEquals(ErrorKind.HTTP_5XX, submitFailure().kind)
+        assertEquals(ErrorKind.INVALID_SUCCESS_PAYLOAD, submitFailure().kind)
+    }
+
+    @Test
+    fun doesNotFollowRedirectsOrForwardTheAuthenticatedRequest() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .setHeader("Location", "https://other.example/api/links"),
+        )
+
+        val result = client().submit(identity(), "key", "https://example.com", "idem-redirect")
+
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(ErrorKind.INVALID_CLIENT_RESPONSE, (result as ApiResult.Failure).failure.kind)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun rejectsUnexpectedSuccessfulStatusCode() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"link_id\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"pending\"}"),
+        )
+
+        val result = client().submit(identity(), "key", "https://example.com", "idem-status")
+
+        assertEquals(ErrorKind.INVALID_SUCCESS_PAYLOAD, (result as ApiResult.Failure).failure.kind)
+        assertEquals(200, result.failure.statusCode)
+    }
+
+    @Test
+    fun refreshUsesExplicitEndpointWithoutSubmitIdempotencyHeader() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(202)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"link_id\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"processing\",\"job_id\":\"33333333-3333-3333-3333-333333333333\"}"),
+        )
+
+        val result = client().refresh(identity(), "key", "11111111-1111-1111-1111-111111111111")
+
+        assertTrue(result is ApiResult.Success)
+        val request = server.takeRequest(1, TimeUnit.SECONDS)!!
+        assertEquals("POST", request.method)
+        assertEquals("/api/links/11111111-1111-1111-1111-111111111111/refresh", request.path)
+        assertNull(request.getHeader("Idempotency-Key"))
+        assertEquals(0L, request.body.size)
+    }
+
+    @Test
+    fun refreshRejectsAResponseForADifferentLink() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(202)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"link_id\":\"22222222-2222-2222-2222-222222222222\",\"status\":\"processing\"}"),
+        )
+
+        val result = client().refresh(identity(), "key", "11111111-1111-1111-1111-111111111111")
+
+        assertEquals(ErrorKind.INVALID_SUCCESS_PAYLOAD, (result as ApiResult.Failure).failure.kind)
+    }
+
+    @Test
+    fun refreshRejectsNonUuidBeforeCreatingARequest() {
+        val result = client().refresh(identity(), "key", "not-a-uuid")
+
+        assertEquals(ErrorKind.INVALID_CLIENT_RESPONSE, (result as ApiResult.Failure).failure.kind)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun rejectsNonUuidResponseIdentifiers() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(202)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"link_id\":\"not-a-uuid\",\"status\":\"pending\"}"),
+        )
+
+        val result = client().submit(identity(), "key", "https://example.com", "idem-invalid-id")
+
+        assertEquals(ErrorKind.INVALID_SUCCESS_PAYLOAD, (result as ApiResult.Failure).failure.kind)
+    }
+
+    @Test
+    fun mapsReadTimeoutToRetryableTimeout() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody(sessionBody(namespace))
+                .setBodyDelay(250, TimeUnit.MILLISECONDS),
+        )
+
+        val result = client(readTimeoutMillis = 50).validateSession(origin(), "key")
+
+        assertEquals(ErrorKind.CLIENT_DEADLINE, (result as ApiResult.Failure).failure.kind)
+    }
+
+    @Test
+    fun capabilitiesAndTodoListAreIdentityFenced() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"reader\":{\"todos\":true,\"home\":true,\"inbox\":false}}"),
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"items\":[${todoBody()}]}"),
+        )
+
+        val capabilities = client().capabilities(identity(), "key") as ApiResult.Success
+        val todos = client().listTodos(identity(), "key") as ApiResult.Success
+
+        assertTrue(capabilities.value.todos)
+        assertTrue(capabilities.value.home)
+        assertEquals("todo text", todos.value.single().text)
+        val capabilitiesRequest = server.takeRequest()
+        val todosRequest = server.takeRequest()
+        assertEquals("GET", capabilitiesRequest.method)
+        assertEquals("/api/capabilities", capabilitiesRequest.path)
+        assertEquals("GET", todosRequest.method)
+        assertEquals("/api/todos?limit=200", todosRequest.path)
+    }
+
+    @Test
+    fun todoListFollowsAllPagesAndRejectsACursorLoop() {
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"items\":[${todoBody()}],\"next_after\":\"next one\"}"),
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"items\":[]}"),
+        )
+
+        val result = client().listTodos(identity(), "key") as ApiResult.Success
+
+        assertEquals(1, result.value.size)
+        assertEquals("/api/todos?limit=200", server.takeRequest().path)
+        assertEquals("/api/todos?limit=200&after=next+one", server.takeRequest().path)
+
+        repeat(2) {
+            server.enqueue(
+                MockResponse().setResponseCode(200)
+                    .setHeader("X-WebTag-Data-Namespace", namespace)
+                    .setBody("{\"items\":[],\"next_after\":\"loop\"}"),
+            )
+        }
+        val loop = client().listTodos(identity(), "key")
+        assertEquals(ErrorKind.INVALID_CLIENT_RESPONSE, (loop as ApiResult.Failure).failure.kind)
+    }
+
+    @Test
+    fun todoListValidatesCanonicalSourceHref() {
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"items\":[${todoBody(sourceHref = "/?view=notes&note_id=one")}] }"),
+        )
+        assertEquals(
+            "/?view=notes&note_id=one",
+            (client().listTodos(identity(), "key") as ApiResult.Success).value.single().sourceHref,
+        )
+
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"items\":[${todoBody(sourceHref = "https://evil.example/")}] }"),
+        )
+        val invalid = client().listTodos(identity(), "key")
+        assertEquals(ErrorKind.INVALID_SUCCESS_PAYLOAD, (invalid as ApiResult.Failure).failure.kind)
+    }
+
+    @Test
+    fun todoCreateAndPatchSendStableIdempotencyAndDesiredState() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(201)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody(todoBody()),
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody(todoBody(done = true, origin = "note", hostRevision = 7)),
+        )
+
+        assertTrue(
+            client().createTodo(
+                identity(),
+                "key",
+                TodoCreate("todo text", 1_786_553_400_000),
+                "create-key",
+            ) is ApiResult.Success,
+        )
+        val create = server.takeRequest()
+        assertEquals("POST", create.method)
+        assertEquals("/api/todos", create.path)
+        assertEquals("create-key", create.getHeader("Idempotency-Key"))
+        val createBody = JSONObject(create.body.readUtf8())
+        assertEquals("todo text", createBody.getString("text"))
+        assertEquals("2026-08-12T16:50:00Z", createBody.getString("due_at"))
+
+        assertTrue(
+            client().patchTodo(
+                identity(),
+                "key",
+                TODO_ID,
+                TodoPatch(done = true, expectedHostRevision = 7),
+                "patch-key",
+            ) is ApiResult.Success,
+        )
+        val patch = server.takeRequest()
+        assertEquals("PATCH", patch.method)
+        assertEquals("/api/todos/$TODO_ID", patch.path)
+        assertEquals("patch-key", patch.getHeader("Idempotency-Key"))
+        val patchBody = JSONObject(patch.body.readUtf8())
+        assertTrue(patchBody.getBoolean("done"))
+        assertEquals(7, patchBody.getLong("expected_host_revision"))
+    }
+
+    @Test
+    fun todoDeleteAcceptsNoBodyButStillRequiresTheNamespaceHeader() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(204)
+                .setHeader("X-WebTag-Data-Namespace", namespace),
+        )
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        assertTrue(client().deleteTodo(identity(), "key", TODO_ID, "delete-key") is ApiResult.Success)
+        val request = server.takeRequest()
+        assertEquals("DELETE", request.method)
+        assertEquals("delete-key", request.getHeader("Idempotency-Key"))
+
+        val missingNamespace = client().deleteTodo(identity(), "key", TODO_ID, "delete-key-2")
+        assertEquals(ErrorKind.IDENTITY_MISMATCH, (missingNamespace as ApiResult.Failure).failure.kind)
+    }
+
+    @Test
+    fun projectedTodoWithoutARevisionIsRejectedAsInvalidSuccessPayload() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody("{\"items\":[${todoBody(origin = "thought", hostRevision = 0)}]}"),
+        )
+
+        val result = client().listTodos(identity(), "key")
+
+        assertEquals(ErrorKind.INVALID_SUCCESS_PAYLOAD, (result as ApiResult.Failure).failure.kind)
+    }
+
+    @Test
+    fun homeDecodesCountsFreshnessAndTodoSummary() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-WebTag-Data-Namespace", namespace)
+                .setBody(
+                    "{\"today\":\"2026-08-13\",\"summary\":\"3 tasks\",\"counts\":{\"todos\":3}," +
+                        "\"continue_reading\":[],\"recent_thoughts\":[],\"todos\":[${todoBody()}]," +
+                        "\"freshness\":\"partial\",\"partial\":true,\"stale\":false}",
+                ),
+        )
+
+        val result = client().home(identity(), "key") as ApiResult.Success
+
+        assertEquals(3, result.value.counts["todos"])
+        assertEquals("partial", result.value.freshness)
+        assertTrue(result.value.partial)
+    }
+
+    private fun submitFailure(): com.alpenl.webtag.share.network.ClassifiedFailure {
+        val result = client().submit(identity(), "key", "https://example.com", "idem-${server.requestCount}")
+        return (result as ApiResult.Failure).failure
+    }
+
+    private fun error(status: Int, code: String, retryAfter: String? = null): MockResponse =
+        MockResponse().setResponseCode(status).apply {
+            retryAfter?.let { setHeader("Retry-After", it) }
+            setBody("{\"error\":{\"error_code\":\"$code\"}}")
+        }
+
+    private fun sessionBody(value: String): String =
+        "{\"client_data_namespace\":\"$value\",\"representation_contract\":\"v3\"}"
+
+    private fun todoBody(
+        done: Boolean = false,
+        origin: String = "standalone",
+        hostRevision: Long = 0,
+        sourceHref: String? = null,
+    ): String =
+        "{\"id\":\"$TODO_ID\",\"text\":\"todo text\",\"due_at\":null,\"done\":$done," +
+            "\"origin_kind\":\"$origin\",\"origin_host_kind\":null,\"origin_host_id\":null," +
+            "\"origin_ref\":null,\"host_revision\":$hostRevision,\"completed_at\":null," +
+            "\"created_at\":\"2026-08-13T00:00:00Z\",\"updated_at\":\"2026-08-13T00:00:00Z\"," +
+            "\"expired\":false" + (sourceHref?.let { ",\"source_href\":${JSONObject.quote(it)}" } ?: "") + "}"
+
+    private fun identity() = SessionIdentity(origin(), namespace, REPRESENTATION_CONTRACT)
+
+    private fun origin(): String = server.url("/").toString().removeSuffix("/")
+
+    private fun client(readTimeoutMillis: Long = 2_000): WebTagApiClient {
+        val hostnameVerifier = HostnameVerifier { hostname, _ -> hostname == "localhost" }
+        val okHttp = OkHttpClient.Builder()
+            .sslSocketFactory(certificates.sslSocketFactory(), certificates.trustManager)
+            .hostnameVerifier(hostnameVerifier)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .connectTimeout(2, TimeUnit.SECONDS)
+            .readTimeout(readTimeoutMillis, TimeUnit.MILLISECONDS)
+            .writeTimeout(2, TimeUnit.SECONDS)
+            .callTimeout(2, TimeUnit.SECONDS)
+            .build()
+        return WebTagApiClient(okHttp)
+    }
+
+    companion object {
+        private const val TODO_ID = "11111111-1111-1111-1111-111111111111"
+        private val namespace = "n".repeat(43)
+        private val otherNamespace = "o".repeat(43)
+    }
+}

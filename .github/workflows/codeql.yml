@@ -1,0 +1,300 @@
+name: codeql
+
+on:
+  workflow_call:
+  schedule:
+    # 每周漂移检查，让长期没动的分支也过一遍 CodeQL。
+    - cron: '0 5 * * 1'
+
+# Must be the union of every job's permissions below: a job may narrow the
+# workflow-level grant but never widen it, and exceeding it makes GitHub reject
+# the file at startup rather than at the offending job. Kept in sync with
+# trivy.yml, which declares the same union for the same reason.
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analyze:
+    name: analyze-go
+    # 曾经这里挂着 `if: github.event.repository.private == false`，于是本仓
+    # （user-owned 私有）上整个 job 永远 skipped：weekly 漂移检查的覆盖**实际
+    # 为零**，而 skipped 又满足 required check，看上去还是通过的。
+    #
+    # 真正不可用的只有「把 SARIF 推到 GitHub Code Scanning」这一步——那个接口
+    # 对 user-owned 私有仓库要 Advanced Security。**分析本身完全能跑。**
+    # 所以现在无条件运行，用 `upload: never` + `output:` 把 SARIF 落到本地，
+    # 由下面自己的步骤判定，上传面板降为 best-effort。
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [go]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@458d36d7d4f47d0dd16ca424c1d3cda0060f1360  # v3.35.5
+        with:
+          languages: ${{ matrix.language }}
+          # `security-and-quality` is heavier than the default `security`
+          # query suite but surfaces dead code / API misuse that has bitten
+          # us before. Trade an extra ~3 min for the signal.
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@458d36d7d4f47d0dd16ca424c1d3cda0060f1360  # v3.35.5
+
+      - name: Perform analysis
+        uses: github/codeql-action/analyze@458d36d7d4f47d0dd16ca424c1d3cda0060f1360  # v3.35.5
+        with:
+          category: "/language:${{ matrix.language }}"
+          output: codeql-sarif
+          # 不在这里上传：user-owned 私有仓库上会失败，且一旦失败就拿不到
+          # 本地 SARIF 做判定。上传交给下面的 best-effort 步骤。
+          upload: never
+
+      # 面板能用就用（仓库转 public 或迁到有 Advanced Security 的 org 后自动
+      # 恢复），用不了也不影响判定——判定在下一步，读的是本地 SARIF。
+      # 同 trivy.yml 的 best-effort 上传处置。
+      - name: Upload SARIF to code scanning (best-effort)
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360  # v3.35.5
+        with:
+          sarif_file: codeql-sarif
+          category: "/language:${{ matrix.language }}"
+
+      # 判定 + 可观测合并在同一步：结论红的时候原因必然在日志与 job summary 里。
+      #
+      # ⚠ 规则对象**不在** `runs[].tool.driver.rules` 里。CodeQL Action 调
+      # databaseInterpretResults 时无条件传 `--sarif-group-rules-by-pack`，规则
+      # 被搬到 `runs[].tool.extensions[].rules`；同时 results 上**没有** `level`
+      # 字段。第一版判定只读 driver.rules，于是拿到空表、每条 result 都回落到
+      # 默认的 "warning"，**永远 0 个阻塞项、永远绿**——本仓第一次真跑就漏掉了
+      # 3 个 error 级 go/uncontrolled-allocation-size。
+      #
+      # 下面的 rules_seen 自检就是为此存在：有 result 却一条规则都没解析出来，
+      # 说明 SARIF 布局又变了，此时必须变红而不是当作「没问题」。
+      #
+      # 只对 error 级硬拦。warning / note 打印但不拦——`security-and-quality`
+      # 套件的这两级在 Go 上噪音较大，一次性全拦会重演「gate 恒红没人看」。
+      - name: Gate on findings
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, sys, collections
+
+          BLOCKING = {"error"}
+
+          # 允许被源内 suppression 放行的 finding，形如 "rule-id@path/to/file.go"。
+          # 空集 = 不放行任何东西。新增条目必须在 PR 里写明理由。
+          ALLOWED_SUPPRESSIONS = set()
+          sarifs = sorted(pathlib.Path("codeql-sarif").glob("*.sarif"))
+          if not sarifs:
+              print("::error::codeql-sarif/ 下没有 SARIF 文件——分析没产出结果，"
+                    "不能据此认为『没有问题』")
+              sys.exit(1)
+
+          def rule_level(rule):
+              return (
+                  rule.get("defaultConfiguration", {}).get("level")
+                  or rule.get("properties", {}).get("problem.severity")
+              )
+
+          counts = collections.Counter()
+          blocking = []
+          # 逐文件计数（而非全局累加）：两个 SARIF 一满一空时，累加会让空的那个
+          # 藏在总数里。当前 matrix 只有 go 一门语言、只产 1 个文件，属预防性。
+          per_file = []
+          rules_seen = 0
+          results_seen = 0
+          unresolved = []
+          suppressed = []
+          unregistered_sup = []
+          rejected_sup = []
+          for p in sarifs:
+              file_rules = rules_seen
+              file_results = results_seen
+              try:
+                  doc = json.loads(p.read_text())
+              except Exception as exc:
+                  # 不让它退化成一句 traceback——方向本来就是红的，但红了要看得懂。
+                  print("::error::%s 不是合法 JSON（%s）——无法判定，"
+                        "不能认为『没有问题』" % (p.name, exc))
+                  sys.exit(1)
+              for run in doc.get("runs", []):
+                  tool = run.get("tool", {})
+                  rules = {}
+                  # driver.rules 与 extensions[].rules 两处都收：前者是 SARIF
+                  # 的常规位置，后者是 --sarif-group-rules-by-pack 的落点。
+                  for holder in [tool.get("driver", {})] + list(tool.get("extensions", [])):
+                      for r in holder.get("rules", []):
+                          lvl = rule_level(r)
+                          if r.get("id") and lvl:
+                              rules[r["id"]] = lvl
+                  rules_seen += len(rules)
+                  for res in run.get("results", []):
+                      results_seen += 1
+                      # 源内抑制（`// codeql[rule-id]`）。**只有登记在
+                      # ALLOWED_SUPPRESSIONS 里的才放行**，未登记的照常参与判定。
+                      #
+                      # 初版写成「有 suppressions 就 continue」，等于一行源码
+                      # 注释即可让任意 error 通过——实测合成一条带 suppression
+                      # 的 go/sql-injection，gate 退出 0。而当时的注释还写着
+                      # 「同 reader 的 audit 豁免清单处置」：reader 那边是登记
+                      # 清单 + 偏离即红，这里只是打印，两者恰好差在起作用的
+                      # 那一半。清单目前为空，因此行为与「完全不认 suppression」
+                      # 一致——要放行必须显式登记，并在 PR 里说明理由。
+                      #
+                      # status 按 SARIF 规范判，只认 `accepted`（缺省即
+                      # accepted）。`rejected` 表示抑制未被接受、结果仍应报告；
+                      # `underReview` 表示尚未被接受——两者都不放行。
+                      raw_sup = res.get("suppressions") or []
+                      sup = [x for x in raw_sup
+                             if x.get("status", "accepted") == "accepted"]
+                      if raw_sup and not sup:
+                          # 被拒/待审的抑制不放行，但「有人试图在源码里抑制」
+                          # 这条信号要留下——否则它连同判定一起静默消失。
+                          rejected_sup.append(res.get("ruleId", "?"))
+                      if sup:
+                          rid = res.get("ruleId", "?")
+                          try:
+                              pl = res["locations"][0]["physicalLocation"]
+                              where = pl["artifactLocation"]["uri"]
+                          except Exception:
+                              where = "?"
+                          key = "%s@%s" % (rid, where)
+                          if key in ALLOWED_SUPPRESSIONS:
+                              suppressed.append(key)
+                              continue
+                          unregistered_sup.append(key)
+                      lvl = res.get("level") or rules.get(res.get("ruleId"))
+                      if lvl is None:
+                          # 既没有 result.level 也查不到规则——级别未知。不能
+                          # 默默当成 warning 放行。
+                          unresolved.append(res.get("ruleId", "?"))
+                          lvl = "error"
+                      counts[lvl] += 1
+                      if lvl in BLOCKING:
+                          try:
+                              pl = res["locations"][0]["physicalLocation"]
+                              loc = "%s:%s" % (
+                                  pl["artifactLocation"]["uri"],
+                                  pl.get("region", {}).get("startLine", "?"),
+                              )
+                          except Exception:
+                              loc = "<no location>"
+                          blocking.append(
+                              (res.get("ruleId", "?"), loc,
+                               res.get("message", {}).get("text", "")[:160])
+                          )
+
+              # 逐文件差值，收在本文件遍历结束处。
+              per_file.append((p.name, rules_seen - file_rules, results_seen - file_results))
+
+          # 规则表的产出与有没有 result 无关：run 30163322492 的 artifact 里
+          # 57 条规则中有 **55 条产出了零个 result**——这直接说明零发现的分析
+          # 同样会带回完整规则表（严格说这是从 per-rule 零 result 推到 per-run，
+          # 中间还有一步，所以是**强烈提示**而非严格证明——但足以支撑这道自检）。
+          #
+          # 因此「既无规则又无 result」基本等价于分析压根没跑。
+          #
+          # 上游那道「文件不存在」的检查挡不住这种。注意**文件损坏本来就会红**
+          # （json.loads 抛异常、脚本非零退出），真正漏掉的是**结构合法而内容
+          # 为空**的 SARIF——CodeQL 失败时通常不会留下 0 字节文件，留下的正是
+          # 这一种。
+          empty = [name for name, nr, nres in per_file if nr == 0 and nres == 0]
+          if empty:
+              print("::error::这些 SARIF 里既无规则定义也无 result——分析很可能"
+                    "没有真正执行，不能据此认为『没有问题』：%s" % ", ".join(empty))
+              sys.exit(1)
+
+          # 自检：规则表为空**且**确实有 result 因此定不了级 = 判定失去依据。
+          #
+          # 早先只判 `results_seen and rules_seen == 0`，会在「所有 result 都
+          # 自带 level、工具干脆不发 rules」这种合法 SARIF 上误红，而且报的
+          # 原因（判定失去依据）是错的——那种情况下每条都定级成功了。
+          # 多带一个 unresolved 条件，原意保留、误红降为 0。
+          if results_seen and rules_seen == 0 and unresolved:
+              print("::error::解析到 %d 条 result，一条规则定义都没找到，且有 %d 条"
+                    "无法定级——SARIF 布局可能又变了，判定失去依据，"
+                    "不能认为『没问题』" % (results_seen, len(unresolved)))
+              sys.exit(1)
+
+          lines = ["## CodeQL (go)", "", "| 级别 | 数量 |", "|---|---|"]
+          # 已知四级按固定顺序，其余（例如 problem.severity 回退时出现的
+          # `recommendation`）一律补在后面。早先只遍历这四个，多出来的级别会
+          # 被计入 counts 却一行都不显示，要靠人肉把表格加总去和脚注对差才
+          # 发现——「计了但看不见」和「没计」一样糟。
+          known = ("error", "warning", "note", "none")
+          for lvl in list(known) + sorted(set(counts) - set(known), key=str):
+              if counts[lvl]:
+                  lines.append("| %s | %d |" % (lvl, counts[lvl]))
+          if not sum(counts.values()):
+              lines.append("| _(无)_ | 0 |")
+          lines.append("")
+          lines.append("_规则定义 %d 条，result %d 条_" % (rules_seen, results_seen))
+
+          if suppressed:
+              lines += ["", "### 已登记放行的 suppression（不参与判定）", ""]
+              for key in sorted(set(suppressed)):
+                  lines.append("- `%s` × %d" % (key, suppressed.count(key)))
+
+          if rejected_sup:
+              lines += ["", "### 状态非 accepted 的 suppression（不放行）", ""]
+              for rid in sorted(set(rejected_sup)):
+                  lines.append("- `%s` × %d" % (rid, rejected_sup.count(rid)))
+
+          if unregistered_sup:
+              lines += ["", "### ⚠ 未登记的 suppression（仍参与判定）", ""]
+              for key in sorted(set(unregistered_sup)):
+                  lines.append("- `%s` × %d" % (key, unregistered_sup.count(key)))
+
+          if unresolved:
+              lines += ["", "### ⚠ 级别无法判定（按 error 处理）", ""]
+              for rid in sorted(set(unresolved)):
+                  lines.append("- `%s`" % rid)
+
+          if blocking:
+              lines += ["", "### 阻塞项（error）", ""]
+              for rid, loc, msg in blocking:
+                  lines.append("- `%s` %s — %s" % (rid, loc, msg))
+
+          summary = "\n".join(lines) + "\n"
+          print(summary)
+          if os.environ.get("GITHUB_STEP_SUMMARY"):
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+                  fh.write(summary)
+
+          if blocking:
+              print("::error::CodeQL 报出 %d 个 error 级问题" % len(blocking))
+              sys.exit(1)
+          PY
+
+      # 判定失败时也要留下完整结果，否则又回到「红了但看不到为什么」。
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: codeql-sarif/
+          if-no-files-found: warn
+          retention-days: 14

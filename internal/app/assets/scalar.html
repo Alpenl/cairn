@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WebTag API</title>
+  <style>
+    body { margin: 0; }
+  </style>
+</head>
+<body>
+  <script
+    id="api-reference"
+    data-url="/openapi.json"
+    data-configuration='{"theme":"default","darkMode":true,"defaultHttpClient":{"targetKey":"shell","clientKey":"curl"},"hideClientButton":false}'
+  ></script>
+  <!-- Pinned to an exact version + SRI hash so a malicious upstream release
+       (or a poisoned CDN cache) cannot inject script content into the docs
+       viewer, which lives on the same origin as the WebTag API. To bump:
+       update the version below, then recompute the integrity hash with
+         curl -sL https://cdn.jsdelivr.net/npm/@scalar/api-reference@<NEW> \
+           | openssl dgst -sha384 -binary | openssl base64 -A
+       and verify the rendering in staging before merging.
+       Offline deployments should mirror this script and patch this URL. -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.55.1"
+    integrity="sha384-Q86rnnrzht84BRiMsBxqWCF2qv39OxFZuCRUWZgm5KZSAdyJa3za65iRf8vfvaEY"
+    crossorigin="anonymous"
+  ></script>
+</body>
+</html>

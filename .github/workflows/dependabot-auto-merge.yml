@@ -1,0 +1,58 @@
+name: dependabot-auto-merge
+
+# 给 dependabot 的 patch / minor 升级开启自动合并。
+#
+# 「自动合并」不等于「不检查就合」：ruleset 要求 `gate` 和
+# `lint-pr-commits` 通过，且 `gate` 已汇总 commitlint 和所有相关交付面。
+# 启用 auto-merge 只是让 PR 在检查变绿之后自己合，检查红了它就一直停在那里。
+# 没有这道 ruleset 的话，auto-merge 会立刻合入，那才是危险的——所以这个 workflow
+# 依赖 ruleset 存在，不要在移除 ruleset 后还留着它。
+#
+# major 升级不自动合：跨大版本的破坏性变更需要人看一眼 changelog，CI 绿不代表语义
+# 兼容。GitHub Actions 的 major 升级尤其如此，它们经常改输入名或默认行为。
+#
+# Dependabot 的 pull_request workflow 始终拿只读 token，无法启用 auto-merge。
+# 这里可以安全使用 pull_request_target：workflow 不 checkout、不执行 PR head 中的
+# 脚本或配置，只读取 GitHub 提供的依赖升级元数据并调用仓库 API。
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: 读取升级元数据
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 对 patch / minor 启用 auto-merge
+        if: |
+          steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+          steps.meta.outputs.update-type == 'version-update:semver-minor'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
+
+      - name: major 升级只留标记，等人处理
+        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr comment "$PR_URL" --body \
+            "major 升级不自动合并。请确认 changelog 中的破坏性变更后手动合入。"

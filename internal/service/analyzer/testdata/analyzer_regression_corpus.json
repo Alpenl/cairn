@@ -1,0 +1,81 @@
+[
+  {
+    "name": "fenced json with explanatory prefix",
+    "raw": "分析如下：\n```json\n{\"summary\":\"稳定提取\",\"tags\":[\"Go\",\"Parser\"]}\n```",
+    "max_summary_chars": 20,
+    "min_tags": 1,
+    "max_tags": 5,
+    "max_tag_chars": 12,
+    "want_summary": "稳定提取",
+    "want_tags": ["Go", "Parser"]
+  },
+  {
+    "name": "markdown bullets then pretty json",
+    "raw": "- 先给结论\n- 再给 JSON\n{\n  \"summary\": \"列表后结果\",\n  \"tags\": [\"Crawler\", \"Index\"]\n}",
+    "max_summary_chars": 20,
+    "min_tags": 1,
+    "max_tags": 5,
+    "max_tag_chars": 12,
+    "want_summary": "列表后结果",
+    "want_tags": ["Crawler", "Index"]
+  },
+  {
+    "name": "mixed language wrapper",
+    "raw": "Final answer below.\n结果如下：{\"summary\":\"混合语言兼容\",\"tags\":[\"Search\",\"Go\"]}\nEnd.",
+    "max_summary_chars": 20,
+    "min_tags": 1,
+    "max_tags": 5,
+    "max_tag_chars": 12,
+    "want_summary": "混合语言兼容",
+    "want_tags": ["Search", "Go"]
+  },
+  {
+    "name": "invalid example followed by final json",
+    "raw": "错误示例 {\"summary\":\"\",\"tags\":[]}\n最终输出 {\"summary\":\"最终可用\",\"tags\":[\"Go\",\"Retry\"]}",
+    "max_summary_chars": 20,
+    "min_tags": 1,
+    "max_tags": 5,
+    "max_tag_chars": 12,
+    "want_summary": "最终可用",
+    "want_tags": ["Go", "Retry"]
+  },
+  {
+    "name": "json with braces inside string",
+    "raw": "说明：{\"summary\":\"包含 {花括号} 的摘要\",\"tags\":[\"JSON\",\"Edge\"]}",
+    "max_summary_chars": 20,
+    "min_tags": 1,
+    "max_tags": 5,
+    "max_tag_chars": 12,
+    "want_summary": "包含 {花括号} 的摘要",
+    "want_tags": ["JSON", "Edge"]
+  },
+  {
+    "name": "content parts text value object",
+    "raw": "前文略。\n{\"summary\":\"对象文本兼容\",\"tags\":[\"API\",\"Compat\"]}",
+    "max_summary_chars": 20,
+    "min_tags": 1,
+    "max_tags": 5,
+    "max_tag_chars": 12,
+    "want_summary": "对象文本兼容",
+    "want_tags": ["API", "Compat"]
+  },
+  {
+    "name": "rejects no valid json candidates",
+    "raw": "这里没有任何结构化输出，只是解释文本。",
+    "max_summary_chars": 20,
+    "min_tags": 1,
+    "max_tags": 5,
+    "max_tag_chars": 12,
+    "want_error_contains": "missing valid JSON"
+  },
+  {
+    "name": "truncates overlong surviving summary",
+    "raw": "{\"summary\":\"这段摘要明显超过限制并且没有其他候选\",\"tags\":[\"Go\"]}",
+    "max_summary_chars": 8,
+    "min_tags": 1,
+    "max_tags": 5,
+    "max_tag_chars": 12,
+    "want_summary": "这段摘要明显超…",
+    "want_tags": ["Go"]
+  }
+]

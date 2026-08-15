@@ -1,0 +1,57 @@
+# Codecov configuration for WebTag.
+#
+# - `project.default.target: auto` lets Codecov pick the baseline from the
+#   parent commit; `threshold: 1%` tolerates the small, noisy coverage drift
+#   a single PR causes (test ordering, generated-line counting) so the
+#   project check only goes red on a *real* regression, not measurement jitter.
+# - `patch.default.informational: true` is a deliberate tradeoff: we still
+#   surface patch coverage on every PR (the number is visible and useful as a
+#   reviewer signal), but it does NOT block merge. Reason: a hard patch gate
+#   on a Go backend with heavy integration/dbintegration coverage produces
+#   constant false reds on PRs whose new lines are exercised only by the
+#   container suites Codecov can't see, plus error-path lines that are
+#   genuinely hard to unit-cover. We'd rather not train reviewers to rubber-
+#   stamp an always-red check. Coverage is enforced socially via the visible
+#   report, not mechanically via a blocking status.
+# - We carve out auxiliary code paths that aren't worth covering with
+#   unit tests (entrypoints, test scaffolding, vendored deps).
+#
+# Docs: https://docs.codecov.com/docs/codecov-yaml
+
+codecov:
+  require_ci_to_pass: true
+  notify:
+    # Wait for the entire test matrix before commenting on the PR.
+    wait_for_ci: true
+
+coverage:
+  precision: 2
+  round: down
+  range: "60...90"
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: false
+    patch:
+      default:
+        target: 80%
+        threshold: 0%
+        # Report patch coverage but never block merge — see header rationale.
+        informational: true
+
+ignore:
+  - "cmd/"
+  - "internal/repository/repotest/"
+  - "test/dbintegration/"
+  - "vendor/"
+  - "**/*_test.go"
+  - "**/testdata/"
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
+  require_changes: true
+  require_base: false
+  require_head: true

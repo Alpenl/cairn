@@ -1,0 +1,10 @@
+Embedded OpenCC dictionary source
+
+Upstream: https://github.com/longbridgeapp/opencc
+Version: v0.3.13
+Configuration: official OpenCC t2s dictionaries
+License: Apache-2.0; see OPENCC_LICENSE.txt
+
+Embedded asset SHA-256:
+6b5a0a799bea2bb22c001f635eaa3fc2904310f0c08addbff275477a80ecf09a  TSCharacters.txt
+b2ef895dd4953b4bb77fc8ef8d26a2a9ca6d43a760ed9a1d767672cfafa6324f  TSPhrases.txt

@@ -1,0 +1,530 @@
+name: release-core
+run-name: release-core / ${{ github.ref_name }}
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+# All Core releases share one non-cancelling promotion queue. A newer tag can
+# arrive while an older candidate is being verified, but mutable channels are
+# only touched by one run at a time and the script refuses a non-highest tag.
+concurrency:
+  group: core-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+      build_time: ${{ steps.release.outputs.build_time }}
+      build_epoch: ${{ steps.release.outputs.build_epoch }}
+      image: ${{ steps.release.outputs.image }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate stable Core release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::Core release tags must match vX.Y.Z"
+            exit 1
+          }
+
+          version="${GITHUB_REF_NAME#v}"
+          commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          [ "$commit" = "$tag_commit" ] || {
+            echo "::error::Checkout does not match the release tag commit"
+            exit 1
+          }
+          [ "$(sh scripts/version.sh)" = "$version" ] || {
+            echo "::error::scripts/version.sh does not resolve to $version"
+            exit 1
+          }
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$commit" origin/main || {
+            echo "::error::Release tag commit is not on origin/main"
+            exit 1
+          }
+
+          build_time="$(git show -s --format=%cI "$commit")"
+          build_epoch="$(git show -s --format=%ct "$commit")"
+          image="$(printf 'ghcr.io/%s/cairn' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "build_time=$build_time" >> "$GITHUB_OUTPUT"
+          echo "build_epoch=$build_epoch" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+  go:
+    needs: validate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/go-verify.yml
+    with:
+      profile: full
+
+  lint:
+    needs: validate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/lint.yml
+    with:
+      profile: full
+
+  reader:
+    needs: validate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reader-ci.yml
+
+  database:
+    needs: validate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/dbintegration.yml
+
+  codeql:
+    needs: validate
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+
+  trivy-source:
+    needs: validate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/trivy.yml
+
+  candidate:
+    needs: [validate, go, lint, reader, database, codeql, trivy-source]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      full_index_digest: ${{ steps.digests.outputs.full_index_digest }}
+      full_amd64_digest: ${{ steps.digests.outputs.full_amd64_digest }}
+      full_arm64_digest: ${{ steps.digests.outputs.full_arm64_digest }}
+      slim_index_digest: ${{ steps.digests.outputs.slim_index_digest }}
+      slim_amd64_digest: ${{ steps.digests.outputs.slim_amd64_digest }}
+      slim_arm64_digest: ${{ steps.digests.outputs.slim_arm64_digest }}
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      COMMIT: ${{ needs.validate.outputs.commit }}
+      BUILD_TIME: ${{ needs.validate.outputs.build_time }}
+      BUILD_EPOCH: ${{ needs.validate.outputs.build_epoch }}
+      IMAGE: ${{ needs.validate.outputs.image }}
+      CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+        with:
+          package_json_file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up QEMU for cross-architecture archive verification
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a  # v4.0.0
+
+      - name: Build and verify release archives
+        shell: bash
+        env:
+          TARGET_ARCHES: amd64,arm64
+          CORE_RELEASE_EXECUTE: 'true'
+        run: |
+          set -euo pipefail
+          make core-release-test
+          bash scripts/core-release-build.sh
+          COMMIT="$COMMIT" bash scripts/core-release-verify.sh dist/cairn_*.tar.gz
+
+      - name: Login to GHCR candidate store
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+
+      - name: Inject full candidate failure
+        run: bash scripts/core-release-promote.sh fault candidate-full
+
+      - name: Build immutable full candidate
+        id: full
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          target: full
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT=${{ env.COMMIT }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+            RELEASE_BUILD=true
+            SOURCE_STATE=clean
+            SOURCE_DATE_EPOCH=${{ env.BUILD_EPOCH }}
+          provenance: false
+          cache-from: type=gha,scope=cairn-release-full
+          cache-to: type=gha,mode=max,scope=cairn-release-full
+
+      - name: Inject slim candidate failure
+        run: bash scripts/core-release-promote.sh fault candidate-slim
+
+      - name: Build immutable slim candidate
+        id: slim
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          target: slim
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT=${{ env.COMMIT }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+            RELEASE_BUILD=true
+            SOURCE_STATE=clean
+            SOURCE_DATE_EPOCH=${{ env.BUILD_EPOCH }}
+          provenance: false
+          cache-from: type=gha,scope=cairn-release-slim
+          cache-to: type=gha,mode=max,scope=cairn-release-slim
+
+      - name: Resolve immutable index and child digests
+        id: digests
+        shell: bash
+        env:
+          FULL_INDEX_DIGEST: ${{ steps.full.outputs.digest }}
+          SLIM_INDEX_DIGEST: ${{ steps.slim.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$FULL_INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$SLIM_INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          full_manifest="$(docker buildx imagetools inspect "$IMAGE@$FULL_INDEX_DIGEST" --format '{{json .Manifest}}')"
+          slim_manifest="$(docker buildx imagetools inspect "$IMAGE@$SLIM_INDEX_DIGEST" --format '{{json .Manifest}}')"
+
+          child_digest() {
+            local manifest=$1
+            local arch=$2
+            jq -er --arg arch "$arch" \
+              '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch)] | if length == 1 then .[0].digest else error("expected exactly one child") end' \
+              <<<"$manifest"
+          }
+
+          full_amd64="$(child_digest "$full_manifest" amd64)"
+          full_arm64="$(child_digest "$full_manifest" arm64)"
+          slim_amd64="$(child_digest "$slim_manifest" amd64)"
+          slim_arm64="$(child_digest "$slim_manifest" arm64)"
+          for digest in "$full_amd64" "$full_arm64" "$slim_amd64" "$slim_arm64"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          done
+
+          echo "full_index_digest=$FULL_INDEX_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "full_amd64_digest=$full_amd64" >> "$GITHUB_OUTPUT"
+          echo "full_arm64_digest=$full_arm64" >> "$GITHUB_OUTPUT"
+          echo "slim_index_digest=$SLIM_INDEX_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "slim_amd64_digest=$slim_amd64" >> "$GITHUB_OUTPUT"
+          echo "slim_arm64_digest=$slim_arm64" >> "$GITHUB_OUTPUT"
+
+          jq -n \
+            --arg commit "$COMMIT" \
+            --arg image "$IMAGE" \
+            --arg tag "$GITHUB_REF_NAME" \
+            --arg build_time "$BUILD_TIME" \
+            --arg source "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --arg full_index "$FULL_INDEX_DIGEST" \
+            --arg full_amd64 "$full_amd64" \
+            --arg full_arm64 "$full_arm64" \
+            --arg slim_index "$SLIM_INDEX_DIGEST" \
+            --arg slim_amd64 "$slim_amd64" \
+            --arg slim_arm64 "$slim_arm64" \
+            '{tag: $tag, commit: $commit, build_time: $build_time, source: $source, image: $image, full: {index: $full_index, children: {"linux/amd64": $full_amd64, "linux/arm64": $full_arm64}}, slim: {index: $slim_index, children: {"linux/amd64": $slim_amd64, "linux/arm64": $slim_arm64}}}' \
+            > dist/IMAGE-DIGESTS.json
+
+      - name: Inject candidate verification failure
+        run: bash scripts/core-release-promote.sh fault candidate-verify
+
+      - name: Verify every final child image
+        shell: bash
+        env:
+          FULL_AMD64: ${{ steps.digests.outputs.full_amd64_digest }}
+          FULL_ARM64: ${{ steps.digests.outputs.full_arm64_digest }}
+          SLIM_AMD64: ${{ steps.digests.outputs.slim_amd64_digest }}
+          SLIM_ARM64: ${{ steps.digests.outputs.slim_arm64_digest }}
+        run: |
+          set -euo pipefail
+          expected="$(printf 'cairn %s\ncommit: %s\nbuilt: %s' "$VERSION" "$COMMIT" "$BUILD_TIME")"
+          while IFS=$'\t' read -r variant platform digest; do
+            reference="$IMAGE@$digest"
+            actual="$(docker run --rm --platform "$platform" "$reference" --version)"
+            [ "$actual" = "$expected" ] || { echo "::error::$variant $platform webtag identity mismatch"; exit 1; }
+            actual="$(docker run --rm --platform "$platform" --entrypoint /app/migrate "$reference" --version)"
+            [ "$actual" = "$expected" ] || { echo "::error::$variant $platform migrate identity mismatch"; exit 1; }
+
+            image_config="$(docker buildx imagetools inspect "$reference" --format '{{json .Image}}')"
+            jq -e --arg arch "${platform#linux/}" --arg version "$VERSION" --arg commit "$COMMIT" --arg built "$BUILD_TIME" \
+              '.architecture == $arch and .os == "linux" and .config.Labels["org.opencontainers.image.version"] == $version and .config.Labels["org.opencontainers.image.revision"] == $commit and .config.Labels["org.opencontainers.image.created"] == $built and .config.Labels["io.cairn.source-state"] == "clean"' \
+              <<<"$image_config" >/dev/null
+
+            docker run --rm --platform "$platform" --entrypoint /bin/sh "$reference" -ec '
+              test -r /usr/share/licenses/cairn/CAIRN_LICENSE.txt
+              test -r /usr/share/licenses/cairn/OPENCC_LICENSE.txt
+              test -r /usr/share/licenses/cairn/OPENCC_SOURCE.txt
+              test -r /usr/share/licenses/cairn/GO_WEBTAG_THIRD_PARTY.txt
+              test -r /usr/share/licenses/cairn/GO_MIGRATE_THIRD_PARTY.txt
+              test -r /usr/share/licenses/cairn/READER_THIRD_PARTY.txt
+              test -r /usr/share/licenses/cairn/DISTRIBUTION_BOUNDARY.txt
+            '
+            for material in \
+              CAIRN_LICENSE.txt OPENCC_LICENSE.txt OPENCC_SOURCE.txt \
+              GO_WEBTAG_THIRD_PARTY.txt GO_MIGRATE_THIRD_PARTY.txt \
+              READER_THIRD_PARTY.txt DISTRIBUTION_BOUNDARY.txt; do
+              expected_sha="$(sha256sum "legal/core/common/$material")"
+              expected_sha="${expected_sha%% *}"
+              actual_sha="$(docker run --rm --platform "$platform" --entrypoint /bin/sh "$reference" \
+                -ec "sha256sum /usr/share/licenses/cairn/$material")"
+              actual_sha="${actual_sha%% *}"
+              [ "$actual_sha" = "$expected_sha" ] || {
+                echo "::error::$variant $platform legal material $material differs from source"
+                exit 1
+              }
+            done
+            if [ "$variant" = full ]; then
+              docker run --rm --platform "$platform" --entrypoint /bin/sh "$reference" -ec '
+                test -r /usr/share/licenses/cairn/YT_DLP_LICENSE.txt
+                test -r /usr/share/licenses/cairn/YT_DLP_SOURCE.txt
+              '
+              for material in YT_DLP_LICENSE.txt YT_DLP_SOURCE.txt; do
+                expected_sha="$(sha256sum "legal/core/full/$material")"
+                expected_sha="${expected_sha%% *}"
+                actual_sha="$(docker run --rm --platform "$platform" --entrypoint /bin/sh "$reference" \
+                  -ec "sha256sum /usr/share/licenses/cairn/$material")"
+                actual_sha="${actual_sha%% *}"
+                [ "$actual_sha" = "$expected_sha" ] || {
+                  echo "::error::$variant $platform legal material $material differs from source"
+                  exit 1
+                }
+              done
+              actual="$(docker run --rm --platform "$platform" --entrypoint /usr/local/bin/yt-dlp "$reference" --version)"
+              [ "$actual" = "$(sed -n 's/^ARG YTDLP_VERSION=//p' Dockerfile)" ]
+            else
+              docker run --rm --platform "$platform" --entrypoint /bin/sh "$reference" -ec '
+                test ! -e /usr/share/licenses/cairn/YT_DLP_LICENSE.txt
+                test ! -e /usr/share/licenses/cairn/YT_DLP_SOURCE.txt
+                test ! -e /usr/local/bin/yt-dlp
+              '
+            fi
+          done <<EOF
+          full	linux/amd64	$FULL_AMD64
+          full	linux/arm64	$FULL_ARM64
+          slim	linux/amd64	$SLIM_AMD64
+          slim	linux/arm64	$SLIM_ARM64
+          EOF
+
+      - name: Upload immutable candidate assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: core-candidate-assets
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90
+
+  trivy-images:
+    needs: [validate, candidate]
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/trivy.yml
+    with:
+      source_scan: false
+      image: ${{ needs.validate.outputs.image }}
+      full_index_digest: ${{ needs.candidate.outputs.full_index_digest }}
+      full_amd64_digest: ${{ needs.candidate.outputs.full_amd64_digest }}
+      full_arm64_digest: ${{ needs.candidate.outputs.full_arm64_digest }}
+      slim_index_digest: ${{ needs.candidate.outputs.slim_index_digest }}
+      slim_amd64_digest: ${{ needs.candidate.outputs.slim_amd64_digest }}
+      slim_arm64_digest: ${{ needs.candidate.outputs.slim_arm64_digest }}
+
+  prepare-draft:
+    needs: [validate, candidate, trivy-images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: read
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.validate.outputs.version }}
+      COMMIT: ${{ needs.validate.outputs.commit }}
+      IMAGE: ${{ needs.validate.outputs.image }}
+      REPOSITORY: ${{ github.repository }}
+      BUILD_TIME: ${{ needs.validate.outputs.build_time }}
+      FULL_INDEX_DIGEST: ${{ needs.candidate.outputs.full_index_digest }}
+      FULL_AMD64_DIGEST: ${{ needs.candidate.outputs.full_amd64_digest }}
+      FULL_ARM64_DIGEST: ${{ needs.candidate.outputs.full_arm64_digest }}
+      SLIM_INDEX_DIGEST: ${{ needs.candidate.outputs.slim_index_digest }}
+      SLIM_AMD64_DIGEST: ${{ needs.candidate.outputs.slim_amd64_digest }}
+      SLIM_ARM64_DIGEST: ${{ needs.candidate.outputs.slim_arm64_digest }}
+      CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Download candidate assets
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
+        with:
+          name: core-candidate-assets
+          path: release-assets
+
+      - name: Download exact-digest scan and SBOM evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
+        with:
+          pattern: core-image-evidence-*
+          path: release-assets/security-evidence
+          merge-multiple: false
+
+      - name: Login to GHCR for channel rollback evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Set up Docker Buildx for channel rollback evidence
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+
+      - name: Seal pre-promotion channel digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/core-release-promote.sh prepare-channel-record release-assets/CHANNEL-ROLLBACK.json
+
+      - name: Seal security evidence and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="$BUILD_TIME" \
+            -C release-assets -cf - security-evidence | gzip -n > "release-assets/core-security-evidence-${VERSION}.tar.gz"
+          rm -rf release-assets/security-evidence
+          (cd release-assets && sha256sum \
+            cairn_*.tar.gz core-security-evidence-*.tar.gz CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json > SHA256SUMS)
+
+      - name: Prepare complete draft Release idempotently
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/core-release-promote.sh prepare-draft release-assets
+
+  promote-versions:
+    needs: [validate, candidate, prepare-draft]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.validate.outputs.version }}
+      IMAGE: ${{ needs.validate.outputs.image }}
+      FULL_INDEX_DIGEST: ${{ needs.candidate.outputs.full_index_digest }}
+      SLIM_INDEX_DIGEST: ${{ needs.candidate.outputs.slim_index_digest }}
+      CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Login to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+
+      - name: Promote version references without rebuilding
+        run: bash scripts/core-release-promote.sh promote-versions
+
+  publish-release:
+    needs: [validate, candidate, promote-versions]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.validate.outputs.version }}
+      IMAGE: ${{ needs.validate.outputs.image }}
+      REPOSITORY: ${{ github.repository }}
+      CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Publish the complete draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/core-release-promote.sh publish-release
+
+  promote-channels:
+    needs: [validate, candidate, publish-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.validate.outputs.version }}
+      IMAGE: ${{ needs.validate.outputs.image }}
+      REPOSITORY: ${{ github.repository }}
+      FULL_INDEX_DIGEST: ${{ needs.candidate.outputs.full_index_digest }}
+      SLIM_INDEX_DIGEST: ${{ needs.candidate.outputs.slim_index_digest }}
+      CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
+    steps:
+      - name: Checkout all Core tags
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Login to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+
+      - name: Promote stable channels from verified digests
+        run: bash scripts/core-release-promote.sh promote-channels

@@ -1,0 +1,237 @@
+name: go-verify
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        description: 'Verification depth: quick or full'
+        required: true
+        type: string
+    secrets:
+      CODECOV_TOKEN:
+        description: 'Optional token for best-effort Codecov uploads'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  vet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go vet
+        run: go vet ./...
+
+      # 独立 module，上一步完全不覆盖它（根 module 的 go list 在那里返回 0 个
+      # 包）。秒级，但能在 PR 阶段拦下编译级漂移，而不必等需要 Docker 的
+      # dbintegration 套件。
+      - name: Go vet (test/dbintegration module)
+        run: go vet -C test/dbintegration -tags=dbintegration ./...
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify Go modules
+        run: make modules-verify
+
+      - name: Go test (with coverage)
+        # `atomic` is required when -race is on; we don't pass -race here
+        # but using atomic costs nothing and lets the same profile be
+        # merged with race-mode runs later if we ever want to.
+        run: go test ./... -count=1 -coverprofile=cover.out -covermode=atomic
+
+      # A test that always Skips on the gate is not a passing test — it is an
+      # uncovered behaviour recorded as covered. Two of them shipped that way
+      # (`if !ReaderBuilt() { t.Skip }`, where the artifact is gitignored and
+      # this job never builds it), so this is enforced rather than trusted.
+      - name: No skipped tests
+        run: make test-no-skip
+
+      - name: Release version derivation
+        run: make version-test
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe  # v5.5.4
+        with:
+          files: cover.out
+          flags: unittests
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # We treat coverage uploads as best-effort: forks won't have
+          # the token and a Codecov outage shouldn't break the gate.
+          fail_ci_if_error: false
+
+  race:
+    if: ${{ inputs.profile == 'full' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go test -race
+        run: go test -race ./...
+
+  fuzz:
+    if: ${{ inputs.profile == 'full' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Analyzer fuzz smoke
+        run: |
+          go test ./internal/service/analyzer -run=^$ -fuzz=FuzzParseAnalysisResponse -fuzztime=2s
+          go test ./internal/service/analyzer -run=^$ -fuzz=FuzzDecodeAnalyzerMessageContent -fuzztime=2s
+
+  # Combined docker build + smoke. The previous design built the image
+  # twice (once in `docker` for cache warming, once in `smoke` for the
+  # actual exercise) which doubled the wall-clock cost without buying
+  # anything — gha cache scope was already shared. We now build once
+  # with `load: true` and one stable local cache scope.
+  # Setup-go is required because db_migrate_smoke.sh and
+  # container_smoke.sh both invoke `go run ./cmd/migrate`.
+  smoke:
+    if: ${{ inputs.profile == 'full' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check generated schema
+        run: make schema-check
+
+      - name: Resolve version
+        id: version
+        # 不能写成 `echo "value=$(sh scripts/version.sh)"`：命令替换**作为参数
+        # 使用时退出码被丢弃**，步骤取 echo 的 0，于是 version.sh 失败会静默
+        # 产出空版本号，并把无效版本继续带入镜像标签与构建元数据。
+        # 赋值形式配 `set -e` 才会把失败传出来（与 pipefail 无关，区别在退出码
+        # 是否被使用）。
+        shell: bash
+        run: |
+          set -euo pipefail
+          value="$(sh scripts/version.sh)"
+          [ -n "$value" ] || { echo "::error::scripts/version.sh 输出为空"; exit 1; }
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+
+      - name: Capture build timestamp
+        id: build_time
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Docker build (full, load for smoke)
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
+        with:
+          context: .
+          platforms: linux/amd64
+          target: full
+          push: false
+          load: true
+          tags: |
+            webtag:${{ steps.version.outputs.value }}
+            webtag:latest
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
+            COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.build_time.outputs.value }}
+          cache-from: type=gha,scope=webtag-build
+          cache-to: type=gha,mode=max,scope=webtag-build
+
+      - name: Prepare smoke log dir
+        run: mkdir -p /tmp/webtag-smoke
+
+      # 两处 shell: bash 同 dbintegration.yml：默认 shell 无 pipefail，`| tee`
+      # 会让脚本的失败退出码被 tee 的 0 顶掉，smoke 变成只产日志不设门槛。
+      - name: Migration smoke
+        shell: bash
+        run: sh scripts/db_migrate_smoke.sh 2>&1 | tee /tmp/webtag-smoke/migration.log
+
+      - name: Container smoke
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+          COMMIT: ${{ github.sha }}
+        run: sh scripts/container_smoke.sh 2>&1 | tee /tmp/webtag-smoke/container.log
+
+      - name: Collect docker logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/webtag-smoke
+          docker ps -a > /tmp/webtag-smoke/docker-ps.log 2>&1 || true
+          for c in webtag-app-smoke webtag-app-smoke-pg; do
+            docker logs "$c" > "/tmp/webtag-smoke/${c}.log" 2>&1 || true
+          done
+
+      - name: Upload smoke logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: smoke-logs
+          path: /tmp/webtag-smoke/
+          if-no-files-found: ignore
+          retention-days: 7

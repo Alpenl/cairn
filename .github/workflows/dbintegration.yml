@@ -1,0 +1,45 @@
+name: dbintegration
+
+# The suite starts its own pgvector/PostgreSQL container with testcontainers,
+# applies the production migrations, and exercises behavior mocks cannot model.
+on:
+  workflow_call:
+  schedule:
+    - cron: '0 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            test/dbintegration/go.sum
+
+      - name: Run dbintegration tests
+        shell: bash
+        run: make test-dbintegration-required 2>&1 | tee /tmp/dbintegration.log
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: dbintegration-logs
+          path: /tmp/dbintegration.log
+          if-no-files-found: ignore
+          retention-days: 14
