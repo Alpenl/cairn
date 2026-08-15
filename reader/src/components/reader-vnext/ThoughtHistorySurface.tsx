@@ -292,11 +292,20 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
   }, [onNavigate])
 
   const restoreDeleteFocus = useCallback((thoughtID?: string) => {
-    window.requestAnimationFrame(() => {
+    // rAF 只在页面参与渲染时才回调：标签页被切到后台、窗口最小化、或运行在
+    // 无显示环境（headless）时它可能长时间不触发甚至不触发，焦点就停在刚被
+    // 移除的按钮上，键盘用户直接失去落点。补一条 setTimeout 兜底，两条路径
+    // 谁先到都只执行一次。
+    let restored = false
+    const restore = () => {
+      if (restored) return
+      restored = true
       const preferred = thoughtID ? deleteButtonRefs.current.get(thoughtID) : undefined
       const target = preferred ?? activeViewButtonRef.current
       target?.focus()
-    })
+    }
+    window.requestAnimationFrame(restore)
+    window.setTimeout(restore, 0)
   }, [])
 
   const refreshLocalProjection = useCallback(async () => {

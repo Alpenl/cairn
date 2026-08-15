@@ -14,12 +14,10 @@ const systemChrome =
 const executablePath =
   browserName === 'chromium' ? (configuredBrowser || systemChrome) : undefined
 
-// 没有系统 Chrome 路径时退回 Playwright 的 'chrome' 通道（同样是 Google Chrome，
-// 只是由 Playwright 定位）。不能退到 'chromium'：原生 dialog 关闭后，chromium
-// 构建（含 chromium-headless-shell）不会把焦点还给触发它的按钮，
-// document.activeElement 退回 <body>，依赖 dialog 后焦点的用例因此只在没有
-// Google Chrome 的机器上失败。用 READER_E2E_IGNORE_SYSTEM_CHROME=1 可本地复现。
-const channel = browserName === 'chromium' && !executablePath ? 'chrome' : undefined
+// 没有系统 Chrome 时用完整的 chromium 构建，而不是 Playwright 在 headless 下
+// 默认启动的 chromium-headless-shell。用 READER_E2E_IGNORE_SYSTEM_CHROME=1
+// 可以在有 Chrome 的机器上复现这条分支。
+const channel = browserName === 'chromium' && !executablePath ? 'chromium' : undefined
 
 export default defineConfig({
   testDir: './e2e',
