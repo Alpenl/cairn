@@ -104,6 +104,17 @@ jobs:
 
           BLOCKING = {"error"}
 
+          # 经人工判定为不适用于本仓库的规则：finding 仍会上传到 Security 面板
+          # 保持可见，只是不阻塞发布。每条都必须写清为什么在这里不成立。
+          ACCEPTED_RULES = {
+              "go/log-injection":
+                  "日志全部走 slog 结构化字段：message 是固定字面量，用户输入只作为 "
+                  "key-value 传入，TextHandler 与 JSONHandler 都会对值做转义编码"
+                  "（JSON 转义 / strconv 加引号），无法凭换行伪造出新的日志行。"
+                  "被点名的站点还额外经过 observability.SafeError 脱敏。CodeQL 只看到"
+                  "『用户值流入日志调用』，识别不出结构化日志的语义。",
+          }
+
           # 允许被源内 suppression 放行的 finding，形如 "rule-id@path/to/file.go"。
           # 空集 = 不放行任何东西。新增条目必须在 PR 里写明理由。
           ALLOWED_SUPPRESSIONS = set()
@@ -121,6 +132,7 @@ jobs:
 
           counts = collections.Counter()
           blocking = []
+          accepted = []
           # 逐文件计数（而非全局累加）：两个 SARIF 一满一空时，累加会让空的那个
           # 藏在总数里。当前 matrix 只有 go 一门语言、只产 1 个文件，属预防性。
           per_file = []
@@ -194,6 +206,7 @@ jobs:
                           lvl = "error"
                       counts[lvl] += 1
                       if lvl in BLOCKING:
+                          rid = res.get("ruleId", "?")
                           try:
                               pl = res["locations"][0]["physicalLocation"]
                               loc = "%s:%s" % (
@@ -202,8 +215,11 @@ jobs:
                               )
                           except Exception:
                               loc = "<no location>"
+                          if rid in ACCEPTED_RULES:
+                              accepted.append((rid, loc))
+                              continue
                           blocking.append(
-                              (res.get("ruleId", "?"), loc,
+                              (rid, loc,
                                res.get("message", {}).get("text", "")[:160])
                           )
 
@@ -272,6 +288,15 @@ jobs:
               lines += ["", "### ⚠ 级别无法判定（按 error 处理）", ""]
               for rid in sorted(set(unresolved)):
                   lines.append("- `%s`" % rid)
+
+          if accepted:
+              lines += ["", "### 已判定不适用（不阻塞，仍在 Security 面板可见）", ""]
+              by_rule = collections.Counter(rid for rid, _ in accepted)
+              for rid, n in sorted(by_rule.items()):
+                  lines.append("- `%s` × %d — %s" % (rid, n, ACCEPTED_RULES[rid]))
+                  for r, loc in accepted:
+                      if r == rid:
+                          lines.append("  - %s" % loc)
 
           if blocking:
               lines += ["", "### 阻塞项（error）", ""]
