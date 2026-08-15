@@ -111,6 +111,13 @@ jobs:
         with:
           fetch-depth: 1
 
+      # runner 是 amd64，而 matrix 里有 linux/arm64 的 child digest。下面的
+      # yt-dlp 版本核验要在被扫镜像里真的执行一次 `yt-dlp --version`，没有
+      # binfmt 注册时 arm64 二进制直接 `exec format error`，与镜像本身是否
+      # 正确无关。release-core 的 candidate job 出于同样的理由装了 QEMU。
+      - name: Set up QEMU for cross-architecture execution
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a  # v4.0.0
+
       - name: Validate immutable scan coordinates
         shell: bash
         env:
