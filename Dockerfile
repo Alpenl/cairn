@@ -80,7 +80,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -mod=vendor -trimpath
 # the core web/API surface (no /downloader video ingest path). Tag suffix
 # `-slim` in the registry. ~35MB lighter than `full`.
 # ---------------------------------------------------------------------------
-FROM alpine:3.23 AS slim
+FROM alpine:3.24 AS slim
 
 ARG VERSION=0.0.0
 ARG COMMIT=unknown
