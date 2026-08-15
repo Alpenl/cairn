@@ -9,7 +9,7 @@
 # install 层失效，增量构建省掉整个装包过程。
 # ---------------------------------------------------------------------------
 ARG SOURCE_DATE_EPOCH
-FROM --platform=$BUILDPLATFORM node:22.22.2-alpine AS reader-builder
+FROM --platform=$BUILDPLATFORM node:26.7.0-alpine AS reader-builder
 
 WORKDIR /workspace
 
