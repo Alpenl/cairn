@@ -61,8 +61,12 @@ jobs:
       - name: Test
         run: pnpm --filter webtag-reader test
 
-      - name: Install Playwright Chromium
-        run: pnpm --filter webtag-reader exec playwright install --with-deps chromium
+      # 装 chrome 而不只是 chromium：原生 dialog 关闭后，chromium 构建（含
+      # headless shell）不把焦点还给触发它的按钮，document.activeElement 退回
+      # <body>，wp26 的键盘删除确认用例因此只在 CI 上失败。playwright.config.ts
+      # 在找不到系统 Chrome 时会退到 channel: 'chrome'，这一步保证它存在。
+      - name: Install Playwright Chrome
+        run: pnpm --filter webtag-reader exec playwright install --with-deps chromium chrome
 
       # Real Chromium is required for the identity epoch and IndexedDB
       # transaction fences; jsdom/fake-indexeddb cannot prove browser timing.
