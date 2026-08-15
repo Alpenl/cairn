@@ -13,8 +13,13 @@ android {
         applicationId = "com.alpenl.webtag.share"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // 版本由发布流水线注入，保持与 Release 的 Core 版本一致：手工同步迟早
+        // 会漏，而漏了会得到一个文件名写着新版、内部 versionName 仍是旧版的包
+        // ——设备按后者判断升级，用户永远装不上新版。本地构建取默认值。
+        // versionCode 由版本号推导（major*10000 + minor*100 + patch），只要版本
+        // 号递增它就单调递增，满足 Android 对升级包的要求。
+        versionCode = (project.findProperty("cairnVersionCode")?.toString() ?: "1").toInt()
+        versionName = project.findProperty("cairnVersionName")?.toString() ?: "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

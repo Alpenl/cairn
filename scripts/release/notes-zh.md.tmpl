@@ -13,7 +13,7 @@
 | 不用容器，直接跑二进制 | `cairn___VERSION___linux_amd64.tar.gz` 或 `_arm64.tar.gz` |
 | 在 Chrome / Edge 里采集网页 | `cairn-extension-chrome-__VERSION__.zip` |
 | 在 Firefox 里采集网页 | `cairn-extension-firefox-__VERSION__.zip` |
-| 在 Android 上用系统分享收藏 | `cairn-android-__VERSION__-debug.apk` |
+| 在 Android 上用系统分享收藏 | `cairn-android-__VERSION__.apk` |
 
 iOS 应用本次不随版本发布。
 
@@ -25,7 +25,7 @@ iOS 应用本次不随版本发布。
 
 **浏览器扩展。** 解压后在扩展管理页用「加载已解压的扩展程序」安装，然后在设置页填入后端地址与访问令牌。扩展以 GPL-3.0-only 分发（详见包内 LICENSE 与 NOTICE），与主仓库的 MIT 不同。
 
-**Android。** 这是用 Android 默认调试密钥签名的 debug 包，可直接侧载安装，但**不是**商店发布包：它与正式签名的应用互不覆盖升级，安装前需要允许「安装未知来源应用」。安装后在应用内填入后端地址与访问令牌，之后即可从任意应用的系统分享菜单收藏链接。
+**Android。** 正式签名的 release 包，用发布密钥签名并通过 apksigner v2 方案校验，可直接安装与覆盖升级。首次安装需要允许「安装未知来源应用」。安装后在应用内填入后端地址与访问令牌，之后即可从任意应用的系统分享菜单收藏链接。APK 的 versionName 与本页版本号一致。
 
 ## 校验产物
 

@@ -193,6 +193,28 @@ jobs:
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
+      # 密钥缺失必须在花任何时间之前就失败，而且必须失败——绝不能退化成发一个
+      # debug 签名的包：那种「成功」比失败更糟，它看起来是正式产物，装到设备上
+      # 却与正式签名的应用互不覆盖升级。
+      - name: 校验签名凭据齐全
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${KEYSTORE_BASE64}" ] || missing="${missing} ANDROID_KEYSTORE_BASE64"
+          [ -n "${KEYSTORE_PASSWORD}" ] || missing="${missing} ANDROID_KEYSTORE_PASSWORD"
+          [ -n "${KEY_ALIAS}" ] || missing="${missing} ANDROID_KEY_ALIAS"
+          [ -n "${KEY_PASSWORD}" ] || missing="${missing} ANDROID_KEY_PASSWORD"
+          if [ -n "${missing}" ]; then
+            echo "::error::缺少签名 secret：${missing}。在 Settings → Secrets and variables → Actions 添加后重试。"
+            exit 1
+          fi
+          echo "四个签名 secret 均已配置。"
+
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -209,21 +231,102 @@ jobs:
         working-directory: mobile/android
         run: ./gradlew --no-daemon --dependency-verification strict help
 
-      # 出 debug APK：仓库里没有 signingConfig，也不存放 keystore，assembleRelease
-      # 只会产出未签名包、装不上机。debug 包用 Android 默认调试密钥签名，可直接
-      # 侧载安装。资产名里保留 -debug 后缀，避免被误当成商店发布包。
-      - name: Build Android debug APK
-        run: ./mobile/android/gradlew -p mobile/android --no-daemon --dependency-verification strict assembleDebug
+      # 发布前跑与日常门禁相同的检查。发布是最不该「这次先跳过验证」的场合。
+      - name: Run Android gates
+        run: |
+          python3 mobile/shared/fixtures/validate.py
+          python3 mobile/shared/fixtures/compare.py
+          python3 scripts/mobile-x1-check.py
+          ./mobile/android/gradlew -p mobile/android --no-daemon --dependency-verification strict testDebugUnitTest lintDebug
 
-      - name: Collect Android asset
-        shell: bash
+      # 版本由 Core 版本推导后注入，APK 内部 versionName 与 Release 资产名一致。
+      - name: Build unsigned release APK
+        id: build
         run: |
           set -euo pipefail
+          IFS=. read -r major minor patch <<< "$VERSION"
+          code=$(( major * 10000 + minor * 100 + patch ))
+          echo "versionName=${VERSION} versionCode=${code}"
+          ./mobile/android/gradlew -p mobile/android --no-daemon --dependency-verification strict \
+            -PcairnVersionName="${VERSION}" -PcairnVersionCode="${code}" assembleRelease
+          printf 'code=%s\n' "${code}" >> "$GITHUB_OUTPUT"
+
+      # keystore 落在 RUNNER_TEMP 而不是 workspace：workspace 会被后续步骤扫描并
+      # 上传，密钥不该有任何机会混进产物。
+      - name: 签名并校验 APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYSTORE="${RUNNER_TEMP}/signing.jks"
+          trap 'shred -u "${KEYSTORE}" 2>/dev/null || rm -f "${KEYSTORE}"' EXIT
+
+          printf '%s' "${KEYSTORE_BASE64}" | base64 -d > "${KEYSTORE}"
+
+          BUILD_TOOLS="$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -1)"
+          echo "build-tools: ${BUILD_TOOLS}"
+
+          UNSIGNED=mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          test -f "${UNSIGNED}"
           mkdir -p client-assets
-          apk=$(find mobile/android -path '*/outputs/apk/debug/*.apk' -type f | head -1)
-          [ -n "$apk" ] || { echo "::error::未找到 debug APK"; exit 1; }
-          cp "$apk" "client-assets/cairn-android-${VERSION}-debug.apk"
+          OUT="client-assets/cairn-android-${VERSION}.apk"
+
+          # zipalign 必须在签名之前：签名后再对齐会破坏 v2/v3 签名块。
+          "${BUILD_TOOLS}/zipalign" -p -f 4 "${UNSIGNED}" "${RUNNER_TEMP}/aligned.apk"
+          "${BUILD_TOOLS}/apksigner" sign \
+            --ks "${KEYSTORE}" \
+            --ks-pass "pass:${KEYSTORE_PASSWORD}" \
+            --key-pass "pass:${KEY_PASSWORD}" \
+            --ks-key-alias "${KEY_ALIAS}" \
+            --out "${OUT}" \
+            "${RUNNER_TEMP}/aligned.apk"
+
+          # verify 失败会返回非零；额外断言 v2 方案确实生效（minSdk 26 下
+          # v1/JAR 签名被自动跳过，属正常）。
+          "${BUILD_TOOLS}/apksigner" verify --print-certs --verbose "${OUT}" | tee "${RUNNER_TEMP}/verify.txt"
+          grep -q "APK Signature Scheme v2): true" "${RUNNER_TEMP}/verify.txt"
+
+          # 指纹行的前缀随 build-tools 版本变化（35 打印 "Signer #1 certificate ..."，
+          # 37 打印 "V3.0 Signer: certificate ..."），只锚定稳定的那一段。
+          CERT_SHA256="$(sed -n 's/.*certificate SHA-256 digest: *\([0-9a-f]\{64\}\).*/\1/p' \
+            "${RUNNER_TEMP}/verify.txt" | sort -u)"
+          if [ "$(printf '%s\n' "${CERT_SHA256}" | grep -c .)" != "1" ]; then
+            echo "::error::期望恰好一个签名证书指纹，实际读到：${CERT_SHA256:-<空>}"
+            exit 1
+          fi
+
+          # APK 确实由预期的那把密钥签名，而不是「某把」密钥。换错 secret 是真实的
+          # 失败模式，而它签出来的包一样能通过 apksigner verify。
+          EXPECTED_SHA256="$(keytool -list -v -keystore "${KEYSTORE}" \
+            -storepass "${KEYSTORE_PASSWORD}" -alias "${KEY_ALIAS}" 2>/dev/null \
+            | awk '/^[[:space:]]*SHA256:/ {gsub(/:/, "", $2); print tolower($2); exit}')"
+          if [ -z "${EXPECTED_SHA256}" ]; then
+            echo "::error::未能从 keystore 读出预期指纹"
+            exit 1
+          fi
+          if [ "${CERT_SHA256}" != "${EXPECTED_SHA256}" ]; then
+            echo "::error::APK 的签名身份与 keystore 不符：APK=${CERT_SHA256} keystore=${EXPECTED_SHA256}"
+            exit 1
+          fi
+          echo "签名身份已核对：${CERT_SHA256}"
+
+      # 密钥泄漏的最后一道拦截。
+      - name: 确认产物中没有密钥文件
+        run: |
+          set -euo pipefail
+          if find client-assets -type f \( -name '*.jks' -o -name '*.keystore' -o -name '*.p12' -o -name '*.pem' \) | grep -q .; then
+            echo "::error::产物目录中出现了密钥文件"
+            exit 1
+          fi
+          if [ -e "${RUNNER_TEMP}/signing.jks" ]; then
+            echo "::error::签名密钥未被清除"
+            exit 1
+          fi
           ls -l client-assets
+          echo "产物干净，签名密钥已清除。"
 
       - name: Upload Android asset
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2

@@ -101,7 +101,7 @@ release_asset_names() {
 		"core-security-evidence-${VERSION}.tar.gz" \
 		"cairn-extension-chrome-${VERSION}.zip" \
 		"cairn-extension-firefox-${VERSION}.zip" \
-		"cairn-android-${VERSION}-debug.apk" \
+		"cairn-android-${VERSION}.apk" \
 		CHANNEL-ROLLBACK.json \
 		IMAGE-DIGESTS.json \
 		SHA256SUMS | sort

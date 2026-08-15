@@ -94,7 +94,7 @@ printf 'arm64 archive\n' >"$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz"
 # 客户端交付物与 Core 同 tag 发布，asset 集合是严格比对的，夹具必须一并提供。
 printf 'chrome zip\n' >"$TMP/assets/cairn-extension-chrome-1.2.3.zip"
 printf 'firefox zip\n' >"$TMP/assets/cairn-extension-firefox-1.2.3.zip"
-printf 'android apk\n' >"$TMP/assets/cairn-android-1.2.3-debug.apk"
+printf 'android apk\n' >"$TMP/assets/cairn-android-1.2.3.apk"
 jq -n \
 	--arg tag "$TAG" --arg commit "$COMMIT" --arg build_time "$BUILD_TIME" --arg image "$IMAGE" \
 	--arg full_index "$FULL_INDEX_DIGEST" --arg full_amd64 "$FULL_AMD64_DIGEST" --arg full_arm64 "$FULL_ARM64_DIGEST" \
