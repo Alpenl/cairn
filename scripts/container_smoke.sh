@@ -31,6 +31,7 @@ app_container="$(docker run -d \
 	-e AI_BASE_URL=https://example.com/v1 \
 	-e AI_API_KEY=smoke-key \
 	-e AI_MODEL=smoke-model \
+	-e CURSOR_SIGNING_KEY=smoke-cursor-signing-key-0123456789abcdef \
 	webtag:${VERSION})"
 app_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8000/tcp") 0).HostPort}}' "$app_container")"
 
