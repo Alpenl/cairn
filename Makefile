@@ -27,6 +27,22 @@ GOLANGCI_LINT_STAMP := $(TOOLS_BIN_DIR)/golangci-lint.$(GOLANGCI_LINT_VERSION).s
 GOVULNCHECK_STAMP := $(TOOLS_BIN_DIR)/govulncheck.$(GOVULNCHECK_VERSION).stamp
 ACTIONLINT_STAMP := $(TOOLS_BIN_DIR)/actionlint.$(ACTIONLINT_VERSION).stamp
 SHELLCHECK_STAMP := $(TOOLS_BIN_DIR)/shellcheck.$(SHELLCHECK_VERSION).stamp
+define ACTION_PIN_CHECK
+import re, glob, collections, sys
+pins = collections.defaultdict(set)
+for path in glob.glob('.github/workflows/*.yml'):
+    text = open(path, encoding='utf-8').read()
+    for action, sha, ver in re.findall(r'uses:\s+([\w./-]+)@([a-f0-9]{40})\s+#\s+(v[\d.]+)', text):
+        pins[(action, ver)].add(sha)
+bad = {k: v for k, v in pins.items() if len(v) > 1}
+for (action, ver), shas in sorted(bad.items()):
+    print(f'action pin mismatch: {action} {ver} -> {sorted(shas)}', file=sys.stderr)
+if bad:
+    sys.exit(1)
+print(f'action pins: {len(pins)} action@version combinations are self-consistent')
+endef
+export ACTION_PIN_CHECK
+
 LDFLAGS := -s -w -X webtag/internal/buildinfo.Version=$(VERSION) -X webtag/internal/buildinfo.Commit=$(COMMIT) -X webtag/internal/buildinfo.BuildTime=$(BUILD_TIME)
 
 # `make` / `make help` prints every target that carries a `## description`
@@ -158,6 +174,11 @@ lint: $(GOLANGCI_LINT_STAMP) ## 跑项目内固定版本的 golangci-lint
 
 actionlint: $(ACTIONLINT_STAMP) $(SHELLCHECK_STAMP) ## 校验所有 GitHub Actions workflow 语法与表达式
 	PATH="$(abspath $(TOOLS_BIN_DIR)):$$PATH" $(ACTIONLINT)
+	@# 同一个 action@版本 在不同 workflow 里必须钉同一个 SHA。actionlint 只校验
+	@# 语法，不核对 SHA 与版本注释是否对应——release-extension 曾把
+	@# docker/setup-qemu-action 的 SHA 贴到 pnpm/action-setup 上，注释还写着 v6.0.10，
+	@# 一路过了 lint，直到 GitHub 拒绝调度才暴露。
+	@python3 -c "$$ACTION_PIN_CHECK"
 	@awk '\
 		/^[[:space:]]*uses:[[:space:]]+/ { \
 			action = $$0; \

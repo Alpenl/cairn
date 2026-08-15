@@ -138,7 +138,11 @@ jobs:
 
           # zipalign 必须在签名之前：签名后再对齐会破坏 v2/v3 签名块。
           "${BUILD_TOOLS}/zipalign" -p -f 4 "${UNSIGNED}" "${RUNNER_TEMP}/aligned.apk"
+          # 关掉 v4：apksigner 默认会额外产出一个 .idsig，它只在 Android 11+ 的
+          # 增量安装（adb install --incremental）里有用，对下载即装的用户没有意义，
+          # 却会让 Release 多一个不在 SHA256SUMS 覆盖范围内的文件。
           "${BUILD_TOOLS}/apksigner" sign \
+            --v4-signing-enabled false \
             --ks "${KEYSTORE}" \
             --ks-pass "pass:${KEYSTORE_PASSWORD}" \
             --key-pass "pass:${KEY_PASSWORD}" \
