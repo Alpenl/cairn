@@ -92,16 +92,14 @@ verify_remote_asset() {
 }
 
 release_asset_names() {
-	# 客户端交付物与 Core 同 tag 发布：浏览器扩展两个商店包、Android debug APK。
-	# iOS 暂不纳入（需要 macOS runner 与签名身份）。这个集合是严格的——多一个
-	# 或少一个文件都会让 prepare-draft 失败，避免 Release 里出现半套产物。
+	# 只包含 Core 交付物。浏览器扩展与 Android 各自是独立的发布单元，有自己的
+	# tag 前缀（extension/vX.Y.Z、android/vX.Y.Z）与 workflow——把它们塞进 Core
+	# 发布会让「改一行 Android 代码」触发整套镜像构建、扫描与频道 promote。
+	# 这个集合是严格的：多一个或少一个文件都会让 prepare-draft 失败。
 	printf '%s\n' \
 		"cairn_${VERSION}_linux_amd64.tar.gz" \
 		"cairn_${VERSION}_linux_arm64.tar.gz" \
 		"core-security-evidence-${VERSION}.tar.gz" \
-		"cairn-extension-chrome-${VERSION}.zip" \
-		"cairn-extension-firefox-${VERSION}.zip" \
-		"cairn-android-${VERSION}.apk" \
 		CHANNEL-ROLLBACK.json \
 		IMAGE-DIGESTS.json \
 		SHA256SUMS | sort

@@ -14,13 +14,19 @@ BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GOLANGCI_LINT_VERSION ?= v2.12.0
 GOVULNCHECK_VERSION ?= v1.3.0
 ACTIONLINT_VERSION ?= v1.7.7
+# actionlint 只有在 PATH 上能找到 shellcheck 时才检查 run: 块里的 shell。
+# 本地缺它 = 本地绿、CI 红：SC2129 与 SC2012 都是这么漏到 CI 才暴露的。
+# 固定版本下载到 bin/tools，让本地与 runner 检查同一套规则。
+SHELLCHECK_VERSION ?= v0.10.0
 YTDLP_BASE_URL ?= https://github.com/yt-dlp/yt-dlp/releases/download
 GOLANGCI_LINT := $(TOOLS_BIN_DIR)/golangci-lint
 GOVULNCHECK := $(TOOLS_BIN_DIR)/govulncheck
 ACTIONLINT := $(TOOLS_BIN_DIR)/actionlint
+SHELLCHECK := $(TOOLS_BIN_DIR)/shellcheck
 GOLANGCI_LINT_STAMP := $(TOOLS_BIN_DIR)/golangci-lint.$(GOLANGCI_LINT_VERSION).stamp
 GOVULNCHECK_STAMP := $(TOOLS_BIN_DIR)/govulncheck.$(GOVULNCHECK_VERSION).stamp
 ACTIONLINT_STAMP := $(TOOLS_BIN_DIR)/actionlint.$(ACTIONLINT_VERSION).stamp
+SHELLCHECK_STAMP := $(TOOLS_BIN_DIR)/shellcheck.$(SHELLCHECK_VERSION).stamp
 LDFLAGS := -s -w -X webtag/internal/buildinfo.Version=$(VERSION) -X webtag/internal/buildinfo.Commit=$(COMMIT) -X webtag/internal/buildinfo.BuildTime=$(BUILD_TIME)
 
 # `make` / `make help` prints every target that carries a `## description`
@@ -114,7 +120,7 @@ vet: ## go vet 全量包（含 test/dbintegration 独立 module）
 # 长期被 `| tee` 吞掉退出码。这一行是秒级的，放在 vet 里保证 PR 就能拦下。
 	$(GO) vet -C test/dbintegration -tags=dbintegration ./...
 
-tools: $(GOLANGCI_LINT_STAMP) $(GOVULNCHECK_STAMP) $(ACTIONLINT_STAMP) ## 安装项目本地质量工具到 bin/tools/
+tools: $(GOLANGCI_LINT_STAMP) $(GOVULNCHECK_STAMP) $(ACTIONLINT_STAMP) $(SHELLCHECK_STAMP) ## 安装项目本地质量工具到 bin/tools/
 
 $(TOOLS_BIN_DIR):
 	mkdir -p $(TOOLS_BIN_DIR)
@@ -134,11 +140,24 @@ $(ACTIONLINT_STAMP): | $(TOOLS_BIN_DIR)
 	GOBIN=$(abspath $(TOOLS_BIN_DIR)) $(GO) install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 	touch $@
 
+$(SHELLCHECK_STAMP): | $(TOOLS_BIN_DIR)
+	rm -f $(SHELLCHECK) $(TOOLS_BIN_DIR)/shellcheck.*.stamp
+	@set -eu; \
+	arch=$$(uname -m); \
+	case "$$arch" in x86_64) asset=x86_64 ;; aarch64|arm64) asset=aarch64 ;; \
+		*) echo "shellcheck: 不支持的架构 $$arch，跳过安装" >&2; touch $@; exit 0 ;; esac; \
+	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	url="https://github.com/koalaman/shellcheck/releases/download/$(SHELLCHECK_VERSION)/shellcheck-$(SHELLCHECK_VERSION).linux.$$asset.tar.xz"; \
+	curl -fsSL "$$url" -o "$$tmp/sc.tar.xz"; \
+	tar -xJf "$$tmp/sc.tar.xz" -C "$$tmp"; \
+	install -m 0755 "$$tmp/shellcheck-$(SHELLCHECK_VERSION)/shellcheck" $(SHELLCHECK)
+	touch $@
+
 lint: $(GOLANGCI_LINT_STAMP) ## 跑项目内固定版本的 golangci-lint
 	$(GOLANGCI_LINT) run --timeout=5m
 
-actionlint: $(ACTIONLINT_STAMP) ## 校验所有 GitHub Actions workflow 语法与表达式
-	$(ACTIONLINT)
+actionlint: $(ACTIONLINT_STAMP) $(SHELLCHECK_STAMP) ## 校验所有 GitHub Actions workflow 语法与表达式
+	PATH="$(abspath $(TOOLS_BIN_DIR)):$$PATH" $(ACTIONLINT)
 	@awk '\
 		/^[[:space:]]*uses:[[:space:]]+/ { \
 			action = $$0; \

@@ -11,21 +11,18 @@
 | 部署服务端（推荐，含视频解析） | 容器镜像 `ghcr.io/alpenl/cairn:__VERSION__` |
 | 部署服务端（不需要视频解析，体积更小） | 容器镜像 `ghcr.io/alpenl/cairn:__VERSION__-slim` |
 | 不用容器，直接跑二进制 | `cairn___VERSION___linux_amd64.tar.gz` 或 `_arm64.tar.gz` |
-| 在 Chrome / Edge 里采集网页 | `cairn-extension-chrome-__VERSION__.zip` |
-| 在 Firefox 里采集网页 | `cairn-extension-firefox-__VERSION__.zip` |
-| 在 Android 上用系统分享收藏 | `cairn-android-__VERSION__.apk` |
+| 在 Chrome / Edge / Firefox 里采集网页 | 见 [浏览器扩展的最新发布](https://github.com/Alpenl/cairn/releases?q=extension&expanded=true) |
+| 在 Android 上用系统分享收藏 | 见 [Android 的最新发布](https://github.com/Alpenl/cairn/releases?q=android&expanded=true) |
 
-iOS 应用本次不随版本发布。
+浏览器扩展与 Android 是**独立的发布单元**，各有自己的版本号与 tag
+（`extension/vX.Y.Z`、`android/vX.Y.Z`），不随 Core 版本联动——改一处客户端不必
+重建服务端镜像，反之亦然。iOS 暂未发布。
 
 ## 安装要点
 
-**服务端。** 先用镜像里的 `/app/migrate` 对空库执行迁移，再启动 `/app/webtag`。至少需要设置 `DATABASE_URL`、`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL`、`EXTENSION_API_TOKEN`、`SESSION_SIGNING_KEY`，以及非开发环境必填的 `CURSOR_SIGNING_KEY`。完整配置见仓库内 `.env.example`。服务只读取进程环境，不会自动加载 `.env` 文件。
+先用镜像里的 `/app/migrate` 对空库执行迁移，再启动 `/app/webtag`。至少需要设置 `DATABASE_URL`、`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL`、`EXTENSION_API_TOKEN`、`SESSION_SIGNING_KEY`，以及非开发环境必填的 `CURSOR_SIGNING_KEY`。完整配置见仓库内 `.env.example`。服务只读取进程环境，不会自动加载 `.env` 文件。
 
 公开 API 默认失败关闭：客户端需携带 `Authorization: Bearer <EXTENSION_API_TOKEN>`。只有在可信内网、或前置代理已完成访问控制时，才可显式设置 `PUBLIC_API_OPEN=true`。
-
-**浏览器扩展。** 解压后在扩展管理页用「加载已解压的扩展程序」安装，然后在设置页填入后端地址与访问令牌。扩展以 GPL-3.0-only 分发（详见包内 LICENSE 与 NOTICE），与主仓库的 MIT 不同。
-
-**Android。** 正式签名的 release 包，用发布密钥签名并通过 apksigner v2 方案校验，可直接安装与覆盖升级。首次安装需要允许「安装未知来源应用」。安装后在应用内填入后端地址与访问令牌，之后即可从任意应用的系统分享菜单收藏链接。APK 的 versionName 与本页版本号一致。
 
 ## 校验产物
 

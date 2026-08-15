@@ -1,0 +1,208 @@
+name: release-android
+run-name: release-android / ${{ github.ref_name }}
+
+# Android 是独立的发布单元：自己的版本权威（build.gradle.kts 的 versionName /
+# versionCode）、自己的 tag 前缀（android/vX.Y.Z）和自己的门禁。改 Android 不该
+# 触发 Core 的镜像构建、Trivy 扫描与频道 promote——那是另一条发布线。
+#
+# 这也是仓库里唯一允许读 Android 签名凭据的 workflow。日常门禁 mobile-android.yml
+# 被 scripts/mobile-x1-check.py 强制禁止出现 `secrets.` 与 assembleRelease，
+# 所以普通 PR（包括来自 fork 的）既不需要也无法接触发布密钥。
+on:
+  push:
+    tags:
+      - 'android/v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-android
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      # 密钥缺失必须在花任何时间之前就失败，而且必须失败——绝不能退化成发一个
+      # debug 签名的包：那种「成功」比失败更糟，它看起来是正式产物，却与正式包
+      # 互不覆盖升级，用户只能卸载重装、丢掉应用内数据。
+      - name: 校验签名凭据齐全
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${KEYSTORE_BASE64}" ] || missing="${missing} ANDROID_KEYSTORE_BASE64"
+          [ -n "${KEYSTORE_PASSWORD}" ] || missing="${missing} ANDROID_KEYSTORE_PASSWORD"
+          [ -n "${KEY_ALIAS}" ] || missing="${missing} ANDROID_KEY_ALIAS"
+          [ -n "${KEY_PASSWORD}" ] || missing="${missing} ANDROID_KEY_PASSWORD"
+          if [ -n "${missing}" ]; then
+            echo "::error::缺少签名 secret：${missing}。在 Settings → Secrets and variables → Actions 添加后重试。"
+            exit 1
+          fi
+          echo "四个签名 secret 均已配置。"
+
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 核对 tag 并推导版本
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#android/v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::Android 发布 tag 必须形如 android/vX.Y.Z"
+            exit 1
+          }
+          commit="$(git rev-parse HEAD)"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$commit" origin/main || {
+            echo "::error::发布 tag 的提交不在 origin/main 上"
+            exit 1
+          }
+          IFS=. read -r major minor patch <<< "$version"
+          code=$(( major * 10000 + minor * 100 + patch ))
+          echo "versionName=${version} versionCode=${code}"
+          {
+            echo "name=$version"
+            echo "code=$code"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4.7.1
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Verify Android dependency metadata
+        working-directory: mobile/android
+        run: ./gradlew --no-daemon --dependency-verification strict help
+
+      # 发布前跑与 mobile-android.yml 相同的静态与单元门禁。
+      - name: Run Android gates
+        run: |
+          set -euo pipefail
+          python3 mobile/shared/fixtures/validate.py
+          python3 mobile/shared/fixtures/compare.py
+          python3 scripts/mobile-x1-check.py
+          python3 scripts/mobile-wire-smoke.py
+          ./mobile/android/gradlew -p mobile/android --no-daemon --dependency-verification strict testDebugUnitTest lintDebug
+
+      # 版本由 tag 注入，APK 内部 versionName 与资产名一致；versionCode 由版本号
+      # 推导（major*10000 + minor*100 + patch），随版本号单调递增。
+      - name: Build unsigned release APK
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+        run: |
+          set -euo pipefail
+          ./mobile/android/gradlew -p mobile/android --no-daemon --dependency-verification strict \
+            -PcairnVersionName="${VERSION_NAME}" -PcairnVersionCode="${VERSION_CODE}" assembleRelease
+
+      # keystore 落在 RUNNER_TEMP 而不是 workspace：workspace 会被后续步骤扫描并
+      # 上传，密钥不该有任何机会混进产物。
+      - name: 签名并校验 APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          KEYSTORE="${RUNNER_TEMP}/signing.jks"
+          trap 'shred -u "${KEYSTORE}" 2>/dev/null || rm -f "${KEYSTORE}"' EXIT
+
+          printf '%s' "${KEYSTORE_BASE64}" | base64 -d > "${KEYSTORE}"
+
+          # find 而非 ls：shellcheck SC2012。取版本号最大的一套 build-tools。
+          BUILD_TOOLS="$(find "${ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          echo "build-tools: ${BUILD_TOOLS}"
+
+          UNSIGNED=mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          test -f "${UNSIGNED}"
+          mkdir -p release-assets
+          OUT="release-assets/cairn-android-${VERSION_NAME}.apk"
+
+          # zipalign 必须在签名之前：签名后再对齐会破坏 v2/v3 签名块。
+          "${BUILD_TOOLS}/zipalign" -p -f 4 "${UNSIGNED}" "${RUNNER_TEMP}/aligned.apk"
+          "${BUILD_TOOLS}/apksigner" sign \
+            --ks "${KEYSTORE}" \
+            --ks-pass "pass:${KEYSTORE_PASSWORD}" \
+            --key-pass "pass:${KEY_PASSWORD}" \
+            --ks-key-alias "${KEY_ALIAS}" \
+            --out "${OUT}" \
+            "${RUNNER_TEMP}/aligned.apk"
+
+          # verify 失败会返回非零；额外断言 v2 方案确实生效（minSdk 26 下
+          # v1/JAR 签名被自动跳过，属正常）。
+          "${BUILD_TOOLS}/apksigner" verify --print-certs --verbose "${OUT}" | tee "${RUNNER_TEMP}/verify.txt"
+          grep -q "APK Signature Scheme v2): true" "${RUNNER_TEMP}/verify.txt"
+
+          # 指纹行的前缀随 build-tools 版本变化（35 打印 "Signer #1 certificate ..."，
+          # 37 打印 "V3.0 Signer: certificate ..."），只锚定稳定的那一段。
+          CERT_SHA256="$(sed -n 's/.*certificate SHA-256 digest: *\([0-9a-f]\{64\}\).*/\1/p' \
+            "${RUNNER_TEMP}/verify.txt" | sort -u)"
+          if [ "$(printf '%s\n' "${CERT_SHA256}" | grep -c .)" != "1" ]; then
+            echo "::error::期望恰好一个签名证书指纹，实际读到：${CERT_SHA256:-<空>}"
+            exit 1
+          fi
+
+          # APK 确实由预期的那把密钥签名，而不是「某把」密钥。换错 secret 是真实的
+          # 失败模式，而它签出来的包一样能通过 apksigner verify。
+          EXPECTED_SHA256="$(keytool -list -v -keystore "${KEYSTORE}" \
+            -storepass "${KEYSTORE_PASSWORD}" -alias "${KEY_ALIAS}" 2>/dev/null \
+            | awk '/^[[:space:]]*SHA256:/ {gsub(/:/, "", $2); print tolower($2); exit}')"
+          if [ -z "${EXPECTED_SHA256}" ]; then
+            echo "::error::未能从 keystore 读出预期指纹"
+            exit 1
+          fi
+          if [ "${CERT_SHA256}" != "${EXPECTED_SHA256}" ]; then
+            echo "::error::APK 的签名身份与 keystore 不符：APK=${CERT_SHA256} keystore=${EXPECTED_SHA256}"
+            exit 1
+          fi
+          echo "签名身份已核对：${CERT_SHA256}"
+          ( cd release-assets && sha256sum ./*.apk > SHA256SUMS )
+
+      # 密钥泄漏的最后一道拦截。
+      - name: 确认产物中没有密钥文件
+        run: |
+          set -euo pipefail
+          if find release-assets -type f \( -name '*.jks' -o -name '*.keystore' -o -name '*.p12' -o -name '*.pem' \) | grep -q .; then
+            echo "::error::产物目录中出现了密钥文件"
+            exit 1
+          fi
+          if [ -e "${RUNNER_TEMP}/signing.jks" ]; then
+            echo "::error::签名密钥未被清除"
+            exit 1
+          fi
+          ls -l release-assets
+          echo "产物干净，签名密钥已清除。"
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          notes="$(mktemp)"
+          sed "s/__VERSION__/${VERSION_NAME}/g" scripts/release/notes-android-zh.md.tmpl > "$notes"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber release-assets/*
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Cairn Android v${VERSION_NAME}" --notes-file "$notes" release-assets/*
+          fi
+          rm -f "$notes"

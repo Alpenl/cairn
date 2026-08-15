@@ -91,10 +91,6 @@ printf '%s\n' "$old_slim" >"$TMP/state/images/ghcr.io_example_cairn_slim"
 
 printf 'amd64 archive\n' >"$TMP/assets/cairn_1.2.3_linux_amd64.tar.gz"
 printf 'arm64 archive\n' >"$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz"
-# 客户端交付物与 Core 同 tag 发布，asset 集合是严格比对的，夹具必须一并提供。
-printf 'chrome zip\n' >"$TMP/assets/cairn-extension-chrome-1.2.3.zip"
-printf 'firefox zip\n' >"$TMP/assets/cairn-extension-firefox-1.2.3.zip"
-printf 'android apk\n' >"$TMP/assets/cairn-android-1.2.3.apk"
 jq -n \
 	--arg tag "$TAG" --arg commit "$COMMIT" --arg build_time "$BUILD_TIME" --arg image "$IMAGE" \
 	--arg full_index "$FULL_INDEX_DIGEST" --arg full_amd64 "$FULL_AMD64_DIGEST" --arg full_arm64 "$FULL_ARM64_DIGEST" \
@@ -140,9 +136,7 @@ tar -C "$TMP" -czf "$TMP/assets/core-security-evidence-1.2.3.tar.gz" security-ev
 
 "$SCRIPT" prepare-channel-record "$TMP/assets/CHANNEL-ROLLBACK.json"
 (cd "$TMP/assets" && sha256sum \
-	cairn_*.tar.gz core-security-evidence-*.tar.gz \
-	cairn-extension-*.zip cairn-android-*.apk \
-	CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
+	cairn_*.tar.gz core-security-evidence-*.tar.gz CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
 
 "$SCRIPT" prepare-draft "$TMP/assets"
 "$SCRIPT" prepare-draft "$TMP/assets"
@@ -151,9 +145,7 @@ if "$SCRIPT" prepare-draft "$TMP/assets" >/dev/null 2>&1; then
 	fail 'draft preparation accepted a same-name asset with different bytes'
 fi
 (cd "$TMP/assets" && sha256sum \
-	cairn_*.tar.gz core-security-evidence-*.tar.gz \
-	cairn-extension-*.zip cairn-android-*.apk \
-	CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
+	cairn_*.tar.gz core-security-evidence-*.tar.gz CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
 mv "$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz" "$TMP/missing-arm64.tar.gz"
 if "$SCRIPT" prepare-draft "$TMP/assets" >/dev/null 2>&1; then
 	fail 'draft preparation accepted a missing architecture archive'

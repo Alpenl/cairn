@@ -86,6 +86,14 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test/setup.ts',
+    // CI 上允许重试。已知偶发：MainView.test.tsx 的「正文选段发送完整块锚点与
+    // observed saved-content revision」在 runner 上会出现 createTranslation
+    // 零调用——不是超时（setup.ts 已把 asyncUtilTimeout 放宽到 5s，仍等满），
+    // 而是选区在慢环境下没能建立。该文件本地 98 项稳定全过，CI 约几轮一次。
+    //
+    // ⚠ 与 playwright.config.ts 的 retries 同性质：权宜之计，不是修复。
+    // 稳定失败仍会红，只有真正的抖动被吸收；定位到根因后应降回 0。
+    retry: process.env.CI ? 2 : 0,
     // Browser specs run under Playwright and use its own test lifecycle. Keep
     // Vitest discovery inside src/ so e2e/*.spec.ts is never loaded by both runners.
     include: ['src/**/*.{test,spec}.{ts,tsx}'],

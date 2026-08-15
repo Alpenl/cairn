@@ -1,0 +1,33 @@
+# Cairn 浏览器扩展 v__VERSION__
+
+把当前页面采集到你自建的 Cairn 实例：通过弹窗或右键菜单一键收藏，在设置页配置后端地址与访问令牌。
+
+浏览器扩展是**独立的发布单元**，版本号与服务端（Core）互不联动——升级扩展不需要同时升级服务端。
+
+## 下载哪个
+
+| 浏览器 | 用这个 |
+| --- | --- |
+| Chrome / Edge 及其他 Chromium 内核 | `cairn-extension-chrome-__VERSION__.zip` |
+| Firefox | `cairn-extension-firefox-__VERSION__.zip` |
+
+## 安装
+
+解压后在扩展管理页用「加载已解压的扩展程序」安装：
+
+- **Chrome / Edge**：打开 `chrome://extensions`，开启右上角「开发者模式」，点「加载已解压的扩展程序」，选中解压出来的目录。
+- **Firefox**：打开 `about:debugging#/runtime/this-firefox`，点「临时载入附加组件」，选中解压目录内的 `manifest.json`。
+
+安装后打开扩展的设置页，填入后端地址（例如 `https://your-cairn.example`）与 `EXTENSION_API_TOKEN`。令牌就是服务端配置里的那一个——扩展通过它调用公开 API，服务端默认失败关闭，没有令牌不会响应。
+
+## 校验产物
+
+`SHA256SUMS` 覆盖本页除它自身以外的全部文件：
+
+```bash
+sha256sum --check SHA256SUMS
+```
+
+## 许可证
+
+浏览器扩展以 **GPL-3.0-only** 分发（它是 NaiveTab 的修改衍生品），与主仓库的 MIT 不同。完整许可证与归属见包内的 `LICENSE` 与 `NOTICE`。

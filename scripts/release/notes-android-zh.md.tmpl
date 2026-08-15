@@ -1,0 +1,23 @@
+# Cairn Android v__VERSION__
+
+在手机上用系统分享菜单把链接收藏进你自建的 Cairn 实例，并查看今日待办。
+
+Android 应用是**独立的发布单元**，版本号与服务端（Core）互不联动——升级应用不需要同时升级服务端。
+
+## 安装
+
+下载 `cairn-android-__VERSION__.apk` 直接安装。这是**正式签名**的 release 包，用发布密钥签名并通过 apksigner v2 方案校验，可以覆盖升级已安装的版本。首次安装需要在系统设置里允许「安装未知来源应用」。
+
+安装后打开应用，填入后端地址（例如 `https://your-cairn.example`）与 `EXTENSION_API_TOKEN`。令牌就是服务端配置里的那一个——应用通过它调用公开 API，服务端默认失败关闭，没有令牌不会响应。
+
+配置完成后，在任意应用里点分享、选择 Cairn 即可收藏当前链接。收藏在离线时进入本地队列，恢复网络后自动重试。
+
+## 校验产物
+
+`SHA256SUMS` 覆盖本页除它自身以外的全部文件：
+
+```bash
+sha256sum --check SHA256SUMS
+```
+
+APK 的 `versionName` 与本页版本号一致，`versionCode` 由版本号推导（`major*10000 + minor*100 + patch`）并随版本单调递增。

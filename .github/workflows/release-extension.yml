@@ -1,0 +1,116 @@
+name: release-extension
+run-name: release-extension / ${{ github.ref_name }}
+
+# 浏览器扩展是独立的发布单元：它有自己的版本权威（extension/package.json）、
+# 自己的 tag 前缀（extension/vX.Y.Z）和自己的门禁。改扩展不该触发 Core 的
+# 镜像构建、Trivy 扫描与频道 promote——那是另一条发布线。
+on:
+  push:
+    tags:
+      - 'extension/v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-extension
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      # 只有这个 job 需要写权限来创建 Release。
+      contents: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # tag 与 package.json 的 version 必须一致。不一致就发布，会得到一个文件名
+      # 写着新版、manifest 里仍是旧版的包——商店按后者判断升级。
+      - name: 核对 tag 与扩展版本
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#extension/v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::扩展发布 tag 必须形如 extension/vX.Y.Z"
+            exit 1
+          }
+          declared="$(node -p "require('./extension/package.json').version")"
+          [ "$declared" = "$version" ] || {
+            echo "::error::tag ${GITHUB_REF_NAME} 与 extension/package.json 的 ${declared} 不一致"
+            exit 1
+          }
+          commit="$(git rev-parse HEAD)"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$commit" origin/main || {
+            echo "::error::发布 tag 的提交不在 origin/main 上"
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@96fe6ef7f33517b61c61be40b68a1882f3264fb8  # v6.0.10
+        with:
+          package_json_file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 发布前跑与 extension-ci.yml 完全相同的门禁序列。发布是最不该
+      # 「这次先跳过验证」的场合。
+      - name: Run extension gates
+        run: |
+          set -euo pipefail
+          pnpm audit:ci
+          pnpm --filter webtag-extension api:check
+          pnpm api:typecheck
+          pnpm --filter webtag-extension lint
+          pnpm --filter webtag-extension typecheck
+          pnpm --filter webtag-extension test
+
+      # 必须写 `run pack`：pnpm 有内置的 pack 命令（打 npm tarball），
+      # 直接写 `pnpm --filter X pack` 会执行内置命令而不是 package.json 的脚本。
+      - name: Build and pack extension
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          pnpm --filter webtag-extension run build
+          pnpm --filter webtag-extension verify:build
+          pnpm --filter webtag-extension run pack
+          pnpm --filter webtag-extension verify:install
+          mkdir -p release-assets
+          cp extension/dist/webtag-chrome.zip "release-assets/cairn-extension-chrome-${VERSION}.zip"
+          cp extension/dist/webtag-firefox.zip "release-assets/cairn-extension-firefox-${VERSION}.zip"
+          (cd release-assets && sha256sum ./*.zip > SHA256SUMS)
+          ls -l release-assets
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="$(mktemp)"
+          sed "s/__VERSION__/${VERSION}/g" scripts/release/notes-extension-zh.md.tmpl > "$notes"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber release-assets/*
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Cairn 浏览器扩展 v${VERSION}" --notes-file "$notes" release-assets/*
+          fi
+          rm -f "$notes"
