@@ -63,7 +63,7 @@ func collectionEntryPoints() []urlEntryPoint {
 			identity: func(_ *testing.T, raw string) (string, error) {
 				normalized, err := normalizeIngestRequest(dto.IngestRequest{
 					Sources: []dto.IngestSource{{Kind: "url", URL: raw}},
-				})
+				}, captureDestinationLibrary)
 				if err != nil {
 					return "", err
 				}
@@ -75,7 +75,7 @@ func collectionEntryPoints() []urlEntryPoint {
 			identity: func(_ *testing.T, raw string) (string, error) {
 				normalized, err := normalizeIngestRequest(dto.IngestRequest{
 					Sources: []dto.IngestSource{{Kind: "browser_capture", URL: raw, Title: "captured"}},
-				})
+				}, captureDestinationLibrary)
 				if err != nil {
 					return "", err
 				}
@@ -231,7 +231,7 @@ func TestEmptyURLIsRejectedWhereTheURLIsTheIdentity(t *testing.T) {
 	// The documented exception, asserted rather than assumed.
 	normalized, err := normalizeIngestRequest(dto.IngestRequest{
 		Sources: []dto.IngestSource{{Kind: "browser_capture", URL: "   ", Title: "a selection"}},
-	})
+	}, captureDestinationLibrary)
 	if err != nil {
 		t.Fatalf("browser capture without a URL error = %v, want a synthetic identity", err)
 	}
@@ -292,9 +292,9 @@ func TestIngestKeepsTheSubmittedURLAsSourceEvidence(t *testing.T) {
 	submitted := "HTTPS://WWW.Contract.Example.com/docs/guide/?b=2&a=1#frag"
 	normalized, err := normalizeIngestRequest(dto.IngestRequest{
 		Sources: []dto.IngestSource{{Kind: "url", URL: submitted}},
-	})
+	}, captureDestinationLibrary)
 	if err != nil {
-		t.Fatalf("normalizeIngestRequest() error = %v", err)
+		t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 	}
 	if normalized.storedURL != submitted {
 		t.Fatalf("storedURL = %q, want submitted display URL %q", normalized.storedURL, submitted)
@@ -355,9 +355,9 @@ func TestBrowserCaptureDisplayURLFollowsTheIdentityOwner(t *testing.T) {
 	normalized, err := normalizeIngestRequest(dto.IngestRequest{Sources: []dto.IngestSource{
 		{Kind: "url", URL: generic},
 		{Kind: "browser_capture", URL: captured, Title: "Captured"},
-	}})
+	}}, captureDestinationLibrary)
 	if err != nil {
-		t.Fatalf("normalizeIngestRequest() error = %v", err)
+		t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 	}
 	if normalized.storedURL != captured {
 		t.Fatalf("storedURL = %q, want browser capture display URL %q", normalized.storedURL, captured)

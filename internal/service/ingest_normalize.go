@@ -154,7 +154,7 @@ func (a *ingestAccumulator) noteCaptureURL(rawURL, submittedURL string) {
 // normalizeIngestRequest 把多源 IngestRequest 折叠成单条入库所需的统一结构：
 // 逐源派发到对应 handler 累积内容、根据来源组合推断 sourceKind、用稳定哈希
 // 算出 sourceKey 作为去重键，并在缺少真实 URL 时合成 webtag://ingest/* 占位。
-func normalizeIngestRequest(req dto.IngestRequest) (normalizedIngest, error) { //nolint:gocyclo // 多模态入口：url/text/image/capture 各有独立归一化路径
+func normalizeIngestRequest(req dto.IngestRequest, defaultDestination string) (normalizedIngest, error) { //nolint:gocyclo // 多模态入口：url/text/image/capture 各有独立归一化路径
 	// Wave 9 MED 迁移：/api/ingest 入口的三种 422 都补上 slug，
 	// 帮上游"用户拿到错误后想自动重试还是抛错给人类"区分场景。
 	if len(req.Sources) == 0 {
@@ -164,7 +164,7 @@ func normalizeIngestRequest(req dto.IngestRequest) (normalizedIngest, error) { /
 	if err != nil {
 		return normalizedIngest{}, err
 	}
-	destination, requestedKind, err := normalizeIngestCaptureTarget(req.Destination, requestedKind)
+	destination, requestedKind, err := normalizeIngestCaptureTarget(req.Destination, requestedKind, defaultDestination)
 	if err != nil {
 		return normalizedIngest{}, err
 	}
@@ -261,6 +261,7 @@ func normalizeIngestRequest(req dto.IngestRequest) (normalizedIngest, error) { /
 func normalizeIngestCaptureTarget(
 	rawDestination string,
 	requestedKind model.RequestedLibraryKind,
+	defaultDestination string,
 ) (string, model.RequestedLibraryKind, error) {
 	if strings.EqualFold(strings.TrimSpace(rawDestination), captureDestinationSite) {
 		if requestedKind != model.RequestedLibraryKindAuto && requestedKind != model.RequestedLibraryKindSite {
@@ -272,7 +273,7 @@ func normalizeIngestCaptureTarget(
 		}
 		return captureDestinationSite, model.RequestedLibraryKindSite, nil
 	}
-	destination, err := normalizeCaptureDestination(rawDestination, captureDestinationLibrary)
+	destination, err := normalizeCaptureDestination(rawDestination, defaultDestination)
 	return destination, requestedKind, err
 }
 

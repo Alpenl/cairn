@@ -151,6 +151,21 @@ func NewLinkServices(
 		}
 }
 
+// defaultCaptureDestination 返回请求未显式指定 destination 时的采集目的地。
+// 收藏默认进收件箱：收藏是「先收着」，抓取结果、标题与归类都还没确认，直接进
+// 阅读库会把未经确认的条目混进正式书库。
+//
+// 但收件箱是可选特性——未启用 Reader Inbox 的部署里 inboxWriter 为 nil。缺省值
+// 在那里必须退回阅读库，否则一个「默认行为」会把这类部署的每一次收藏都变成 503。
+// 显式请求 inbox 不走这里，仍由 createInbox 明确报 inbox_destination_unavailable，
+// 用户点名要收件箱时不该被静默改道。
+func (s *linkSubmitter) defaultCaptureDestination() string {
+	if s.inboxWriter == nil {
+		return captureDestinationLibrary
+	}
+	return captureDestinationInbox
+}
+
 func (s *linkSubmitter) createInbox(ctx context.Context, capture LinkCapture) (dto.SubmitResponse, error) {
 	if s.inboxWriter == nil {
 		return dto.SubmitResponse{}, httperr.NewWithCode(http.StatusServiceUnavailable, "inbox_destination_unavailable", "inbox destination is not available")

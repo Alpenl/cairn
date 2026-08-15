@@ -99,7 +99,7 @@ func NewIngestService(reader linkSubmissionReader, jobs repository.JobStore, com
 // 然后按 source_key（必要时再用真实 URL）去重判断是新建还是命中已有链接，
 // 整个查询 + 写入过程被 URL/source_key 互斥锁串行化，避免同一来源并发产生两条记录。
 func (s *IngestService) Ingest(ctx context.Context, req dto.IngestRequest) (dto.SubmitResponse, error) {
-	normalized, err := normalizeIngestRequest(req)
+	normalized, err := normalizeIngestRequest(req, s.core.defaultCaptureDestination())
 	if err != nil {
 		return dto.SubmitResponse{}, err
 	}

@@ -259,7 +259,7 @@ func TestIngestExplicitSiteDestinationRejectsReadingIntent(t *testing.T) {
 		Destination:          "site",
 		RequestedLibraryKind: "reading",
 		Sources:              []dto.IngestSource{{Kind: "url", URL: "https://example.com/site"}},
-	})
+	}, captureDestinationLibrary)
 	if err == nil {
 		t.Fatal("site destination with reading intent should fail")
 	}
@@ -281,7 +281,7 @@ func TestSubmitServiceBatchSupportsLibraryAndInboxDestinations(t *testing.T) {
 	service, _ := NewLinkServices(links, jobs, commands, &submitFakeLocker{}, SubmitServiceOptions{InboxWriter: inbox})
 
 	response, err := service.Batch(context.Background(), dto.BatchCreateRequest{Items: []dto.LinkCreateRequest{
-		{URL: "https://example.com/library"},
+		{URL: "https://example.com/library", Destination: "library"},
 		{URL: "https://example.com/inbox", Destination: "inbox"},
 		{URL: "https://example.com/inbox", Destination: "inbox"},
 	}})
@@ -318,3 +318,63 @@ func TestNormalizeCaptureDestinationRejectsSiteOutsideIngest(t *testing.T) {
 }
 
 func stringPtrForDestinationTest(value string) *string { return &value }
+
+// 收藏的缺省目的地是收件箱：客户端（尤其是 Android 分享入口）不传 destination
+// 时，条目必须落进收件箱而不是直接进阅读库。
+func TestSubmitDefaultsToInboxWhenInboxAvailable(t *testing.T) {
+	links := &repotest.ObservableLinkStore{
+		CreateFunc: func(_ context.Context, params repository.CreateLinkParams) (*model.Link, error) {
+			return &model.Link{ID: uuid.New(), URL: params.URL, Status: model.LinkStatusPending}, nil
+		},
+	}
+	jobs := &repotest.ObservableJobStore{
+		CreateFunc: func(_ context.Context, linkID uuid.UUID) (*model.ParseJob, error) {
+			return &model.ParseJob{ID: uuid.New(), LinkID: linkID, Status: model.JobStatusPending}, nil
+		},
+	}
+	commands := (&submitFakeSubmitter{links: links, jobs: jobs}).withQueue(&submitFakeQueue{})
+	service, _ := NewLinkServices(links, jobs, commands, &submitFakeLocker{}, SubmitServiceOptions{
+		InboxWriter: &inboxCaptureWriterFake{},
+	})
+
+	resp, err := service.Submit(context.Background(), dto.LinkCreateRequest{URL: "https://example.com/default"})
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	if resp.Destination != captureDestinationInbox || resp.InboxID == "" || resp.LinkID != "" {
+		t.Fatalf("default capture = %+v, want inbox", resp)
+	}
+}
+
+// 收件箱是可选特性。未启用 Reader Inbox 的部署里 InboxWriter 为 nil，缺省必须
+// 退回阅读库——否则「默认进收件箱」会把这类部署的每一次收藏都变成 503。
+func TestSubmitDefaultsToLibraryWhenInboxUnavailable(t *testing.T) {
+	links := &repotest.ObservableLinkStore{
+		CreateFunc: func(_ context.Context, params repository.CreateLinkParams) (*model.Link, error) {
+			return &model.Link{ID: uuid.New(), URL: params.URL, Status: model.LinkStatusPending}, nil
+		},
+	}
+	jobs := &repotest.ObservableJobStore{
+		CreateFunc: func(_ context.Context, linkID uuid.UUID) (*model.ParseJob, error) {
+			return &model.ParseJob{ID: uuid.New(), LinkID: linkID, Status: model.JobStatusPending}, nil
+		},
+	}
+	commands := (&submitFakeSubmitter{links: links, jobs: jobs}).withQueue(&submitFakeQueue{})
+	service, _ := NewLinkServices(links, jobs, commands, &submitFakeLocker{}, SubmitServiceOptions{})
+
+	resp, err := service.Submit(context.Background(), dto.LinkCreateRequest{URL: "https://example.com/default"})
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	if resp.LinkID == "" || resp.InboxID != "" {
+		t.Fatalf("fallback capture = %+v, want library", resp)
+	}
+
+	// 显式点名 inbox 仍必须硬失败，不被静默改道。
+	if _, err := service.Submit(context.Background(), dto.LinkCreateRequest{
+		URL:         "https://example.com/explicit",
+		Destination: "inbox",
+	}); err == nil {
+		t.Fatal("explicit inbox destination should fail when inbox is unavailable")
+	}
+}

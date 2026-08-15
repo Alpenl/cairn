@@ -107,9 +107,9 @@ func TestBrowserCapturePromotesUserNoteToDescription(t *testing.T) {
 				"captured_at": "2026-07-11T10:00:00Z",
 			},
 		}},
-	})
+	}, captureDestinationLibrary)
 	if err != nil {
-		t.Fatalf("normalizeIngestRequest() error = %v", err)
+		t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 	}
 
 	params, err := normalized.toLinkCapture()
@@ -136,9 +136,9 @@ func TestBrowserCaptureUsesURLAsStableSourceKey(t *testing.T) {
 					"captured_at": capturedAt,
 				},
 			}},
-		})
+		}, captureDestinationLibrary)
 		if err != nil {
-			t.Fatalf("normalizeIngestRequest() error = %v", err)
+			t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 		}
 		return got
 	}
@@ -156,9 +156,9 @@ func TestSoleURLIngestUsesURLAsStableSourceKey(t *testing.T) {
 	normalized, err := normalizeIngestRequest(dto.IngestRequest{Sources: []dto.IngestSource{{
 		Kind: "url",
 		URL:  " https://example.com/sole-url ",
-	}}})
+	}}}, captureDestinationLibrary)
 	if err != nil {
-		t.Fatalf("normalizeIngestRequest() error = %v", err)
+		t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 	}
 	if normalized.sourceKind != "url" {
 		t.Fatalf("sourceKind = %q, want url", normalized.sourceKind)
@@ -178,9 +178,9 @@ func TestURLBackedMultimodalIngestUsesURLAsStableSourceKey(t *testing.T) {
 	normalized, err := normalizeIngestRequest(dto.IngestRequest{Sources: []dto.IngestSource{
 		{Kind: "url", URL: submitted},
 		{Kind: "text", Text: "Selected passage"},
-	}})
+	}}, captureDestinationLibrary)
 	if err != nil {
-		t.Fatalf("normalizeIngestRequest() error = %v", err)
+		t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 	}
 	if normalized.sourceKind != "multimodal" {
 		t.Fatalf("sourceKind = %q, want multimodal", normalized.sourceKind)
@@ -288,9 +288,9 @@ func TestBrowserCapturePersistsStructuredHTMLAlongsideReadableText(t *testing.T)
 				"https://cdn.example.com/chart.png",
 			},
 		}},
-	})
+	}, captureDestinationLibrary)
 	if err != nil {
-		t.Fatalf("normalizeIngestRequest() error = %v", err)
+		t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 	}
 	params, err := normalized.toLinkCapture()
 	if err != nil {

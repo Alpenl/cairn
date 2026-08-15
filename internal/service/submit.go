@@ -79,6 +79,11 @@ type SubmitServiceOptions struct {
 	InboxProposalCommands InboxProposalCommands
 }
 
+// normalizeCaptureDestination 解析采集目的地。缺省值由调用方给出，因为不同入口
+// 的语义不同：用户主动收藏（单条、批量、ingest）缺省进收件箱——收藏是「先收着」，
+// 抓取质量、标题、归类都还没确认，直接进库会把未经确认的内容混进阅读库；而订阅源
+// 的条目分析（AnalyzeRSS）缺省仍是 library，它由订阅刷新驱动、结果关联回 feed
+// item，不是一次收藏动作，进收件箱会把它淹没。
 func normalizeCaptureDestination(raw, fallback string) (string, error) {
 	destination := strings.ToLower(strings.TrimSpace(raw))
 	if destination == "" {

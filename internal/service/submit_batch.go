@@ -56,6 +56,7 @@ func (s *SubmitService) Batch(ctx context.Context, req dto.BatchCreateRequest) (
 		destination   string
 	}
 	entries := make([]dto.BatchItemResponse, len(req.Items))
+	defaultDestination := s.core.defaultCaptureDestination()
 	contexts := make([]itemContext, 0, len(req.Items))
 	for i, item := range req.Items {
 		rawURL, err := validateURL(item.URL)
@@ -81,7 +82,7 @@ func (s *SubmitService) Batch(ctx context.Context, req dto.BatchCreateRequest) (
 			entries[i] = dto.BatchItemResponse{Error: batchItemErrorMessage(err)}
 			continue
 		}
-		destination, err := normalizeCaptureDestination(item.Destination, captureDestinationLibrary)
+		destination, err := normalizeCaptureDestination(item.Destination, defaultDestination)
 		if err != nil {
 			entries[i] = dto.BatchItemResponse{Error: batchItemErrorMessage(err)}
 			continue

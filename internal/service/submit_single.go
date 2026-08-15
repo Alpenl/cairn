@@ -31,7 +31,7 @@ func (s *SubmitService) Submit(ctx context.Context, req dto.LinkCreateRequest) (
 		return dto.SubmitResponse{}, err
 	}
 	intent := resolveRequestedLibraryIntent(requestedLibraryIntent{}, userRequestedLibraryIntent(requestedKind))
-	destination, err := normalizeCaptureDestination(req.Destination, captureDestinationLibrary)
+	destination, err := normalizeCaptureDestination(req.Destination, s.core.defaultCaptureDestination())
 	if err != nil {
 		return dto.SubmitResponse{}, err
 	}

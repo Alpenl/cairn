@@ -53,9 +53,9 @@ func TestNormalizeIngestRequestPersistsAutomaticPredictionWithoutFinalizingKind(
 		t.Run(tt.name, func(t *testing.T) {
 			normalized, err := normalizeIngestRequest(dto.IngestRequest{Sources: []dto.IngestSource{{
 				Kind: "browser_capture", URL: tt.url, Metadata: tt.metadata,
-			}}})
+			}}}, captureDestinationLibrary)
 			if err != nil {
-				t.Fatalf("normalizeIngestRequest() error = %v", err)
+				t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 			}
 			params, err := normalized.toLinkCapture()
 			if err != nil {
@@ -81,9 +81,9 @@ func TestNormalizeIngestRequestDoesNotClassifyArbitraryMetadata(t *testing.T) {
 			"description": "This must not become classifier evidence",
 			"anything":    "WebApplication",
 		},
-	}}})
+	}}}, captureDestinationLibrary)
 	if err != nil {
-		t.Fatalf("normalizeIngestRequest() error = %v", err)
+		t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 	}
 	params, err := normalized.toLinkCapture()
 	if err != nil {
