@@ -9,15 +9,15 @@ import (
 	"log/slog"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tidwall/gjson"
 
 	"github.com/riverqueue/river/internal/execution"
-	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
-	"github.com/riverqueue/river/internal/middlewarelookup"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -80,11 +80,12 @@ func MetadataUpdatesFromWorkContext(ctx context.Context) (map[string]any, bool) 
 }
 
 type jobExecutorResult struct {
-	Err             error
-	MetadataUpdates map[string]any
-	NextRetry       time.Time
-	PanicTrace      string
-	PanicVal        any
+	Err                error
+	JobArgsUnmarshaled bool
+	MetadataUpdates    map[string]any
+	NextRetry          time.Time
+	PanicTrace         string
+	PanicVal           any
 }
 
 // ErrorStr returns an appropriate string to persist to the database based on
@@ -110,13 +111,12 @@ type JobExecutor struct {
 	ClientRetryPolicy        ClientRetryPolicy
 	DefaultClientRetryPolicy ClientRetryPolicy
 	ErrorHandler             ErrorHandler
-	HookLookupByJob          *hooklookup.JobHookLookup
-	HookLookupGlobal         hooklookup.HookLookupInterface
+	PluginLookupByJob        *pluginlookup.JobPluginLookup
+	PluginLookupGlobal       *pluginlookup.PluginLookup
 	JobRow                   *rivertype.JobRow
-	MiddlewareLookupGlobal   middlewarelookup.MiddlewareLookupInterface
 	ProducerCallbacks        struct {
 		JobDone func(jobRow *rivertype.JobRow)
-		Stuck   func()
+		Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
 		Unstuck func()
 	}
 	SchedulerInterval      time.Duration
@@ -125,8 +125,17 @@ type JobExecutor struct {
 	WorkUnit               workunit.WorkUnit
 
 	// Meant to be used from within the job executor only.
-	start time.Time
-	stats *jobstats.JobStatistics // initialized by the executor, and handed off to completer
+	slotClosed atomic.Bool
+	start      time.Time
+	stats      *jobstats.JobStatistics // initialized by the executor, and handed off to completer
+}
+
+// TryCloseSlot marks this executor's producer slot as closed. A closed slot
+// means the producer has already stopped counting this executor against its
+// active worker capacity, although the executor goroutine may still be running.
+// It returns true only the first time the slot is closed.
+func (e *JobExecutor) TryCloseSlot() bool {
+	return e.slotClosed.CompareAndSwap(false, true)
 }
 
 func (e *JobExecutor) Cancel(ctx context.Context) {
@@ -175,6 +184,7 @@ func (e *JobExecutor) Execute(ctx context.Context) {
 func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 	metadataUpdates := make(map[string]any)
 	ctx = context.WithValue(ctx, ContextKeyMetadataUpdates, metadataUpdates)
+	jobArgsUnmarshaled := false
 
 	defer func() {
 		if recovery := recover(); recovery != nil {
@@ -185,7 +195,8 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			)
 
 			res = &jobExecutorResult{
-				MetadataUpdates: metadataUpdates,
+				JobArgsUnmarshaled: jobArgsUnmarshaled,
+				MetadataUpdates:    metadataUpdates,
 				// Skip the first 4 frames which are:
 				//
 				// 1. The `runtime.Callers` function.
@@ -206,12 +217,13 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		)
 		return &jobExecutorResult{Err: &rivertype.UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: metadataUpdates}
 	}
+	pluginLookupByJob := e.WorkUnit.PluginLookup(e.PluginLookupByJob)
 
 	doInner := execution.Func(func(ctx context.Context) error {
 		{
 			for _, hook := range append(
-				e.HookLookupGlobal.ByHookKind(hooklookup.HookKindWorkBegin),
-				e.WorkUnit.HookLookup(e.HookLookupByJob).ByHookKind(hooklookup.HookKindWorkBegin)...,
+				e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindHookWorkBegin),
+				pluginLookupByJob.ByKind(pluginlookup.PluginKindHookWorkBegin)...,
 			) {
 				if err := hook.(rivertype.HookWorkBegin).WorkBegin(ctx, e.JobRow); err != nil { //nolint:forcetypeassert
 					return err
@@ -222,6 +234,7 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		if err := e.WorkUnit.UnmarshalJob(); err != nil {
 			return err
 		}
+		jobArgsUnmarshaled = true
 
 		jobTimeout := cmp.Or(e.WorkUnit.Timeout(), e.ClientJobTimeout)
 
@@ -238,8 +251,8 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 
 		{
 			for _, hook := range append(
-				e.HookLookupGlobal.ByHookKind(hooklookup.HookKindWorkEnd),
-				e.WorkUnit.HookLookup(e.HookLookupByJob).ByHookKind(hooklookup.HookKindWorkEnd)...,
+				e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindHookWorkEnd),
+				pluginLookupByJob.ByKind(pluginlookup.PluginKindHookWorkEnd)...,
 			) {
 				err = hook.(rivertype.HookWorkEnd).WorkEnd(ctx, e.JobRow, err) //nolint:forcetypeassert
 			}
@@ -248,23 +261,37 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return err
 	})
 
+	pluginMiddleware := make([]rivertype.Middleware, 0,
+		len(e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker))+
+			len(pluginLookupByJob.ByKind(pluginlookup.PluginKindMiddlewareWorker)),
+	)
+	for _, plugin := range e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker) {
+		pluginMiddleware = append(pluginMiddleware, plugin.(rivertype.Middleware)) //nolint:forcetypeassert
+	}
+	for _, plugin := range pluginLookupByJob.ByKind(pluginlookup.PluginKindMiddlewareWorker) {
+		pluginMiddleware = append(pluginMiddleware, plugin.(rivertype.Middleware)) //nolint:forcetypeassert
+	}
+
 	executeFunc := execution.MiddlewareChain(
-		e.MiddlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker),
+		pluginMiddleware,
 		e.WorkUnit.Middleware(),
 		doInner,
 		e.JobRow,
 	)
 
-	return &jobExecutorResult{Err: executeFunc(ctx), MetadataUpdates: metadataUpdates}
+	return &jobExecutorResult{
+		Err:                executeFunc(ctx),
+		JobArgsUnmarshaled: jobArgsUnmarshaled,
+		MetadataUpdates:    metadataUpdates,
+	}
 }
 
 // Watches for jobs that may have become stuck. i.e. They've run longer than
 // their job timeout (plus a small margin) and don't appear to be responding to
 // context cancellation (unfortunately, quite an easy error to make in Go).
 //
-// Currently we don't do anything if we notice a job is stuck.  Knowing about
-// stuck jobs is just used for informational purposes in the producer in
-// generating periodic stats.
+// Producers use stuck-job notifications for periodic stats and optional user
+// handlers.
 func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) context.CancelFunc {
 	// We add a WithoutCancel here so that this inner goroutine becomes
 	// immune to all context cancellations _except_ the one where it's
@@ -281,7 +308,7 @@ func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) 
 			// context cancelled as we leave JobExecutor.execute
 
 		case <-time.After(jobTimeout + cmp.Or(e.StuckThresholdOverride, stuckThresholdDefault)):
-			e.ProducerCallbacks.Stuck()
+			e.ProducerCallbacks.Stuck(ctx, e.JobRow)
 
 			e.Logger.WarnContext(ctx, e.Name+": Job appears to be stuck",
 				slog.Int64("job_id", e.JobRow.ID),
@@ -363,7 +390,7 @@ func (e *JobExecutor) reportResult(ctx context.Context, jobRow *rivertype.JobRow
 			slog.String("job_kind", jobRow.Kind),
 			slog.Duration("duration", snoozeErr.Duration),
 		)
-		nextAttemptScheduledAt := time.Now().Add(snoozeErr.Duration)
+		nextAttemptScheduledAt := e.Time.Now().Add(snoozeErr.Duration)
 
 		snoozesValue := gjson.GetBytes(jobRow.Metadata, "snoozes").Int()
 		if res.MetadataUpdates == nil {
@@ -479,7 +506,7 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 	}
 
 	var nextRetryScheduledAt time.Time
-	if e.WorkUnit != nil {
+	if e.WorkUnit != nil && res.JobArgsUnmarshaled {
 		nextRetryScheduledAt = e.WorkUnit.NextRetry()
 	}
 	if nextRetryScheduledAt.IsZero() {

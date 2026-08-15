@@ -45,7 +45,13 @@ func NewSparseVectorFromMap(elements map[int32]float32, dim int32) SparseVector 
 	for _, k := range indices {
 		values = append(values, elements[k])
 	}
-	return SparseVector{dim: dim, indices: indices, values: values}
+	v := SparseVector{dim: dim, indices: indices, values: values}
+	err := v.validate()
+	if err != nil {
+		// TODO return error in 0.5.0
+		panic(err)
+	}
+	return v
 }
 
 // Dimensions returns the number of dimensions.
@@ -95,19 +101,34 @@ func (v SparseVector) String() string {
 // Parse parses a string representation of a sparse vector.
 func (v *SparseVector) Parse(s string) error {
 	sp := strings.SplitN(s, "/", 2)
+	if len(sp) != 2 {
+		return fmt.Errorf("malformed sparsevec literal")
+	}
 
 	dim, err := strconv.ParseInt(sp[1], 10, 32)
 	if err != nil {
 		return err
 	}
 
-	elements := strings.Split(sp[0][1:len(sp[0])-1], ",")
+	// TODO check brackets in 0.5.0
+	if len(sp[0]) < 2 {
+		return fmt.Errorf("malformed sparsevec literal")
+	}
+
+	elements := []string{}
+	if len(sp[0]) > 2 {
+		elements = strings.Split(sp[0][1:len(sp[0])-1], ",")
+	}
+
 	v.dim = int32(dim)
 	v.indices = make([]int32, 0, len(elements))
 	v.values = make([]float32, 0, len(elements))
 
 	for i := 0; i < len(elements); i++ {
 		ep := strings.SplitN(elements[i], ":", 2)
+		if len(ep) != 2 {
+			return fmt.Errorf("malformed sparsevec literal")
+		}
 
 		n, err := strconv.ParseInt(ep[0], 10, 32)
 		if err != nil {
@@ -122,7 +143,7 @@ func (v *SparseVector) Parse(s string) error {
 		v.values = append(v.values, float32(n2))
 	}
 
-	return nil
+	return v.validate()
 }
 
 // EncodeBinary encodes a binary representation of the sparse vector.
@@ -143,14 +164,26 @@ func (v SparseVector) EncodeBinary(buf []byte) (newBuf []byte, err error) {
 
 // DecodeBinary decodes a binary representation of a sparse vector.
 func (v *SparseVector) DecodeBinary(buf []byte) error {
-	dim := binary.BigEndian.Uint32(buf[0:4])
+	if len(buf) < 12 {
+		return fmt.Errorf("invalid length")
+	}
+
+	dim := int32(binary.BigEndian.Uint32(buf[0:4]))
 	nnz := int(binary.BigEndian.Uint32(buf[4:8]))
+	if nnz < 0 {
+		return fmt.Errorf("sparsevec cannot have negative number of elements")
+	}
+
 	unused := binary.BigEndian.Uint32(buf[8:12])
 	if unused != 0 {
 		return fmt.Errorf("expected unused to be 0")
 	}
 
-	v.dim = int32(dim)
+	if (len(buf)-12)/8 != nnz || (len(buf)-12)%8 != 0 {
+		return fmt.Errorf("invalid length")
+	}
+
+	v.dim = dim
 	v.indices = make([]int32, 0, nnz)
 	v.values = make([]float32, 0, nnz)
 	offset := 12
@@ -163,6 +196,20 @@ func (v *SparseVector) DecodeBinary(buf []byte) error {
 	for i := 0; i < nnz; i++ {
 		v.values = append(v.values, math.Float32frombits(binary.BigEndian.Uint32(buf[offset:offset+4])))
 		offset += 4
+	}
+
+	return v.validate()
+}
+
+func (v *SparseVector) validate() error {
+	if v.dim < 0 {
+		return fmt.Errorf("sparsevec cannot have negative dimensions")
+	}
+
+	for _, index := range v.indices {
+		if index < 0 || index >= v.dim {
+			return fmt.Errorf("sparsevec index out of bounds")
+		}
 	}
 
 	return nil

@@ -1,4 +1,8 @@
-## 0.4.0 (unreleased)
+## 0.4.1 (2026-07-29)
+
+- Fixed possible panics with `Parse` and `DecodeBinary` methods
+
+## 0.4.0 (2026-05-18)
 
 - Changed `ent` and `pgx` packages to modules
 - Dropped support for Go < 1.25

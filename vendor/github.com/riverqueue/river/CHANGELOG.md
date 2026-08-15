@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-08-05
+
+### Added
+
+- Added `JobListParams.TagsAll` and `JobListParams.TagsAny` for filtering jobs that match every or any exact tag, respectively. [PR #1339](https://github.com/riverqueue/river/pull/1339).
+
+### Fixed
+
+- `testsignal` no longer imports `riversharedtest`, so testify, go-spew, goleak, and yaml are no longer linked into production binaries that use River. `WaitTimeout` moved to `rivershared/util/testutil`, with `riversharedtest.WaitTimeout` kept as a wrapper around it. [PR #1342](https://github.com/riverqueue/river/pull/1342).
+
+## [0.42.0] - 2026-07-31
+
+### Added
+
+- Added `JobArgsWithPlugins` for installing plugins that apply only to a specific job type. [PR #1337](https://github.com/riverqueue/river/pull/1337).
+
+## [0.41.1] - 2026-07-29
+
+### Fixed
+
+- Fixed `JobRescuer` incorrectly rescuing jobs whose worker timeout of zero inherits a client-level `Config.JobTimeout` of `-1` (no timeout). [PR #1331](https://github.com/riverqueue/river/pull/1331).
+
+## [0.41.0] - 2026-07-23
+
+### Added
+
+- Added `rivertype.HookMetricEmit` for receiving metrics emitted by River. Initial metrics report the duration of successful job fetches with `JobGetAvailableDurationMetric` and the number of jobs fetched with `JobGetAvailableCountMetric`. [PR #1285](https://github.com/riverqueue/river/pull/1285).
+- The `riversqlite` driver is now tested against Turso, an in-process SQLite-compatible database written in Rust. [PR #1311](https://github.com/riverqueue/river/pull/1311).
+
+### Changed
+
+- Added `Config.Plugins` for extensions that should be installed as both hooks and middleware. `Config.Hooks` and `Config.Middleware` remain available for hook-only and middleware-only registration. [PR #1284](https://github.com/riverqueue/river/pull/1284).
+- Reduce producer keep alive interval from 1 minute to 30 seconds. [PR #1319](https://github.com/riverqueue/river/pull/1319).
+- Add context helpers that name timeouts for easy attribution on where they happened. [PR #1329](https://github.com/riverqueue/river/pull/1329).
+
+### Fixed
+
+- Guard against empty job slice returned by `JobSetStateIfRunningMany` when a job has been deleted mid-run. [PR #1308](https://github.com/riverqueue/river/pull/1308).
+- Fixed `JobRescuer` pagination so a full batch of running jobs with disabled or longer worker-specific timeouts can't prevent later stuck jobs from being rescued. [PR #1318](https://github.com/riverqueue/river/pull/1318).
+- If a job fails to unmarshal from JSON during job rescue or job execution, back off using the retry schedule and eventually discard it, similar to any other error that might occur. [PR #1324](https://github.com/riverqueue/river/pull/1324).
+- Fixed `JobListOrderByFinalizedAt` validation so finalized states are accepted while non-finalized states are rejected. [PR #1327](https://github.com/riverqueue/river/issues/1327).
+
+## [0.40.0] - 2026-07-02
+
+⚠️ Version 0.40.0 contains a new database migration, version 7, that rolls up some database cleanups and a few SQLite features:
+
+- Drop tables `river_client` and `river_client_queue`. These were added prospectively, but in the end were never used for anything. [PR #1115](https://github.com/riverqueue/river/pull/1115).
+- Add a default value of 25 to `river_job.max_attempts`. Go code was previously injecting a max value, so this has no functional effect on existing behavior. [PR #1115](https://github.com/riverqueue/river/pull/1115).
+- Add a default value of `CURRENT_TIMESTAMP` to `river_queue.updated_at`. Go code was previously injecting the current time, so this has no functional effect on existing behavior. [PR #1115](https://github.com/riverqueue/river/pull/1115).
+- SQLite only: Convert `json` columns to `jsonb`. [PR #1224](https://github.com/riverqueue/river/pull/1224).
+- SQLite only: Add pseudo listen/notify mechanism in a new `river_notification` table. [PR #1275](https://github.com/riverqueue/river/pull/1275).
+
+For SQLite, running River apps must be stopped briefly while the migration is run and their code upgrade to 0.40.0 so they start reading and inserting new values in `jsonb` instead of `json`.
+
+See [documentation on running River migrations](https://riverqueue.com/docs/migrations). If migrating with the CLI, make sure to update it to its latest version:
+
+```shell
+go install github.com/riverqueue/river/cmd/river@latest
+river migrate-up --database-url "$DATABASE_URL"
+```
+
+If not using River's internal migration system, the raw SQL can alternatively be dumped with (or change `--database-url` to a Postgres URI for Postgres versions):
+
+```shell
+go install github.com/riverqueue/river/cmd/river@latest
+river migrate-get --database-url sqlite:// --version 7 --up > river7.up.sql
+river migrate-get --database-url sqlite:// --version 7 --down > river7.down.sql
+```
+
+### Added
+
+- SQLite picks up a new `river_notification` table that allows River to provide listen/notify-like functionality despite these functions not being supported outside of Postgres. [PR #1275](https://github.com/riverqueue/river/pull/1275).
+- Added `JobStuckHandler`, giving clients a hook to handle "stuck" jobs (i.e. ones which are passed timeout and haven't responded to context cancellation) and potentially open a new worker slot if so desired. [PR #1291](https://github.com/riverqueue/river/pull/1291).
+
+### Changed
+
+- Convert SQLite JSON columns to JSONB (including migration). [PR #1224](https://github.com/riverqueue/river/pull/1224).
+- Change SQLite driver operations over to use bulk inserts where possible now that sqlc has better support for `json_each`. [PR #1276](https://github.com/riverqueue/river/pull/1276)
+- Detect duplicate step names across `river.ResumableStep` and return a validation error. [PR #1281](https://github.com/riverqueue/river/pull/1281)
+- Earlier backpressure from `BatchCompleter` when it's throughput is saturated with fewer warnings to console. [PR #1292](https://github.com/riverqueue/river/pull/1292)
+- Series of minor optimizations in `BatchCompleter` raising throughput ~20% when it's the bottleneck in job processing (e.g. in benchmarks). [PR #1293](https://github.com/riverqueue/river/pull/1293)
+
+### Fixed
+
+- Fix `JobCancel` having no effect on running jobs when using a poll-only driver (e.g. `riverdatabasesql`). The `controlActionCancel` event was silently dropped in `fetchAndRunLoop`'s `queueControlCh` handler instead of being forwarded to `maybeCancelJob`. Note: this fix only works within a single process; cross-process cancels in poll-only setups must wait for the next poll cycle. [PR #1245](https://github.com/riverqueue/river/pull/1245).
+- Ensure jobs that return a custom timeout of -1 (no timeout) are never rescued. [PR #1288](https://github.com/riverqueue/river/pull/1288).
+- Detect numbered PostgreSQL `REINDEX INDEX CONCURRENTLY` artifacts like `_ccnew1` and `_ccold2` so the reindexer does not keep accumulating failed artifact indexes. Fixes [#1296](https://github.com/riverqueue/river/issues/1296). [PR #1297](https://github.com/riverqueue/river/pull/1297).
+
 ## [0.39.0] - 2026-06-03
 
 ⚠️ **Breaking API change:** `rivermigrate.Migrator.Validate` and `rivermigrate.Migrator.ValidateTx` now take a `*rivermigrate.ValidateOpts` parameter. Pass `nil` to preserve previous behavior. We normally endeavor not to make any breaking API changes, but this one will keep the API in a much nicer state, and is on an ancillary function that most installations won't be using. [PR #1259](https://github.com/riverqueue/river/pull/1259)
