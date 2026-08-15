@@ -26,9 +26,9 @@ func TestBrowserCaptureIdentityDoesNotDependOnSourceOrder(t *testing.T) {
 		{browserCapture, reference},
 		{reference, browserCapture},
 	} {
-		normalized, err := normalizeIngestRequest(dto.IngestRequest{Sources: sources})
+		normalized, err := normalizeIngestRequest(dto.IngestRequest{Sources: sources}, captureDestinationLibrary)
 		if err != nil {
-			t.Fatalf("normalizeIngestRequest() error = %v", err)
+			t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 		}
 		if normalized.sourceKey != pageURL {
 			t.Fatalf("sourceKey = %q, want browser capture page URL %q", normalized.sourceKey, pageURL)
@@ -69,9 +69,9 @@ func TestBrowserCaptureFingerprintTracksSupplementalSourceIdentity(t *testing.T)
 		if referenceFirst {
 			sources = []dto.IngestSource{extra, capture}
 		}
-		got, err := normalizeIngestRequest(dto.IngestRequest{Sources: sources})
+		got, err := normalizeIngestRequest(dto.IngestRequest{Sources: sources}, captureDestinationLibrary)
 		if err != nil {
-			t.Fatalf("normalizeIngestRequest() error = %v", err)
+			t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 		}
 		return got
 	}
@@ -116,9 +116,9 @@ func TestCaptureChangedUsesSupplementalSourceFingerprint(t *testing.T) {
 		if referenceFirst {
 			sources = []dto.IngestSource{extra, capture}
 		}
-		normalized, err := normalizeIngestRequest(dto.IngestRequest{Sources: sources})
+		normalized, err := normalizeIngestRequest(dto.IngestRequest{Sources: sources}, captureDestinationLibrary)
 		if err != nil {
-			t.Fatalf("normalizeIngestRequest() error = %v", err)
+			t.Fatalf("normalizeIngestRequest(, captureDestinationLibrary) error = %v", err)
 		}
 		params, err := normalized.toLinkCapture()
 		if err != nil {

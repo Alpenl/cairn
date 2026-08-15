@@ -19,8 +19,12 @@ import (
 //     service.NormalizeParseDepth 等深度防御逻辑兜底。
 type LinkCreateRequest struct {
 	URL string `json:"url" binding:"required,url,max=2048"`
-	// Destination selects the durable capture host. Empty keeps the legacy
-	// library behavior; Reader-aware clients may request inbox explicitly.
+	// Destination selects the durable capture host. Empty means inbox: a
+	// capture is "put this aside", and its fetch, title and classification
+	// are all still unconfirmed. Clients that want the reading library
+	// directly must say so explicitly. Deployments without Reader Inbox fall
+	// back to library for the empty case only — an explicit inbox request
+	// still fails loudly rather than being silently rerouted.
 	Destination string  `json:"destination,omitempty" binding:"omitempty,oneof=library inbox"`
 	Description *string `json:"description,omitempty" binding:"omitempty,max=4096"` // 用户备注，附在链接上的可选描述；按 wave 10 默认值设置，业务可调
 	// RequestedLibraryKind is optional for backwards compatibility. Empty is
@@ -83,8 +87,9 @@ func NormalizeParseDepth(raw *string) (string, error) {
 // handler 层提前拒绝，避免进入 service 循环。
 type IngestRequest struct {
 	Sources []IngestSource `json:"sources" binding:"required,min=1,max=64,dive"`
-	// Destination is additive and optional so older extension builds continue
-	// to use the legacy library path until they advertise Inbox explicitly.
+	// Destination is optional; empty means inbox, matching the single-link
+	// capture default. Deployments without Reader Inbox fall back to library
+	// for the empty case only.
 	Destination          string `json:"destination,omitempty" binding:"omitempty,oneof=library inbox site"`
 	RequestedLibraryKind string `json:"requested_library_kind,omitempty" binding:"omitempty,max=16"`
 }
