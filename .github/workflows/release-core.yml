@@ -188,6 +188,20 @@ jobs:
           bash scripts/core-release-build.sh
           COMMIT="$COMMIT" bash scripts/core-release-verify.sh dist/cairn_*.tar.gz
 
+      # 独立 Reader 站（reader.alpenl.com）与镜像内嵌的 /reader/ 是同一份代码的
+      # 两种部署形态，但前者是静态站、不随镜像更新。它必须与后端同版本发布：
+      # Reader 会严格比对 representation_contract，后端一升级、旧构建立刻连不上。
+      # helper 同时产出两种形态、写入 per-file SHA-256 provenance 与发布清单，
+      # 部署侧据此校验，不能用手工 cp reader/dist 代替。
+      - name: Build standalone Reader release
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/reader-vnext-release.sh build --release-id "reader-${VERSION}" --out-dir "reader-release"
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="$BUILD_TIME" \
+            -C reader-release -czf "dist/cairn-reader-${VERSION}.tar.gz" .
+          ls -l "dist/cairn-reader-${VERSION}.tar.gz"
+
       - name: Login to GHCR candidate store
         env:
           GH_TOKEN: ${{ github.token }}
@@ -456,7 +470,8 @@ jobs:
             -C release-assets -cf - security-evidence | gzip -n > "release-assets/core-security-evidence-${VERSION}.tar.gz"
           rm -rf release-assets/security-evidence
           (cd release-assets && sha256sum \
-            cairn_*.tar.gz core-security-evidence-*.tar.gz CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json > SHA256SUMS)
+            cairn_*.tar.gz core-security-evidence-*.tar.gz cairn-reader-*.tar.gz \
+            CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json > SHA256SUMS)
 
       - name: Prepare complete draft Release idempotently
         env:

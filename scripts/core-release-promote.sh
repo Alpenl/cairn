@@ -92,14 +92,18 @@ verify_remote_asset() {
 }
 
 release_asset_names() {
-	# 只包含 Core 交付物。浏览器扩展与 Android 各自是独立的发布单元，有自己的
-	# tag 前缀（extension/vX.Y.Z、android/vX.Y.Z）与 workflow——把它们塞进 Core
-	# 发布会让「改一行 Android 代码」触发整套镜像构建、扫描与频道 promote。
+	# Core 交付物：服务端二进制、镜像证据，以及独立 Reader 站的发布包——后者是
+	# 前端的另一种部署形态（静态站），与内嵌 /reader/ 同源同版本，必须随 Core
+	# 一起发布，否则后端升级会让站点因 representation_contract 不符而连不上。
+	#
+	# 浏览器扩展与 Android 各自是独立发布单元，有自己的 tag 前缀与 workflow——
+	# 把它们塞进 Core 会让「改一行 Android 代码」触发整套镜像构建与频道 promote。
 	# 这个集合是严格的：多一个或少一个文件都会让 prepare-draft 失败。
 	printf '%s\n' \
 		"cairn_${VERSION}_linux_amd64.tar.gz" \
 		"cairn_${VERSION}_linux_arm64.tar.gz" \
 		"core-security-evidence-${VERSION}.tar.gz" \
+		"cairn-reader-${VERSION}.tar.gz" \
 		CHANNEL-ROLLBACK.json \
 		IMAGE-DIGESTS.json \
 		SHA256SUMS | sort

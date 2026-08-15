@@ -91,6 +91,8 @@ printf '%s\n' "$old_slim" >"$TMP/state/images/ghcr.io_example_cairn_slim"
 
 printf 'amd64 archive\n' >"$TMP/assets/cairn_1.2.3_linux_amd64.tar.gz"
 printf 'arm64 archive\n' >"$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz"
+# 独立 Reader 站的发布包随 Core 一同发布，asset 集合严格比对，夹具必须提供。
+printf 'reader release\n' >"$TMP/assets/cairn-reader-1.2.3.tar.gz"
 jq -n \
 	--arg tag "$TAG" --arg commit "$COMMIT" --arg build_time "$BUILD_TIME" --arg image "$IMAGE" \
 	--arg full_index "$FULL_INDEX_DIGEST" --arg full_amd64 "$FULL_AMD64_DIGEST" --arg full_arm64 "$FULL_ARM64_DIGEST" \
@@ -136,7 +138,8 @@ tar -C "$TMP" -czf "$TMP/assets/core-security-evidence-1.2.3.tar.gz" security-ev
 
 "$SCRIPT" prepare-channel-record "$TMP/assets/CHANNEL-ROLLBACK.json"
 (cd "$TMP/assets" && sha256sum \
-	cairn_*.tar.gz core-security-evidence-*.tar.gz CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
+	cairn_*.tar.gz core-security-evidence-*.tar.gz cairn-reader-*.tar.gz \
+	CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
 
 "$SCRIPT" prepare-draft "$TMP/assets"
 "$SCRIPT" prepare-draft "$TMP/assets"
@@ -145,7 +148,8 @@ if "$SCRIPT" prepare-draft "$TMP/assets" >/dev/null 2>&1; then
 	fail 'draft preparation accepted a same-name asset with different bytes'
 fi
 (cd "$TMP/assets" && sha256sum \
-	cairn_*.tar.gz core-security-evidence-*.tar.gz CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
+	cairn_*.tar.gz core-security-evidence-*.tar.gz cairn-reader-*.tar.gz \
+	CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
 mv "$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz" "$TMP/missing-arm64.tar.gz"
 if "$SCRIPT" prepare-draft "$TMP/assets" >/dev/null 2>&1; then
 	fail 'draft preparation accepted a missing architecture archive'

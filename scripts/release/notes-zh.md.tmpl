@@ -11,6 +11,7 @@
 | 部署服务端（推荐，含视频解析） | 容器镜像 `ghcr.io/alpenl/cairn:__VERSION__` |
 | 部署服务端（不需要视频解析，体积更小） | 容器镜像 `ghcr.io/alpenl/cairn:__VERSION__-slim` |
 | 不用容器，直接跑二进制 | `cairn___VERSION___linux_amd64.tar.gz` 或 `_arm64.tar.gz` |
+| 部署独立的 Reader 站（根域静态站） | `cairn-reader-__VERSION__.tar.gz` |
 | 在 Chrome / Edge / Firefox 里采集网页 | 见 [浏览器扩展的最新发布](https://github.com/Alpenl/cairn/releases?q=extension&expanded=true) |
 | 在 Android 上用系统分享收藏 | 见 [Android 的最新发布](https://github.com/Alpenl/cairn/releases?q=android&expanded=true) |
 
@@ -23,6 +24,10 @@
 先用镜像里的 `/app/migrate` 对空库执行迁移，再启动 `/app/webtag`。至少需要设置 `DATABASE_URL`、`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL`、`EXTENSION_API_TOKEN`、`SESSION_SIGNING_KEY`，以及非开发环境必填的 `CURSOR_SIGNING_KEY`。完整配置见仓库内 `.env.example`。服务只读取进程环境，不会自动加载 `.env` 文件。
 
 公开 API 默认失败关闭：客户端需携带 `Authorization: Bearer <EXTENSION_API_TOKEN>`。只有在可信内网、或前置代理已完成访问控制时，才可显式设置 `PUBLIC_API_OPEN=true`。
+
+**独立 Reader 站。** 镜像里已内嵌一份 Reader，走 `/reader/` 路径即可使用，不需要额外部署。只有把 Reader 挂在自己的根域（例如 `reader.example.com`）时才需要 `cairn-reader-__VERSION__.tar.gz`：解包后上传其中的 `root/` 目录（`VITE_BASE=/` 构建），**不要**上传 `embedded/`——那份的 base 是 `/reader/`，放到根域会全站 404。包内带 per-file SHA-256 provenance 与发布标记 `webtag-reader-release.json`。
+
+⚠️ 独立 Reader 站与后端**必须同版本**：客户端会严格比对 `representation_contract`，只升级一边会让站点连不上。同理，浏览器扩展与 Android 应用也需与后端契约匹配。
 
 ## 校验产物
 
