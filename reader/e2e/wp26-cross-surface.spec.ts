@@ -1,9 +1,27 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import {
   bootstrapReaderPage,
   configureReaderConnection,
   Wp26BackendFixture,
 } from './wp26-fixtures'
+
+// 原生 dialog 关闭之后不能用 toBeFocused()：CI runner 上没有
+// /usr/bin/google-chrome（见 playwright.config.ts 的 executablePath 回退），
+// Playwright 因此使用 chromium-headless-shell，而它在 dialog 之后不会把页面
+// 重新标记为 active，断言会以 "Expected: focused / Received: inactive" 失败；
+// 完整 Chrome 下则稳定通过。document.activeElement 在两种构建里都正确维护，
+// 用它断言「焦点落在哪个可及名称上」语义相同且与浏览器构建无关。
+async function expectFocusedAccessibleName(page: Page, name: string): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null
+        if (!active) return ''
+        return (active.getAttribute('aria-label') ?? active.textContent ?? '').trim()
+      }),
+    )
+    .toBe(name)
+}
 
 type JsonRecord = Record<string, unknown>
 
@@ -349,7 +367,7 @@ test('Issue 141 live thought deletion confirms from the keyboard and sends one d
   await cancelPressPromise
   await expect(page.getByText('Keep this captured idea.')).toBeVisible()
   expect(backend.calls.filter((call) => call.path === '/api/annotations/ops')).toHaveLength(0)
-  await expect(deleteButton).toBeFocused()
+  await expectFocusedAccessibleName(page, '删除想法 thought-capture-1')
 
   const acceptDialogPromise = page.waitForEvent('dialog')
   const acceptPressPromise = page.keyboard.press('Space')
@@ -358,15 +376,7 @@ test('Issue 141 live thought deletion confirms from the keyboard and sends one d
   await acceptPressPromise
 
   await expect(page.getByText('Keep this captured idea.')).not.toBeVisible()
-  // 查 document.activeElement 而不是 toBeFocused()：确认原生 dialog 之后，
-  // chromium-headless-shell 不会把页面重新标记为 active，toBeFocused() 会以
-  // "Received: inactive" 失败，而完整 Chrome 不会。CI runner 上没有
-  // /usr/bin/google-chrome（见 playwright.config.ts 的 executablePath 回退），
-  // 于是同一个断言本地过、CI 挂。activeElement 在两种构建里都正确维护，
-  // 断言的语义——删除确认后焦点回到「当前」按钮——保持不变。
-  await expect
-    .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim() ?? ''))
-    .toBe('当前')
+  await expectFocusedAccessibleName(page, '当前')
   await expect.poll(() => backend.calls.filter((call) => call.path === '/api/annotations/ops').length).toBe(1)
   expect(backend.calls.find((call) => call.path === '/api/annotations/ops')?.body).toMatchObject({
     ops: [expect.objectContaining({
