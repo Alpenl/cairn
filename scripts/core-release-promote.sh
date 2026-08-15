@@ -257,7 +257,7 @@ prepare_draft() {
 		# GitHub 会把自动生成的内容接在 notes 之后。
 		local notes_file
 		notes_file=$(mktemp)
-		sed "s/__VERSION__/${VERSION}/g" "$ROOT/scripts/release/notes-zh.md" >"$notes_file"
+		sed "s/__VERSION__/${VERSION}/g" "$ROOT/scripts/release/notes-zh.md.tmpl" >"$notes_file"
 		"$GH_BIN" release create "$TAG" --repo "$REPOSITORY" --verify-tag --draft \
 			--notes-file "$notes_file" --generate-notes --title "Cairn $TAG"
 		rm -f "$notes_file"

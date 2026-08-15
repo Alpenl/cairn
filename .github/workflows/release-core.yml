@@ -160,8 +160,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # 必须写 `run pack`：pnpm 有内置的 `pack` 命令（打 npm tarball），
+      # 直接写 `pnpm --filter X pack` 会执行内置命令而不是 package.json 里的
+      # pack 脚本——构建照常通过，却产不出 dist/webtag-*.zip。
       - name: Build and pack extension
-        run: pnpm --filter webtag-extension build && pnpm --filter webtag-extension pack
+        run: |
+          pnpm --filter webtag-extension run build
+          pnpm --filter webtag-extension run pack
 
       - name: Collect extension assets
         shell: bash
