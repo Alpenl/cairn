@@ -2,7 +2,6 @@ import { useCallback, useMemo } from 'react'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ApiError, ApiResult } from '../lib/api/result'
 import type { DomainTreeSummaryEnvelope, DomainTreeSummaryResponse } from '../lib/api/types'
-import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryReload'
 
@@ -45,9 +44,4 @@ export function useDomainSummaries(client: IdentityBoundReaderClient): DomainSum
       reload,
     }
   }, [resource.data, resource.error, resource.loading, reload])
-}
-
-/** 让域名摘要缓存失效（写操作之后调用）。 */
-export function invalidateDomainSummaries(): void {
-  resourceStore.invalidate(DOMAIN_SUMMARIES_CACHE_PREFIX)
 }

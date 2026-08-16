@@ -131,15 +131,6 @@ type Config struct {
 	Embedding EmbeddingConfig
 	RateLimit RateLimitConfig
 
-	// DeprecatedEnvsSet lists the deprecated env var names that were set
-	// to a non-empty value at load time. v3 (Spec 检索式打标) retired the
-	// Wikidata anchoring path and all concept normalization; their legacy
-	// env vars are still detected (so a stale
-	// .env does not fail-fast at boot) but ignored. app.warnUnsafeBootDefaults
-	// emits one "deprecated config ignored" WARN per entry here so an
-	// operator carrying a stale config gets a nudge to clean it up.
-	DeprecatedEnvsSet []string
-
 	DatabaseURL string
 
 	LogLevel string

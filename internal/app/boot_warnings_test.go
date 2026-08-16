@@ -158,38 +158,3 @@ func TestWarnPublicAPIOpen(t *testing.T) {
 		}
 	})
 }
-
-// TestWarnDeprecatedConfig pins the v3 retirement WARN: each non-empty
-// deprecated env in Config.DeprecatedEnvsSet produces exactly one
-// "deprecated config ignored" WARN carrying the env name as "flag".
-func TestWarnDeprecatedConfig(t *testing.T) {
-	t.Parallel()
-
-	t.Run("each deprecated env warns once", func(t *testing.T) {
-		t.Parallel()
-		cfg := baseValidishConfig()
-		// PublicAPIOpen 保持默认 false，不会触发无鉴权 WARN。
-		cfg.DeprecatedEnvsSet = []string{"WIKIDATA_ENABLED", "CONCEPT_JUDGE_ENABLED"}
-
-		for _, flag := range cfg.DeprecatedEnvsSet {
-			warns := capturedWarnings(t, cfg, flag)
-			if len(warns) != 1 {
-				t.Fatalf("%s warns = %d, want 1", flag, len(warns))
-			}
-			if msg, _ := warns[0]["msg"].(string); msg != "deprecated config ignored" {
-				t.Fatalf("%s warn msg = %q, want %q", flag, msg, "deprecated config ignored")
-			}
-		}
-	})
-
-	t.Run("empty set emits no deprecated warn", func(t *testing.T) {
-		t.Parallel()
-		cfg := baseValidishConfig()
-		cfg.ExtensionAPIToken = "ext-token"
-		cfg.DeprecatedEnvsSet = nil
-
-		if warns := capturedWarnings(t, cfg, "WIKIDATA_ENABLED"); len(warns) != 0 {
-			t.Fatalf("deprecated warns = %d, want 0 on a clean config", len(warns))
-		}
-	})
-}

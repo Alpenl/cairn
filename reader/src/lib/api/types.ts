@@ -115,8 +115,6 @@ export type ListLinksParams = NonNullable<
 >
 
 export type LinkResponse = WireLinkResponse
-export type LinkStatus = LinkResponse['status']
-export type ContentSource = NonNullable<LinkResponse['content_source']>
 export type LinkContentResponse = WireLinkContentResponse
 export type ContentEditRequest = WireContentEditRequest
 export type LinkCreateRequest = WireLinkCreateRequest
@@ -130,10 +128,7 @@ export type ClassificationRuleResponse = WireClassificationRuleResponse
 export type LibraryReviewResolveRequest = WireLibraryReviewResolveRequest
 export type LibraryReviewResponse = WireLibraryReviewResponse
 export type GroupedSearchResponse = WireGroupedSearchResponse
-export type LibrarySearchGroup = WireGroupedSearchResponse['reading']
-export type SiteSearchGroup = WireGroupedSearchResponse['sites']
 export type SiteSearchResultResponse = WireGroupedSearchResponse['sites']['items'][number]
-export type SiteSearchEntryResponse = SiteSearchResultResponse['matched_entries'][number]
 export type ReaderThoughtSearchResponse = WireReaderThoughtSearchResponse
 export type ReaderNoteSearchResponse = WireReaderNoteSearchResponse
 export type SubmitResponse = WireSubmitResponse
@@ -231,7 +226,6 @@ export type ReaderFeedSourceResponse = WireReaderFeedSourceResponse
 export type ReaderFeedFeedbackRequest = WireReaderFeedFeedbackRequest
 export type ReaderFeedFeedbackResponse = WireReaderFeedFeedbackResponse
 export type ReaderHomeResponse = WireReaderHomeResponse & ReaderHomeTodoResponseMetadata
-export type ReaderHomeFreshness = NonNullable<WireReaderHomeResponse['freshness']>
 export type ReaderLinkMetadataRequest = WireReaderLinkMetadataRequest
 export type ReaderLinkMetadataResponse = WireReaderLinkMetadataResponse
 export type ReaderContentHistoryResponse = WireReaderContentHistoryResponse

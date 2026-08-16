@@ -1388,9 +1388,6 @@ private fun quarantineLegacy(database: SupportSQLiteDatabase, operationId: Strin
 private fun legacyV1Aad(operationId: String, origin: String, namespace: String): String =
     "todo-outbox-v1|$operationId|$origin|$namespace"
 
-private fun cacheV1Aad(todoId: String, origin: String, namespace: String): String =
-    "todo-cache-v1|$todoId|$origin|$namespace"
-
 internal fun cacheV2Aad(todoId: String, origin: String, namespace: String, activationRevision: Long): String =
     buildString {
         append("webtag.todo-cache-envelope\n")

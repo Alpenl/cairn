@@ -20,7 +20,7 @@ func TestConversionAndSiteOperationMetricsExposeBoundedResults(t *testing.T) {
 	auto := model.LibraryKindSourceAuto
 	reason := "personal_rule_host"
 	writer := &conversionWriterFake{result: ConvertLinkResult{LinkID: linkID, Kind: model.LibraryKindSite, SiteID: &siteID, EntryID: &entryID, ContentRevision: 2, Status: model.LinkStatusDone}}
-	svc := NewConversionExecuteServiceWithMetrics(conversionLinksFake{link: &model.Link{ID: linkID, Status: model.LinkStatusDone, LibraryKind: &from, LibraryKindSource: &auto, ClassificationReason: &reason, ContentRevision: 1}}, writer, metrics)
+	svc := NewConversionExecuteServiceWithOptions(ConversionExecuteServiceOptions{Links: conversionLinksFake{link: &model.Link{ID: linkID, Status: model.LinkStatusDone, LibraryKind: &from, LibraryKindSource: &auto, ClassificationReason: &reason, ContentRevision: 1}}, Commands: writer, Metrics: metrics})
 	if _, err := svc.Execute(context.Background(), linkID.String(), dto.ConversionExecuteRequest{TargetKind: "site", ExpectedContentRevision: 1, ConfirmDestructive: true}); err != nil {
 		t.Fatal(err)
 	}

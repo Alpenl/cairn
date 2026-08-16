@@ -3,7 +3,6 @@ import type { ReaderClient } from '../lib/api/client'
 import { buildFeedItemsQuery } from '../lib/api/client'
 import type { ApiError } from '../lib/api/result'
 import type { FeedItem, ListFeedItemsParams, PaginatedFeedItemsResponse } from '../lib/api/types'
-import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 
 const PAGE_SIZE = 30
@@ -125,9 +124,4 @@ export function useFeedItems(client: ReaderClient, filters: ListFeedItemsParams)
     patchItem,
     removeItem,
   }
-}
-
-/** 让全部 RSS 条目列表缓存失效（条目状态批量变更之后调用）。 */
-export function invalidateFeedItems(): void {
-  resourceStore.invalidate(FEED_ITEMS_CACHE_PREFIX)
 }

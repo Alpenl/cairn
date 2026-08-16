@@ -189,23 +189,6 @@ export async function hydrateFromDisk(
   return restored ?? 0
 }
 
-export async function reconcileDurableInvalidations(
-  expectedLease: IdentityLease | null = readerIdentity.activeLease,
-): Promise<void> {
-  const lease = expectedLease
-  if (!lease) return
-  await cacheStorageQueue.enqueue(lease, 'IndexedDB invalidation reconciliation', async (operation) => {
-    const invalidations = await idbGetInvalidations(operation)
-    if (!operation.isCurrent()) return
-    for (const invalidation of invalidations) {
-      resourceStore.applyInvalidationGeneration(
-        invalidation.logicalPrefix,
-        invalidation.generation,
-      )
-    }
-  })
-}
-
 /**
  * 开始把 store 的写入同步到磁盘。返回停止函数。
  *

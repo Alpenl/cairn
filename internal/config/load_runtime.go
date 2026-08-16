@@ -140,13 +140,12 @@ func loadRuntimeConfig() (Config, error) { //nolint:gocyclo // 逐项解析运�
 	}
 
 	return Config{
-		Server:            server,
-		DB:                db,
-		Fetcher:           fetcher,
-		Analyzer:          analyzer,
-		Embedding:         embedding,
-		RateLimit:         rateLimit,
-		DeprecatedEnvsSet: detectDeprecatedEnvs(),
+		Server:    server,
+		DB:        db,
+		Fetcher:   fetcher,
+		Analyzer:  analyzer,
+		Embedding: embedding,
+		RateLimit: rateLimit,
 
 		DatabaseURL: databaseURL,
 

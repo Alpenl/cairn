@@ -66,8 +66,3 @@ export function useReaderClient(
   )
   return explicitClient ?? registered
 }
-
-/** Read the current client outside React (for non-component helpers). */
-export function getReaderClient(): IdentityBoundReaderClient | null {
-  return getRegisteredClient()
-}

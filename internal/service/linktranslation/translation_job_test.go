@@ -104,7 +104,7 @@ func TestTranslationWorkerRunsCompleteAttempt(t *testing.T) {
 	revision := int64(31)
 	const sourceHash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	processor := &recordingTranslationProcessor{}
-	worker := NewWorker(processor, 41*time.Minute, nil)
+	worker := NewWorkerWithOptions(processor, WorkerOptions{JobTimeout: 41 * time.Minute, Logger: nil})
 	err := worker.Work(context.Background(), &river.Job[JobArgs]{
 		JobRow: &rivertype.JobRow{ID: 401, Kind: (JobArgs{}).Kind()},
 		Args: JobArgs{
@@ -166,7 +166,7 @@ func TestTranslationV2WorkerRejectsIncompleteAttemptIdentity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			processor := &recordingTranslationProcessor{}
-			if err := NewWorker(processor, time.Minute, nil).Work(context.Background(), tc.job); err == nil {
+			if err := NewWorkerWithOptions(processor, WorkerOptions{JobTimeout: time.Minute, Logger: nil}).Work(context.Background(), tc.job); err == nil {
 				t.Fatal("Work() error = nil")
 			}
 			if processor.runCalls != 0 {

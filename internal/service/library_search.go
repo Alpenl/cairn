@@ -75,14 +75,6 @@ func newLibrarySearchService(links librarySearchLinkReader, sites repository.Sit
 	}
 }
 
-func NewLibrarySearchService(links librarySearchLinkReader, sites repository.SiteSearchStore, embedders ...RetrievalEmbedder) *LibrarySearchService {
-	var embedder RetrievalEmbedder
-	if len(embedders) > 0 {
-		embedder = embedders[0]
-	}
-	return newLibrarySearchService(links, sites, embedder, nil, LibrarySearchServiceOptions{})
-}
-
 func (s *LibrarySearchService) Search(ctx context.Context, raw string, readingLimit, siteLimit, thoughtLimit int, thoughtAfter string) (dto.GroupedSearchResponse, error) { //nolint:gocyclo // 混合检索：语义腿 + 关键词腿 + 分组装配，各腿有独立降级路径
 	query := strings.TrimSpace(raw)
 	if query == "" {

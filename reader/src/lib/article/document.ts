@@ -107,7 +107,6 @@ export type TranslationCommandOutcome =
   | { readonly status: 'committed' }
   | { readonly status: 'failed' | 'stale' | 'disposed' }
 
-export type DocumentCommandOutcome = AnnotationCommandOutcome | TranslationCommandOutcome
 
 type CommandExecution<Result extends DurableCommandResult> =
   | { readonly status: 'completed'; readonly result: Result }

@@ -24,14 +24,6 @@ type ConversionExecuteService struct {
 	disableSiteLibraryWrite bool
 }
 
-func NewConversionExecuteServiceWithMetrics(links repository.LinkLifecycleReader, commands LinkConversionCommands, metrics *observability.Metrics) *ConversionExecuteService {
-	return NewConversionExecuteServiceWithOptions(ConversionExecuteServiceOptions{Links: links, Commands: commands, Metrics: metrics})
-}
-
-func NewConversionExecuteService(links repository.LinkLifecycleReader, commands LinkConversionCommands) *ConversionExecuteService {
-	return NewConversionExecuteServiceWithOptions(ConversionExecuteServiceOptions{Links: links, Commands: commands})
-}
-
 // ConversionExecuteServiceOptions keeps the rollout gate at the mutation
 // boundary. Existing sites may still convert back to reading while site writes
 // are disabled, but no conversion may create a new Site or SiteEntry.

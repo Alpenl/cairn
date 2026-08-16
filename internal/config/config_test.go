@@ -479,65 +479,6 @@ func TestLoadIgnoresRetiredNoOpKnobs(t *testing.T) {
 	}
 }
 
-// TestDeprecatedEnvsIgnoredButDetected locks the v3 retirement contract:
-// retired concept-normalization env vars are still tolerated (Load
-// does not fail-fast on a stale .env carrying them) but are surfaced in
-// Config.DeprecatedEnvsSet so the boot path can WARN. Order matches
-// declaration order in deprecatedEnvVars.
-func TestDeprecatedEnvsIgnoredButDetected(t *testing.T) {
-	setBaseConfigEnv(t)
-	t.Setenv("WIKIDATA_ENABLED", "true")
-	// A placeholder UA that the old validator would have rejected — proves
-	// the retired validation no longer fires.
-	t.Setenv("WIKIDATA_USER_AGENT", "MyApp/1.0 (placeholder)")
-	t.Setenv("CONCEPT_JUDGE_ENABLED", "true")
-	t.Setenv("CONCEPT_JUDGE_INTERVAL_MS", "0") // would have failed validation pre-v3
-	t.Setenv("CONCEPT_RETRIEVE_TOP_K", "not-an-integer")
-	t.Setenv("CONCEPT_AUTO_MERGE_THRESHOLD", "not-a-number")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load should ignore deprecated config, got err: %v", err)
-	}
-
-	want := map[string]bool{
-		"WIKIDATA_ENABLED":             true,
-		"WIKIDATA_USER_AGENT":          true,
-		"CONCEPT_JUDGE_ENABLED":        true,
-		"CONCEPT_JUDGE_INTERVAL_MS":    true,
-		"CONCEPT_RETRIEVE_TOP_K":       true,
-		"CONCEPT_AUTO_MERGE_THRESHOLD": true,
-	}
-	got := make(map[string]bool, len(cfg.DeprecatedEnvsSet))
-	for _, name := range cfg.DeprecatedEnvsSet {
-		got[name] = true
-	}
-	for name := range want {
-		if !got[name] {
-			t.Errorf("DeprecatedEnvsSet missing %q; got %v", name, cfg.DeprecatedEnvsSet)
-		}
-	}
-	// Sanity: unset deprecated vars must not appear.
-	for _, name := range cfg.DeprecatedEnvsSet {
-		if name == "WIKIDATA_BASE_URL" || name == "CONCEPT_JUDGE_BATCH_SIZE" {
-			t.Errorf("DeprecatedEnvsSet reported %q which was never set", name)
-		}
-	}
-}
-
-// TestDeprecatedEnvsEmptyByDefault confirms a clean environment reports no
-// deprecated vars (so the boot path stays quiet).
-func TestDeprecatedEnvsEmptyByDefault(t *testing.T) {
-	setBaseConfigEnv(t)
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if len(cfg.DeprecatedEnvsSet) != 0 {
-		t.Errorf("DeprecatedEnvsSet = %v, want empty on a clean env", cfg.DeprecatedEnvsSet)
-	}
-}
-
 // TestIdempotencyDefaultsEnabled locks the live idempotency defaults.
 func TestIdempotencyDefaultsEnabled(t *testing.T) {
 	setBaseConfigEnv(t)

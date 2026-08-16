@@ -128,10 +128,6 @@ type WorkerOptions struct {
 	Logger     *slog.Logger
 }
 
-func NewWorker(processor JobProcessor, jobTimeout time.Duration, logger *slog.Logger) *Worker {
-	return NewWorkerWithOptions(processor, WorkerOptions{JobTimeout: jobTimeout, Logger: logger})
-}
-
 func NewWorkerWithOptions(processor JobProcessor, opts WorkerOptions) *Worker {
 	return &Worker{
 		processor:  processor,
