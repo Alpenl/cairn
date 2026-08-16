@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"webtag/internal/errsafe"
 	"webtag/internal/observability"
 	"webtag/internal/security"
 	"webtag/internal/textutil"
@@ -98,12 +99,18 @@ func NewDefaultManager(client *HTTPClient, options ManagerOptions) *Manager {
 // Fetch 是 deep-fetch 主入口：先走 Router 选中的专用 Fetcher，正文不足时回退到 jina；仅显式配置 Searcher 时才使用搜索摘要。
 // 全部失败才返回错误；只是质量偏弱时仍会返回结果，但通过 FetcherType / Metadata["quality_signal"] 暴露信号。
 func (m *Manager) Fetch(ctx context.Context, url string) (Content, error) {
-	candidate, hasCandidate, originalErr := m.fetchRouter(ctx, url)
+	// blocked tracks whether any strategy came back with a verification
+	// interstitial. It changes the *error* we report when everything
+	// fails: "blocked" is actionable (re-fetch through a real browser),
+	// while the generic "all strategies failed" is not.
+	candidate, hasCandidate, blocked, originalErr := m.fetchRouterUnblocked(ctx, url)
 	if hasCandidate && isSufficient(candidate, m.minBodyChars) && !shouldEscalateToJina(candidate) {
 		return candidate, nil
 	}
 
-	if jinaCandidate, ok := m.fetchJina(ctx, url, candidate, hasCandidate); ok {
+	jinaCandidate, hasJina, jinaBlocked := m.fetchJinaUnblocked(ctx, url, candidate, hasCandidate)
+	blocked = blocked || jinaBlocked
+	if hasJina {
 		if isSufficient(jinaCandidate, m.minBodyChars) {
 			return jinaCandidate, nil
 		}
@@ -128,11 +135,50 @@ func (m *Manager) Fetch(ctx context.Context, url string) (Content, error) {
 		return candidate, nil
 	}
 
+	if blocked {
+		return Content{}, &FetchError{
+			URL:    url,
+			Reason: "origin served an anti-bot verification page instead of the document",
+			Err:    errsafe.ErrBlockedByOrigin,
+		}
+	}
+
 	if originalErr != nil {
 		return Content{}, originalErr
 	}
 
 	return Content{}, &FetchError{URL: url, Reason: "all fetch strategies failed"}
+}
+
+// fetchRouterUnblocked runs the router pass and discards a result that
+// turns out to be a verification interstitial, reporting separately that
+// one was seen.
+//
+// Dropping it matters: an interstitial carries a title and a paragraph,
+// so it would otherwise satisfy isSufficient and be handed to analysis
+// as though it were the article.
+func (m *Manager) fetchRouterUnblocked(ctx context.Context, url string) (Content, bool, bool, error) {
+	candidate, hasCandidate, originalErr := m.fetchRouter(ctx, url)
+	if hasCandidate && blockedInterstitial(candidate) {
+		return Content{}, false, true, originalErr
+	}
+	return candidate, hasCandidate, false, originalErr
+}
+
+// fetchJinaUnblocked is the same filter over the jina escalation. This is
+// the arm that actually fires in practice: jina renders server-side from
+// its own datacenter IPs, which origins like mp.weixin.qq.com block
+// wholesale, so a blocked target reliably comes back as an interstitial
+// here even when the router pass produced nothing at all.
+func (m *Manager) fetchJinaUnblocked(ctx context.Context, url string, candidate Content, hasCandidate bool) (Content, bool, bool) {
+	jinaCandidate, ok := m.fetchJina(ctx, url, candidate, hasCandidate)
+	if !ok {
+		return Content{}, false, false
+	}
+	if blockedInterstitial(jinaCandidate) {
+		return Content{}, false, true
+	}
+	return jinaCandidate, true, false
 }
 
 // minLightSignalChars is the floor below which a "light" fetch is

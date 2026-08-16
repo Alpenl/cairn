@@ -58,6 +58,7 @@ var ErrAlreadyPersisted = errors.New("processor: failure already persisted")
 //	ErrUpstreamHTTP     → "upstream_http"
 //	ErrParse            → "parse"
 //	ErrParseJobMissing  → "parse_job_missing"
+//	ErrBlockedByOrigin  → "blocked_by_origin"
 //
 // New sentinels are safe to add; renaming an existing one is a breaking
 // change for callers that match against it via errors.Is.
@@ -70,6 +71,13 @@ var (
 	ErrUpstreamHTTP     = errors.New("upstream http error")
 	ErrParse            = errors.New("parse failure")
 	ErrParseJobMissing  = errors.New("parse job missing")
+	// ErrBlockedByOrigin marks a fetch that reached the origin and got a
+	// well-formed HTTP 200 that is an anti-bot / verification interstitial
+	// instead of the requested document. It is deliberately distinct from
+	// ErrUpstreamHTTP: nothing failed at the transport level, so the only
+	// way to tell them apart is by inspecting the body. Callers that can
+	// re-fetch through a real browser key off this category.
+	ErrBlockedByOrigin = errors.New("blocked by origin")
 )
 
 // safeErrorMessageMaxRunes caps the user-visible portion of a persisted
@@ -115,6 +123,8 @@ func ClassifyError(err error) string {
 		return "network"
 	case errors.Is(err, ErrUpstreamHTTP):
 		return "upstream_http"
+	case errors.Is(err, ErrBlockedByOrigin):
+		return "blocked_by_origin"
 	case errors.Is(err, ErrParseJobMissing):
 		return "parse_job_missing"
 	case errors.Is(err, ErrParse):

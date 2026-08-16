@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"webtag/internal/errsafe"
+
 	"webtag/internal/observability"
 )
 
@@ -678,4 +680,48 @@ func (s *stubSearcher) Search(_ context.Context, query string) (string, error) {
 	s.calls++
 	s.query = query
 	return s.result, s.err
+}
+
+// 这是本次修复的核心回归：mp.weixin.qq.com 的风控页是 HTTP 200 + 有标题有正文，
+// 修复前它能满足 isSufficient 而被当成文章交给模型总结，链接以 status=done 入库、
+// 标题「微信公众号环境异常验证页」、摘要一本正经地解释这里没有文章。抓取失败是可见
+// 可重试的，被自信地总结掉的风控页则是静默的数据损失，所以它必须报错而不是降级。
+func TestManagerRejectsInterstitialInsteadOfSummarisingIt(t *testing.T) {
+	primary := &stubFetcher{
+		match: func(string) bool { return true },
+		fetch: func(context.Context, string) (Content, error) {
+			return Content{
+				URL:         "https://mp.weixin.qq.com/s/example",
+				Title:       "环境异常",
+				Body:        "环境异常 当前环境异常，完成验证后即可继续访问。 去验证 确定",
+				FetcherType: "wechat",
+			}, nil
+		},
+	}
+	// jina 从自己的机房 IP 服务端渲染，正是被 mp.weixin.qq.com 整段封锁的那类出口，
+	// 所以现实中真正命中的是这一支：它也只能拿回同一张风控页。
+	jina := &stubFetcher{
+		fetch: func(context.Context, string) (Content, error) {
+			return Content{
+				URL:         "https://mp.weixin.qq.com/s/example",
+				Title:       "环境异常",
+				Body:        "环境异常 完成验证后即可继续访问 去验证",
+				FetcherType: "jina",
+			}, nil
+		},
+	}
+
+	manager := NewManager(NewRouter(primary), jina, nil, ManagerOptions{})
+	manager.setMinBodyChars(20)
+
+	got, err := manager.Fetch(context.Background(), "https://mp.weixin.qq.com/s/example")
+	if err == nil {
+		t.Fatalf("Fetch() should fail on an interstitial, got content %+v", got)
+	}
+	if !errors.Is(err, errsafe.ErrBlockedByOrigin) {
+		t.Fatalf("Fetch() error = %v, want ErrBlockedByOrigin so callers can re-fetch via a browser", err)
+	}
+	if errsafe.ClassifyError(err) != "blocked_by_origin" {
+		t.Fatalf("ClassifyError = %q, want blocked_by_origin", errsafe.ClassifyError(err))
+	}
 }
