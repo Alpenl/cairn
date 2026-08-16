@@ -294,7 +294,9 @@ class QueueDatabaseInstrumentedTest {
         val dao = database.queueDao()
         activate(repository, oldIdentity)
 
-        assertEquals(1, claim(dao, entry.id, "migration-owner", now + 10_000, now))
+        // 这条 entry 是用 oldIdentity 入队的，必须以同一身份认领——
+        // dao.claim 会同时比对行自身的 apiOrigin/namespace 与活动会话的身份。
+        assertEquals(1, claim(dao, entry.id, "migration-owner", now + 10_000, now, oldIdentity))
         assertEquals(
             1,
             dao.updateClaimed(
@@ -353,8 +355,11 @@ class QueueDatabaseInstrumentedTest {
         )
         val entry = repository.enqueue("https://example.org/leased", oldIdentity, now)
         val dao = database.queueDao()
+        // 认领要求「行的身份」与「当前活动会话的身份 + 代数」同时匹配，
+        // 所以先把 oldIdentity 激活，否则活动会话还是 setUp 播种的那个。
+        activate(repository, oldIdentity)
 
-        assertEquals(1, claim(dao, entry.id, "active-owner", now + 10_000, now))
+        assertEquals(1, claim(dao, entry.id, "active-owner", now + 10_000, now, oldIdentity))
         assertFalse(repository.migrateIdentity(entry.id, newIdentity, now + 1))
         assertFalse(repository.migrateIdentity(entry.id, oldIdentity, now + 1))
 
@@ -500,16 +505,21 @@ class QueueDatabaseInstrumentedTest {
             releaseDelayed.countDown()
             thread.join(5_000)
             assertEquals(ConnectionResult.IdentityChanged, delayedResult)
+            // setUp() 播种了一个 activationRevision=1 的活动会话，而
+            // beginActivationAttempt() 会对「已有尝试代数」和「活动会话代数」取
+            // 最大值再 +1——这是 ABA 防护的要点：新尝试必须压过当前活动代数。
+            // 因此第一次 beginActivationAttempt 返回 2，被阻塞的 "old" 拿走它，
+            // 后发的 "new" 拿到 3 并以该代数激活。
             val bSnapshot = repository.activeSessionSnapshot()!!
             assertEquals("https://b.example", bSnapshot.identity.origin)
-            assertEquals(2L, bSnapshot.activationRevision)
-            assertEquals(2L, credentials.recover(bSnapshot)!!.activationRevision)
+            assertEquals(3L, bSnapshot.activationRevision)
+            assertEquals(3L, credentials.recover(bSnapshot)!!.activationRevision)
 
             assertTrue(coordinator.saveAndTest("https://a.example", "again") is ConnectionResult.Activated)
             val aAgain = repository.activeSessionSnapshot()!!
             assertEquals("https://a.example", aAgain.identity.origin)
-            assertEquals(3L, aAgain.activationRevision)
-            assertEquals(3L, credentials.recover(aAgain)!!.activationRevision)
+            assertEquals(4L, aAgain.activationRevision)
+            assertEquals(4L, credentials.recover(aAgain)!!.activationRevision)
         } finally {
             releaseDelayed.countDown()
             thread.join(5_000)
@@ -1176,8 +1186,14 @@ class QueueDatabaseInstrumentedTest {
             database.todoDao().updateOutbox(tampered)
             assertEquals(TodoClaimOutcome.IntegrityFailure, repository.claimDue(activation, 40_001, 30_000))
             val unchanged = database.todoDao().findOperation(operationId)!!
-            assertNull(unchanged.leaseOwner)
+            // 断言的是「claimDue 没有推进状态」，而不是「leaseOwner 一定为 null」：
+            // 其中一个篡改样本自己就把 leaseOwner 写成了 "tampered"，此时正确的
+            // 期望是它保持原样。认领若成功会写入一个新生成的 UUID owner，所以
+            // 与篡改值逐字相等就足以证明没有被认领。
+            assertEquals(tampered.leaseOwner, unchanged.leaseOwner)
+            assertEquals(tampered.leaseExpiresAt, unchanged.leaseExpiresAt)
             assertEquals(tampered.attemptCount, unchanged.attemptCount)
+            assertEquals(tampered.state, unchanged.state)
             database.todoDao().updateOutbox(original)
         }
 
@@ -1376,22 +1392,27 @@ class QueueDatabaseInstrumentedTest {
     private fun todoClaim(outcome: TodoClaimOutcome): com.alpenl.webtag.share.data.ClaimedTodoOperation =
         (outcome as TodoClaimOutcome.Claimed).value
 
+    // 默认走 setUp() 播种的那个活动会话身份。identity/revision 可以覆盖：
+    // dao.claim 同时按「行自己的身份」和「当前活动会话的身份 + 代数」过滤，
+    // 所以在别的身份下入队的行，必须用那个身份来认领，否则 WHERE 匹配不到。
     private fun claim(
         dao: com.alpenl.webtag.share.data.QueueDao,
         id: String,
         owner: String,
         expiresAt: Long,
         now: Long,
+        identity: QueueIdentity = QueueIdentity("https://example.org", "n".repeat(43)),
+        activationRevision: Long = 1,
     ): Int = dao.claim(
         id = id,
-        apiOrigin = "https://example.org",
-        namespace = "n".repeat(43),
+        apiOrigin = identity.origin,
+        namespace = identity.namespace,
         owner = owner,
         expiresAt = expiresAt,
         now = now,
-        activeOrigin = "https://example.org",
-        activeNamespace = "n".repeat(43),
-        activationRevision = 1,
+        activeOrigin = identity.origin,
+        activeNamespace = identity.namespace,
+        activationRevision = activationRevision,
     )
 
     private fun queueEntity(id: String, now: Long, state: String = "pending_submit") = QueueEntity(
