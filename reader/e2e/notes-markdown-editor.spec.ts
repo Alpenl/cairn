@@ -203,7 +203,7 @@ test('Notes selection AI sends no unselected Note content and stays below mobile
     expect(surface).not.toContain(fullNote)
   }
 
-  const toolbar = page.locator('.rvx-editor-toolbar')
+  const toolbar = page.locator('.rvx-note-toolbar')
   const chat = page.locator('.notes-split > .chat')
   await expect(toolbar).toBeVisible()
   await expect(chat).toBeVisible()
