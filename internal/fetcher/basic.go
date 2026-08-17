@@ -28,6 +28,10 @@ const (
 	// and reply semantics. Substring selectors such as [class*="comment"]
 	// would also delete legitimate article sections named "commentary".
 	discussionRemovalSelector = `#comments,#comment-list,#commentlist,#comment-thread,#comment-section,#comments-area,#disqus_thread,#giscus,#utterances,.comment,.comments,.comment-list,.commentlist,.comment-thread,.comment-section,.comments-area,.reply,.reply-list,.replies,.replies-list,[itemprop="comment"],[itemprop="comments"],[itemtype$="/Comment"]`
+	// Furniture the WeChat editor injects inside #js_content: the follow /
+	// QR / reward widgets, and the empty gutter list that renders code line
+	// numbers from a CSS counter.
+	weChatArticleRemovalSelector = `script,style,.qr_code_pc,.qr_code_pc_outer,.reward_area,.reward_qrcode_area,.code-snippet__line-index,mp-common-profile`
 )
 
 // BasicFetcher 是通用 HTML 抓取器，对任意 URL 都 CanHandle，作为 Router 链路的兜底实现。
@@ -230,9 +234,20 @@ func pruneDiscussionContent(doc *goquery.Document, parsedURL *nurl.URL) {
 }
 
 func siteSpecificReadableHTML(doc *goquery.Document, parsedURL *nurl.URL) string {
-	if doc == nil || !isV2EXTopicURL(parsedURL) {
+	if doc == nil {
 		return ""
 	}
+	switch {
+	case isV2EXTopicURL(parsedURL):
+		return v2exTopicReadableHTML(doc)
+	case isWeChatArticleURL(parsedURL):
+		return weChatArticleReadableHTML(doc)
+	default:
+		return ""
+	}
+}
+
+func v2exTopicReadableHTML(doc *goquery.Document) string {
 	topic := doc.Find(".topic_content").First()
 	if len(topic.Nodes) == 0 {
 		return ""
@@ -242,6 +257,79 @@ func siteSpecificReadableHTML(doc *goquery.Document, parsedURL *nurl.URL) string
 		return ""
 	}
 	return strings.TrimSpace(html)
+}
+
+// weChatArticleReadableHTML pins the article body of an mp.weixin.qq.com page.
+//
+// The generic chain cannot read these pages at all: the body lives in
+// #js_content, which the page ships as `visibility: hidden; opacity: 0` and
+// reveals from its own script. readability and the HTML→document conversion
+// both skip invisible subtrees, so a stock extraction of a real article
+// returns the byline and "阅读原文" — a hundred-odd bytes — and nothing else.
+//
+// Pinning the container also lets us repair what the page defers to script:
+// illustrations keep their address in data-src with an empty src, and code
+// blocks render their line numbers from a CSS counter over an empty gutter
+// list that would otherwise survive as a run of blank list items.
+func weChatArticleReadableHTML(doc *goquery.Document) string {
+	content := doc.Find("#js_content").First()
+	if len(content.Nodes) == 0 {
+		return ""
+	}
+	revealHiddenElement(content)
+	content.Find("img[data-src]").Each(func(_ int, img *goquery.Selection) {
+		if src := strings.TrimSpace(img.AttrOr("data-src", "")); src != "" {
+			img.SetAttr("src", src)
+		}
+	})
+	content.Find(weChatArticleRemovalSelector).Remove()
+
+	html, err := goquery.OuterHtml(content)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(html)
+}
+
+// revealHiddenElement drops the declarations that keep an element invisible
+// and leaves the rest of its inline styling alone. Applied to the pinned
+// container only: descendants that hide themselves are hiding real
+// alternates (mobile/desktop variants, script-only placeholders) and stay
+// hidden.
+func revealHiddenElement(sel *goquery.Selection) {
+	style, ok := sel.Attr("style")
+	if !ok {
+		return
+	}
+	kept := make([]string, 0, strings.Count(style, ";")+1)
+	for _, declaration := range strings.Split(style, ";") {
+		name, _, found := strings.Cut(declaration, ":")
+		if !found {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "visibility", "opacity", "display":
+			continue
+		}
+		kept = append(kept, strings.TrimSpace(declaration))
+	}
+	if len(kept) == 0 {
+		sel.RemoveAttr("style")
+		return
+	}
+	sel.SetAttr("style", strings.Join(kept, "; "))
+}
+
+func isWeChatArticleURL(parsedURL *nurl.URL) bool {
+	if parsedURL == nil {
+		return false
+	}
+	if strings.ToLower(parsedURL.Hostname()) != "mp.weixin.qq.com" {
+		return false
+	}
+	path := parsedURL.EscapedPath()
+	// Articles are served as /s/<signature> and, for older links, /s?__biz=…
+	return path == "/s" || strings.HasPrefix(path, "/s/")
 }
 
 func isV2EXTopicURL(parsedURL *nurl.URL) bool {
