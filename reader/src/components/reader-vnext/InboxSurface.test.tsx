@@ -179,6 +179,25 @@ describe('InboxSurface', () => {
     expect(screen.getByRole('dialog', { name: '添加条目' })).toBeInTheDocument()
   })
 
+  it('labels a queue row by host and only flags rows that left the pending flow', async () => {
+    const { client } = makeClient([
+      inbox({ url: 'https://www.example.com/2026/08/article', source_kind: 'browser_capture' }),
+      inbox({ id: 'inbox-2', title: '第二篇', url: 'https://feeds.example.org/post', status: 'discarded' }),
+    ])
+
+    renderInbox(client)
+
+    const pending = await screen.findByRole('button', { name: /第一篇/ })
+    // The host reads like the Reading list; the source kind survives as the
+    // row icon's tooltip rather than a snake_cased label.
+    expect(pending).toHaveTextContent('example.com')
+    expect(pending).not.toHaveTextContent('browser_capture')
+    // Every active row is pending, so repeating the state on each of them is
+    // noise. Only rows that left the flow carry a state.
+    expect(pending).not.toHaveTextContent('待处理')
+    expect(screen.getByRole('button', { name: /第二篇/ })).toHaveTextContent('已丢弃')
+  })
+
   it('shows loading before an empty Inbox state', async () => {
     let resolveList!: (value: ReturnType<typeof ok>) => void
     const listInbox = vi.fn(() => new Promise((resolve) => { resolveList = resolve }))
@@ -450,7 +469,8 @@ describe('InboxSurface', () => {
 
     await waitFor(() => expect(confirmInboxBulk).toHaveBeenCalledTimes(1))
     expect(await screen.findByRole('alert')).toHaveTextContent('内容已经被其他窗口更新，请刷新后重试。')
-    expect(screen.getAllByText('第一篇')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /第一篇/ })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '第一篇' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /第二篇/ })).toBeInTheDocument()
     expect(screen.queryByText('批量确认完成')).not.toBeInTheDocument()
   })
