@@ -1711,6 +1711,18 @@ export class ReaderClient {
     return isReaderTrashResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderTrashResponse')
   }
 
+  /**
+   * 把链接移入回收站。
+   *
+   * 后端是软删（置 deleted_at），条目随后出现在 /api/trash，可用 restoreLink
+   * 撤销、或用 purgeHost('link', ...) 彻底清除。所以调用方给一次撤销机会就够，
+   * 不必在删除前弹确认框——真正不可逆的是 purge，不是这里。
+   */
+  async deleteLink(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<true>> {
+    const r = await this.send('DELETE', `/api/links/${encodeURIComponent(id)}`, undefined, undefined, undefined, options.signal)
+    return r.ok ? ok(true) : r
+  }
+
   async restoreLink(
     id: string,
     options: ReaderRequestOptions = {},

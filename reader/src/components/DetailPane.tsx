@@ -201,6 +201,7 @@ interface DetailToolbarProps {
   onJumpNotes: () => void
   onOpenContentHistory?: (id: string) => void
   onConvertToSite?: () => void
+  onDeleteLink?: () => void
   onToggleFont: () => void
   focusMode: boolean
   onToggleFocus: () => void
@@ -211,7 +212,7 @@ interface DetailToolbarProps {
   onJumpToc: (id: string) => void
 }
 
-function DetailToolbar({ l, onBack, onChat, chatOpen, aiEnabled, annotationsEnabled, progressEnabled, onCopy, annCount, onJumpNotes, onOpenContentHistory, onConvertToSite, onToggleFont, focusMode, onToggleFocus, progress, editing, tocItems, activeTocId, onJumpToc }: DetailToolbarProps) {
+function DetailToolbar({ l, onBack, onChat, chatOpen, aiEnabled, annotationsEnabled, progressEnabled, onCopy, annCount, onJumpNotes, onOpenContentHistory, onConvertToSite, onDeleteLink, onToggleFont, focusMode, onToggleFocus, progress, editing, tocItems, activeTocId, onJumpToc }: DetailToolbarProps) {
   return (
     <div className="reader-toolbar-wrap">
       <div className="reader-toolbar">
@@ -246,6 +247,17 @@ function DetailToolbar({ l, onBack, onChat, chatOpen, aiEnabled, annotationsEnab
           {l.status === 'done' && l.library_kind === 'reading' && onConvertToSite && (
             <button className="tb-btn" onClick={onConvertToSite} title="移到网站收藏" aria-label="移到网站收藏">
               <Icon name="layers" size={16} />
+            </button>
+          )}
+          {onDeleteLink && (
+            <button
+              type="button"
+              className="tb-btn"
+              onClick={onDeleteLink}
+              title="删除"
+              aria-label="删除"
+            >
+              <Icon name="trash" size={16} />
             </button>
           )}
           <ReadingTocControl items={tocItems} activeId={activeTocId} onJump={onJumpToc} />
@@ -404,6 +416,7 @@ export interface DetailPaneProps {
   onTranslateSelection: (info: SelectionInfo, force: boolean) => Promise<string | null>
   onTranslateFull: (force: boolean) => void
 	onConvertToSite?: () => void
+	onDeleteLink?: () => void
   focusMode: boolean
   onToggleFocus: () => void
   previous?: ArticlePagerTarget | null
@@ -469,6 +482,7 @@ function DetailPaneInner({
   onTranslateSelection,
   onTranslateFull,
 	onConvertToSite,
+	onDeleteLink,
   focusMode: parentFocusMode,
   onToggleFocus,
 	previous,
@@ -1319,6 +1333,7 @@ function DetailPaneInner({
         onJumpNotes={jumpToNotes}
 		onOpenContentHistory={onOpenContentHistory}
 			onConvertToSite={onConvertToSite}
+			onDeleteLink={onDeleteLink}
         onToggleFont={() => setFontPopoverOpen((open) => !open)}
         focusMode={focusMode}
         onToggleFocus={() => { setFontPopoverOpen(false); toggleFocus() }}

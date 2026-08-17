@@ -11,7 +11,7 @@ export type ReaderRoute =
   | { readonly kind: 'surface'; readonly id: 'home' | 'feed' }
   | { readonly kind: 'library'; readonly id: 'pending'; readonly inboxId?: string }
   | { readonly kind: 'library'; readonly id: Exclude<ReaderLibraryId, 'pending'> }
-  | { readonly kind: 'tool'; readonly id: 'todo' | 'settings' | 'history' }
+  | { readonly kind: 'tool'; readonly id: 'todo' | 'settings' | 'history' | 'trash' }
   | { readonly kind: 'internal'; readonly id: 'review'; readonly reviewId?: string }
 
 export const READER_LAST_LOCATION_STORAGE_KEY = 'webtag:reader:last-location:v1'
@@ -57,6 +57,7 @@ function routeFromValue(value: string | null, reviewId: string | null, inboxId: 
   if (normalizedValue === 'todo' || normalizedValue === 'todos') return { kind: 'tool', id: 'todo' }
   if (normalizedValue === 'settings' || normalizedValue === 'setting') return { kind: 'tool', id: 'settings' }
   if (normalizedValue === 'history' || normalizedValue === 'thought-history') return { kind: 'tool', id: 'history' }
+  if (normalizedValue === 'trash') return { kind: 'tool', id: 'trash' }
   if (normalizedValue === 'review') {
     const normalizedReviewId = normalizeRouteTarget(reviewId)
     return normalizedReviewId
