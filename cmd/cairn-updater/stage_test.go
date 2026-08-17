@@ -186,3 +186,46 @@ func TestTheReaderRootBuildIsTheOneServedFromDisk(t *testing.T) {
 		t.Fatalf("expected the root build, got %q", got)
 	}
 }
+
+// safeJoin compares strings, and a string comparison cannot see a symlink that
+// was created after it ran. os.Root is what actually confines the write: the
+// kernel refuses to follow a link out of the root. This is the property that
+// matters for a process unpacking a downloaded archive as root, so it is
+// asserted directly rather than inferred from safeJoin's return value.
+func TestExtractionIsConfinedByTheKernelNotByStringComparison(t *testing.T) {
+	t.Parallel()
+
+	outside := t.TempDir()
+	staging := t.TempDir()
+	victim := filepath.Join(outside, "victim")
+	if err := os.WriteFile(victim, []byte("original"), 0o600); err != nil {
+		t.Fatalf("seed victim: %v", err)
+	}
+
+	// A link inside the staging root pointing out of it — exactly what an
+	// archive would plant if it could, and what a path-prefix check waves
+	// through because "staging/escape" is textually inside the root.
+	if err := os.Symlink(outside, filepath.Join(staging, "escape")); err != nil {
+		t.Fatalf("plant symlink: %v", err)
+	}
+
+	confined, err := os.OpenRoot(staging)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() { _ = confined.Close() }()
+
+	// safeJoin is happy with this name: it never leaves the root textually.
+	if _, err := safeJoin(staging, "escape/victim"); err != nil {
+		t.Fatalf("safeJoin rejected a textually-contained name: %v", err)
+	}
+
+	// The kernel is not.
+	if _, err := confined.OpenFile("escape/victim", os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		t.Fatal("writing through a symlink out of the root succeeded; extraction is not confined")
+	}
+
+	if contents, err := os.ReadFile(victim); err != nil || string(contents) != "original" {
+		t.Fatalf("victim file was modified: contents=%q err=%v", contents, err)
+	}
+}

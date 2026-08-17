@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -51,6 +52,17 @@ func extractArchive(data []byte, contents *releasetrust.ArchiveContents, destina
 	if err != nil {
 		return fmt.Errorf("resolve %s: %w", destination, err)
 	}
+	// os.Root confines every path below to `destination` in the kernel rather
+	// than by comparing strings: an entry that resolves outside — through
+	// `..`, an absolute name, or a symlink planted by an earlier member of the
+	// same archive — fails at the syscall. safeJoin still runs first so the
+	// refusal names the offending member, but the containment no longer depends
+	// on getting a string comparison right in a process running as root.
+	confined, err := os.OpenRoot(destination)
+	if err != nil {
+		return fmt.Errorf("confine %s: %w", destination, err)
+	}
+	defer func() { _ = confined.Close() }()
 
 	decompressor, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -77,7 +89,7 @@ func extractArchive(data []byte, contents *releasetrust.ArchiveContents, destina
 		if err != nil {
 			return err
 		}
-		if err := extractEntry(reader, header, entry, target); err != nil {
+		if err := extractEntry(confined, reader, header, entry, name, target); err != nil {
 			return err
 		}
 		written++
@@ -88,20 +100,20 @@ func extractArchive(data []byte, contents *releasetrust.ArchiveContents, destina
 	return nil
 }
 
-func extractEntry(reader io.Reader, header *tar.Header, entry releasetrust.ArchiveEntry, target string) error {
+func extractEntry(confined *os.Root, reader io.Reader, header *tar.Header, entry releasetrust.ArchiveEntry, name, target string) error {
 	if entry.Directory {
 		if header.Typeflag != tar.TypeDir {
 			return fmt.Errorf("archive member %q changed type between verification and unpacking", entry.Path)
 		}
-		if err := os.MkdirAll(target, 0o755); err != nil { //nolint:gosec // See extractArchive: deployment trees are read-and-traverse for other users, never writable.
+		if err := mkdirAllIn(confined, name); err != nil {
 			return fmt.Errorf("create %s: %w", target, err)
 		}
-		return os.Chmod(target, 0o755) //nolint:gosec // See extractArchive: deployment trees are read-and-traverse for other users, never writable.
+		return confined.Chmod(name, 0o755) //nolint:gosec // See extractArchive: deployment trees are read-and-traverse for other users, never writable.
 	}
 	if header.Typeflag != tar.TypeReg {
 		return fmt.Errorf("archive member %q changed type between verification and unpacking", entry.Path)
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil { //nolint:gosec // See extractArchive: deployment trees are read-and-traverse for other users, never writable.
+	if err := mkdirAllIn(confined, path.Dir(name)); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(target), err)
 	}
 	// The mode is decided here rather than copied from the header. The signed
@@ -112,7 +124,7 @@ func extractEntry(reader io.Reader, header *tar.Header, entry releasetrust.Archi
 	if entry.Executable {
 		mode = 0o755
 	}
-	file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode) //nolint:gosec // target is confined to the staging root by safeJoin.
+	file, err := confined.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", target, err)
 	}
@@ -132,7 +144,31 @@ func extractEntry(reader io.Reader, header *tar.Header, entry releasetrust.Archi
 	// The mode is set again because OpenFile applies the process umask, and a
 	// binary that came out 0o644 would fail to start with a confusing
 	// permission error long after this step.
-	return os.Chmod(target, mode)
+	return confined.Chmod(name, mode)
+}
+
+// mkdirAllIn is os.MkdirAll for a confined root: os.Root has no recursive
+// variant, so each component is created in turn and an existing component is
+// not an error.
+func mkdirAllIn(confined *os.Root, name string) error {
+	if name == "" || name == "." {
+		return nil
+	}
+	built := ""
+	for _, part := range strings.Split(name, "/") {
+		if part == "" {
+			continue
+		}
+		if built == "" {
+			built = part
+		} else {
+			built += "/" + part
+		}
+		if err := confined.Mkdir(built, 0o755); err != nil && !errors.Is(err, os.ErrExist) { //nolint:gosec // See extractArchive: deployment trees are read-and-traverse for other users, never writable.
+			return err
+		}
+	}
+	return nil
 }
 
 // safeJoin resolves an archive-relative path inside root and refuses anything
