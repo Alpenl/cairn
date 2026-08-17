@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import {
   readerRouteIsAvailable,
@@ -6,19 +6,21 @@ import {
 } from '../../lib/capabilities'
 import type { ReaderTodoResponse } from '../../lib/api/types'
 import { navigateReaderRoute, type ReaderRoute } from '../../lib/navigation/route'
-import { Icon } from '../Icon'
+import { useExclusiveAction } from '../../hooks/useExclusiveAction'
+import { useSurfaceRequestGate, type SurfaceRequestToken } from '../../hooks/useSurfaceRequestGate'
+import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
+import { asRecord, isRecord } from '../../lib/records'
 import {
   navigateReaderTarget,
-  SurfaceError,
-  SurfaceLoading,
-  SurfaceShell,
+  readerErrorMessage,
   SURFACE_IDENTITY_ERROR,
-  errorMessage,
   formatRelativeDate,
   identityIsCurrent,
   isIdentityError,
   todoDesiredStatePatch,
-} from './SurfaceShell'
+} from '../../lib/reader-surface'
+import { Icon } from '../Icon'
+import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 
 export interface TodoSurfaceProps {
   readonly client: IdentityBoundReaderClient
@@ -48,22 +50,31 @@ function dateTimeLocalISO(value: string): string | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
 }
 
-const TODO_CHANGE_EVENT = 'webtag:todos-change'
 const CREATE_BUSY_ID = '__create__'
 const UNSUPPORTED_TODO_MESSAGE = '当前服务端不支持 TODO，未使用本地状态伪造结果。'
 const INCOMPLETE_TODO_MESSAGE = '服务端返回的 TODO 数据不完整，未应用本地更改。'
 
 type TodoClientMethod = 'listTodos' | 'createTodo' | 'patchTodo' | 'deleteTodo'
-type TodoRecord = Record<string, unknown>
+
+/**
+ * 请求通道。
+ *
+ * `list` 是列表读取本身；`mutation` 承载 create / toggle / saveText / remove。
+ * 分成两条是因为它们互相作废的方向不同：本地写入必须让在途的列表读取作废
+ * （否则改动前的快照会覆盖改动后的界面），但列表读取不该反过来作废一次正在
+ * 提交的写入。load 因此在发请求前 `capture('mutation')`，回包时确认「这中间
+ * 没有人写过」，而 loading 的释放只看自己的 `list` token——把两件事挂在同一个
+ * 代次上，会让一次 mutation 把在途 load 的 loading 永远卡住。
+ */
+type TodoChannel = 'list' | 'mutation'
+type TodoRequest = SurfaceRequestToken<TodoChannel>
 
 /** Metadata kept outside the wire contract for old projected responses. */
 type TodoItem = ReaderTodoResponse & {
   readonly hostRevisionKnown: boolean
 }
 
-function isRecord(value: unknown): value is TodoRecord {
-  return typeof value === 'object' && value !== null
-}
+type TodoRecord = Record<string, unknown>
 
 function readField(record: TodoRecord, ...keys: string[]): unknown {
   for (const key of keys) {
@@ -75,8 +86,7 @@ function readField(record: TodoRecord, ...keys: string[]): unknown {
 }
 
 function readNestedRecord(record: TodoRecord, key: string): TodoRecord | null {
-  const value = record[key]
-  return isRecord(value) ? value : null
+  return asRecord(record[key])
 }
 
 function readString(record: TodoRecord, ...keys: string[]): string | null {
@@ -186,17 +196,6 @@ function supportsTodoMethod(client: IdentityBoundReaderClient, method: TodoClien
   return typeof (client as unknown as Record<string, unknown>)[method] === 'function'
 }
 
-function thrownErrorMessage(value: unknown): string {
-  if (isRecord(value) && typeof value.message === 'string') {
-    return errorMessage({ message: value.message, status: typeof value.status === 'number' ? value.status : undefined })
-  }
-  return '请求失败，请稍后重试。'
-}
-
-function emitTodoChange(): void {
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event(TODO_CHANGE_EVENT))
-}
-
 // eslint-disable-next-line react-refresh/only-export-components
 export function sortTodos(items: readonly ReaderTodoResponse[]): ReaderTodoResponse[] {
   return [...items].sort((left, right) => {
@@ -217,8 +216,8 @@ function replaceTodo(items: readonly TodoItem[], next: TodoItem): TodoItem[] {
 
 function originLinkID(todo: ReaderTodoResponse): string | null {
   if (todo.origin_host_kind === 'link' && todo.origin_host_id) return todo.origin_host_id
-  if (!todo.origin_ref || typeof todo.origin_ref !== 'object') return null
-  const originRef = todo.origin_ref as TodoRecord
+  const originRef = asRecord(todo.origin_ref)
+  if (!originRef) return null
   const linkID = readNullableString(originRef, 'link_id', 'linkId')
   if (linkID) return linkID
   const sourceKind = readNullableString(originRef, 'source_kind', 'sourceKind', 'target_kind', 'targetKind', 'kind')
@@ -235,7 +234,7 @@ function originTarget(todo: ReaderTodoResponse): TodoOriginTarget | null {
   const linkID = originLinkID(todo)
   if (linkID) return { kind: 'link', id: linkID }
 
-  const originRef = todo.origin_ref && typeof todo.origin_ref === 'object' ? todo.origin_ref as TodoRecord : null
+  const originRef = asRecord(todo.origin_ref)
   const sourceKind = originRef
     ? readNullableString(originRef, 'source_kind', 'sourceKind', 'target_kind', 'targetKind', 'kind')
     : null
@@ -273,24 +272,37 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
   const [editingText, setEditingText] = useState('')
   const [editingDueAt, setEditingDueAt] = useState('')
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [busyID, setBusyID] = useState<string | null>(null)
-  const busyIDRef = useRef<string | null>(null)
-  const requestID = useRef(0)
-  const mountedRef = useRef(false)
-  const mutationEpochRef = useRef(0)
+  const gate = useSurfaceRequestGate<TodoChannel>({
+    owner: [client],
+    authority: () => identityIsCurrent(client),
+  })
+  // 创建没有行 ID，用固定的 CREATE_BUSY_ID 占同一个单飞坑位，于是 CRUD 四条路径
+  // 共用一份互斥状态。原来的 `saving` state 因此消失：它的生命周期与 busy 完全
+  // 重合，每个使用点都写成 `saving || busyID !== null`；真要单独认出「正在创建」，
+  // 从 `busyKey === CREATE_BUSY_ID` 派生即可，不必再维护第二份 state。
+  const {
+    busy: actionBusy,
+    begin: beginAction,
+    finish: finishAction,
+    clear: clearAction,
+  } = useExclusiveAction<string>()
 
-  const clearForIdentityLoss = useCallback(() => {
-    if (!mountedRef.current) return
-    busyIDRef.current = null
-    setBusyID(null)
+  /**
+   * 身份失效后的收口。用 `isSameOwner` 而不是 `isCurrent`：此刻 authority 已经
+   * 是 false，但发起这次请求的那段代码仍然必须能把自己置的 loading 收掉并写出
+   * 失效提示，否则界面永远停在加载中。generation 仍然要看——被顶掉的旧请求不该
+   * 清掉新请求刚画上的东西。
+   */
+  const clearForIdentityLoss = useCallback((token: TodoRequest) => {
+    if (!gate.isSameOwner(token)) return
+    clearAction()
     setItems([])
     setEditingID(null)
     setEditingDueAt('')
     setError(SURFACE_IDENTITY_ERROR)
     setLoading(false)
-  }, [])
+  }, [clearAction, gate])
 
   const ordered = useMemo(() => sortTodos(items), [items])
   const openItems = ordered.filter((item) => !item.done)
@@ -299,16 +311,17 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
   const navigate = useCallback((route: ReaderRoute) => navigateReaderRoute(route, onNavigate), [onNavigate])
 
   const load = useCallback(async (): Promise<boolean> => {
-    const request = ++requestID.current
-    const mutationEpoch = mutationEpochRef.current
+    const token = gate.begin('list')
+    // 本地写入会顶掉这个代次：回包时若代次已变，说明列表快照比界面还旧。
+    const mutationEpoch = gate.capture('mutation')
     setLoading(true)
     setError(null)
-    if (!identityIsCurrent(client)) {
-      clearForIdentityLoss()
+    if (!gate.isCurrent(token)) {
+      clearForIdentityLoss(token)
       return false
     }
     if (!supportsTodoMethod(client, 'listTodos')) {
-      if (request === requestID.current && mountedRef.current) {
+      if (gate.isSameOwner(token)) {
         setItems([])
         setError(UNSUPPORTED_TODO_MESSAGE)
         setLoading(false)
@@ -317,14 +330,14 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
     }
     try {
       const result = await client.listTodos()
-      if (request !== requestID.current || mutationEpoch !== mutationEpochRef.current || !mountedRef.current) return false
-      if (!identityIsCurrent(client)) {
-        clearForIdentityLoss()
+      if (!gate.isSameOwner(token) || !gate.isSameOwner(mutationEpoch)) return false
+      if (!gate.isCurrent(token)) {
+        clearForIdentityLoss(token)
         return false
       }
       if (!result.ok) {
-        if (isIdentityError(result.error)) clearForIdentityLoss()
-        else setError(errorMessage(result.error))
+        if (isIdentityError(result.error)) clearForIdentityLoss(token)
+        else setError(readerErrorMessage(result.error))
         return false
       }
       const next = normalizeTodoList(result.data)
@@ -335,49 +348,30 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
       setItems(next)
       return true
     } catch (cause) {
-      if (request === requestID.current && mountedRef.current) {
-        if (!identityIsCurrent(client)) clearForIdentityLoss()
-        else setError(thrownErrorMessage(cause))
+      if (gate.isSameOwner(token)) {
+        if (!gate.isCurrent(token)) clearForIdentityLoss(token)
+        else setError(readerErrorMessage(cause))
       }
       return false
     } finally {
-      if (request === requestID.current && mountedRef.current) setLoading(false)
+      if (gate.isSameOwner(token)) setLoading(false)
     }
-  }, [clearForIdentityLoss, client])
+  }, [clearForIdentityLoss, client, gate])
 
   useEffect(() => {
-    mountedRef.current = true
-    const onTodosChange = () => { void load() }
-    window.addEventListener(TODO_CHANGE_EVENT, onTodosChange)
+    const unsubscribe = subscribeReaderEvents([READER_EVENTS.todosChanged], () => { void load() })
     void load()
-    return () => {
-      mountedRef.current = false
-      requestID.current += 1
-      window.removeEventListener(TODO_CHANGE_EVENT, onTodosChange)
-    }
+    return unsubscribe
   }, [load])
-
-  const beginBusy = useCallback((id: string): boolean => {
-    if (busyIDRef.current !== null) return false
-    mutationEpochRef.current += 1
-    busyIDRef.current = id
-    setBusyID(id)
-    return true
-  }, [])
-
-  const endBusy = useCallback((id: string) => {
-    if (busyIDRef.current !== id) return
-    busyIDRef.current = null
-    setBusyID(null)
-  }, [])
 
   const create = useCallback(async () => {
     if (!text.trim()) return
-    if (!beginBusy(CREATE_BUSY_ID)) return
-    setSaving(true)
+    const busy = beginAction(CREATE_BUSY_ID)
+    if (!busy) return
+    const token = gate.begin('mutation')
     try {
-      if (!identityIsCurrent(client)) {
-        clearForIdentityLoss()
+      if (!gate.isCurrent(token)) {
+        clearForIdentityLoss(token)
         return
       }
       if (!supportsTodoMethod(client, 'createTodo')) {
@@ -385,14 +379,14 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
         return
       }
       const result = await client.createTodo({ text: text.trim(), due_at: dueAt ? new Date(dueAt).toISOString() : null })
-      if (!mountedRef.current) return
-      if (!identityIsCurrent(client)) {
-        clearForIdentityLoss()
+      if (!gate.isSameOwner(token)) return
+      if (!gate.isCurrent(token)) {
+        clearForIdentityLoss(token)
         return
       }
       if (!result.ok) {
-        if (isIdentityError(result.error)) clearForIdentityLoss()
-        else setError(errorMessage(result.error))
+        if (isIdentityError(result.error)) clearForIdentityLoss(token)
+        else setError(readerErrorMessage(result.error))
         return
       }
       const next = normalizeMutationTodo(result.data)
@@ -403,20 +397,21 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
       setItems((current) => [...current, next])
       setText('')
       setDueAt('')
-      emitTodoChange()
+      emitReaderEvent(READER_EVENTS.todosChanged)
     } catch (cause) {
-      if (!mountedRef.current) return
-      if (!identityIsCurrent(client)) clearForIdentityLoss()
-      else setError(thrownErrorMessage(cause))
+      if (!gate.isSameOwner(token)) return
+      if (!gate.isCurrent(token)) clearForIdentityLoss(token)
+      else setError(readerErrorMessage(cause))
     } finally {
-      setSaving(false)
-      endBusy(CREATE_BUSY_ID)
+      finishAction(busy)
     }
-  }, [beginBusy, clearForIdentityLoss, client, dueAt, endBusy, text])
+  }, [beginAction, clearForIdentityLoss, client, dueAt, finishAction, gate, text])
 
   const toggle = useCallback(async (todo: ReaderTodoResponse) => {
     const item = todo as TodoItem
-    if (!beginBusy(todo.id)) return
+    const busy = beginAction(todo.id)
+    if (!busy) return
+    const token = gate.begin('mutation')
     const desiredDone = !todo.done
     try {
       if (!supportsTodoMethod(client, 'patchTodo')) {
@@ -432,19 +427,19 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
         setError('来源 TODO 缺少版本信息，未执行完成状态更改。')
         return
       }
-      if (!identityIsCurrent(client)) {
-        clearForIdentityLoss()
+      if (!gate.isCurrent(token)) {
+        clearForIdentityLoss(token)
         return
       }
       const result = await client.patchTodo(todo.id, patch)
-      if (!mountedRef.current) return
-      if (!identityIsCurrent(client)) {
-        clearForIdentityLoss()
+      if (!gate.isSameOwner(token)) return
+      if (!gate.isCurrent(token)) {
+        clearForIdentityLoss(token)
         return
       }
       if (!result.ok) {
-        if (isIdentityError(result.error)) clearForIdentityLoss()
-        else setError(errorMessage(result.error))
+        if (isIdentityError(result.error)) clearForIdentityLoss(token)
+        else setError(readerErrorMessage(result.error))
         return
       }
       const next = normalizeMutationTodo(result.data)
@@ -453,22 +448,25 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
         return
       }
       setItems((current) => replaceTodo(current, next))
-      emitTodoChange()
+      emitReaderEvent(READER_EVENTS.todosChanged)
     } catch (cause) {
-      if (!mountedRef.current) return
-      if (!identityIsCurrent(client)) clearForIdentityLoss()
-      else setError(thrownErrorMessage(cause))
+      if (!gate.isSameOwner(token)) return
+      if (!gate.isCurrent(token)) clearForIdentityLoss(token)
+      else setError(readerErrorMessage(cause))
     } finally {
-      endBusy(todo.id)
+      finishAction(busy)
     }
-  }, [beginBusy, clearForIdentityLoss, client, endBusy])
+  }, [beginAction, clearForIdentityLoss, client, finishAction, gate])
 
   const saveText = useCallback(async (todo: ReaderTodoResponse) => {
     const nextText = editingText.trim()
-    if (todo.origin_kind !== 'standalone' || !nextText || !beginBusy(todo.id)) return
+    if (todo.origin_kind !== 'standalone' || !nextText) return
+    const busy = beginAction(todo.id)
+    if (!busy) return
+    const token = gate.begin('mutation')
     try {
-      if (!identityIsCurrent(client)) {
-        clearForIdentityLoss()
+      if (!gate.isCurrent(token)) {
+        clearForIdentityLoss(token)
         return
       }
       if (!supportsTodoMethod(client, 'patchTodo')) {
@@ -490,14 +488,14 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
         }
       }
       const result = await client.patchTodo(todo.id, { text: nextText, ...duePatch })
-      if (!mountedRef.current) return
-      if (!identityIsCurrent(client)) {
-        clearForIdentityLoss()
+      if (!gate.isSameOwner(token)) return
+      if (!gate.isCurrent(token)) {
+        clearForIdentityLoss(token)
         return
       }
       if (!result.ok) {
-        if (isIdentityError(result.error)) clearForIdentityLoss()
-        else setError(errorMessage(result.error))
+        if (isIdentityError(result.error)) clearForIdentityLoss(token)
+        else setError(readerErrorMessage(result.error))
         return
       }
       const next = normalizeMutationTodo(result.data)
@@ -510,21 +508,24 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
       setItems((current) => replaceTodo(current, next))
       setEditingID(null)
       setEditingDueAt('')
-      emitTodoChange()
+      emitReaderEvent(READER_EVENTS.todosChanged)
     } catch (cause) {
-      if (!mountedRef.current) return
-      if (!identityIsCurrent(client)) clearForIdentityLoss()
-      else setError(thrownErrorMessage(cause))
+      if (!gate.isSameOwner(token)) return
+      if (!gate.isCurrent(token)) clearForIdentityLoss(token)
+      else setError(readerErrorMessage(cause))
     } finally {
-      endBusy(todo.id)
+      finishAction(busy)
     }
-  }, [beginBusy, clearForIdentityLoss, client, editingDueAt, editingText, endBusy])
+  }, [beginAction, clearForIdentityLoss, client, editingDueAt, editingText, finishAction, gate])
 
   const remove = useCallback(async (todo: ReaderTodoResponse) => {
-    if (todo.origin_kind !== 'standalone' || !beginBusy(todo.id)) return
+    if (todo.origin_kind !== 'standalone') return
+    const busy = beginAction(todo.id)
+    if (!busy) return
+    const token = gate.begin('mutation')
     try {
-      if (!identityIsCurrent(client)) {
-        clearForIdentityLoss()
+      if (!gate.isCurrent(token)) {
+        clearForIdentityLoss(token)
         return
       }
       if (!supportsTodoMethod(client, 'deleteTodo')) {
@@ -532,14 +533,14 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
         return
       }
       const result = await client.deleteTodo(todo.id)
-      if (!mountedRef.current) return
-      if (!identityIsCurrent(client)) {
-        clearForIdentityLoss()
+      if (!gate.isSameOwner(token)) return
+      if (!gate.isCurrent(token)) {
+        clearForIdentityLoss(token)
         return
       }
       if (!result.ok) {
-        if (isIdentityError(result.error)) clearForIdentityLoss()
-        else setError(errorMessage(result.error))
+        if (isIdentityError(result.error)) clearForIdentityLoss(token)
+        else setError(readerErrorMessage(result.error))
         return
       }
       if (result.data !== true) {
@@ -547,15 +548,15 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
         return
       }
       setItems((current) => current.filter((item) => item.id !== todo.id))
-      emitTodoChange()
+      emitReaderEvent(READER_EVENTS.todosChanged)
     } catch (cause) {
-      if (!mountedRef.current) return
-      if (!identityIsCurrent(client)) clearForIdentityLoss()
-      else setError(thrownErrorMessage(cause))
+      if (!gate.isSameOwner(token)) return
+      if (!gate.isCurrent(token)) clearForIdentityLoss(token)
+      else setError(readerErrorMessage(cause))
     } finally {
-      endBusy(todo.id)
+      finishAction(busy)
     }
-  }, [beginBusy, clearForIdentityLoss, client, endBusy])
+  }, [beginAction, clearForIdentityLoss, client, finishAction, gate])
 
   const openOrigin = useCallback((todo: ReaderTodoResponse) => {
     const target = availableOriginTarget(todo, capabilityPolicy)
@@ -576,17 +577,17 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
   const renderTodoRow = (todo: ReaderTodoResponse) => {
     const targetAvailable = availableOriginTarget(todo, capabilityPolicy) !== null
     return <li key={todo.id} className={'rvx-todo-item' + (todo.done ? ' done' : '')}>
-      <button className="rvx-check-button" type="button" disabled={busyID !== null} aria-label={todo.done ? `重新打开 ${todo.text}` : `完成 ${todo.text}`} aria-pressed={todo.done} onClick={() => void toggle(todo)}><Icon name="check" size={16} /></button>
+      <button className="rvx-check-button" type="button" disabled={actionBusy} aria-label={todo.done ? `重新打开 ${todo.text}` : `完成 ${todo.text}`} aria-pressed={todo.done} onClick={() => void toggle(todo)}><Icon name="check" size={16} /></button>
       <div className="rvx-todo-content">
         {editingID === todo.id ? (
           <div className="rvx-todo-edit-fields">
-            <input autoFocus disabled={busyID !== null} value={editingText} onChange={(event) => setEditingText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void saveText(todo) } if (event.key === 'Escape') { setEditingID(null); setEditingDueAt('') } }} />
-            <label><span>截止时间</span><input type="datetime-local" value={editingDueAt} disabled={busyID !== null} onChange={(event) => setEditingDueAt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void saveText(todo) } if (event.key === 'Escape') { setEditingID(null); setEditingDueAt('') } }} /></label>
+            <input autoFocus disabled={actionBusy} value={editingText} onChange={(event) => setEditingText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void saveText(todo) } if (event.key === 'Escape') { setEditingID(null); setEditingDueAt('') } }} />
+            <label><span>截止时间</span><input type="datetime-local" value={editingDueAt} disabled={actionBusy} onChange={(event) => setEditingDueAt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void saveText(todo) } if (event.key === 'Escape') { setEditingID(null); setEditingDueAt('') } }} /></label>
           </div>
-        ) : todo.origin_kind === 'standalone' ? <button className="rvx-todo-text" type="button" disabled={busyID !== null} onClick={() => { setEditingID(todo.id); setEditingText(todo.text); setEditingDueAt(dateTimeLocalValue(todo.due_at)) }}>{todo.text}</button> : <span className="rvx-todo-text">{todo.text}</span>}
+        ) : todo.origin_kind === 'standalone' ? <button className="rvx-todo-text" type="button" disabled={actionBusy} onClick={() => { setEditingID(todo.id); setEditingText(todo.text); setEditingDueAt(dateTimeLocalValue(todo.due_at)) }}>{todo.text}</button> : <span className="rvx-todo-text">{todo.text}</span>}
         <div className="rvx-todo-meta">{todo.due_at && <span className={todo.expired && !todo.done ? 'rvx-expired' : ''}>{todo.expired && !todo.done ? '已过期 · ' : '截止 · '}{formatRelativeDate(todo.due_at)}</span>}{todo.completed_at && <span>完成于 · {formatRelativeDate(todo.completed_at)}</span>}<span>{todo.origin_kind === 'standalone' ? '独立任务' : `来源：${todo.origin_kind}`}</span></div>
       </div>
-      <div className="rvx-action-row"><button className="rvx-icon-button" type="button" title="打开来源" aria-label="打开来源" disabled={busyID !== null || !targetAvailable} onClick={() => openOrigin(todo)}><Icon name="arrowright" size={15} /></button>{todo.origin_kind === 'standalone' && <button className="rvx-icon-button danger" type="button" title="删除" aria-label="删除" disabled={busyID !== null} onClick={() => void remove(todo)}><Icon name="trash" size={15} /></button>}</div>
+      <div className="rvx-action-row"><button className="rvx-icon-button" type="button" title="打开来源" aria-label="打开来源" disabled={actionBusy || !targetAvailable} onClick={() => openOrigin(todo)}><Icon name="arrowright" size={15} /></button>{todo.origin_kind === 'standalone' && <button className="rvx-icon-button danger" type="button" title="删除" aria-label="删除" disabled={actionBusy} onClick={() => void remove(todo)}><Icon name="trash" size={15} /></button>}</div>
     </li>
   }
 
@@ -597,13 +598,13 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
       activeRoute={{ kind: 'tool', id: 'todo' }}
       onNavigate={onNavigate}
       capabilityPolicy={capabilityPolicy}
-      actions={<button className="rvx-button secondary" type="button" disabled={loading || saving || busyID !== null} onClick={() => void load()}><Icon name="refresh" size={15} />刷新</button>}
+      actions={<button className="rvx-button secondary" type="button" disabled={loading || actionBusy} onClick={() => void load()}><Icon name="refresh" size={15} />刷新</button>}
     >
       {error && <SurfaceError message={error} onRetry={() => void load()} />}
       <section className="rvx-editor rvx-todo-create" aria-label="新建 TODO">
         <label><span>添加任务</span><input value={text} onChange={(event) => setText(event.target.value)} placeholder="下一步要完成什么？" onKeyDown={(event) => { if (event.key === 'Enter') void create() }} /></label>
         <label><span>截止时间</span><input type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} /></label>
-        <button className="rvx-button primary" type="button" disabled={saving || busyID !== null || !text.trim()} onClick={() => void create()}><Icon name="plus" size={15} />添加</button>
+        <button className="rvx-button primary" type="button" disabled={actionBusy || !text.trim()} onClick={() => void create()}><Icon name="plus" size={15} />添加</button>
       </section>
       {loading && items.length === 0 ? <SurfaceLoading /> : !error && ordered.length === 0 ? <div className="rvx-empty"><Icon name="check" size={24} /><h2>没有 TODO</h2><p>把阅读和整理过程中的下一步写下来。</p></div> : (
         <>

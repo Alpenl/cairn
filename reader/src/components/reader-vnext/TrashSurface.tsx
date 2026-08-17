@@ -16,9 +16,19 @@
  *     不可逆的动作。也因此这里没有「全部清空」：一次点击同时销毁三类东西，
  *     其中很可能混着只是想暂时收起来的收件箱条目。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Icon, type IconName } from '../Icon'
-import { SurfaceShell, SurfaceLoading, formatRelativeDate, identityIsCurrent, isIdentityError, SURFACE_IDENTITY_ERROR } from './SurfaceShell'
+import { SurfaceShell, SurfaceLoading } from './SurfaceShell'
+import { ReaderListRow } from '../ui/ReaderListRow'
+import { useExclusiveAction } from '../../hooks/useExclusiveAction'
+import { useSurfaceRequestGate } from '../../hooks/useSurfaceRequestGate'
+import {
+  formatRelativeDate,
+  identityIsCurrent,
+  isIdentityError,
+  readerErrorMessage,
+  SURFACE_IDENTITY_ERROR,
+} from '../../lib/reader-surface'
 import type { ReaderClient } from '../../lib/api/client'
 import type { ReaderTrashItemResponse, ReaderHostKind } from '../../lib/api/types'
 import type { ReaderRoute } from '../../lib/navigation/route'
@@ -57,33 +67,51 @@ export function TrashSurface({ client, onNavigate, capabilityPolicy, onToast }: 
   const [cursor, setCursor] = useState<string | undefined>(undefined)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [busyID, setBusyID] = useState<string | null>(null)
-  // 过滤器切换会让上一页请求的结果变得陈旧；只认最后一次请求的回包。
-  const requestSeq = useRef(0)
+  // 过滤器切换、翻页、换 client 和身份撤销都会让上一次请求的回包作废；
+  // owner 里放 client，authority 判身份租约，两者任一变了就不再往界面上画。
+  const gate = useSurfaceRequestGate<'list' | 'mutation'>({
+    owner: [client],
+    authority: () => identityIsCurrent(client),
+  })
+  // restore 与 purge 共用一个单飞坑位：同一时刻只允许一条行操作在飞。
+  const { busyKey, begin: beginAction, finish: finishAction } = useExclusiveAction<string>()
 
   const load = useCallback(async (append: boolean, after?: string, kind: KindFilter = filter) => {
-    if (!identityIsCurrent(client)) {
+    const token = gate.begin('list')
+    if (!gate.isCurrent(token)) {
       setError(SURFACE_IDENTITY_ERROR)
       return
     }
-    const seq = ++requestSeq.current
     setLoading(true)
-    const result = await client.listTrash({
-      hostKind: kind === 'all' ? undefined : kind,
-      after,
-      limit: PAGE_SIZE,
-    })
-    if (seq !== requestSeq.current) return
-    setLoading(false)
-    if (!result.ok) {
-      setError(isIdentityError(result.error) ? SURFACE_IDENTITY_ERROR : result.error.message)
-      return
+    try {
+      const result = await client.listTrash({
+        hostKind: kind === 'all' ? undefined : kind,
+        after,
+        limit: PAGE_SIZE,
+      })
+      if (!gate.isCurrent(token)) {
+        // 身份在等待期间被撤销时仍然要说清楚为什么没有内容；换了 client 或被
+        // 后一次请求顶掉时则什么都不写——那份状态已经归新请求所有。
+        if (gate.isSameOwner(token)) setError(SURFACE_IDENTITY_ERROR)
+        return
+      }
+      if (!result.ok) {
+        setError(isIdentityError(result.error) ? SURFACE_IDENTITY_ERROR : result.error.message)
+        return
+      }
+      setError(null)
+      setCount(result.data.count)
+      setCursor(result.data.next_cursor || undefined)
+      setItems((current) => append ? [...current, ...result.data.items] : result.data.items)
+    } catch (cause) {
+      if (gate.isCurrent(token)) setError(readerErrorMessage(cause))
+      else if (gate.isSameOwner(token)) setError(SURFACE_IDENTITY_ERROR)
+    } finally {
+      // 释放自己置上的 loading 用 isSameOwner：身份撤销后也必须收掉加载态，
+      // 否则界面永远停在「加载中」；但被顶掉的旧请求不能清掉新请求的加载态。
+      if (gate.isSameOwner(token)) setLoading(false)
     }
-    setError(null)
-    setCount(result.data.count)
-    setCursor(result.data.next_cursor || undefined)
-    setItems((current) => append ? [...current, ...result.data.items] : result.data.items)
-  }, [client, filter])
+  }, [client, filter, gate])
 
   useEffect(() => {
     void load(false, undefined, filter)
@@ -99,42 +127,56 @@ export function TrashSurface({ client, onNavigate, capabilityPolicy, onToast }: 
 
   /** 恢复后把该行摘掉。链接还要失效库缓存，否则阅读库里看不到它回来。 */
   const restore = useCallback(async (item: ReaderTrashItemResponse) => {
-    setBusyID(item.host_id)
-    const result = item.host_kind === 'link'
-      ? await client.restoreLink(item.host_id)
-      : item.host_kind === 'note'
-        ? await client.restoreNote(item.host_id)
-        : await client.restoreInbox(item.host_id)
-    setBusyID(null)
-    if (!result.ok) {
-      onToast(`恢复失败：${result.error.message}`, 'alert')
-      return
+    const busy = beginAction(item.host_id)
+    if (!busy) return
+    const token = gate.begin('mutation')
+    try {
+      const result = item.host_kind === 'link'
+        ? await client.restoreLink(item.host_id)
+        : item.host_kind === 'note'
+          ? await client.restoreNote(item.host_id)
+          : await client.restoreInbox(item.host_id)
+      if (!gate.isCurrent(token)) return
+      if (!result.ok) {
+        onToast(`恢复失败：${result.error.message}`, 'alert')
+        return
+      }
+      if (item.host_kind === 'link') {
+        invalidateLibrary()
+        invalidateLink(item.host_id)
+      }
+      setItems((current) => current.filter((row) => row.host_id !== item.host_id))
+      setCount((current) => current === null ? null : Math.max(0, current - 1))
+      onToast(`已${KIND_META[item.host_kind].restoresTo}`, 'check')
+    } finally {
+      // 只释放自己占的坑：连点两下时第二次点击拿不到 token，也就不会把第一次
+      // 的 busy 提前抹掉。
+      finishAction(busy)
     }
-    if (item.host_kind === 'link') {
-      invalidateLibrary()
-      invalidateLink(item.host_id)
-    }
-    setItems((current) => current.filter((row) => row.host_id !== item.host_id))
-    setCount((current) => current === null ? null : Math.max(0, current - 1))
-    onToast(`已${KIND_META[item.host_kind].restoresTo}`, 'check')
-  }, [client, onToast])
+  }, [beginAction, client, finishAction, gate, onToast])
 
   /** 永久清除。这一步不可逆，所以逐条确认，并且没有批量入口。 */
   const purge = useCallback(async (item: ReaderTrashItemResponse) => {
     const label = item.title || item.url || '这一项'
     if (!window.confirm(`永久删除“${label}”？此操作不可恢复。`)) return
-    setBusyID(item.host_id)
-    const result = await client.purgeHost(item.host_kind, item.host_id, crypto.randomUUID())
-    setBusyID(null)
-    if (!result.ok) {
-      onToast(`清除失败：${result.error.message}`, 'alert')
-      return
+    const busy = beginAction(item.host_id)
+    if (!busy) return
+    const token = gate.begin('mutation')
+    try {
+      const result = await client.purgeHost(item.host_kind, item.host_id, crypto.randomUUID())
+      if (!gate.isCurrent(token)) return
+      if (!result.ok) {
+        onToast(`清除失败：${result.error.message}`, 'alert')
+        return
+      }
+      if (item.host_kind === 'link') invalidateLink(item.host_id)
+      setItems((current) => current.filter((row) => row.host_id !== item.host_id))
+      setCount((current) => current === null ? null : Math.max(0, current - 1))
+      onToast('已永久删除', 'trash')
+    } finally {
+      finishAction(busy)
     }
-    if (item.host_kind === 'link') invalidateLink(item.host_id)
-    setItems((current) => current.filter((row) => row.host_id !== item.host_id))
-    setCount((current) => current === null ? null : Math.max(0, current - 1))
-    onToast('已永久删除', 'trash')
-  }, [client, onToast])
+  }, [beginAction, client, finishAction, gate, onToast])
 
   const subtitle = useMemo(() => {
     if (error) return undefined
@@ -186,40 +228,43 @@ export function TrashSurface({ client, onNavigate, capabilityPolicy, onToast }: 
           <ul className="rvx-trash-list">
             {items.map((item) => {
               const meta = KIND_META[item.host_kind]
-              const busy = busyID === item.host_id
+              const busy = busyKey === item.host_id
               return (
-                <li key={`${item.host_kind}:${item.host_id}`} className="rvx-trash-row">
-                  <span className="rvx-trash-kind" title={meta.label}>
-                    <Icon name={meta.icon} size={15} />
-                    {meta.label}
-                  </span>
-                  <span className="rvx-trash-main">
-                    <strong>{item.title || item.url || '未命名'}</strong>
-                    <small>
-                      删除于 {formatRelativeDate(item.trashed_at)} · {meta.restoresTo}
-                    </small>
-                  </span>
-                  <span className="rvx-action-row">
-                    <button
-                      className="rvx-button secondary"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void restore(item)}
-                    >
-                      恢复
-                    </button>
-                    <button
-                      className="rvx-icon-button danger"
-                      type="button"
-                      disabled={busy}
-                      title="永久删除"
-                      aria-label={`永久删除 ${item.title || item.url || '这一项'}`}
-                      onClick={() => void purge(item)}
-                    >
-                      <Icon name="trash" size={16} />
-                    </button>
-                  </span>
-                </li>
+                <ReaderListRow
+                  key={`${item.host_kind}:${item.host_id}`}
+                  variant="dense"
+                  busy={busy}
+                  source={
+                    <span className="rvx-trash-kind" title={meta.label}>
+                      <Icon name={meta.icon} size={15} />
+                      {meta.label}
+                    </span>
+                  }
+                  title={item.title || item.url || '未命名'}
+                  summary={`删除于 ${formatRelativeDate(item.trashed_at)} · ${meta.restoresTo}`}
+                  actions={
+                    <span className="rvx-action-row">
+                      <button
+                        className="rvx-button secondary"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void restore(item)}
+                      >
+                        恢复
+                      </button>
+                      <button
+                        className="rvx-icon-button danger"
+                        type="button"
+                        disabled={busy}
+                        title="永久删除"
+                        aria-label={`永久删除 ${item.title || item.url || '这一项'}`}
+                        onClick={() => void purge(item)}
+                      >
+                        <Icon name="trash" size={16} />
+                      </button>
+                    </span>
+                  }
+                />
               )
             })}
           </ul>
