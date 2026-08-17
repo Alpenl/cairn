@@ -36,6 +36,9 @@ type PublicAuthOptions struct {
 	AllowOpenAccess bool
 	SessionKey      []byte
 	Representations VersionReader
+	// SessionTTL is the window each renewal grants. Zero falls back to
+	// session.DefaultTTL so a caller that does not care still renews.
+	SessionTTL time.Duration
 }
 
 // PublicAuth accepts the static Bearer token, an explicitly enabled anonymous
@@ -80,13 +83,41 @@ func tryInstallationSession(c *gin.Context, opts PublicAuthOptions) bool {
 	if err != nil || cookie.Value == "" {
 		return false
 	}
-	if _, err := session.Parse(cookie.Value, opts.SessionKey, time.Now()); err != nil {
+	now := time.Now()
+	claims, err := session.Parse(cookie.Value, opts.SessionKey, now)
+	if err != nil {
 		ClearSessionCookie(c)
 		rejectPublicAuth(c)
 		return true
 	}
+	renewSessionCookie(c, opts, claims, now)
 	allowInstallation(c, opts.Representations)
 	return true
+}
+
+// renewSessionCookie pushes the sliding deadline forward when the session is
+// close to running out.
+//
+// Without this the cookie expires on a fixed schedule no matter how actively
+// it is used, and because session mode keeps no installation token in the
+// browser there is nothing left to re-authenticate with — the Reader can only
+// show "unauthorized" and ask for the token again. Renewal is best effort: a
+// signing failure here must not fail a request that is already authenticated,
+// since the existing cookie is still valid for a while yet.
+func renewSessionCookie(c *gin.Context, opts PublicAuthOptions, claims session.Claims, now time.Time) {
+	ttl := opts.SessionTTL
+	if ttl <= 0 {
+		ttl = session.DefaultTTL
+	}
+	renewed, ok := session.Renew(claims, now, ttl)
+	if !ok {
+		return
+	}
+	token, err := session.Sign(renewed, opts.SessionKey)
+	if err != nil {
+		return
+	}
+	SetSessionCookie(c, token, renewed.ExpiresAt)
 }
 
 func allowInstallation(c *gin.Context, versions VersionReader) {

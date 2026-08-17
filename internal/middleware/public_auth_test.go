@@ -189,3 +189,78 @@ func TestPublicAuthFailsClosedWhenInstallationNamespaceUnavailable(t *testing.T)
 		}
 	}
 }
+
+// 这是修复的端到端契约：会话在临近过期时被使用，响应必须带回一张新
+// cookie。少了它，会话每 12 小时准时死一次，而 Reader 在 session 模式下
+// 刻意不保存 installation token，届时手里没有任何凭证可以恢复，用户只能
+// 看到「无法确认当前身份：unauthorized」并手动重填 token。
+func TestPublicAuthRenewsASessionThatIsRunningOut(t *testing.T) {
+	t.Parallel()
+	key := []byte("test-public-auth-renewal-signing-key")
+	now := time.Now()
+	signed, err := session.Sign(session.Claims{
+		ExpiresAt:         now.Add(time.Hour),
+		AbsoluteExpiresAt: now.Add(session.DefaultAbsoluteTTL),
+	}, key)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	router := publicAuthRouter(PublicAuthOptions{
+		Authenticator:   NewInstallationAuthenticator("installation-secret"),
+		SessionKey:      key,
+		Representations: &publicAuthVersions{namespace: uuid.New()},
+	})
+
+	rec := requestPublicAuth(router, "", &http.Cookie{Name: session.CookieName, Value: signed}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	refreshed := sessionCookieFrom(t, rec)
+	if refreshed == nil {
+		t.Fatal("a session one hour from expiry must come back with a refreshed cookie")
+	}
+	claims, err := session.Parse(refreshed.Value, key, now)
+	if err != nil {
+		t.Fatalf("refreshed cookie does not parse: %v", err)
+	}
+	if !claims.ExpiresAt.After(now.Add(time.Hour)) {
+		t.Fatalf("refreshed ExpiresAt = %s, want later than the original", claims.ExpiresAt)
+	}
+}
+
+// 反向：会话还很新时不应该在每个响应上都挂 Set-Cookie。
+func TestPublicAuthLeavesAFreshSessionAlone(t *testing.T) {
+	t.Parallel()
+	key := []byte("test-public-auth-fresh-signing-key")
+	now := time.Now()
+	signed, err := session.Sign(session.Claims{
+		ExpiresAt:         now.Add(session.DefaultTTL),
+		AbsoluteExpiresAt: now.Add(session.DefaultAbsoluteTTL),
+	}, key)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	router := publicAuthRouter(PublicAuthOptions{
+		Authenticator:   NewInstallationAuthenticator("installation-secret"),
+		SessionKey:      key,
+		Representations: &publicAuthVersions{namespace: uuid.New()},
+	})
+
+	rec := requestPublicAuth(router, "", &http.Cookie{Name: session.CookieName, Value: signed}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if cookie := sessionCookieFrom(t, rec); cookie != nil {
+		t.Fatal("a fresh session must not put a Set-Cookie on every response")
+	}
+}
+
+func sessionCookieFrom(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
+	for _, cookie := range (&http.Response{Header: rec.Header()}).Cookies() {
+		if cookie.Name == session.CookieName {
+			return cookie
+		}
+	}
+	return nil
+}

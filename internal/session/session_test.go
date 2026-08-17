@@ -34,12 +34,36 @@ func TestSignParseRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSignUsesV3ExpiryOnlyPayload(t *testing.T) {
+// v4 载荷带两个期限。第二个是绝对上限，滑动续期不能越过它——没有它，
+// 被窃取的 cookie 只要持续使用就永不过期。省略 AbsoluteExpiresAt 时按
+// ExpiresAt 填入，得到一张不可续期的票。
+func TestSignUsesV4TwoDeadlinePayload(t *testing.T) {
+	t.Parallel()
+	token, err := session.Sign(session.Claims{
+		ExpiresAt:         time.Unix(2_000_000_000, 0),
+		AbsoluteExpiresAt: time.Unix(2_000_090_000, 0),
+	}, testSigningKey)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if got, want := decodedPayload(t, token), "v4|2000000000|2000090000"; got != want {
+		t.Fatalf("payload = %q, want %q", got, want)
+	}
+}
+
+func TestSignDefaultsTheAbsoluteDeadlineToTheSlidingOne(t *testing.T) {
 	t.Parallel()
 	token, err := session.Sign(claims(time.Unix(2_000_000_000, 0)), testSigningKey)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
+	if got, want := decodedPayload(t, token), "v4|2000000000|2000000000"; got != want {
+		t.Fatalf("payload = %q, want %q", got, want)
+	}
+}
+
+func decodedPayload(t *testing.T, token string) string {
+	t.Helper()
 	payload, _, ok := strings.Cut(token, ".")
 	if !ok {
 		t.Fatal("signed token is missing MAC separator")
@@ -48,9 +72,7 @@ func TestSignUsesV3ExpiryOnlyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
-	if got, want := string(raw), "v3|2000000000"; got != want {
-		t.Fatalf("payload = %q, want %q", got, want)
-	}
+	return string(raw)
 }
 
 func TestSignRejectsMissingExpiry(t *testing.T) {
