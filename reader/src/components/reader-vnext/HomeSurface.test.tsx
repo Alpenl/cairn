@@ -9,6 +9,7 @@ import type {
   ReaderTodoResponse,
 } from '../../lib/api/types'
 import type { ReaderRoute, ReaderRouteTargets } from '../../lib/navigation/route'
+import { formatRelativeDate } from '../../lib/reader-surface'
 import { enabledReaderCapabilityLease } from '../../test/capabilities'
 import { HomeSurface } from './HomeSurface'
 
@@ -358,6 +359,8 @@ describe('HomeSurface', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('TODO 写入失败')
     expect(screen.getByText(item.text)).toBeInTheDocument()
+    // 单飞的坑必须在失败后还给用户，否则这一行就永远点不动了。
+    expect(screen.getByRole('button', { name: `完成 ${item.text}` })).toBeEnabled()
     expect(getHome).toHaveBeenCalledTimes(1)
   })
 
@@ -429,6 +432,19 @@ describe('HomeSurface', () => {
 
     await waitFor(() => expect(getHome).toHaveBeenCalledTimes(2))
     expect(await screen.findByText('Feed 操作后')).toBeInTheDocument()
+  })
+
+  it('renders continue reading through the shared list row, keeping source, time and the open action', async () => {
+    const { client } = makeClient([home()])
+
+    renderHome(client)
+
+    const row = (await screen.findByText('收件箱文章')).closest('li') as HTMLElement
+    expect(row).toHaveClass('reader-list-row', 'reader-list-row-compact')
+    expect(row.querySelector('.reader-list-row-source')).toHaveTextContent('inbox')
+    expect(row.querySelector('.reader-list-row-meta')).toHaveTextContent(formatRelativeDate('2026-08-10T01:00:00Z'))
+    expect(row.querySelector('.reader-list-row-summary')).toHaveTextContent('需要整理')
+    expect(within(row).getByRole('button', { name: '打开收件箱' }).closest('.reader-list-row-actions')).not.toBeNull()
   })
 
   it('does not expose a continue-reading open control without an explicit item action', async () => {
