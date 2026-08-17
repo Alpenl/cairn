@@ -168,6 +168,94 @@ func TestBasicFetcherFallsBackToHeadingWhenTitleIsGeneric(t *testing.T) {
 	}
 }
 
+// mp.weixin.qq.com hides #js_content until its own script reveals it, which
+// used to cost us the entire article: readability and the HTML→document
+// conversion both skip invisible subtrees, so a live article extracted down
+// to its byline. Guard the reveal, the lazy-image repair, and the furniture
+// removal together — they are the difference between a saved article and a
+// saved title.
+func TestWeChatFetcherRevealsTheHiddenArticleBody(t *testing.T) {
+	t.Parallel()
+
+	fixture, err := os.ReadFile("testdata/wechat_article.html")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		header := make(http.Header)
+		header.Set("Content-Type", "text/html; charset=utf-8")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader(string(fixture))),
+			Request:    req,
+		}, nil
+	})}
+	fetcher := NewWeChatFetcher(NewHTTPClientWithOptions(HTTPClientOptions{
+		Client:             client,
+		AllowUnsafeTargets: true,
+	}))
+
+	got, err := fetcher.Fetch(context.Background(), "https://mp.weixin.qq.com/s/fixture-signature")
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+
+	if got.Title != "把懒加载的图片交给读者之前" {
+		t.Errorf("Title = %q, want 把懒加载的图片交给读者之前", got.Title)
+	}
+	if got.FetcherType != "wechat" {
+		t.Errorf("FetcherType = %q, want wechat", got.FetcherType)
+	}
+	for _, want := range []string{
+		"页面把正文交给脚本",
+		"地址写在 data-src 上",
+		"把容器钉住",
+		"行号并不写在文档里",
+	} {
+		if !strings.Contains(got.Body, want) {
+			t.Errorf("Body missing article text %q (body_len=%d)", want, len(got.Body))
+		}
+	}
+
+	// Lazy-loaded illustrations reach the saved document with an address.
+	for _, want := range []string{
+		`src="https://mmbiz.qpic.cn/mmbiz_png/fixture-illustration-one/640?wx_fmt=png"`,
+		`src="https://mmbiz.qpic.cn/mmbiz_jpg/fixture-illustration-two/640?wx_fmt=jpeg"`,
+	} {
+		if !strings.Contains(got.HTML, want) {
+			t.Errorf("HTML missing repaired image source %q", want)
+		}
+	}
+
+	// The container is revealed, but styling that is not about hiding stays.
+	for _, hiding := range []string{"visibility", "opacity"} {
+		if strings.Contains(got.HTML, hiding) {
+			t.Errorf("HTML still carries the %q declaration", hiding)
+		}
+	}
+	if !strings.Contains(got.HTML, "font-size: 16px") {
+		t.Error("HTML dropped inline styling unrelated to hiding")
+	}
+
+	for _, unwanted := range []string{
+		"扫描二维码关注",
+		"喜欢作者，赞赏支持",
+		"关注测试公众号，查看更多内容",
+		"code-snippet__line-index",
+		"window.__wx_reveal__",
+		"line-height: 1.75",
+		"写留言",
+	} {
+		bodyHas := strings.Contains(got.Body, unwanted)
+		htmlHas := strings.Contains(got.HTML, unwanted)
+		if bodyHas || htmlHas {
+			t.Errorf("extracted content contains furniture %q (body=%v html=%v)", unwanted, bodyHas, htmlHas)
+		}
+	}
+}
+
 func TestBasicFetcherDecodesV2EXAndExcludesReplies(t *testing.T) {
 	t.Parallel()
 

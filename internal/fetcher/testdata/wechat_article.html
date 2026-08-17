@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<!--
+  Synthetic mp.weixin.qq.com article. The prose is written for this fixture;
+  only the page's structure is taken from a real article:
+
+    - #js_content ships as `visibility: hidden; opacity: 0` and is revealed
+      by the page's own script,
+    - illustrations carry their address in data-src with no src,
+    - code blocks put line numbers in an empty .code-snippet__line-index
+      gutter that a CSS counter fills in,
+    - follow / QR / reward widgets sit inside the body container.
+-->
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta property="og:title" content="把懒加载的图片交给读者之前">
+    <title>把懒加载的图片交给读者之前</title>
+</head>
+<body>
+<div id="page-content">
+    <div class="rich_media_area_primary">
+        <h1 class="rich_media_title" id="activity-name">把懒加载的图片交给读者之前</h1>
+        <div id="meta_content">
+            <span class="rich_media_meta rich_media_meta_text">原创</span>
+            <a id="js_name">测试公众号</a>
+        </div>
+        <div class="rich_media_content js_underline_content" id="js_content" style="visibility: hidden; opacity: 0; font-size: 16px;">
+            <section>
+                <p>抓一篇文章和读一篇文章之间隔着一层：页面把正文交给脚本，脚本在渲染之后才把它揭开。抽取器没有脚本，看到的是一整块被标记为不可见的内容，于是它按规矩把这块内容跳过，只留下标题和署名。</p>
+            </section>
+            <section>
+                <p>这类页面的图片也一样。地址写在 data-src 上，src 留空，等脚本在进入视口时补齐。任何不跑脚本的保存流程拿到的都是一串没有来源的空图，读者在离线副本里看到的是一篇没有插图的文章。</p>
+            </section>
+            <section>
+                <p>所以站点规则要做的事情很短：把容器钉住，把隐藏的声明去掉，把图片地址挪回 src。剩下的排版原样保留，因为那正是作者想让人看到的样子。</p>
+                <img class="rich_pages wxw-img" data-ratio="0.5625" data-w="1080" data-src="https://mmbiz.qpic.cn/mmbiz_png/fixture-illustration-one/640?wx_fmt=png" />
+            </section>
+            <section>
+                <p>代码块是另一处需要留心的地方。行号并不写在文档里，而是由 CSS 计数器在一个空列表上生成。把那个列表原样带走，读者拿到的就是一串空行。</p>
+                <pre class="code-snippet__js code-snippet__fix" data-lang="go"><ul class="code-snippet__line-index code-snippet__js"><li></li><li></li></ul><code><span class="code-snippet__keyword">func</span> reveal(node *Node) {
+    node.Style = strip(node.Style)
+}</code></pre>
+            </section>
+            <section>
+                <p>页面末尾的关注卡片、二维码和赞赏区不属于正文。它们在每篇文章里都长得一样，留在保存下来的副本里只会稀释内容。</p>
+                <img class="rich_pages wxw-img" data-ratio="0.75" data-w="800" data-src="https://mmbiz.qpic.cn/mmbiz_jpg/fixture-illustration-two/640?wx_fmt=jpeg" />
+            </section>
+            <mp-common-profile class="js_uneditable custom_select_card mp_profile_iframe">关注测试公众号，查看更多内容</mp-common-profile>
+            <section class="qr_code_pc_outer">
+                <span class="qr_code_pc">扫描二维码关注测试公众号</span>
+            </section>
+            <div class="reward_area">
+                <span class="reward_qrcode_area">喜欢作者，赞赏支持</span>
+            </div>
+            <script>window.__wx_reveal__ = 1;</script>
+            <style>#js_content section { line-height: 1.75; }</style>
+        </div>
+    </div>
+    <div id="js_pc_qr_code" class="qr_code_pc_outer">微信扫一扫，关注该公众号</div>
+    <div id="js_article_comment">写留言</div>
+</div>
+</body>
+</html>
