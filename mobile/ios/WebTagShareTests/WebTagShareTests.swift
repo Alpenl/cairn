@@ -1990,7 +1990,7 @@ final class WebTagShareTests: XCTestCase {
         )
         XCTAssertEqual(
             message(.configurationRequired),
-            expected("请先打开 WebTag 完成设置", closesSheet: false)
+            expected("请先打开 Cairn 完成设置", closesSheet: false)
         )
         XCTAssertEqual(message(.noCandidate), expected("没找到链接", closesSheet: false))
     }
@@ -2430,6 +2430,11 @@ final class WebTagShareTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let firstRepository = try AppGroupQueueRepository(containerURL: directory)
         let secondRepository = try AppGroupQueueRepository(containerURL: directory)
+        // Reading the fenced state needs a handle of its own: the fence holds
+        // the first repository for as long as its body runs, and the second is
+        // held by the activation waiting on that fence, so asking either one
+        // what is active would block until the fence it is waiting for is over.
+        let observerRepository = try AppGroupQueueRepository(containerURL: directory)
         let identity = QueueIdentity(origin: "https://example.org", namespace: String(repeating: "f", count: 43))
         let target = try firstRepository.activate(session: activation(identity).identity)
         let enteredFence = expectation(description: "entered target fence")
@@ -2468,7 +2473,7 @@ final class WebTagShareTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.05)
         resultLock.lock(); let finishedWhileFenced = activationDidFinish; resultLock.unlock()
         XCTAssertFalse(finishedWhileFenced)
-        XCTAssertEqual(try firstRepository.activeSessionSnapshot(), target)
+        XCTAssertEqual(try observerRepository.activeSessionSnapshot(), target)
         releaseFence.signal()
         wait(for: [fenceFinished, activationFinished], timeout: 2)
         XCTAssertTrue(errors.isEmpty)
@@ -2662,7 +2667,11 @@ final class WebTagShareTests: XCTestCase {
         let namespace = String(repeating: "e", count: 43)
         let session = SessionIdentity(origin: "https://example.org", namespace: namespace, representationContract: "v3")
         let active = try repository.activate(session: session)
-        let start = Date()
+        // A whole second, because the recomputed wake is compared against this
+        // instant after a round trip through the store: seconds since 1970 are
+        // held as a double there, and a fractional now comes back a fraction of
+        // a microsecond off, which passed or failed by luck of the clock.
+        let start = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded())
         let queued = try repository.enqueue(url: "https://example.org/expired-drain", identity: active.queueIdentity, now: start)
         let expiration = LockedExpirationSignal()
         let responseURL = URL(string: "https://example.org/api/links")!
