@@ -261,6 +261,12 @@ var layer = map[string]int{
 	// release-manifest 是发布期工具（生成并签名 Release manifest），不随镜像或
 	// 归档分发；Core 归档仍然只有 webtag 与 migrate 两个可执行文件。
 	"cmd/release-manifest": 6,
+	// cairn-updater 是 root 运行的部署 helper，与 webtag 是两个进程、两个用户。
+	// 它只依赖 releasetrust（0 层信任根）与 buildinfo；迁移一律交给目标 Release
+	// 自带的 migrate 二进制以子进程执行，因此这里刻意不 import internal/migrate
+	// ——helper 编译进来的迁移计划永远是"旧那一版"，用它规划升级范围必然漏掉本次
+	// 要执行的 step。
+	"cmd/cairn-updater": 6,
 
 	"app":     5,
 	"handler": 4,
@@ -276,8 +282,15 @@ var layer = map[string]int{
 	"service":    3,
 	"repository": 2,
 	// migrate 是 cmd/migrate 的迁移源，直接使用 database，故位于其上而非 0 层。
-	"migrate":  2,
-	"database": 1,
+	"migrate": 2,
+	// deployplan 与 migrate 同层：它是 cairn-updater 用来驱动**目标 Release 自带
+	// 的** migrate 二进制的子进程契约。它刻意不 import migrate——helper 以 root
+	// 运行，链进迁移引擎 + pgx + River 既扩大攻击面，又会重新诱惑「在进程内规划
+	// 升级范围」，而 helper 编译进来的计划永远是旧那一版。代价是手抄的 JSON 形状
+	// 会漂移，所以漂移由 TestTheMirrorDecodesTheRealTypes 机械封死（测试里才
+	// import migrate，同层无约束）。
+	"deployplan": 2,
+	"database":   1,
 
 	// 0 层：领域模型与工具包。显式列出而非依赖默认值，这样新增包时
 	// allInternalPackagesAreLayered 会强制作者主动定级。
@@ -299,6 +312,12 @@ var layer = map[string]int{
 	"model":         0,
 	"notetitle":     0,
 	"observability": 0,
+	// deploybackup：cairn-updater 的 pg_dump / pg_restore 驱动。抽成包而不是
+	// helper 内部方法，是因为「dump 可恢复」这条判断是关于 PostgreSQL 的断言，
+	// 只有拿真实容器跑真实客户端才算证明；而 test/dbintegration 那个独立 module
+	// 能 import 内部包、不能 import cmd 的 main 包。它同样必须是零依赖叶子（纯
+	// stdlib，不含任何数据库驱动）。
+	"deploybackup": 0,
 	// releasetrust：Release 信任根（canonical manifest、Ed25519 公钥集合与验证
 	// 路径）。root-owned 的 cairn-updater helper 直接 import 它，因此必须是零
 	// 依赖叶子——它一旦依赖任何应用层包，helper 就会被迫链接整个应用。
@@ -543,6 +562,9 @@ var skipLayerExempt = map[string]bool{
 	// 它必须在服务开始只读投影之前跑完，因此挂在部署期的 migrate 入口上，与
 	// 其他 step 一样是「跑完即退出」的一次性任务。
 	"cmd/migrate -> repository": true,
+	// cmd/cairn-updater 通过 deployplan 驱动目标 Release 的 migrate 子进程；它
+	// 自己不 import migrate，理由见 layer 表里 deployplan 的说明。
+	"cmd/cairn-updater -> deployplan": true,
 	// cmd/release-manifest 在发布期读取本次发布编译进来的迁移计划，把精确的
 	// schema target 与 online-update 分类写进签名 manifest。它必须直读迁移源：
 	// 经 service 中转会让「manifest 里的目标」与「二进制真正会执行的目标」变成
