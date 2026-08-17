@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"webtag/internal/model"
 	"webtag/internal/repository"
 	readerservice "webtag/internal/service"
 )
@@ -58,13 +59,15 @@ func TestReaderDismissedTodoProjectionStaysDismissed(t *testing.T) {
 	reader := repository.NewPGXReaderVNextRepository(pool)
 	service := readerservice.NewReaderVNextService(reader, nil)
 
-	note := seedReaderVNextNote(t, pool, "Dismissed projection host", "- [ ] dismissed by the user")
-	if _, err := service.ListTodos(ctx, "", 200); err != nil {
-		t.Fatalf("first ListTodos: %v", err)
+	note, err := reader.CreateNote(ctx, model.ReaderNote{
+		Title: "Dismissed projection host", PublishedContent: "- [ ] dismissed by the user",
+	})
+	if err != nil {
+		t.Fatalf("CreateNote: %v", err)
 	}
 	projections := readReaderTodoProjections(t, pool, "note", note.ID.String())
 	if len(projections) != 1 || projections[0].DeletedAt != nil {
-		t.Fatalf("projections after first Todos open = %#v, want one live projection", projections)
+		t.Fatalf("projections after creating the note = %#v, want one live projection", projections)
 	}
 	dismissed := projections[0]
 
@@ -132,19 +135,23 @@ func TestReaderDismissedTodoProjectionSurvivesSourceRewrite(t *testing.T) {
 	reader := repository.NewPGXReaderVNextRepository(pool)
 	service := readerservice.NewReaderVNextService(reader, nil)
 
-	note := seedReaderVNextNote(t, pool, "Rewritten projection host", "- [ ] rewritten by the source")
-	if _, err := service.ListTodos(ctx, "", 200); err != nil {
-		t.Fatalf("first ListTodos: %v", err)
+	note, err := reader.CreateNote(ctx, model.ReaderNote{
+		Title: "Rewritten projection host", PublishedContent: "- [ ] rewritten by the source",
+	})
+	if err != nil {
+		t.Fatalf("CreateNote: %v", err)
 	}
 	if len(readReaderTodoProjections(t, pool, "note", note.ID.String())) != 1 {
-		t.Fatal("first Todos open did not project the note checkbox")
+		t.Fatal("creating the note did not project its checkbox")
 	}
 
+	// An out-of-band source rewrite is exactly the drift the explicit repair
+	// exists for, so it stands in for whatever produced the tombstone.
 	if _, err := pool.Exec(ctx, `UPDATE reader_notes SET published_content=$1,published_revision=2,updated_at=NOW() WHERE id=$2`, "no checklist left", note.ID); err != nil {
 		t.Fatalf("drop source checkbox: %v", err)
 	}
-	if _, err := service.ListTodos(ctx, "", 200); err != nil {
-		t.Fatalf("ListTodos after dropping the checkbox: %v", err)
+	if err := service.RepairProjectedTodos(ctx); err != nil {
+		t.Fatalf("repair after dropping the checkbox: %v", err)
 	}
 	dismissed := readReaderTodoProjections(t, pool, "note", note.ID.String())
 	if len(dismissed) != 1 || dismissed[0].DeletedAt == nil {
@@ -159,6 +166,9 @@ func TestReaderDismissedTodoProjectionSurvivesSourceRewrite(t *testing.T) {
 	}
 	if _, err := service.ListTodos(ctx, "", 200); err != nil {
 		t.Fatalf("ListTodos after restoring the checkbox: %v", err)
+	}
+	if err := service.RepairProjectedTodos(ctx); err != nil {
+		t.Fatalf("repair after restoring the checkbox: %v", err)
 	}
 	after := readReaderTodoProjections(t, pool, "note", note.ID.String())
 	if len(after) != 1 || after[0].DeletedAt == nil {

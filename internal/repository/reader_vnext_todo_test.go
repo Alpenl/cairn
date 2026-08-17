@@ -546,7 +546,7 @@ func TestReconcileTodoProjectionsKeepsDismissedProjectionDismissed(t *testing.T)
 
 	body := "- [ ] resurrect me\n"
 	block := readertext.List(body)[0]
-	projection := homeChecklistTodos([]readerTodoHostSource{{originKind: "thought", hostID: "thought-1", hostRevision: 4, body: body, sourceKind: "thought", sourceID: "thought-1", live: true}})[0]
+	projection := checklistTodosForSources([]readerTodoHostSource{{originKind: "thought", hostID: "thought-1", hostRevision: 4, body: body, sourceKind: "thought", sourceID: "thought-1", live: true}})[0]
 	projectionID := uuid.New()
 	hostID := "thought-1"
 	dismissedAt := testReaderTime

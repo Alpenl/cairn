@@ -300,11 +300,11 @@ func (r *PGXReaderVNextRepository) BackfillTodoProjections(ctx context.Context) 
 			return fmt.Errorf("read todo projection backfill ledger: %w", err)
 		}
 
-		sources, err := listHomeTodoSourcesOn(ctx, db)
+		sources, err := listTodoHostSourcesOn(ctx, db)
 		if err != nil {
 			return err
 		}
-		desired := homeChecklistTodos(sources)
+		desired := checklistTodosForSources(sources)
 		if err := r.reconcileTodoProjectionsOn(ctx, db, desired); err != nil {
 			return err
 		}
@@ -408,4 +408,62 @@ func verifyTodoProjectionTombstonesOn(ctx context.Context, db database.Querier, 
 			ErrReaderTodoProjectionUnverified, todo.OriginKind, valueOrEmpty(todo.OriginHostID))
 	}
 	return nil
+}
+
+// readerTodoHostSourcesSQL enumerates every live TODO source in the
+// installation: undeleted, untombstoned Thoughts and undeleted Notes at their
+// published revision. Only the backfill and the explicit repair walk all of
+// them; ordinary reads and writes work one host at a time.
+const readerTodoHostSourcesSQL = `
+SELECT 'thought'::text AS host_kind, t.id::text AS host_id, t.last_sequence AS host_revision, t.body,
+	t.host_kind AS source_kind, t.host_id AS source_id, t.link_id
+FROM reader_thoughts t
+WHERE t.deleted=false
+	AND NOT EXISTS (
+		SELECT 1 FROM reader_thought_tombstones tt
+		WHERE tt.thought_id=t.id
+	)
+UNION ALL
+SELECT 'note'::text AS host_kind, n.id::text AS host_id, n.published_revision AS host_revision, n.published_content,
+	'note'::text AS source_kind, n.id::text AS source_id, NULL::uuid AS link_id
+FROM reader_notes n
+WHERE n.deleted_at IS NULL
+ORDER BY host_kind, host_id`
+
+func listTodoHostSourcesOn(ctx context.Context, db database.Querier) ([]readerTodoHostSource, error) {
+	rows, err := db.Query(ctx, readerTodoHostSourcesSQL)
+	if err != nil {
+		return nil, fmt.Errorf("list todo host sources: %w", err)
+	}
+	defer rows.Close()
+
+	sources := make([]readerTodoHostSource, 0, 32)
+	for rows.Next() {
+		source := readerTodoHostSource{live: true}
+		if err := rows.Scan(
+			&source.originKind, &source.hostID, &source.hostRevision, &source.body,
+			&source.sourceKind, &source.sourceID, &source.linkID,
+		); err != nil {
+			return nil, fmt.Errorf("scan todo host source: %w", err)
+		}
+		if source.sourceKind == "" || source.sourceID == "" {
+			source.sourceKind, source.sourceID = source.originKind, source.hostID
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read todo host sources: %w", err)
+	}
+	return sources, nil
+}
+
+// checklistTodosForSources flattens a whole-installation source scan into the
+// projections those sources own, through the same builder the single-host
+// replace pass uses so a repair and a write agree byte for byte.
+func checklistTodosForSources(sources []readerTodoHostSource) []model.ReaderTodo {
+	out := make([]model.ReaderTodo, 0, len(sources))
+	for _, source := range sources {
+		out = append(out, readerChecklistTodos(source)...)
+	}
+	return out
 }

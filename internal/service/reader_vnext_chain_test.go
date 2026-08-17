@@ -11,6 +11,7 @@ import (
 
 	"webtag/internal/dto"
 	"webtag/internal/model"
+	"webtag/internal/readertext"
 	"webtag/internal/repository"
 )
 
@@ -195,6 +196,32 @@ func (s *readerVNextChainStore) PublishNote(_ context.Context, command model.Rea
 	s.note.PublishedRevision++
 	s.note.DraftContent = nil
 	s.note.UpdatedAt = s.now
+	// The real repository replaces the note's projections inside the publish
+	// transaction. The double does the same so the chain exercises a Todos read
+	// that only pages stored rows, which is what the service now does.
+	hostKind, hostID := "note", s.note.ID.String()
+	s.todos = s.todos[:0]
+	for _, block := range readertext.List(s.note.PublishedContent) {
+		originRef, err := json.Marshal(map[string]any{
+			"block_ref": block.BlockRef, "text": block.Text, "occurrence": block.Occurrence,
+			"source_kind": "note", "source_id": hostID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		s.todos = append(s.todos, model.ReaderTodo{
+			ID:             uuid.MustParse("00000000-0000-0000-0000-000000000005"),
+			Text:           block.Text,
+			Done:           block.Done,
+			OriginKind:     "note",
+			OriginHostKind: &hostKind,
+			OriginHostID:   &hostID,
+			OriginRef:      originRef,
+			HostRevision:   s.note.PublishedRevision,
+			CreatedAt:      s.now,
+			UpdatedAt:      s.now,
+		})
+	}
 	return cloneReaderNote(s.note), nil
 }
 

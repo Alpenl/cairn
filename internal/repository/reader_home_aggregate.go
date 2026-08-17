@@ -2,13 +2,11 @@ package repository
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"webtag/internal/database"
 	"webtag/internal/model"
@@ -46,22 +44,6 @@ type ReaderHomeAggregate struct {
 type readerHomeSnapshotBeginner interface {
 	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
 }
-
-const readerHomeTodoSourcesSQL = `
-SELECT 'thought'::text AS host_kind, t.id::text AS host_id, t.last_sequence AS host_revision, t.body,
-	t.host_kind AS source_kind, t.host_id AS source_id, t.link_id
-FROM reader_thoughts t
-WHERE t.deleted=false
-	AND NOT EXISTS (
-		SELECT 1 FROM reader_thought_tombstones tt
-		WHERE tt.thought_id=t.id
-	)
-UNION ALL
-SELECT 'note'::text AS host_kind, n.id::text AS host_id, n.published_revision AS host_revision, n.published_content,
-	'note'::text AS source_kind, n.id::text AS source_id, NULL::uuid AS link_id
-FROM reader_notes n
-WHERE n.deleted_at IS NULL
-ORDER BY host_kind, host_id`
 
 const readerHomeListTodosSQL = `SELECT ` + readerTodoColumns + ` FROM reader_todos WHERE deleted_at IS NULL ORDER BY done ASC, due_at ASC NULLS LAST, created_at DESC, id DESC`
 
@@ -101,37 +83,21 @@ WHERE deleted=false
 	)
 ORDER BY updated_at DESC,id DESC LIMIT $1`
 
-// LoadHomeAggregate reconciles source-owned TODO projections and reads every
-// Home section in one repeatable-read transaction. The transaction is
-// intentionally read-write because reconciliation is part of the authority
-// of the returned TODO list and count.
+// LoadHomeAggregate reads every Home section in one read-only repeatable-read
+// transaction. Home used to reconcile the TODO projection here, which made a
+// plain GET take row locks and write; two concurrent reads then had to lose a
+// serialization race and retry. The projection is now maintained by whichever
+// transaction changes a Thought or Note, so Home only has to read it.
 func (r *PGXReaderVNextRepository) LoadHomeAggregate(ctx context.Context) (ReaderHomeAggregate, error) {
 	beginner, ok := r.db.(readerHomeSnapshotBeginner)
 	if !ok {
 		return ReaderHomeAggregate{}, fmt.Errorf("load home aggregate: snapshot transaction unavailable")
 	}
-
-	// 这是一个读写快照：取完 RepeatableRead 快照后还会 FOR UPDATE 并写回 TODO
-	// 投影。RR 下对快照之后提交的行加锁会直接抛 40001，于是两个并发的纯读请求
-	// （…/home 与 …/todos 都会同步投影）必然有一方失败。序列化失败是可重试的，
-	// 重开快照即可；不重试就会把一次 GET 变成 500。
-	const homeAggregateMaxAttempts = 3
-	var lastErr error
-	for attempt := 0; attempt < homeAggregateMaxAttempts; attempt++ {
-		aggregate, err := r.loadHomeAggregateSnapshot(ctx, beginner)
-		if err == nil {
-			return aggregate, nil
-		}
-		if !isSerializationFailure(err) {
-			return ReaderHomeAggregate{}, err
-		}
-		lastErr = err
-	}
-	return ReaderHomeAggregate{}, lastErr
+	return r.loadHomeAggregateSnapshot(ctx, beginner)
 }
 
 func (r *PGXReaderVNextRepository) loadHomeAggregateSnapshot(ctx context.Context, beginner readerHomeSnapshotBeginner) (ReaderHomeAggregate, error) {
-	tx, err := beginner.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	tx, err := beginner.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return ReaderHomeAggregate{}, fmt.Errorf("begin home aggregate snapshot: %w", err)
 	}
@@ -147,28 +113,7 @@ func (r *PGXReaderVNextRepository) loadHomeAggregateSnapshot(ctx context.Context
 	return aggregate, nil
 }
 
-// isSerializationFailure reports whether err is a retryable PostgreSQL
-// serialization failure (SQLSTATE 40001) or deadlock (40P01).
-func isSerializationFailure(err error) bool {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		return false
-	}
-	return pgErr.Code == "40001" || pgErr.Code == "40P01"
-}
-
 func (r *PGXReaderVNextRepository) loadHomeAggregateOn(ctx context.Context, db database.Querier) (ReaderHomeAggregate, error) {
-	sources, err := listHomeTodoSourcesOn(ctx, db)
-	if err != nil {
-		return ReaderHomeAggregate{}, err
-	}
-	projections := homeChecklistTodos(sources)
-	// Home shares the general reconcile so a projection the user dismissed
-	// stays dismissed no matter which read reaches the database first.
-	if err := r.reconcileTodoProjectionsOn(ctx, db, projections); err != nil {
-		return ReaderHomeAggregate{}, err
-	}
-
 	todos, err := listHomeTodosOn(ctx, db)
 	if err != nil {
 		return ReaderHomeAggregate{}, err
@@ -193,44 +138,6 @@ func (r *PGXReaderVNextRepository) loadHomeAggregateOn(ctx context.Context, db d
 		RecentThoughts:  recentThoughts,
 		Todos:           todos,
 	}, nil
-}
-
-func listHomeTodoSourcesOn(ctx context.Context, db database.Querier) ([]readerTodoHostSource, error) {
-	rows, err := db.Query(ctx, readerHomeTodoSourcesSQL)
-	if err != nil {
-		return nil, fmt.Errorf("list home todo sources: %w", err)
-	}
-	defer rows.Close()
-
-	sources := make([]readerTodoHostSource, 0, 32)
-	for rows.Next() {
-		source := readerTodoHostSource{live: true}
-		if err := rows.Scan(
-			&source.originKind, &source.hostID, &source.hostRevision, &source.body,
-			&source.sourceKind, &source.sourceID, &source.linkID,
-		); err != nil {
-			return nil, fmt.Errorf("scan home todo source: %w", err)
-		}
-		if source.sourceKind == "" || source.sourceID == "" {
-			source.sourceKind, source.sourceID = source.originKind, source.hostID
-		}
-		sources = append(sources, source)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read home todo sources: %w", err)
-	}
-	return sources, nil
-}
-
-// homeChecklistTodos builds the same projections the single-host replace pass
-// builds, so a Home read cannot rewrite an origin_ref that a Thought or Note
-// write just stored.
-func homeChecklistTodos(sources []readerTodoHostSource) []model.ReaderTodo {
-	out := make([]model.ReaderTodo, 0, len(sources))
-	for _, source := range sources {
-		out = append(out, readerChecklistTodos(source)...)
-	}
-	return out
 }
 
 func listHomeTodosOn(ctx context.Context, db database.Querier) ([]model.ReaderTodo, error) {

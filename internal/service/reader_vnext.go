@@ -1227,10 +1227,12 @@ func (s *ReaderVNextService) CreateTodo(ctx context.Context, request dto.ReaderT
 	return todoResponse(*todo), nil
 }
 
+// ListTodos pages the stored projection and nothing else. It used to parse
+// every Thought and published Note first and reconcile the whole projection,
+// which made a read scale with the installation and write on every GET.
+// Thought and Note commands now maintain the projection as they commit, so the
+// stored rows are already the answer.
 func (s *ReaderVNextService) ListTodos(ctx context.Context, after string, limit int) (dto.ReaderTodosResponse, error) {
-	if err := s.syncProjectedTodos(ctx); err != nil {
-		return dto.ReaderTodosResponse{}, mapReaderError(err)
-	}
 	page, err := s.store.ListTodos(ctx, after, limit)
 	if err != nil {
 		return dto.ReaderTodosResponse{}, mapReaderError(err)
