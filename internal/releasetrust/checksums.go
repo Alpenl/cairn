@@ -63,14 +63,41 @@ func ParseChecksums(data []byte) (map[string]string, error) {
 	return checksums, nil
 }
 
-// CrossCheckChecksums compares SHA256SUMS against the signed manifest. A
-// mismatch means the Release is internally inconsistent, which is a stop
-// condition even though the manifest is the one that decides authenticity.
-func CrossCheckChecksums(manifest Manifest, checksums map[string]string) error {
+// CrossCheckListedChecksums compares only the entries SHA256SUMS already
+// carries.
+//
+// It exists for the moment before the Release is sealed. The signing step has
+// to run *before* SHA256SUMS is written, so that the list can cover the
+// manifest and its signature; at that point a list that does not yet mention
+// an artifact is evidence of ordering, not of inconsistency. A listed digest
+// that disagrees is still a stop condition — that one cannot be explained by
+// ordering. The strict form belongs after sealing; see CrossCheckChecksums.
+func CrossCheckListedChecksums(manifest Manifest, checksums map[string]string) error {
+	for name, digest := range manifestArtifactDigests(manifest) {
+		listed, ok := checksums[name]
+		if !ok {
+			continue
+		}
+		if listed != digest {
+			return fmt.Errorf("SHA256SUMS digest for %s disagrees with the signed manifest", name)
+		}
+	}
+	return nil
+}
+
+func manifestArtifactDigests(manifest Manifest) map[string]string {
 	expected := map[string]string{manifest.Reader.Archive: manifest.Reader.SHA256}
 	for _, artifact := range manifest.Core {
 		expected[artifact.Archive] = artifact.SHA256
 	}
+	return expected
+}
+
+// CrossCheckChecksums compares SHA256SUMS against the signed manifest. A
+// mismatch means the Release is internally inconsistent, which is a stop
+// condition even though the manifest is the one that decides authenticity.
+func CrossCheckChecksums(manifest Manifest, checksums map[string]string) error {
+	expected := manifestArtifactDigests(manifest)
 	for name, digest := range expected {
 		listed, ok := checksums[name]
 		if !ok {

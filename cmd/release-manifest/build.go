@@ -330,10 +330,14 @@ func verifyManifestAgainstAssets(distDir string, manifest releasetrust.Manifest,
 	if err != nil {
 		return err
 	}
-	if err := releasetrust.CrossCheckChecksums(manifest, checksums); err != nil {
+	// Generate runs before the Release is sealed, so an artifact SHA256SUMS
+	// has not reached yet is ordering rather than inconsistency. A listed
+	// digest that disagrees is still fatal. The strict comparison runs in
+	// verify, after sealing.
+	if err := releasetrust.CrossCheckListedChecksums(manifest, checksums); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(report, "SHA256SUMS agrees with the signed manifest")
+	_, _ = fmt.Fprintln(report, "SHA256SUMS agrees with the signed manifest so far as it is written")
 	return nil
 }
 
