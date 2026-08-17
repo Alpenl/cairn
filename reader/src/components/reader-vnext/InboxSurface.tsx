@@ -13,7 +13,7 @@ import type { ReaderRoute } from '../../lib/navigation/route'
 import type { TocHeading } from '../../lib/toc'
 import { useReaderToc } from '../../hooks/useReaderToc'
 import { NO_ANNOTATIONS } from '../../lib/annotations'
-import { Icon } from '../Icon'
+import { Icon, type IconName } from '../Icon'
 import { PlainTextView } from '../PlainTextView'
 import { ArticleOutline } from '../detail/ArticleOutline'
 import { SurfaceError, SurfaceLoading, SurfaceShell, formatRelativeDate, errorMessage } from './SurfaceShell'
@@ -50,6 +50,39 @@ function statusLabel(status: ReaderInboxResponse['status']): string {
   if (status === 'pending') return '待处理'
   if (status === 'discarded') return '已丢弃'
   return '已入库'
+}
+
+const SOURCE_ICONS: Partial<Record<string, IconName>> = {
+  browser_capture: 'link',
+  extension: 'link',
+  rss: 'rss',
+  subscription: 'rss',
+  manual: 'pencil',
+}
+
+const SOURCE_LABELS: Partial<Record<string, string>> = {
+  browser_capture: '网页捕获',
+  extension: '扩展捕获',
+  rss: '订阅',
+  subscription: '订阅',
+  manual: '手动添加',
+}
+
+function sourceIcon(kind: string): IconName {
+  return SOURCE_ICONS[kind] ?? 'inbox'
+}
+
+function sourceLabel(kind: string): string {
+  return SOURCE_LABELS[kind] ?? kind
+}
+
+/**
+ * The queue rows read like the Reading list: a host, not a snake_cased source
+ * enum. The source kind survives as the row icon and its tooltip.
+ */
+function hostLabel(url: string): string {
+  const host = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i.exec(url)?.[1] ?? url
+  return host.replace(/^www\./, '')
 }
 
 function otherInboxPartition(partition: ReaderInboxPartition): ReaderInboxPartition {
@@ -292,6 +325,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   const inboxTargetLoadGenerationRef = useRef(0)
   const inboxDataClientRef = useRef(client)
   const detailScrollRef = useRef<HTMLDivElement>(null)
+  const titleRef = useRef<HTMLTextAreaElement>(null)
 
   const partitionRef = useRef(partition)
   const page = inboxPages[partition]
@@ -390,6 +424,15 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   useEffect(() => {
     setEditorOutlineHeadings(selected ? INBOX_EDITOR_OUTLINE : [])
   }, [selected, setEditorOutlineHeadings])
+
+  // The title is a textarea so long titles wrap the way the reader renders
+  // them; it grows to its content instead of scrolling inside one line.
+  useLayoutEffect(() => {
+    const node = titleRef.current
+    if (!node) return
+    node.style.height = 'auto'
+    node.style.height = `${node.scrollHeight}px`
+  }, [title, selected?.id])
 
   useEffect(() => {
     inboxOperationGenerationRef.current += 1
@@ -1367,26 +1410,39 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
               </div>
             ) : (
               <ul className="inbox-list">
-                {items.map((item) => (
-                  <li key={item.id} className={item.id === selected?.id ? 'active' : ''}>
-                    <label className="inbox-row-check">
-                      <input type="checkbox" aria-label={`选择 ${item.title || item.url}`} checked={selectedIDs.has(item.id)} disabled={saving || item.status !== 'pending'} onChange={() => toggleSelection(item.id)} />
-                    </label>
-                    <button type="button" className={item.id === selected?.id ? 'active' : ''} onClick={() => void selectInbox(item.id)}>
-                      <span className="inbox-row-meta">
-                        <span>{item.source_kind}</span>
-                        <time>{formatRelativeDate(item.updated_at)}</time>
-                      </span>
-                      <strong>{item.title || item.url}</strong>
-                      <p>{item.summary || item.note || item.body || '暂无内容'}</p>
-                      <span className="inbox-row-foot">
-                        <span className={'inbox-state-dot ' + item.status} />
-                        {item.expired ? '已过期' : statusLabel(item.status)}
-                        {item.tags.slice(0, 2).map((tag) => <span key={tag}>#{tag}</span>)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
+                {items.map((item) => {
+                  const flagged = item.expired || item.status !== 'pending'
+                  const rowTags = item.tags.slice(0, 3)
+                  return (
+                    <li key={item.id} className={(item.id === selected?.id ? 'active' : '') + (selectedIDs.has(item.id) ? ' picked' : '')}>
+                      <label className="inbox-row-check">
+                        <input type="checkbox" aria-label={`选择 ${item.title || item.url}`} checked={selectedIDs.has(item.id)} disabled={saving || item.status !== 'pending'} onChange={() => toggleSelection(item.id)} />
+                      </label>
+                      <button type="button" className={item.id === selected?.id ? 'active' : ''} onClick={() => void selectInbox(item.id)}>
+                        <span className="inbox-row-meta">
+                          <span className="inbox-row-source" title={sourceLabel(item.source_kind)}>
+                            <Icon name={sourceIcon(item.source_kind)} size={12} />
+                            {hostLabel(item.url)}
+                          </span>
+                          <time>{formatRelativeDate(item.updated_at)}</time>
+                        </span>
+                        <strong>{item.title || item.url}</strong>
+                        <p>{item.summary || item.note || item.body || '暂无内容'}</p>
+                        {(flagged || rowTags.length > 0) && (
+                          <span className="inbox-row-foot">
+                            {flagged && (
+                              <span className="inbox-row-state">
+                                <span className={'inbox-state-dot ' + item.status} />
+                                {item.expired ? '已过期' : statusLabel(item.status)}
+                              </span>
+                            )}
+                            {rowTags.map((tag) => <span className="mini-tag" key={tag}>#{tag}</span>)}
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  )
+                })}
               </ul>
             )}
             {nextCursor && <button className="rvx-load-more" type="button" disabled={loadingMore || saving} onClick={() => void load(partition, true, nextCursor)}>{loadingMore ? '加载中…' : '更多'}</button>}
@@ -1398,7 +1454,10 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
             <>
               <header className="inbox-detail-toolbar">
                 <div className="inbox-detail-state">
-                  <span className="rvx-source-chip">{selected.source_kind}</span>
+                  <span className="rvx-source-chip">
+                    <Icon name={sourceIcon(selected.source_kind)} size={12} />
+                    {sourceLabel(selected.source_kind)}
+                  </span>
                   <span className="rvx-status-chip">{selected.expired ? '已过期' : statusLabel(selected.status)}</span>
                   {dirty && <span className="inbox-unsaved">未保存</span>}
                 </div>
@@ -1425,24 +1484,34 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                         <span>{formatRelativeDate(selected.created_at)} 收件</span>
                         <span>修订 {selected.metadata_revision}</span>
                         <a href={selected.url} target="_blank" rel="noreferrer" title="打开原网页">
-                          {selected.url.replace(/^https?:\/\//, '')}<Icon name="external" size={13} />
+                          <span>{selected.url.replace(/^https?:\/\//, '')}</span>
+                          <Icon name="external" size={13} />
                         </a>
                       </div>
-                      <h1>{title || '未命名条目'}</h1>
-                      {selectedDraft?.conflict && <p className="inbox-conflict" role="status"><Icon name="alert" size={15} />检测到其他位置的更新。本地草稿已保留，并会在下次保存时使用最新版本。</p>}
-                      <label className="inbox-clean-field">
-                        <span>标题</span>
-                        <input value={title} disabled={saving} onChange={(event) => updateSelectedDraft({ title: event.target.value })} />
+                      {/* The visible title is the editor itself; the heading
+                          stays for structure and assistive technology. */}
+                      <h1 className="sr-only">{title || '未命名条目'}</h1>
+                      <label className="inbox-title-field">
+                        <span className="sr-only">标题</span>
+                        <textarea
+                          ref={titleRef}
+                          rows={1}
+                          value={title}
+                          disabled={saving}
+                          placeholder="未命名条目"
+                          onChange={(event) => updateSelectedDraft({ title: event.target.value })}
+                        />
                       </label>
-                      <label className="inbox-clean-field inbox-summary-field">
+                      {selectedDraft?.conflict && <p className="inbox-conflict" role="status"><Icon name="alert" size={15} />检测到其他位置的更新。本地草稿已保留，并会在下次保存时使用最新版本。</p>}
+                      <label className="inbox-summary-card">
                         <span><Icon name="sparkles" size={13} />摘要</span>
-                        <textarea value={summary} disabled={saving} onChange={(event) => updateSelectedDraft({ summary: event.target.value })} rows={4} placeholder="暂无摘要" />
+                        <textarea value={summary} disabled={saving} onChange={(event) => updateSelectedDraft({ summary: event.target.value })} rows={3} placeholder="暂无摘要" />
                       </label>
                       {selected.job_id && <p className="inbox-job"><Icon name={job?.status === 'failed' ? 'alert' : 'loader'} size={13} />摘要任务 {job?.status ?? 'queued'} · {selected.job_id}</p>}
                     </section>
 
                     <section id="inbox-note" className="inbox-editor-section" data-toc-heading tabIndex={-1}>
-                      <header className="inbox-section-title"><Icon name="edit" size={15} /><h2>笔记</h2></header>
+                      <header className="inbox-section-title"><span><Icon name="edit" size={15} /><h2>笔记</h2></span></header>
                       <label className="inbox-clean-field">
                         <span className="sr-only">笔记</span>
                         <textarea value={note} disabled={saving} onChange={(event) => updateSelectedDraft({ note: event.target.value })} rows={5} placeholder="记录为什么要留下它" />
@@ -1460,13 +1529,13 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                       {previewBody ? (
                         <PlainTextView className="inbox-body-preview reader-flow" text={body || '暂无正文'} blockKey="inbox-body" anns={NO_ANNOTATIONS} onClickHL={ignoreInboxHighlight} />
                       ) : (
-                        <textarea className="inbox-body-editor" aria-label="正文" value={body} disabled={saving} onChange={(event) => updateSelectedDraft({ body: event.target.value })} rows={14} />
+                        <textarea className="inbox-body-editor" aria-label="正文" value={body} disabled={saving} onChange={(event) => updateSelectedDraft({ body: event.target.value })} rows={10} />
                       )}
                       <details className="rvx-source-details"><summary>查看收件时的原始内容</summary><pre>{selected.body}</pre></details>
                     </section>
 
                     <section id="inbox-organization" className="inbox-editor-section" data-toc-heading tabIndex={-1}>
-                      <header className="inbox-section-title"><Icon name="tag" size={15} /><h2>整理</h2></header>
+                      <header className="inbox-section-title"><span><Icon name="tag" size={15} /><h2>整理</h2></span></header>
                       <label className="inbox-clean-field">
                         <span>标签</span>
                         <input value={tags} disabled={saving} onChange={(event) => updateSelectedDraft({ tags: event.target.value })} placeholder="用逗号或空格分隔" />
