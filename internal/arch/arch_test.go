@@ -258,6 +258,9 @@ var layer = map[string]int{
 	"cmd/webtag":  6,
 	"cmd/migrate": 6,
 	"cmd/eval":    6,
+	// release-manifest 是发布期工具（生成并签名 Release manifest），不随镜像或
+	// 归档分发；Core 归档仍然只有 webtag 与 migrate 两个可执行文件。
+	"cmd/release-manifest": 6,
 
 	"app":     5,
 	"handler": 4,
@@ -278,24 +281,28 @@ var layer = map[string]int{
 
 	// 0 层：领域模型与工具包。显式列出而非依赖默认值，这样新增包时
 	// allInternalPackagesAreLayered 会强制作者主动定级。
-	"alloc":          0, // 分配容量夹取；零依赖叶子包，任何层都可 import
-	"arch":           0,
-	"buildinfo":      0,
-	"concept":        0,
-	"config":         0,
-	"contentdoc":     0,
-	"dto":            0,
-	"embedding":      0,
-	"errsafe":        0,
-	"feed":           0,
-	"fetcher":        0,
-	"httperr":        0,
-	"jsonx":          0,
-	"lifecycle":      0,
-	"lockkey":        0,
-	"model":          0,
-	"notetitle":      0,
-	"observability":  0,
+	"alloc":         0, // 分配容量夹取；零依赖叶子包，任何层都可 import
+	"arch":          0,
+	"buildinfo":     0,
+	"concept":       0,
+	"config":        0,
+	"contentdoc":    0,
+	"dto":           0,
+	"embedding":     0,
+	"errsafe":       0,
+	"feed":          0,
+	"fetcher":       0,
+	"httperr":       0,
+	"jsonx":         0,
+	"lifecycle":     0,
+	"lockkey":       0,
+	"model":         0,
+	"notetitle":     0,
+	"observability": 0,
+	// releasetrust：Release 信任根（canonical manifest、Ed25519 公钥集合与验证
+	// 路径）。root-owned 的 cairn-updater helper 直接 import 它，因此必须是零
+	// 依赖叶子——它一旦依赖任何应用层包，helper 就会被迫链接整个应用。
+	"releasetrust":   0,
 	"retry":          0,
 	"representation": 0,
 	"readertext":     0,
@@ -536,6 +543,11 @@ var skipLayerExempt = map[string]bool{
 	// 它必须在服务开始只读投影之前跑完，因此挂在部署期的 migrate 入口上，与
 	// 其他 step 一样是「跑完即退出」的一次性任务。
 	"cmd/migrate -> repository": true,
+	// cmd/release-manifest 在发布期读取本次发布编译进来的迁移计划，把精确的
+	// schema target 与 online-update 分类写进签名 manifest。它必须直读迁移源：
+	// 经 service 中转会让「manifest 里的目标」与「二进制真正会执行的目标」变成
+	// 两处可漂移的事实。
+	"cmd/release-manifest -> migrate": true,
 }
 
 // TestEverySkipLayerPairIsRegistered 保证 knownSkipLayer 覆盖每一个真实存在的

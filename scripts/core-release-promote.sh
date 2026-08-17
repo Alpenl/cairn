@@ -99,11 +99,18 @@ release_asset_names() {
 	# 浏览器扩展与 Android 各自是独立发布单元，有自己的 tag 前缀与 workflow——
 	# 把它们塞进 Core 会让「改一行 Android 代码」触发整套镜像构建与频道 promote。
 	# 这个集合是严格的：多一个或少一个文件都会让 prepare-draft 失败。
+	#
+	# cairn-release-manifest.json 与它的 detached 签名是受控页面更新（#41）的
+	# 信任根：helper 只认这两个文件，不认 SHA256SUMS——后者与 tarball 同属一个
+	# Release，能被同时替换。它们由 prepare-draft 里的签名步骤产出，缺失即整条
+	# 发布失败，不存在「未签名但标记过」的中间态。
 	printf '%s\n' \
 		"cairn_${VERSION}_linux_amd64.tar.gz" \
 		"cairn_${VERSION}_linux_arm64.tar.gz" \
 		"core-security-evidence-${VERSION}.tar.gz" \
 		"cairn-reader-${VERSION}.tar.gz" \
+		cairn-release-manifest.json \
+		cairn-release-manifest.json.sig \
 		CHANNEL-ROLLBACK.json \
 		IMAGE-DIGESTS.json \
 		SHA256SUMS | sort

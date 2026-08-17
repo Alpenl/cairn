@@ -93,6 +93,12 @@ printf 'amd64 archive\n' >"$TMP/assets/cairn_1.2.3_linux_amd64.tar.gz"
 printf 'arm64 archive\n' >"$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz"
 # 独立 Reader 站的发布包随 Core 一同发布，asset 集合严格比对，夹具必须提供。
 printf 'reader release\n' >"$TMP/assets/cairn-reader-1.2.3.tar.gz"
+# 受控页面更新（#41）的信任根：签名 manifest 与它的 detached 签名同属严格的
+# Release asset 集合，少任何一个都不允许成 draft。promote 只负责「这两个文件
+# 必须随 Release 一起存在、字节稳定、且被 SHA256SUMS 覆盖」；签名本身的语义由
+# internal/releasetrust 与 core-release-manifest.test.sh 覆盖，那里才有密钥。
+printf 'release manifest\n' >"$TMP/assets/cairn-release-manifest.json"
+printf 'release signature\n' >"$TMP/assets/cairn-release-manifest.json.sig"
 jq -n \
 	--arg tag "$TAG" --arg commit "$COMMIT" --arg build_time "$BUILD_TIME" --arg image "$IMAGE" \
 	--arg full_index "$FULL_INDEX_DIGEST" --arg full_amd64 "$FULL_AMD64_DIGEST" --arg full_arm64 "$FULL_ARM64_DIGEST" \
@@ -139,6 +145,7 @@ tar -C "$TMP" -czf "$TMP/assets/core-security-evidence-1.2.3.tar.gz" security-ev
 "$SCRIPT" prepare-channel-record "$TMP/assets/CHANNEL-ROLLBACK.json"
 (cd "$TMP/assets" && sha256sum \
 	cairn_*.tar.gz core-security-evidence-*.tar.gz cairn-reader-*.tar.gz \
+	cairn-release-manifest.json cairn-release-manifest.json.sig \
 	CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
 
 "$SCRIPT" prepare-draft "$TMP/assets"
@@ -149,12 +156,24 @@ if "$SCRIPT" prepare-draft "$TMP/assets" >/dev/null 2>&1; then
 fi
 (cd "$TMP/assets" && sha256sum \
 	cairn_*.tar.gz core-security-evidence-*.tar.gz cairn-reader-*.tar.gz \
+	cairn-release-manifest.json cairn-release-manifest.json.sig \
 	CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
 mv "$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz" "$TMP/missing-arm64.tar.gz"
 if "$SCRIPT" prepare-draft "$TMP/assets" >/dev/null 2>&1; then
 	fail 'draft preparation accepted a missing architecture archive'
 fi
 mv "$TMP/missing-arm64.tar.gz" "$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz"
+
+# 未签名的 Release 不是「降级到 SHA256SUMS 校验」，而是根本不成立：signed
+# manifest 或它的签名缺席时，draft 直接失败，不留下一个 helper 需要自己判断
+# 「这份 manifest 能不能信」的中间态。
+for missing in cairn-release-manifest.json cairn-release-manifest.json.sig; do
+	mv "$TMP/assets/$missing" "$TMP/$missing"
+	if "$SCRIPT" prepare-draft "$TMP/assets" >/dev/null 2>&1; then
+		fail "draft preparation accepted a Release without $missing"
+	fi
+	mv "$TMP/$missing" "$TMP/assets/$missing"
+done
 
 CAIRN_RELEASE_FAIL_AT=version-slim "$SCRIPT" promote-versions >/dev/null 2>&1 &&
 	fail 'version-slim injection did not fail'
