@@ -513,16 +513,20 @@ final class CompanionTodoTransactionCoordinator {
             if shouldNotify { notifyCommit() }
         }
 
-        let descriptor = lockURL.path.withCString {
-            Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
-        }
+        // `O_EXLOCK` takes the same whole-file advisory lock `flock(2)` would,
+        // atomically with the open and released by the close below. Naming the
+        // flag rather than the call keeps this off `flock`, which Darwin gives
+        // to both a struct and a function — the qualified spelling resolves to
+        // the struct, so the lock never compiled into the app target.
+        var descriptor: Int32
+        repeat {
+            descriptor = lockURL.path.withCString {
+                Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC | O_EXLOCK, S_IRUSR | S_IWUSR)
+            }
+        } while descriptor < 0 && errno == EINTR
         guard descriptor >= 0 else { throw TodoStateError.unavailable }
         defer { Darwin.close(descriptor) }
 
-        var status: Int32
-        repeat { status = Darwin.flock(descriptor, LOCK_EX) } while status != 0 && errno == EINTR
-        guard status == 0 else { throw TodoStateError.unavailable }
-        defer { _ = Darwin.flock(descriptor, LOCK_UN) }
         try protect(lockURL)
         return try body()
     }
