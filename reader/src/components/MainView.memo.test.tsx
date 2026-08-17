@@ -187,7 +187,7 @@ describe('MainView 调用侧 props 稳定性（PF2 守卫）', () => {
     // 自动打开的是最新那篇；手动点开**中间**那条，让 previous 与 next 同时非空。
     await screen.findByRole('heading', { level: 1, name: '最新的一篇' })
     const middleCard = (await screen.findAllByText('真实组件树下的 memo 守卫'))
-      .map((node) => node.closest<HTMLElement>('.card'))
+      .map((node) => node.closest<HTMLElement>('.reader-preview-card-main'))
       .find(Boolean)
     if (!middleCard) throw new Error('中间那条链接的列表卡片不存在')
     fireEvent.click(middleCard)
@@ -294,7 +294,7 @@ describe('MainView 调用侧 props 稳定性（PF2 守卫）', () => {
 
     await screen.findByRole('heading', { level: 1, name: '最新的一篇' })
     const middleCard = (await screen.findAllByText('真实组件树下的 memo 守卫'))
-      .map((node) => node.closest<HTMLElement>('.card'))
+      .map((node) => node.closest<HTMLElement>('.reader-preview-card-main'))
       .find(Boolean)
     if (!middleCard) throw new Error('中间那条链接的列表卡片不存在')
     fireEvent.click(middleCard)
@@ -376,7 +376,7 @@ describe('MainView 调用侧 props 稳定性（PF2 守卫）', () => {
     const afterMount = probe.parses
 
     const secondCard = (await screen.findAllByText('第二篇'))
-      .map((node) => node.closest<HTMLElement>('.card'))
+      .map((node) => node.closest<HTMLElement>('.reader-preview-card-main'))
       .find(Boolean)
     if (!secondCard) throw new Error('第二篇的列表卡片不存在')
     fireEvent.click(secondCard)

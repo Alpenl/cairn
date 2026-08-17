@@ -231,9 +231,11 @@ afterEach(async () => {
   await deleteUserDataDatabase()
 })
 
+// LinkCard 迁到 ReaderPreviewCard 后，打开由卡片内的真实 button 承载：点击卡片根
+// 节点不会冒泡进打开区域，所以这里返回那个 button（标题/摘要仍在它内部，文本断言不受影响）。
 async function findCardByTitle(title: string): Promise<HTMLElement> {
   const matches = await screen.findAllByText(title)
-  const card = matches.map((match) => match.closest<HTMLElement>('.card')).find(Boolean)
+  const card = matches.map((match) => match.closest<HTMLElement>('.reader-preview-card-main')).find(Boolean)
   if (!card) throw new Error(`expected link card for "${title}" to exist`)
   return card
 }

@@ -4,6 +4,7 @@
  */
 import { memo, useMemo } from 'react'
 import { Icon } from './Icon'
+import { ReaderPreviewCard } from './ui/ReaderPreviewCard'
 import { fetcherIcon, relDate } from '../lib/meta'
 import type { LinkResponse } from '../lib/api/types'
 
@@ -26,25 +27,28 @@ function LinkCardInner({ l, active, onSelect }: LinkCardProps) {
       .filter(Boolean)
       .join(' · ')
   }, [l.summary])
+  // 无 title 时降级显示去掉协议头的 URL；这段文字同时是卡片标题和无障碍名称。
+  const titleText = l.title || l.url.replace(/^https?:\/\//, '')
   return (
-    <div className={'card' + (active ? ' active' : '')} onClick={() => onSelect(l.id)}>
-      <div className="card-top">
-        <span className="src-badge">
+    <ReaderPreviewCard
+      className="card"
+      selected={active}
+      source={
+        <>
           <span className="src-ic">
             <Icon name={fIcon} size={13} sw={1.8} />
           </span>
           {l.domain || '—'}
-        </span>
-        <span className="card-spacer" />
-        <span className="card-time">{relDate(l.created_at)}</span>
-      </div>
-      {l.title ? (
-        <h3>{l.title}</h3>
-      ) : (
-        <h3 className="card-url">{l.url.replace(/^https?:\/\//, '')}</h3>
-      )}
-      <p>{summaryLine}</p>
-    </div>
+        </>
+      }
+      time={relDate(l.created_at)}
+      title={l.title || <span className="card-url">{titleText}</span>}
+      summary={summaryLine || undefined}
+      // main button 的 aria-label 会盖掉标题文本，所以把标题写进标签里，
+      // 读屏用户听到的仍是「打开 + 这张卡片是哪一篇」。
+      openLabel={`打开 ${titleText}`}
+      onOpen={() => onSelect(l.id)}
+    />
   )
 }
 
