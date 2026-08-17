@@ -1,0 +1,89 @@
+# Caddy fragment for the deployment API.
+#
+# Where it goes: one copy inside each of the two site blocks, as shown at the
+# bottom of this file. Not at the top level, and not in a snippet that is
+# imported anywhere else — the whole point of a fixed path list is that it is
+# fixed, and a global route would attach the deployment API to every future
+# site block by accident.
+#
+# What Caddy is doing here, and what it is deliberately not doing:
+#
+#   * It holds no credential. There is no basic_auth, no forward_auth and no
+#     header_up carrying a token. The Bearer header travels from the browser
+#     straight through to cairn-updater, which validates it itself. Caddy's
+#     config file is therefore not a place a deployment token can leak from.
+#
+#   * `handle` is used rather than `handle_path`. handle_path would strip the
+#     matched prefix and the helper would see GET / instead of
+#     GET /api/deploy/system/version — every route would 404. The helper
+#     matches the full path on purpose, because these four strings are the
+#     contract between the two config files.
+#
+#   * The webtag application never sees these requests. They do not reach
+#     127.0.0.1:8732, so the application has no deploy route, no deploy client
+#     and nothing to authenticate. Caddy reaches the socket because it runs as
+#     the caddy group and the socket is 0660 root:caddy; the webtag account is
+#     in neither, so it cannot connect even from inside the same host.
+#
+#   * Both site blocks get the fragment. reader.alpenl.com is the important
+#     one: it is a static tree served from disk, so it keeps answering while
+#     webtag.service is stopped, which is exactly the window in which an
+#     operator needs to read job status.
+#
+# The wildcard is the only wildcard: `/api/deploy/system/*` matches the four
+# routes and the {id} path segment, and nothing else is proxied to the socket.
+
+# ---------------------------------------------------------------------------
+# Paste this block, verbatim, inside BOTH site blocks.
+# ---------------------------------------------------------------------------
+
+	handle /api/deploy/system/* {
+		reverse_proxy unix//run/cairn-updater.sock {
+			# The helper writes Cache-Control: no-store on every response. This
+			# just makes sure nothing in front of Caddy re-adds a policy.
+			header_down -Cache-Control
+			header_down +Cache-Control "no-store"
+		}
+	}
+
+# ---------------------------------------------------------------------------
+# The two site blocks in full, for reference.
+# ---------------------------------------------------------------------------
+#
+# reader.alpenl.com {
+# 	handle /api/deploy/system/* {
+# 		reverse_proxy unix//run/cairn-updater.sock {
+# 			header_down -Cache-Control
+# 			header_down +Cache-Control "no-store"
+# 		}
+# 	}
+#
+# 	# The root-path Reader, served straight from the root-owned tree the
+# 	# helper relinks. 0755 root:root all the way down, so Caddy can read and
+# 	# traverse it and the application cannot write to it.
+# 	handle {
+# 		root * /var/www/reader/current
+# 		try_files {path} /index.html
+# 		file_server
+# 		encode zstd gzip
+# 	}
+# }
+#
+# webtag.alpenl.com {
+# 	handle /api/deploy/system/* {
+# 		reverse_proxy unix//run/cairn-updater.sock {
+# 			header_down -Cache-Control
+# 			header_down +Cache-Control "no-store"
+# 		}
+# 	}
+#
+# 	# Everything else is unchanged: API, /health, /ready and the embedded
+# 	# /reader/ build all come from the systemd Core on loopback.
+# 	handle {
+# 		reverse_proxy 127.0.0.1:8732
+# 	}
+# }
+#
+# Caddy sorts `handle` blocks by matcher specificity rather than by file order,
+# so the deployment block wins over the catch-all regardless of where it sits.
+# It is written first anyway, because a reader should not have to know that.

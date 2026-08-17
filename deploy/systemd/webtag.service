@@ -1,0 +1,117 @@
+# Cairn Core, run from a root-owned release tree by an unprivileged account.
+#
+# The single claim this unit exists to make: an application compromise must not
+# be able to choose the program that runs after the next restart, and must not
+# be able to destroy the evidence needed to recover. Everything below is in
+# service of that claim.
+#
+# The trap this unit deliberately avoids: ProtectSystem=strict does NOT protect
+# a directory that is listed in ReadWritePaths. Handing /opt/webtag to the
+# application "so it can write logs" would give back the whole guarantee in one
+# line. This unit therefore has no ReadWritePaths at all. If the application
+# ever needs to write to disk, it gets a StateDirectory= of its own under
+# /var/lib — never a path inside the deployment tree.
+
+[Unit]
+Description=Cairn Core (webtag)
+Documentation=https://github.com/Alpenl/cairn
+Wants=network-online.target
+After=network-online.target
+
+# No relationship with cairn-updater.service in either direction. The helper
+# stops this unit during an update and must keep answering job status while it
+# is stopped; a Requires= or PartOf= edge in either direction would couple the
+# thing being replaced to the thing doing the replacing.
+
+[Service]
+Type=simple
+User=webtag
+Group=webtag
+
+# root:webtag 0640. systemd reads it as PID 1 before the namespace and the uid
+# change, so the application never needs read access through its own account —
+# but it has it anyway, because a config file the operator can hand-edit is
+# worth more than one more removed bit. It cannot write the file.
+EnvironmentFile=/opt/webtag/.env
+
+# Read-and-traverse only; see the absence of ReadWritePaths below.
+WorkingDirectory=/opt/webtag
+
+# Resolved through the root-owned releases/current symlink at exec time, so an
+# atomic relink by the helper is what selects the next program.
+ExecStart=/opt/webtag/releases/current/webtag
+
+Restart=on-failure
+RestartSec=5s
+# An explicit `systemctl stop` from the helper does not trigger Restart=, so the
+# maintenance window is not fought by the restart policy.
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+LimitNOFILE=65535
+
+# --- filesystem ------------------------------------------------------------
+# strict: the entire hierarchy is read-only except /dev, /proc and /sys, and
+# there is no exception list. Combined with PrivateTmp the process has exactly
+# one writable place on disk: its own private /tmp, which the PDF isolation
+# helper uses for scratch files and which is discarded when the unit stops.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+# Belt and braces on top of the mode bits. /etc/cairn-updater.env is 0600
+# root:root and the socket is 0660 root:caddy, so the account already cannot
+# reach either; making them invisible means a future mode mistake elsewhere is
+# still not reachable from this namespace. The leading `-` tolerates a path
+# that does not exist yet — the socket only exists while the helper is running.
+InaccessiblePaths=-/etc/cairn-updater.env
+InaccessiblePaths=-/run/cairn-updater.sock
+InaccessiblePaths=-/var/lib/cairn-updater
+InaccessiblePaths=-/opt/webtag/backups
+
+# --- privilege -------------------------------------------------------------
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+UMask=0077
+
+# --- kernel and host -------------------------------------------------------
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# The application must not be able to enumerate, or read the environment of,
+# the root-owned helper process running beside it.
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# Go does not generate code at runtime, so W^X costs nothing here.
+MemoryDenyWriteExecute=yes
+
+# --- network ---------------------------------------------------------------
+# AF_UNIX stays allowed: Go's resolver and any libc NSS path use it, and
+# removing it would trade a real startup failure for no security. The fence
+# around the deployment socket is its 0660 root:caddy mode plus the account's
+# absence from the caddy group, not the address family. AF_NETLINK is what Go
+# uses to enumerate interfaces.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# --- system calls ----------------------------------------------------------
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @obsolete @resources
+# setrlimit/prlimit64 are members of @resources and are removed by the line
+# above, but the PDF parser re-executes itself and lowers its own RLIMIT_AS and
+# RLIMIT_CPU before parsing untrusted input. Denying them would disarm a
+# sandbox to satisfy a hardening checklist, so they are added back explicitly.
+SystemCallFilter=setrlimit prlimit64
+
+[Install]
+WantedBy=multi-user.target
