@@ -161,6 +161,7 @@ func expectNoteTombstoneInsert(mock pgxmock.PgxPoolIface, thoughtID string, reas
 	mock.ExpectExec("(?s)INSERT INTO reader_thought_tombstones.*FROM reader_thoughts.*id=\\$1").
 		WithArgs(thoughtID, reason, sequence).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectThoughtTodoProjectionRefresh(mock, thoughtID)
 }
 
 func expectPublishedNoteResult(mock pgxmock.PgxPoolIface, noteID uuid.UUID, row []any) {
@@ -223,10 +224,13 @@ func TestPublishNoteReanchorsThoughtAndClearsTombstoneAtomically(t *testing.T) {
 			opID,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectThoughtTodoProjectionRefresh(mock, thoughtID)
 	expectThoughtSupersessionEvent(mock, thoughtID, 7, 8)
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM reader_thought_tombstones WHERE thought_id=$1")).
 		WithArgs(thoughtID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	expectThoughtTodoProjectionRefresh(mock, thoughtID)
+	expectNoteTodoProjectionRefresh(mock, noteID)
 	expectPublishedNoteResult(mock, noteID, readerNoteRowForTest(noteID, "Reader note", newContent, 2, nil, 3, at))
 	mock.ExpectCommit()
 
@@ -281,6 +285,7 @@ func TestPublishNoteHistoricalThoughtWritesSingleTombstone(t *testing.T) {
 		13,
 	)
 	expectNoteTombstoneInsert(mock, thoughtID, "note_reanchor_not-reanchored", 13)
+	expectNoteTodoProjectionRefresh(mock, noteID)
 	expectPublishedNoteResult(mock, noteID, readerNoteRowForTest(noteID, "Reader note", content, 5, nil, 6, at))
 	mock.ExpectCommit()
 
@@ -606,6 +611,7 @@ func TestRestoreNoteRevisionCreatesNewRevisionWhenTargetIsCurrent(t *testing.T) 
 			readerNoteRowForTest(noteID, "already restored", "already restored", 6, nil, 7, at)...,
 		))
 	expectPublishedNoteHistory(mock, noteID, "already restored", 6)
+	expectNoteTodoProjectionRefresh(mock, noteID)
 	mock.ExpectCommit()
 
 	item, err := repo.RestoreNoteRevision(context.Background(), model.ReaderNoteRestoreCommand{NoteID: noteID, Revision: 5, ExpectedDraftRevision: 6, ExpectedPublishedRevision: 5})

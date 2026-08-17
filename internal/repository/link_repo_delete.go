@@ -86,5 +86,8 @@ func terminalizeAndDeleteLockedLinkOn(ctx context.Context, db database.Querier, 
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	// The delete above fires the trigger that tombstones this Link's Thoughts.
+	// Their TODO projections have to retire in the same transaction, otherwise
+	// they outlive their source with no read left to notice.
+	return NewPGXReaderVNextRepository(db).replaceLinkThoughtTodoProjectionsOn(ctx, db, lockedID)
 }

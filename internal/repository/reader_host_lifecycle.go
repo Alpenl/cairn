@@ -65,6 +65,14 @@ func (r *PGXReaderVNextRepository) SoftDeleteHost(ctx context.Context, kind mode
 				return err
 			}
 		}
+		// A trashed Note stops being a TODO source in the same transaction
+		// that trashes it. Link and Inbox are hosts of Thoughts, not of
+		// projections, so their Thought tombstones above are enough.
+		if kind == model.ReaderHostNote {
+			if err := r.replaceNoteTodoProjectionsOn(ctx, db, id); err != nil {
+				return err
+			}
+		}
 		result.Changed = true
 		return nil
 	})
@@ -103,6 +111,11 @@ func (r *PGXReaderVNextRepository) RestoreHost(ctx context.Context, kind model.R
 		}
 		if err := r.restoreReaderHostThoughts(ctx, db, kind, id, host.body, host.revision); err != nil {
 			return err
+		}
+		if kind == model.ReaderHostNote {
+			if err := r.replaceNoteTodoProjectionsOn(ctx, db, id); err != nil {
+				return err
+			}
 		}
 		result.Changed = true
 		return nil
@@ -279,7 +292,8 @@ func (r *PGXReaderVNextRepository) restoreReaderHostThought(ctx context.Context,
 	if _, err := db.Exec(ctx, `DELETE FROM reader_thought_tombstones WHERE thought_id=$1`, lifecycle.item.ID); err != nil {
 		return fmt.Errorf("clear reader %s restore tombstone: %w", kind, err)
 	}
-	return nil
+	// Clearing the tombstone is what makes the Thought a TODO source again.
+	return r.replaceThoughtTodoProjectionsOn(ctx, db, lifecycle.item.ID)
 }
 
 func (r *PGXReaderVNextRepository) PurgeHost(ctx context.Context, kind model.ReaderHostKind, id, operationID uuid.UUID) error {

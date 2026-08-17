@@ -51,6 +51,7 @@ func TestDeleteLifecycleTerminalizesAttemptsBeforeSoftDelete(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(deleteLinkSQL)).WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	expectLinkThoughtTodoProjectionRefresh(mock, linkID, "thought-on-deleted-link")
 	mock.ExpectCommit()
 
 	if err := NewPGXLinkRepository(mock).DeleteLifecycle(t.Context(), linkID); err != nil {

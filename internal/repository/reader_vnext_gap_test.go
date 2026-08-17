@@ -53,6 +53,7 @@ func TestRestoreNoteScansOnlyMatchingLifecycleTombstones(t *testing.T) {
 	mock.ExpectQuery("(?s)SELECT .*reader_thoughts.*tt.created_at.*FROM reader_thought_tombstones tt.*tt.host_kind=\\$1.*tt.host_id=\\$2.*tt.reason=\\$3.*reader_thoughts.deleted=false").
 		WithArgs(model.ReaderHostNote, noteID.String(), "note_deleted").
 		WillReturnRows(mock.NewRows(append(readerThoughtSyncColumnsForTest(), "created_at")))
+	expectNoteTodoProjectionRefresh(mock, noteID)
 	mock.ExpectCommit()
 
 	repo := NewPGXReaderVNextRepository(mock)

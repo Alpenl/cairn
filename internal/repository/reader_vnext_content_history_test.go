@@ -148,6 +148,7 @@ func TestRestoreContentHistoryReanchorsUniqueThought(t *testing.T) {
 			opID,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectThoughtTodoProjectionRefresh(mock, thoughtID)
 	expectThoughtSupersessionEvent(mock, thoughtID, 7, 8)
 	mock.ExpectCommit()
 
@@ -200,6 +201,7 @@ func TestRestoreContentHistoryKeepsAmbiguousThoughtHistorical(t *testing.T) {
 	mock.ExpectExec("(?s)INSERT INTO reader_thought_tombstones.*FROM reader_thoughts.*id=\\$1").
 		WithArgs(thoughtID, "content_restored", int64(10)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectThoughtTodoProjectionRefresh(mock, thoughtID)
 	mock.ExpectCommit()
 
 	revision, err := repo.RestoreContentHistory(context.Background(), linkID, 19, 4)

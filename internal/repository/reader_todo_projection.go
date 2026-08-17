@@ -58,6 +58,54 @@ func (r *PGXReaderVNextRepository) replaceHostTodoProjectionsOn(ctx context.Cont
 	return r.applyTodoProjectionsOn(ctx, db, readerChecklistTodos(source), existing)
 }
 
+// replaceThoughtTodoProjectionsOn refreshes one Thought's projections. Every
+// Thought command funnels through materialization or tombstoning, so the two
+// call sites below that name it cover create, update, delete, reattach,
+// lifecycle tombstones, host restore, note reanchor, and checkbox writeback.
+func (r *PGXReaderVNextRepository) replaceThoughtTodoProjectionsOn(ctx context.Context, db database.Querier, thoughtID string) error {
+	return r.replaceHostTodoProjectionsOn(ctx, db, readerTodoHostThought, thoughtID)
+}
+
+// replaceNoteTodoProjectionsOn refreshes one Note's projections. Only the
+// published revision is a source; a draft save or discard changes nothing the
+// projection can see.
+func (r *PGXReaderVNextRepository) replaceNoteTodoProjectionsOn(ctx context.Context, db database.Querier, noteID uuid.UUID) error {
+	return r.replaceHostTodoProjectionsOn(ctx, db, readerTodoHostNote, noteID.String())
+}
+
+const readerLinkHostedThoughtsSQL = `
+SELECT id FROM reader_thoughts WHERE host_kind='link' AND host_id=$1::text ORDER BY id`
+
+// replaceLinkThoughtTodoProjectionsOn covers the one Thought lifecycle edge
+// that is not written by Go: a Link delete tombstones its Thoughts through a
+// database trigger. Without this the Thoughts stop being TODO sources while
+// their projections stay live, and no later read would notice.
+func (r *PGXReaderVNextRepository) replaceLinkThoughtTodoProjectionsOn(ctx context.Context, db database.Querier, linkID uuid.UUID) error {
+	rows, err := db.Query(ctx, readerLinkHostedThoughtsSQL, linkID)
+	if err != nil {
+		return fmt.Errorf("list link hosted thoughts: %w", err)
+	}
+	thoughtIDs := make([]string, 0, 8)
+	for rows.Next() {
+		var thoughtID string
+		if err := rows.Scan(&thoughtID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan link hosted thought: %w", err)
+		}
+		thoughtIDs = append(thoughtIDs, thoughtID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read link hosted thoughts: %w", err)
+	}
+	for _, thoughtID := range thoughtIDs {
+		if err := r.replaceThoughtTodoProjectionsOn(ctx, db, thoughtID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // applyTodoProjectionsOn is the shared body of both the whole-installation
 // reconcile and the single-host replace. existing must already cover every
 // projection key inside the requested scope, including the soft-deleted ones:

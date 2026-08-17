@@ -1441,6 +1441,14 @@ func (r *PGXReaderVNextRepository) materializeThought(ctx context.Context, db da
 			return fmt.Errorf("clear superseded thought user deletion: %w", err)
 		}
 	}
+	// The projection is maintained here rather than at each command, because
+	// every Thought write — add, update, delete, reattach, lifecycle, note
+	// reanchor, checkbox writeback, history restore — ends in this function.
+	// It runs after the tombstone bookkeeping above so it observes the final
+	// liveness of the Thought, not the intermediate one.
+	if err := r.replaceThoughtTodoProjectionsOn(ctx, db, op.AnnotationID); err != nil {
+		return err
+	}
 	return r.recordThoughtSupersession(ctx, db, op, sequence, previous, previousOK)
 }
 
@@ -2052,7 +2060,10 @@ func (r *PGXReaderVNextRepository) markThoughtTombstoneOn(ctx context.Context, d
 	if err != nil {
 		return fmt.Errorf("mark thought tombstone: %w", err)
 	}
-	return nil
+	// The lifecycle op above materializes the Thought, which refreshes the
+	// projection while the Thought is still a live source. The tombstone is
+	// what actually retires it, so the projection is refreshed again here.
+	return r.replaceThoughtTodoProjectionsOn(ctx, db, thoughtID)
 }
 
 func readerThoughtLifecycleOpID(action, reason string, item *model.ReaderThought) string {
@@ -2436,13 +2447,24 @@ func (r *PGXReaderVNextRepository) GetAIContext(ctx context.Context, linkID uuid
 	return item, nil
 }
 
+// CreateNote runs in a transaction because a note created with published
+// content is immediately a TODO source; the note row and its projections must
+// become visible together.
 func (r *PGXReaderVNextRepository) CreateNote(ctx context.Context, note model.ReaderNote) (*model.ReaderNote, error) {
-	created, err := scanReaderNote(r.db.QueryRow(ctx, `
-		INSERT INTO reader_notes (title, published_content, published_revision, draft_content, draft_revision)
-		VALUES (COALESCE(NULLIF($1,''),'未命名笔记'),$2,CASE WHEN $2 <> '' THEN 1 ELSE 0 END,$3::text,CASE WHEN $3::text IS NOT NULL THEN 1 ELSE 0 END)
-		RETURNING `+readerNoteColumns, note.Title, note.PublishedContent, note.DraftContent))
+	var created *model.ReaderNote
+	err := r.withTx(ctx, func(db database.Querier) error {
+		item, err := scanReaderNote(db.QueryRow(ctx, `
+			INSERT INTO reader_notes (title, published_content, published_revision, draft_content, draft_revision)
+			VALUES (COALESCE(NULLIF($1,''),'未命名笔记'),$2,CASE WHEN $2 <> '' THEN 1 ELSE 0 END,$3::text,CASE WHEN $3::text IS NOT NULL THEN 1 ELSE 0 END)
+			RETURNING `+readerNoteColumns, note.Title, note.PublishedContent, note.DraftContent))
+		if err != nil {
+			return fmt.Errorf("create note: %w", err)
+		}
+		created = item
+		return r.replaceNoteTodoProjectionsOn(ctx, db, item.ID)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create note: %w", err)
+		return nil, err
 	}
 	return created, nil
 }
@@ -2692,6 +2714,9 @@ func (r *PGXReaderVNextRepository) PublishNote(ctx context.Context, command mode
 			return fmt.Errorf("record note history: %w", err)
 		}
 		if err := r.applyNoteReanchorOps(ctx, db, command.NoteID, current.PublishedRevision, newRevision, content, command.ReanchorOps); err != nil {
+			return err
+		}
+		if err := r.replaceNoteTodoProjectionsOn(ctx, db, command.NoteID); err != nil {
 			return err
 		}
 		out, err = scanReaderNote(db.QueryRow(ctx, `SELECT `+readerNoteColumns+` FROM reader_notes WHERE id=$1`, command.NoteID))
@@ -3192,7 +3217,9 @@ func (r *PGXReaderVNextRepository) commitNoteReanchor(
 	if _, err := db.Exec(ctx, `DELETE FROM reader_thought_tombstones WHERE thought_id=$1`, op.ThoughtID); err != nil {
 		return fmt.Errorf("clear note reanchor tombstone: %w", err)
 	}
-	return nil
+	// Clearing the tombstone brings the Thought back as a TODO source, which
+	// the materialization above could not yet see.
+	return r.replaceThoughtTodoProjectionsOn(ctx, db, op.ThoughtID)
 }
 
 func readerReanchorOpsJSON(ops []json.RawMessage) ([]byte, error) {
@@ -3285,6 +3312,9 @@ func (r *PGXReaderVNextRepository) restoreNoteRevisionOn(ctx context.Context, db
 		return updated, fmt.Errorf("record restored note history: %w", err)
 	}
 	if err := r.applyNoteReanchorOps(ctx, db, command.NoteID, current.PublishedRevision, newRevision, content, command.ReanchorOps); err != nil {
+		return updated, err
+	}
+	if err := r.replaceNoteTodoProjectionsOn(ctx, db, command.NoteID); err != nil {
 		return updated, err
 	}
 	return updated, nil
@@ -4939,6 +4969,9 @@ func (r *PGXReaderVNextRepository) patchNoteTodo(ctx context.Context, db databas
 		return nil, fmt.Errorf("record note todo history: %w", err)
 	}
 	if err := r.markThoughtHostTombstonesOn(ctx, db, "note", noteID.String(), "note_todo_updated"); err != nil {
+		return nil, err
+	}
+	if err := r.replaceNoteTodoProjectionsOn(ctx, db, noteID); err != nil {
 		return nil, err
 	}
 	return r.updateProjectedTodo(ctx, db, todoID, updated.Block.Text, done, newRevision)

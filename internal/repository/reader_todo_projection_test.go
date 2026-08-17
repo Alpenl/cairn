@@ -193,3 +193,37 @@ func TestReaderChecklistTodosCarriesSourcePointer(t *testing.T) {
 }
 
 func pgxNoRows() error { return pgx.ErrNoRows }
+
+// expectThoughtTodoProjectionRefresh queues the two reads the write-time
+// projection refresh performs for one Thought host. The stubbed source has no
+// checklist block, so the refresh is observable but writes nothing — which is
+// exactly what a test about some other invariant wants from it.
+func expectThoughtTodoProjectionRefresh(mock pgxmock.PgxPoolIface, thoughtID string) {
+	mock.ExpectQuery(regexp.QuoteMeta(readerThoughtTodoSourceSQL)).
+		WithArgs(thoughtID).
+		WillReturnRows(mock.NewRows(readerThoughtTodoSourceColumns()).
+			AddRow("", int64(0), "thought", thoughtID, (*uuid.UUID)(nil)))
+	mock.ExpectQuery(regexp.QuoteMeta(readerExistingHostTodoProjectionsSQL)).
+		WithArgs(readerTodoHostThought, thoughtID).
+		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()))
+}
+
+func expectNoteTodoProjectionRefresh(mock pgxmock.PgxPoolIface, noteID uuid.UUID) {
+	mock.ExpectQuery(regexp.QuoteMeta(readerNoteTodoSourceSQL)).
+		WithArgs(noteID).
+		WillReturnRows(mock.NewRows([]string{"published_content", "published_revision"}).AddRow("", int64(0)))
+	mock.ExpectQuery(regexp.QuoteMeta(readerExistingHostTodoProjectionsSQL)).
+		WithArgs(readerTodoHostNote, noteID.String()).
+		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()))
+}
+
+func expectLinkThoughtTodoProjectionRefresh(mock pgxmock.PgxPoolIface, linkID uuid.UUID, thoughtIDs ...string) {
+	rows := mock.NewRows([]string{"id"})
+	for _, thoughtID := range thoughtIDs {
+		rows = rows.AddRow(thoughtID)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta(readerLinkHostedThoughtsSQL)).WithArgs(linkID).WillReturnRows(rows)
+	for _, thoughtID := range thoughtIDs {
+		expectThoughtTodoProjectionRefresh(mock, thoughtID)
+	}
+}

@@ -1206,6 +1206,15 @@ func (s *ReaderVNextService) syncProjectedTodos(ctx context.Context) error {
 	return s.store.ReconcileTodoProjections(ctx, projections)
 }
 
+// RepairProjectedTodos rebuilds every host's TODO projection from the current
+// Thoughts and published Notes. Thought and Note commands already maintain the
+// projection inside their own transaction, so this is a drift repair rather
+// than part of any read: it exists for the backfill and for tests that need to
+// prove a write path left nothing for it to do.
+func (s *ReaderVNextService) RepairProjectedTodos(ctx context.Context) error {
+	return s.syncProjectedTodos(ctx)
+}
+
 func (s *ReaderVNextService) CreateTodo(ctx context.Context, request dto.ReaderTodoCreateRequest) (dto.ReaderTodoResponse, error) {
 	text := strings.TrimSpace(request.Text)
 	if text == "" {

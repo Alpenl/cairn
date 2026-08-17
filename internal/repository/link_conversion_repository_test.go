@@ -254,6 +254,7 @@ func expectConversionThoughtLifecycle(mock pgxmock.PgxPoolIface, linkID uuid.UUI
 		return
 	}
 	snapshot.WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectThoughtTodoProjectionRefresh(mock, thoughtID)
 }
 
 func int64Ptr(value int64) *int64 { return &value }
