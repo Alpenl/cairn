@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { Icon } from './Icon'
+import { ReaderDialog } from './ui/ReaderDialog'
 import type { ReaderClient } from '../lib/api/client'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
 import type { ConversionPreviewResponse, LinkResponse } from '../lib/api/types'
@@ -49,9 +50,17 @@ export function LinkConversionDialog({ client, capabilityLease, link, initialNot
     onConverted()
   }
 
-  return <div className="site-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting) onClose() }}>
-    <form className="site-dialog conversion-dialog" onSubmit={(event) => void submit(event)} aria-labelledby="conversion-title">
-      <header><h2 id="conversion-title">移到网站收藏</h2><button type="button" className="tb-btn" onClick={onClose} disabled={submitting} title="关闭" aria-label="关闭"><Icon name="close" size={15} /></button></header>
+  // 关闭规则原样保留：backdrop 可关（转换中除外），Escape 一直不关闭——迁移前这个
+  // Dialog 就没有 Escape 监听，这里不借迁移偷偷改行为。
+  return <ReaderDialog
+    title="移到网站收藏"
+    titleId="conversion-title"
+    className="site-dialog conversion-dialog"
+    busy={submitting}
+    dismissOnEscape={false}
+    onClose={onClose}
+  >
+    <form onSubmit={(event) => void submit(event)}>
       {!preview && !error && <p className="conversion-loading"><Icon name="loader" size={15} /> 正在检查转换影响</p>}
       {error && <p className="conversion-error" role="alert">{error}</p>}
       {preview && <>
@@ -63,5 +72,5 @@ export function LinkConversionDialog({ client, capabilityLease, link, initialNot
       </>}
       <footer><button type="button" onClick={onClose} disabled={submitting}>取消</button><button type="submit" disabled={!preview || submitting}>{submitting ? '转换中' : '确认转换'}</button></footer>
     </form>
-  </div>
+  </ReaderDialog>
 }

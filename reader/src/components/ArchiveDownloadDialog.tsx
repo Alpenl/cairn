@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useState, type FormEvent } from 'react'
+import { useLayoutEffect, useState, type FormEvent } from 'react'
 import { archiveV2Sections, fullArchiveV2Selection, type ArchiveV2Selection } from '../lib/api/archive-v2'
-import { Icon } from './Icon'
+import { ReaderDialog } from './ui/ReaderDialog'
 
 export interface ArchiveDownloadDialogProps {
   readonly open: boolean
@@ -26,15 +26,6 @@ export function ArchiveDownloadDialog({
     setIncludeNotes(fullArchiveV2Selection.includeNotes)
   }, [open])
 
-  useEffect(() => {
-    if (!open) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !downloading) onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [downloading, onClose, open])
-
   if (!open) return null
 
   const selection: ArchiveV2Selection = { includeThoughts, includeNotes }
@@ -46,32 +37,17 @@ export function ArchiveDownloadDialog({
   }
 
   return (
-    <div
-      className="site-dialog-backdrop"
-      role="presentation"
-      onMouseDown={() => { if (!downloading) onClose() }}
+    // 下载中（downloading）映射到 busy：关闭按钮、Escape 和 backdrop 一起失效，
+    // 与迁移前「!downloading 才关闭」等价。
+    <ReaderDialog
+      title="下载归档"
+      titleId="archive-download-title"
+      size="compact"
+      className="site-dialog archive-download-dialog"
+      busy={downloading}
+      onClose={onClose}
     >
-      <form
-        className="site-dialog compact archive-download-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="archive-download-title"
-        onMouseDown={(event) => event.stopPropagation()}
-        onSubmit={(event) => void submit(event)}
-      >
-        <header>
-          <h2 id="archive-download-title">下载归档</h2>
-          <button
-            type="button"
-            className="tb-btn"
-            title="关闭"
-            aria-label="关闭"
-            onClick={onClose}
-            disabled={downloading}
-          >
-            <Icon name="close" size={15} />
-          </button>
-        </header>
+      <form onSubmit={(event) => void submit(event)}>
         <div className="archive-download-options" aria-label="归档内容">
           <label className="archive-download-option">
             <input
@@ -99,6 +75,6 @@ export function ArchiveDownloadDialog({
           </button>
         </footer>
       </form>
-    </div>
+    </ReaderDialog>
   )
 }

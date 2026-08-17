@@ -42,4 +42,22 @@ describe('LinkConversionDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认转换' }))
     await waitFor(() => expect(client.convertLink).toHaveBeenCalledWith('L1', expect.objectContaining({ target_site_id: undefined, expected_site_revision: undefined })))
   })
+
+  it('保留原有关闭规则：backdrop 可关、Escape 不关', async () => {
+    const client = clientFixture()
+    const onClose = vi.fn()
+    render(<LinkConversionDialog client={client} capabilityLease={enabledReaderCapabilityLease()} link={makeLink({ id: 'L1', library_kind: 'reading', content_revision: 7, status: 'done' })} initialNote="" onClose={onClose} onConverted={vi.fn()} onToast={vi.fn()} />)
+    const dialog = await screen.findByRole('dialog', { name: '移到网站收藏' })
+    const backdrop = document.querySelector<HTMLElement>('.reader-dialog-backdrop')
+    if (!backdrop) throw new Error('backdrop 未渲染')
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+
+    fireEvent.mouseDown(dialog)
+    expect(onClose).not.toHaveBeenCalled()
+
+    fireEvent.mouseDown(backdrop)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
 })
