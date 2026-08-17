@@ -56,6 +56,7 @@ __pycache__/
 # 本地产出的评审 / 调研工件与截图，不进版本控制。
 # 锚定到仓库根，避免忽略组件内同名的运行时资源。
 /artifacts/
+/tmp/
 /image.png
 
 # Reader 前端（Vite + React）
