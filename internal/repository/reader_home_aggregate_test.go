@@ -77,8 +77,8 @@ func TestLoadHomeAggregateUsesOneRepeatableReadSnapshot(t *testing.T) {
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
 		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}))
-	mock.ExpectQuery(regexp.QuoteMeta(readerHomeExistingTodoProjectionsSQL)).
-		WillReturnRows(mock.NewRows([]string{"id", "origin_kind", "origin_host_id", "origin_ref"}))
+	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
+		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()))
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeListTodosSQL)).
 		WillReturnRows(mock.NewRows(readerTodoColumnsForTest()).AddRow(readerTodoRowForTest(todoID, "standalone", false, 0)...))
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeCountsSQL)).
@@ -134,8 +134,8 @@ func TestLoadHomeAggregateReconcilesSourceTodosBeforeReadingCounts(t *testing.T)
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
 		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}).AddRow("thought", "thought-1", int64(9), body))
-	mock.ExpectQuery(regexp.QuoteMeta(readerHomeExistingTodoProjectionsSQL)).
-		WillReturnRows(mock.NewRows([]string{"id", "origin_kind", "origin_host_id", "origin_ref"}))
+	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
+		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()))
 	mock.ExpectQuery("(?s)SELECT id FROM reader_todos.*FOR UPDATE").
 		WithArgs("thought", "thought-1", block.BlockRef, "1").
 		WillReturnError(pgx.ErrNoRows)
@@ -186,8 +186,8 @@ func TestLoadHomeAggregateProjectsCompletedTodoWithCompletionTimestamp(t *testin
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
 		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}).AddRow("thought", "thought-1", int64(9), body))
-	mock.ExpectQuery(regexp.QuoteMeta(readerHomeExistingTodoProjectionsSQL)).
-		WillReturnRows(mock.NewRows([]string{"id", "origin_kind", "origin_host_id", "origin_ref"}))
+	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
+		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()))
 	mock.ExpectQuery("(?s)SELECT id FROM reader_todos.*FOR UPDATE").
 		WithArgs("thought", "thought-1", block.BlockRef, "1").
 		WillReturnError(pgx.ErrNoRows)
@@ -246,13 +246,13 @@ func TestLoadHomeAggregateReopensProjectionAndPreservesDueDate(t *testing.T) {
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
 		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}).AddRow("thought", "thought-1", int64(9), body))
-	mock.ExpectQuery(regexp.QuoteMeta(readerHomeExistingTodoProjectionsSQL)).
-		WillReturnRows(mock.NewRows([]string{"id", "origin_kind", "origin_host_id", "origin_ref"}).AddRow(projectionID, "thought", &hostID, []byte(projection.OriginRef)))
+	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
+		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()).AddRow(projectionID, "thought", &hostID, []byte(projection.OriginRef), nil))
 	mock.ExpectQuery("(?s)SELECT id FROM reader_todos.*FOR UPDATE").
 		WithArgs("thought", "thought-1", block.BlockRef, "1").
 		WillReturnRows(mock.NewRows([]string{"id"}).AddRow(projectionID))
-	mock.ExpectQuery("(?s)UPDATE reader_todos SET.*due_at=COALESCE.*completed_at=CASE.*RETURNING "+regexp.QuoteMeta(readerTodoColumns)).
-		WithArgs(projection.Text, projection.DueAt, projection.OriginHostKind, []byte(projection.OriginRef), projection.HostRevision, projection.Done, projection.CompletedAt, projectionID).
+	mock.ExpectQuery("(?s)UPDATE reader_todos SET text=.*completed_at=CASE.*RETURNING "+regexp.QuoteMeta(readerTodoColumns)).
+		WithArgs(projection.Text, projection.OriginHostKind, []byte(projection.OriginRef), projection.HostRevision, projection.Done, projectionID).
 		WillReturnRows(mock.NewRows(readerTodoColumnsForTest()).AddRow(row...))
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeListTodosSQL)).
 		WillReturnRows(mock.NewRows(readerTodoColumnsForTest()).AddRow(row...))
@@ -300,8 +300,8 @@ func TestLoadHomeAggregateDismissesStaleProjectionBeforeReading(t *testing.T) {
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
 		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}))
-	mock.ExpectQuery(regexp.QuoteMeta(readerHomeExistingTodoProjectionsSQL)).
-		WillReturnRows(mock.NewRows([]string{"id", "origin_kind", "origin_host_id", "origin_ref"}).AddRow(projectionID, "thought", &hostID, []byte(`{"block_ref":"task:stale","occurrence":1}`)))
+	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
+		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()).AddRow(projectionID, "thought", &hostID, []byte(`{"block_ref":"task:stale","occurrence":1}`), nil))
 	mock.ExpectExec("UPDATE reader_todos SET deleted_at=COALESCE\\(deleted_at,NOW\\(\\)\\),updated_at=NOW\\(\\) WHERE id=\\$1 AND deleted_at IS NULL").
 		WithArgs(projectionID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -340,8 +340,8 @@ func TestLoadHomeAggregateRollsBackInsteadOfReturningPartialData(t *testing.T) {
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
 		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}))
-	mock.ExpectQuery(regexp.QuoteMeta(readerHomeExistingTodoProjectionsSQL)).
-		WillReturnRows(mock.NewRows([]string{"id", "origin_kind", "origin_host_id", "origin_ref"}))
+	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
+		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()))
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeListTodosSQL)).
 		WillReturnError(failure)
 	mock.ExpectRollback()
@@ -355,5 +355,52 @@ func TestLoadHomeAggregateRollsBackInsteadOfReturningPartialData(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("pgxmock expectations: %v", err)
+	}
+}
+
+// TestLoadHomeAggregateDoesNotResurrectDismissedProjection locks the defect
+// that made Home and Todos disagree: Home read only the live projections, so a
+// key the user had already dismissed looked missing and was re-inserted on the
+// next Home open. Both paths now share one tombstone rule.
+func TestLoadHomeAggregateDoesNotResurrectDismissedProjection(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	body := "- [ ] dismissed by the user\n"
+	projection := homeChecklistTodos([]homeTodoSource{{hostKind: "thought", hostID: "thought-1", hostRevision: 3, body: body}})[0]
+	projectionID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	hostID := "thought-1"
+	dismissedAt := time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)
+
+	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
+		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}).AddRow("thought", "thought-1", int64(3), body))
+	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
+		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()).
+			AddRow(projectionID, "thought", &hostID, []byte(projection.OriginRef), dismissedAt))
+	mock.ExpectQuery(regexp.QuoteMeta(readerHomeListTodosSQL)).
+		WillReturnRows(mock.NewRows(readerTodoColumnsForTest()))
+	mock.ExpectQuery(regexp.QuoteMeta(readerHomeCountsSQL)).
+		WillReturnRows(mock.NewRows([]string{"pending", "expired", "reading", "sites", "subs", "notes", "todos", "thoughts", "unread"}).AddRow(0, 0, 0, 0, 0, 0, 0, 1, 0))
+	mock.ExpectQuery(regexp.QuoteMeta(readerHomeContinueReadingSQL)).
+		WithArgs(readerHomeContinueReadingLimit).
+		WillReturnRows(mock.NewRows([]string{"id", "url", "title", "summary", "read", "read_later", "progress", "last_opened", "created_at"}))
+	mock.ExpectQuery(regexp.QuoteMeta(readerHomeRecentThoughtsSQL)).
+		WithArgs(readerHomeRecentThoughtsLimit).
+		WillReturnRows(mock.NewRows(readerThoughtSyncColumnsForTest()))
+	mock.ExpectCommit()
+
+	aggregate, err := NewPGXReaderVNextRepository(mock).LoadHomeAggregate(context.Background())
+	if err != nil {
+		t.Fatalf("LoadHomeAggregate() error = %v", err)
+	}
+	if len(aggregate.Todos) != 0 {
+		t.Fatalf("Todos = %#v, want the dismissed projection to stay dismissed", aggregate.Todos)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("Home resurrected a dismissed projection: %v", err)
 	}
 }

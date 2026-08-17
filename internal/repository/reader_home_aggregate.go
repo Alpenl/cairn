@@ -63,12 +63,6 @@ FROM reader_notes n
 WHERE n.deleted_at IS NULL
 ORDER BY host_kind, host_id`
 
-const readerHomeExistingTodoProjectionsSQL = `
-SELECT id,origin_kind,origin_host_id,origin_ref
-FROM reader_todos
-WHERE origin_kind <> 'standalone' AND deleted_at IS NULL
-FOR UPDATE`
-
 const readerHomeListTodosSQL = `SELECT ` + readerTodoColumns + ` FROM reader_todos WHERE deleted_at IS NULL ORDER BY done ASC, due_at ASC NULLS LAST, created_at DESC, id DESC`
 
 const readerHomeCountsSQL = `
@@ -169,7 +163,9 @@ func (r *PGXReaderVNextRepository) loadHomeAggregateOn(ctx context.Context, db d
 		return ReaderHomeAggregate{}, err
 	}
 	projections := homeChecklistTodos(sources)
-	if err := r.reconcileHomeTodoProjectionsOn(ctx, db, projections); err != nil {
+	// Home shares the general reconcile so a projection the user dismissed
+	// stays dismissed no matter which read reaches the database first.
+	if err := r.reconcileTodoProjectionsOn(ctx, db, projections); err != nil {
 		return ReaderHomeAggregate{}, err
 	}
 
@@ -253,91 +249,6 @@ func homeChecklistTodos(sources []homeTodoSource) []model.ReaderTodo {
 		}
 	}
 	return out
-}
-
-func (r *PGXReaderVNextRepository) reconcileHomeTodoProjectionsOn(ctx context.Context, db database.Querier, todos []model.ReaderTodo) error {
-	desired := make(map[string]struct{}, len(todos))
-	for _, todo := range todos {
-		if todo.OriginKind == "standalone" {
-			continue
-		}
-		desired[readerTodoProjectionKey(todo.OriginKind, valueOrEmpty(todo.OriginHostID), todo.OriginRef)] = struct{}{}
-	}
-
-	type existingProjection struct {
-		id        uuid.UUID
-		origin    string
-		hostID    *string
-		originRef []byte
-	}
-	rows, err := db.Query(ctx, readerHomeExistingTodoProjectionsSQL)
-	if err != nil {
-		return fmt.Errorf("list existing home todo projections: %w", err)
-	}
-	existing := make([]existingProjection, 0, 32)
-	for rows.Next() {
-		var item existingProjection
-		if err := rows.Scan(&item.id, &item.origin, &item.hostID, &item.originRef); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan existing home todo projection: %w", err)
-		}
-		existing = append(existing, item)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("read existing home todo projections: %w", err)
-	}
-	rows.Close()
-
-	for _, todo := range todos {
-		if todo.OriginKind == "standalone" {
-			continue
-		}
-		if _, err := r.upsertHomeTodoProjection(ctx, db, todo); err != nil {
-			return fmt.Errorf("upsert home todo projection: %w", err)
-		}
-	}
-	for _, item := range existing {
-		if _, ok := desired[readerTodoProjectionKey(item.origin, valueOrEmpty(item.hostID), item.originRef)]; ok {
-			continue
-		}
-		if _, err := db.Exec(ctx, `UPDATE reader_todos SET deleted_at=COALESCE(deleted_at,NOW()),updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, item.id); err != nil {
-			return fmt.Errorf("dismiss stale home todo projection: %w", err)
-		}
-	}
-	return nil
-}
-
-// upsertHomeTodoProjection keeps the projection identity and locking contract
-// of upsertTodoProjection while making the Home read's lifecycle invariant
-// explicit: a completed row always has completed_at, and reopening it clears
-// the timestamp. Due dates are source-owned for projected rows, so a nil
-// source value preserves a previously stored value rather than erasing it.
-func (r *PGXReaderVNextRepository) upsertHomeTodoProjection(ctx context.Context, db database.Querier, todo model.ReaderTodo) (*model.ReaderTodo, error) {
-	var existingID uuid.UUID
-	lookupErr := db.QueryRow(ctx, `
-		SELECT id FROM reader_todos
-		WHERE origin_kind=$1 AND origin_host_id=$2
-			AND origin_ref->>'block_ref'=$3
-			AND COALESCE(origin_ref->>'occurrence','1')=$4 AND deleted_at IS NULL
-		FOR UPDATE`, todo.OriginKind, valueOrEmpty(todo.OriginHostID), originBlockRef(todo.OriginRef), originBlockOccurrence(todo.OriginRef)).Scan(&existingID)
-	if lookupErr == nil {
-		return scanReaderTodo(db.QueryRow(ctx, `
-			UPDATE reader_todos SET
-				text=$1,due_at=COALESCE($2::timestamptz,due_at),origin_host_kind=$3,
-				origin_ref=$4::jsonb,host_revision=$5,done=$6,
-				completed_at=CASE WHEN $6 THEN COALESCE(completed_at,COALESCE($7::timestamptz,NOW())) ELSE NULL END,
-				updated_at=NOW()
-			WHERE id=$8 AND deleted_at IS NULL
-			RETURNING `+readerTodoColumns, todo.Text, todo.DueAt, todo.OriginHostKind, rawJSON(todo.OriginRef), todo.HostRevision, todo.Done, todo.CompletedAt, existingID))
-	}
-	if !errors.Is(lookupErr, pgx.ErrNoRows) {
-		return nil, lookupErr
-	}
-	return scanReaderTodo(db.QueryRow(ctx, `
-		INSERT INTO reader_todos (text,due_at,done,origin_kind,origin_host_kind,origin_host_id,origin_ref,host_revision,completed_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,CASE WHEN $3 THEN COALESCE($9::timestamptz,NOW()) ELSE NULL END)
-			RETURNING `+readerTodoColumns, todo.Text, todo.DueAt, todo.Done, todo.OriginKind, todo.OriginHostKind, todo.OriginHostID, rawJSON(todo.OriginRef), todo.HostRevision, todo.CompletedAt))
 }
 
 func listHomeTodosOn(ctx context.Context, db database.Querier) ([]model.ReaderTodo, error) {
