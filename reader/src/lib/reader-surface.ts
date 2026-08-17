@@ -29,7 +29,7 @@ export function isIdentityError(value: unknown): boolean {
  * 把任意抛出物或 API 错误对象翻译成 Surface 展示的文案。
  *
  * 状态码文案是宿主协议的一部分（409 / 412 / 403），逐字保持现状。既覆盖
- * `errorMessage({ message, status })` 这种结构化错误，也覆盖各 Surface 本地
+ * `{ message, status }` 这种结构化 API 错误，也覆盖各 Surface 本地
  * `thrownErrorMessage(cause)` 处理的 unknown 抛出物。
  */
 export function readerErrorMessage(value: unknown, fallback: string = GENERIC_REQUEST_ERROR): string {
@@ -40,13 +40,6 @@ export function readerErrorMessage(value: unknown, fallback: string = GENERIC_RE
   if (status === 412) return '版本已经变化，请刷新后重试。'
   if (status === 403) return '当前身份没有执行此操作的权限。'
   return typeof record.message === 'string' && record.message ? record.message : fallback
-}
-
-/**
- * @deprecated 调用方改为 `readerErrorMessage` 后删除；行为与它完全一致。
- */
-export function errorMessage(error: { readonly message: string; readonly status?: number }): string {
-  return readerErrorMessage(error)
 }
 
 export function formatRelativeDate(value: string | null | undefined): string {

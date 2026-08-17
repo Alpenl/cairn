@@ -43,7 +43,7 @@ export function ArchiveDownloadDialog({
       title="下载归档"
       titleId="archive-download-title"
       size="compact"
-      className="site-dialog archive-download-dialog"
+      className="archive-download-dialog"
       busy={downloading}
       onClose={onClose}
     >

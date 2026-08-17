@@ -55,7 +55,7 @@ export function LinkConversionDialog({ client, capabilityLease, link, initialNot
   return <ReaderDialog
     title="移到网站收藏"
     titleId="conversion-title"
-    className="site-dialog conversion-dialog"
+    className="conversion-dialog"
     busy={submitting}
     dismissOnEscape={false}
     onClose={onClose}

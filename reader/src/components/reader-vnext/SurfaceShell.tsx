@@ -4,19 +4,8 @@ import { type ReaderRoute } from '../../lib/navigation/route'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
 import { SurfaceNav } from './SurfaceNav'
 
-// 非组件工具已经搬到 lib/reader-surface.ts。这里的 re-export 只是过渡：
-// 调用方改成直接从该模块导入后就删除，本文件只留组件。
-/* eslint-disable react-refresh/only-export-components */
-export {
-  errorMessage,
-  formatRelativeDate,
-  identityIsCurrent,
-  isIdentityError,
-  navigateReaderTarget,
-  SURFACE_IDENTITY_ERROR,
-  todoDesiredStatePatch,
-} from '../../lib/reader-surface'
-/* eslint-enable react-refresh/only-export-components */
+// 非组件工具全部住在 lib/reader-surface.ts，本文件只留组件——过渡期的
+// re-export 与它带来的 react-refresh 例外都已经删掉。
 
 export interface SurfaceShellProps {
   readonly title: string

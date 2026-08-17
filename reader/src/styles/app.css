@@ -3,7 +3,6 @@
    Light + Dark, warm neutrals, terracotta accent, mono accents
    ─────────────────────────────────────────────────────────── */
 
-.conversion-dialog { width: min(500px, 100%); }
 .conversion-loading { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); }
 .conversion-loading svg { animation: spin .9s linear infinite; }
 .conversion-warning { margin: 0; color: var(--err); font-size: 13px; line-height: 1.5; }
@@ -57,7 +56,7 @@
 .rss-sidebar button,
 .rss-list-pane button,
 .rss-detail-pane button,
-.rss-dialog button {
+.reader-dialog button {
   font-family: var(--font-ui);
 }
 
@@ -261,10 +260,15 @@ button.rss-nav-row.active { background: var(--accent-soft); }
 .rss-source-status span { min-width: 0; overflow-wrap: anywhere; }
 .rss-source-status.error { color: var(--err); background: var(--err-soft); }
 .rss-items-scroll { padding: 6px; }
-.rss-item-card { min-height: 118px; outline: none; }
-.rss-item-card:focus-visible { box-shadow: 0 0 0 2px var(--accent-line); }
-.rss-item-card .src-badge { max-width: 190px; }
-.rss-card-foot { height: 25px; margin-top: 6px; display: flex; align-items: center; justify-content: flex-end; gap: 1px; }
+.rss-item-card { min-height: 118px; }
+/* 焦点环归 ReaderPreviewCard 里的真实 button（.reader-preview-card-main）所有，
+   卡片外壳自身不再可聚焦。来源行在订阅列表里比阅读列表窄一档。 */
+.rss-item-card .reader-preview-card-source { max-width: 190px; }
+/* 信号与操作在订阅列表里一直是卡片底部的一行。共享卡片把 actions 放在打开区的
+   兄弟位置，而卡片是 align-items: flex-start，所以默认会贴着顶部——压回底部，
+   卡片的重心才和迁移前一致。 */
+.rss-item-card .reader-preview-card-actions { align-self: flex-end; }
+.rss-card-foot { height: 25px; display: flex; align-items: center; justify-content: flex-end; gap: 1px; }
 .rss-card-signals { margin-right: auto; min-width: 20px; display: flex; align-items: center; gap: 4px; color: var(--accent); }
 .rss-card-signals .error { color: var(--err); }
 .rss-card-foot > button { width: 25px; height: 25px; border-radius: 5px; opacity: 0; }
@@ -371,13 +375,12 @@ button.rss-nav-row.active { background: var(--accent-soft); }
 }
 .rss-dialog > header h2 { font-size: 17px; line-height: 1.3; font-weight: 680; }
 .rss-dialog > header p { margin-top: 4px; color: var(--text-tertiary); font-size: 12px; }
-.rss-dialog > header > button {
-  width: 28px; height: 28px; flex-shrink: 0; border: 0; border-radius: 6px;
-  background: transparent; color: var(--text-tertiary); cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.rss-dialog > header > button:hover { color: var(--text-primary); background: var(--bg-hover); }
-.rss-dialog-body { padding: 17px; }
+/* 只有 App.tsx 的 legacy「未归属的本地数据」Dialog 还在用 .rss-dialog 外壳，
+   它的 panel 自己不带 padding，所以内边距挂在这一层；订阅的两个 Dialog 已经
+   换成 ReaderDialog，panel 自带 18px，body 再补一层就成了 35px。 */
+.rss-dialog > .rss-dialog-body { padding: 17px; }
+/* 订阅 Dialog 的副标题：外壳 header 已经留了 14px，这里收回来贴住标题。 */
+.rss-dialog-lede { margin: -10px 0 14px; color: var(--text-tertiary); font-size: 12px; }
 .rss-field { display: block; margin-bottom: 14px; }
 .rss-field > span { display: block; margin-bottom: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 570; }
 .rss-field > input,
@@ -390,7 +393,7 @@ button.rss-nav-row.active { background: var(--accent-soft); }
 .rss-field > input { padding: 0 10px; }
 .rss-field > select { padding: 0 8px; }
 .rss-url-input { display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--text-tertiary); }
-.rss-url-input input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; }
+.rss-url-input input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; }
 .rss-field > input:focus,
 .rss-field > select:focus,
 .rss-url-input:focus-within { border-color: var(--accent-line); }
@@ -685,12 +688,29 @@ body {
 .site-card-foot em { font: normal 10px var(--font-mono); color: var(--text-faint); white-space: nowrap; text-align: right; }
 .site-open { position: absolute; z-index: 1; right: 8px; top: 50%; transform: translateY(-50%); width: 27px; height: 27px; display: flex; align-items: center; justify-content: center; color: var(--text-tertiary); border-radius: 4px; }
 .site-open:hover { color: var(--accent); background: var(--accent-soft); }
-.site-detail { min-width: 0; overflow-y: auto; border-left: .5px solid var(--border); background: var(--bg-list); }.site-detail-inner { padding: 21px; }.site-detail-inner header { display: flex; align-items: center; gap: 10px; }.site-detail-inner header > div { min-width: 0; flex: 1; }.site-mobile-back { display: none; }.site-detail-inner h2 { font-size: 17px; margin: 0; overflow-wrap: anywhere; }.site-detail-inner header small { color: var(--text-tertiary); font: 10.5px var(--font-mono); overflow-wrap: anywhere; }.site-detail-inner p { font-size: 13px; color: var(--text-secondary); line-height: 1.55; }.site-detail-inner h3 { font-size: 11px; margin: 22px 0 8px; color: var(--text-tertiary); }.site-detail-tags { display: flex; flex-wrap: wrap; gap: 5px; }.site-detail-tags span { font: 10.5px var(--font-mono); color: var(--accent); padding: 3px 5px; background: var(--accent-soft); border-radius: 4px; }.site-homepage { display: block; color: var(--accent); font: 11px var(--font-mono); overflow-wrap: anywhere; margin: 8px 0; }.site-entry-list { list-style: none; margin: 0; padding: 0; }.site-entry-list li { position: relative; border-top: .5px solid var(--divider); padding: 9px 84px 9px 0; }.site-entry-list a { display: block; color: var(--text-primary); font-size: 12.5px; overflow-wrap: anywhere; }.site-entry-list small { display: block; color: var(--text-tertiary); font-size: 11px; margin-top: 3px; overflow-wrap: anywhere; }.site-entry-actions { position: absolute; right: 0; top: 9px; display: inline-flex; align-items: center; gap: 3px; }.site-entry-actions button { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; color: var(--text-tertiary); background: transparent; cursor: pointer; }.site-entry-actions button:hover { color: var(--accent); background: var(--accent-soft); }.site-entry-list b { color: var(--accent); font: 10px var(--font-mono); white-space: nowrap; }.tb-btn.danger:hover { color: var(--err); background: var(--err-soft); }.site-note { white-space: pre-wrap; overflow-wrap: anywhere; }.sites-empty { min-height: 120px; display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: 13px; text-align: center; padding: 18px; }.site-dialog-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 18px; background: rgba(0, 0, 0, .34); }.site-dialog { width: min(520px, 100%); max-height: calc(100vh - 36px); overflow-y: auto; padding: 18px; border: .5px solid var(--border-strong); border-radius: 8px; background: var(--bg-elevated); box-shadow: var(--shadow-pop); }.site-dialog.compact { width: min(420px, 100%); }.site-dialog header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }.site-dialog header h2 { flex: 1; margin: 0; font-size: 16px; }.site-dialog label { display: flex; flex-direction: column; gap: 5px; margin-top: 11px; color: var(--text-secondary); font-size: 12px; }.site-dialog input, .site-dialog textarea { width: 100%; box-sizing: border-box; border: .5px solid var(--border-strong); border-radius: 5px; padding: 8px 9px; background: var(--bg-list); color: var(--text-primary); font: 13px var(--font-ui); }.site-dialog textarea { min-height: 72px; resize: vertical; }.site-dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 17px; }.site-dialog footer button { border: .5px solid var(--border); border-radius: 5px; padding: 7px 12px; background: var(--bg-list); color: var(--text-primary); cursor: pointer; }.site-dialog footer button[type="submit"] { border-color: var(--accent); background: var(--accent); color: #fff; }.site-dialog footer button:disabled { opacity: .55; cursor: default; }
+.site-detail { min-width: 0; overflow-y: auto; border-left: .5px solid var(--border); background: var(--bg-list); }.site-detail-inner { padding: 21px; }.site-detail-inner header { display: flex; align-items: center; gap: 10px; }.site-detail-inner header > div { min-width: 0; flex: 1; }.site-mobile-back { display: none; }.site-detail-inner h2 { font-size: 17px; margin: 0; overflow-wrap: anywhere; }.site-detail-inner header small { color: var(--text-tertiary); font: 10.5px var(--font-mono); overflow-wrap: anywhere; }.site-detail-inner p { font-size: 13px; color: var(--text-secondary); line-height: 1.55; }.site-detail-inner h3 { font-size: 11px; margin: 22px 0 8px; color: var(--text-tertiary); }.site-detail-tags { display: flex; flex-wrap: wrap; gap: 5px; }.site-detail-tags span { font: 10.5px var(--font-mono); color: var(--accent); padding: 3px 5px; background: var(--accent-soft); border-radius: 4px; }.site-homepage { display: block; color: var(--accent); font: 11px var(--font-mono); overflow-wrap: anywhere; margin: 8px 0; }.site-entry-list { list-style: none; margin: 0; padding: 0; }.site-entry-list li { position: relative; border-top: .5px solid var(--divider); padding: 9px 84px 9px 0; }.site-entry-list a { display: block; color: var(--text-primary); font-size: 12.5px; overflow-wrap: anywhere; }.site-entry-list small { display: block; color: var(--text-tertiary); font-size: 11px; margin-top: 3px; overflow-wrap: anywhere; }.site-entry-actions { position: absolute; right: 0; top: 9px; display: inline-flex; align-items: center; gap: 3px; }.site-entry-actions button { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; color: var(--text-tertiary); background: transparent; cursor: pointer; }.site-entry-actions button:hover { color: var(--accent); background: var(--accent-soft); }.site-entry-list b { color: var(--accent); font: 10px var(--font-mono); white-space: nowrap; }.tb-btn.danger:hover { color: var(--err); background: var(--err-soft); }.site-note { white-space: pre-wrap; overflow-wrap: anywhere; }.sites-empty { min-height: 120px; display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: 13px; text-align: center; padding: 18px; }
+/* Dialog 里「没有自带样式的表单」的兜底层。外壳（backdrop / panel / header /
+   关闭按钮）已经归 .reader-dialog，这里只剩字段与 footer。
+   整条选择器都包在 :where() 里是有意的：特异度归零，任何带 class 的领域规则
+   （.rss-field、.add-link-input、.conversion-target label、.rvx-form-grid、
+   .rss-primary-button…）都天然赢过它，不必再按文件顺序或加权重去斗——旧的
+   `.site-dialog label` 正是靠「同特异度但写在后面」压掉了 .conversion-target
+   的横向单选行。
+   label 上再加一道 :not([class])：它是唯一会改 flex-direction 的规则，而
+   .add-link-input 这类横向字段本身没写过 flex-direction，兜底层会漏进去。 */
+:where(.reader-dialog label:not([class])) { display: flex; flex-direction: column; gap: 5px; margin-top: 11px; color: var(--text-secondary); font-size: 12px; }
+:where(.reader-dialog input),
+:where(.reader-dialog textarea) { width: 100%; box-sizing: border-box; border: .5px solid var(--border-strong); border-radius: 5px; padding: 8px 9px; background: var(--bg-list); color: var(--text-primary); font: 13px var(--font-ui); }
+:where(.reader-dialog textarea) { min-height: 72px; resize: vertical; }
+:where(.reader-dialog footer) { display: flex; justify-content: flex-end; gap: 8px; margin-top: 17px; }
+:where(.reader-dialog footer button) { border: .5px solid var(--border); border-radius: 5px; padding: 7px 12px; background: var(--bg-list); color: var(--text-primary); cursor: pointer; }
+:where(.reader-dialog footer button[type="submit"]) { border-color: var(--accent); background: var(--accent); color: #fff; }
+:where(.reader-dialog footer button:disabled) { opacity: .55; cursor: default; }
 .archive-download-options {
   display: grid;
   gap: 7px;
 }
-.site-dialog .archive-download-option {
+.reader-dialog .archive-download-option {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -699,7 +719,7 @@ body {
   color: var(--text-primary);
   cursor: pointer;
 }
-.site-dialog .archive-download-option input[type="checkbox"] {
+.reader-dialog .archive-download-option input[type="checkbox"] {
   width: 16px;
   height: 16px;
   margin: 0;
@@ -784,30 +804,11 @@ body {
 
 .list-scroll { flex: 1; overflow-y: auto; padding: 6px; }
 
-.card {
-  padding: 14px 15px; border-radius: var(--r-md); cursor: pointer;
-  position: relative; transition: background 0.1s;
-  border: 0.5px solid transparent;
-}
-.card:hover { background: var(--bg-hover); }
-.card.active { background: var(--bg-elevated); border-color: var(--border); box-shadow: var(--shadow-card); }
-.card.active::before {
-  content: ""; position: absolute; left: -6px; top: 14px; bottom: 14px;
-  width: 3px; border-radius: 3px; background: var(--accent);
-}
-.card-top { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
-.card-spacer { flex: 1; min-width: 8px; }
-.src-badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary);
-  max-width: 200px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0;
-}
+/* 卡片外壳（padding / 圆角 / hover / 选中态 / 标题 / 摘要）已经归
+   .reader-preview-card；`.card` 只作为 LinkCard 与订阅卡片的 e2e 定位钩子留在
+   元素上。下面两条是卡片里的领域装饰，公共组件不该知道它们。 */
 .src-ic { width: 13px; height: 13px; flex-shrink: 0; }
 .unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
-.card-time { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-faint); white-space: nowrap; }
-.card h3 { font-size: 14.5px; line-height: 1.35; font-weight: 620; color: var(--text-primary); margin-bottom: 5px; letter-spacing: -0.005em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.card.read h3 { color: var(--text-secondary); font-weight: 560; }
-.card p { font-size: 12.5px; line-height: 1.54; color: var(--text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 /* mini-tag — 详情页标题下的标签 chip */
 .mini-tag {
   font-family: var(--font-mono); font-size: 10.5px; padding: 2px 7px; border-radius: 5px;
@@ -1640,14 +1641,6 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   font-weight: 600;
   letter-spacing: 0;
 }
-.card h3,
-.rss-item-card h3 {
-  font-family: var(--font-display);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-.card.active { box-shadow: var(--shadow-card); }
 
 .reader-pane,
 .sites-main {
@@ -2013,51 +2006,8 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   }
 }
 
-.add-link-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 130;
-  padding: 13vh 14px 14px;
-  background: rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  animation: fade 0.12s ease;
-}
-.add-link-dialog {
-  width: min(590px, 100%);
-  overflow: hidden;
-  border: 0.5px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-pop);
-  animation: pop 0.16s ease;
-}
-.add-link-dialog > header {
-  min-height: 58px;
-  padding: 13px 16px;
-  border-bottom: 0.5px solid var(--divider);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.add-link-dialog h2 { font-family: var(--font-display); font-size: 18px; font-weight: 600; }
-.add-link-dialog > header button {
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-tertiary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-.add-link-dialog > header button:hover { background: var(--bg-hover); color: var(--text-primary); }
-.add-link-body { padding: 16px; }
+/* 添加链接的外壳（overlay / panel / header / 关闭按钮）已经归 .reader-dialog，
+   这里只剩输入行本身。 */
 .add-link-row { display: flex; align-items: stretch; gap: 8px; }
 .add-link-input {
   flex: 1;
@@ -2076,6 +2026,7 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .add-link-input input {
   flex: 1;
   min-width: 0;
+  padding: 0;
   border: 0;
   outline: 0;
   background: transparent;
@@ -2095,7 +2046,6 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 [data-theme="dark"] .add-link-submit { color: #1b1815; }
 .add-link-submit:disabled { opacity: 0.48; cursor: default; }
 .add-link-error { margin: 9px 0 0; color: var(--err); font-size: 12px; }
-.add-link-hint { margin: 10px 0 0; color: var(--text-faint); font-size: 11.5px; line-height: 1.5; }
 
 /* Website collection */
 .sites-view {
@@ -2219,8 +2169,8 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   cursor: pointer;
 }
 .sites-load-more:disabled { opacity: 0.55; cursor: default; }
-.site-dialog .sites-load-more { width: 100%; }
-.site-dialog .sites-page-error { box-sizing: border-box; width: 100%; }
+.reader-dialog .sites-load-more { width: 100%; }
+.reader-dialog .sites-page-error { box-sizing: border-box; width: 100%; }
 .site-list-head { display: none; }
 .site-card {
   position: relative;
@@ -2589,7 +2539,6 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   .site-detail-inner { padding: 15px; }
   .reading-preference-popover { right: 8px; width: min(250px, calc(100vw - 16px)); }
   .back-to-top { right: 12px; bottom: 12px; }
-  .add-link-overlay { padding-top: 8vh; }
   .add-link-row { flex-direction: column; }
   .add-link-submit { height: 36px; }
 }
@@ -2674,7 +2623,7 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .wt-primary-nav .library-mode-nav { margin: 0; padding: 0; border-bottom: 0; }
 .rvx-main { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg-reader); }
 .rvx-header { min-height: 70px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px clamp(16px, 3vw, 42px); border-bottom: .5px solid var(--divider); }
-.rvx-title-block, .rvx-header-actions, .rvx-section-head, .rvx-feed-card-top, .rvx-feed-card-foot, .rvx-action-row { display: flex; align-items: center; }
+.rvx-title-block, .rvx-header-actions, .rvx-section-head, .rvx-action-row { display: flex; align-items: center; }
 .rvx-title-block { min-width: 0; gap: 10px; }
 .rvx-title-block h1 { margin: 0; color: var(--text-primary); font-size: 22px; font-weight: 700; }
 .rvx-title-block p { margin: 4px 0 0; color: var(--text-tertiary); font-size: 11.5px; overflow-wrap: anywhere; }
@@ -2728,13 +2677,7 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .rvx-section-head { justify-content: space-between; gap: 12px; margin-bottom: 11px; }
 .rvx-section-head h2, .rvx-section-head h3 { margin: 4px 0 0; color: var(--text-primary); font-size: 16px; }
 .rvx-item-list, .rvx-todo-list, .rvx-thought-list, .rvx-feed-list, .rvx-compact-list, .rvx-history-panel ul { list-style: none; margin: 0; padding: 0; }
-.rvx-feed-row, .rvx-thought-list li, .rvx-todo-row { border-top: .5px solid var(--divider); }
-.rvx-feed-row { min-height: 76px; display: flex; align-items: center; gap: 10px; padding: 10px 0; }
-.rvx-row-main { min-width: 0; flex: 1; }
-.rvx-row-main strong, .rvx-row-main span, .rvx-row-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rvx-row-main strong { color: var(--text-primary); font-size: 13px; }
-.rvx-row-main span { margin-top: 4px; color: var(--text-secondary); font-size: 11.5px; }
-.rvx-row-main small { margin-top: 5px; color: var(--text-faint); font: 10px var(--font-mono); }
+.rvx-thought-list li, .rvx-todo-row { border-top: .5px solid var(--divider); }
 .rvx-todo-row { min-height: 42px; display: flex; align-items: center; gap: 8px; padding: 6px 0; color: var(--text-secondary); font-size: 12px; }
 .rvx-todo-row.done span, .rvx-todo-item.done .rvx-todo-text { color: var(--text-faint); text-decoration: line-through; }
 .rvx-check-button { width: 22px; height: 22px; flex: 0 0 22px; display: inline-flex; align-items: center; justify-content: center; border: .5px solid var(--border-strong); border-radius: 50%; background: transparent; color: transparent; }
@@ -2752,15 +2695,9 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .rvx-empty h2 { margin: 8px 0 0; color: var(--text-secondary); font-size: 16px; }
 .rvx-empty p { max-width: 420px; margin: 0; font-size: 12px; line-height: 1.55; }
 .rvx-feed-meta { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--text-tertiary); font: 10.5px var(--font-mono); }
-.rvx-feed-card { padding: 16px 0 15px; border-top: .5px solid var(--divider); }
-.rvx-feed-card-top { gap: 8px; margin-bottom: 8px; }
 .rvx-source-chip, .rvx-status-chip, .rvx-tag-chip { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 6px; border-radius: 4px; background: var(--bg-chip); color: var(--text-tertiary); font: 10px var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rvx-status-chip { background: var(--accent-soft); color: var(--accent); }
 .rvx-reason { min-width: 0; color: var(--text-faint); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rvx-feed-title { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--text-primary); cursor: pointer; font-size: 16px; font-weight: 650; text-align: left; overflow-wrap: anywhere; }
-.rvx-feed-title:hover { color: var(--accent); }
-.rvx-feed-card > p { margin: 7px 0 11px; color: var(--text-secondary); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-.rvx-feed-card-foot { justify-content: space-between; gap: 12px; color: var(--text-faint); font: 10px var(--font-mono); }
 .rvx-action-row { flex-wrap: wrap; justify-content: flex-end; gap: 3px; }
 .rvx-action-row button { min-height: 27px; display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: var(--text-tertiary); font-size: 10.5px; }
 .rvx-action-row button:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -2888,86 +2825,27 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .inbox-bulkbar button:disabled:hover { background: transparent; color: var(--text-tertiary); }
 .inbox-queue-scroll { min-height: 0; flex: 1 1 auto; overflow-y: auto; scrollbar-gutter: stable; padding: 4px 6px 10px; }
 .inbox-list { list-style: none; margin: 0; padding: 0; }
-/* Queue rows echo the Reading list: floating cards, not table rows. */
-.inbox-list > li {
-  position: relative;
-  display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
-  border: .5px solid transparent;
-  border-radius: var(--r-md);
-  transition: background .1s;
-}
+/* 行外壳（卡片、hover、选中条、标题、摘要）已经归 .reader-preview-card；
+   这里只剩队列自己的东西：行距、选择框和状态脚注。 */
 .inbox-list > li + li { margin-top: 2px; }
-.inbox-list > li::before {
-  content: '';
-  position: absolute;
-  left: -6px;
-  top: 14px;
-  bottom: 14px;
-  width: 3px;
-  border-radius: 3px;
-  background: transparent;
-}
-.inbox-list > li:hover { background: var(--bg-hover); }
-.inbox-list > li.active {
-  background: var(--bg-elevated);
-  border-color: var(--border);
-  box-shadow: var(--shadow-card);
-}
-.inbox-list > li.active::before { background: var(--accent); }
-/* The picker is background noise until it is in play. */
+/* The picker is background noise until it is in play.
+   纵向位置由 .reader-preview-card-leading 决定，这里不再自带 padding-top，
+   否则会叠在卡片 14px 内边距上把选择框压到第二行。 */
 .inbox-row-check {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding-top: 15px;
   opacity: 0;
   transition: opacity .12s;
 }
 .inbox-list > li:hover .inbox-row-check,
-.inbox-list > li.picked .inbox-row-check,
+.inbox-list > li.is-picked .inbox-row-check,
 .inbox-row-check:focus-within { opacity: 1; }
 .inbox-row-check input { width: 14px; height: 14px; margin: 0; }
-.inbox-list button {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  padding: 12px 13px 12px 1px;
-  border: 0;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  text-align: left;
-}
-.inbox-row-meta, .inbox-row-foot { display: flex; align-items: center; min-width: 0; }
-.inbox-row-meta { justify-content: space-between; gap: 8px; color: var(--text-faint); font: 10.5px var(--font-mono); }
 .inbox-row-source { min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; color: var(--text-tertiary); text-overflow: ellipsis; white-space: nowrap; }
 .inbox-row-source svg { flex: 0 0 auto; }
-.inbox-row-meta time { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inbox-list strong {
-  display: -webkit-box;
-  margin-top: 7px;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 13.5px;
-  font-weight: 620;
-  line-height: 1.36;
-  letter-spacing: -0.005em;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-.inbox-list p {
-  display: -webkit-box;
-  margin: 5px 0 0;
-  overflow: hidden;
-  color: var(--text-tertiary);
-  font-size: 11.5px;
-  line-height: 1.5;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-.inbox-row-foot { flex-wrap: wrap; gap: 5px; margin-top: 9px; overflow: hidden; color: var(--text-faint); font: 10px var(--font-mono); white-space: nowrap; }
+/* 与摘要之间的间距由 .reader-preview-card-details 统一给（7px），这里不再自带。 */
+.inbox-row-foot { display: flex; align-items: center; min-width: 0; flex-wrap: wrap; gap: 5px; overflow: hidden; color: var(--text-faint); font: 10px var(--font-mono); white-space: nowrap; }
 .inbox-row-state { display: inline-flex; align-items: center; gap: 5px; }
 .inbox-row-foot .mini-tag { font-size: 10px; padding: 1px 6px; }
 .inbox-state-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--text-faint); }
@@ -3168,11 +3046,10 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .inbox-result summary { color: var(--accent); cursor: pointer; white-space: nowrap; }
 .inbox-result ul { position: absolute; right: 0; bottom: 22px; width: min(460px, 70vw); max-height: 240px; margin: 0; padding: 10px 10px 10px 28px; overflow: auto; border: .5px solid var(--border); border-radius: 6px; background: var(--bg-elevated); box-shadow: var(--shadow-pop); }
 .inbox-result li + li { margin-top: 7px; }
-.inbox-dialog-backdrop { position: fixed; inset: 0; z-index: 130; display: grid; place-items: center; padding: 18px; background: rgba(0, 0, 0, .36); }
-.inbox-dialog { width: min(560px, 100%); max-height: calc(100vh - 36px); overflow-y: auto; padding: 20px; box-sizing: border-box; border: .5px solid var(--border-strong); border-radius: 8px; background: var(--bg-elevated); box-shadow: var(--shadow-pop); }
-.inbox-dialog header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
-.inbox-dialog h2 { margin: 4px 0 0; color: var(--text-primary); font-size: 18px; }
-.inbox-dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+/* 新建条目 Dialog 的外壳与 footer 都归 .reader-dialog；表单沿用 .rvx-form-grid，
+   只要把外壳给「无 class 表单」准备的 72px textarea 兜底关掉。 */
+.reader-dialog .rvx-form-grid label { margin-top: 0; }
+.reader-dialog .rvx-form-grid textarea { min-height: 0; }
 
 @container inbox-detail (max-width: 870px) {
   .inbox-reader-layout { grid-template-columns: minmax(0, 760px); }
@@ -3446,7 +3323,7 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   .rvx-inbox-workspace .rvx-scroll { padding: 0; }
   .inbox-workbench { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(190px, 34vh) minmax(0, 1fr); }
   .inbox-queue { border-right: 0; border-bottom: .5px solid var(--divider); }
-  .inbox-list > li, .inbox-list button { min-height: 96px; }
+  .inbox-list > li { min-height: 96px; }
   .inbox-detail-toolbar { overflow-x: auto; scrollbar-width: none; }
   .inbox-detail-toolbar::-webkit-scrollbar { display: none; }
   .inbox-detail-state, .inbox-detail-actions { flex: 0 0 auto; }
@@ -3484,8 +3361,6 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   .rvx-settings-row { display: block; padding-inline: 0; }
   .rvx-settings-row .rvx-button { margin-top: 12px; }
   .rvx-settings-control { justify-items: start; margin-top: 12px; }
-  .rvx-feed-card-foot { display: block; }
-  .rvx-feed-card-foot .rvx-action-row { justify-content: flex-start; margin-top: 7px; }
   .rvx-history-reattach { grid-template-columns: 1fr; }
   .rvx-history-reattach .rvx-button { width: 100%; }
   .rvx-history-panel li { align-items: flex-start; flex-direction: column; }
@@ -3502,32 +3377,20 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   .inbox-detail-actions .rvx-button { padding-inline: 8px; }
   .inbox-reader-document h1 { font-size: 26px; }
   .inbox-source-line a { max-width: 100%; }
-  .inbox-dialog-backdrop { padding: 9px; }
-  .inbox-dialog { max-height: calc(100vh - 18px); padding: 16px; }
 }
 
-/* 回收站列表：类型标记 / 主体 / 操作 三列。混合列表里类型与「恢复去哪」
-   必须一眼可见，否则点恢复等于开盲盒。 */
+/* 回收站列表：类型标记 / 主体 / 操作 三列，行布局归 .reader-list-row-dense。
+   混合列表里类型与「恢复去哪」必须一眼可见，否则点恢复等于开盲盒。 */
 .rvx-trash-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.rvx-trash-row { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 0.5px solid var(--border-strong); border-radius: 10px; background: var(--bg-elevated); }
 .rvx-trash-kind { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 76px; font-size: 12px; color: var(--text-secondary); }
 .rvx-trash-kind svg { color: var(--text-secondary); }
-.rvx-trash-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
-.rvx-trash-main strong { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rvx-trash-main small { font-size: 12px; color: var(--text-secondary); }
-.rvx-trash-row .rvx-action-row { flex: 0 0 auto; }
-@media (max-width: 720px) {
-  .rvx-trash-row { flex-wrap: wrap; }
-  .rvx-trash-main { flex-basis: 100%; order: 2; }
-  .rvx-trash-row .rvx-action-row { margin-left: auto; }
-}
 
 /* ============================================================================
    Reader 共享外壳（components/ui/）。
-   ReaderDialog / ReaderPreviewCard / ReaderListRow 三个公共组件的样式，取自
-   .site-dialog-* / .rss-dialog-* / .add-link-dialog / .inbox-dialog-* 与
-   .card / .rss-item-card / .rvx-feed-card / .rvx-trash-row / .rvx-feed-row
-   的公共部分，让调用方迁过来时视觉等价。领域样式（chip、reason、signal、
+   ReaderDialog / ReaderPreviewCard / ReaderListRow 三个公共组件的样式。它们
+   接管了原来 .site-dialog-* / .rss-dialog-* / .add-link-dialog / .inbox-dialog-*
+   与 .card / .rss-item-card / .rvx-feed-card / .rvx-trash-row / .rvx-feed-row
+   各写一遍的外壳；那些旧规则已经删掉，领域样式（chip、reason、signal、
    action 图标等）仍留在各自的规则里。
    ============================================================================ */
 

@@ -70,7 +70,6 @@ export function AddLinkDialog({ client, capabilityLease, destination, onClose, o
     <ReaderDialog
       title="添加链接"
       titleId="add-link-title"
-      className="add-link-dialog"
       busy={submitting}
       initialFocusRef={inputRef}
       onClose={onClose}

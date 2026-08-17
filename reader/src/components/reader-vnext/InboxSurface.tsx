@@ -1299,7 +1299,6 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         <ReaderDialog
           title="添加条目"
           titleId="inbox-create-title"
-          className="inbox-dialog"
           busy={saving}
           initialFocusRef={createUrlRef}
           onClose={() => setCreateOpen(false)}
@@ -1383,7 +1382,6 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                     <ReaderPreviewCard
                       key={item.id}
                       as="li"
-                      className={`${rowSelected ? 'active' : ''}${rowPicked ? ' picked' : ''}`.trim()}
                       selected={rowSelected}
                       picked={rowPicked}
                       leading={(

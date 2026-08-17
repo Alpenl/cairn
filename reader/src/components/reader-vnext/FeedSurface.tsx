@@ -946,8 +946,8 @@ export function FeedSurface({
       <ReaderListRow
         key={feedResourceIdentity(item)}
         variant="feed"
-        // 行的公共布局已由 reader-list-row-feed 提供，`rvx-feed-card` 只是 e2e 仍在
-        // 用的定位钩子；等 .rvx-feed-card* 那批规则删掉时它跟着一起走。
+        // 行的公共布局已由 reader-list-row-feed 提供，`.rvx-feed-card*` 的样式规则
+        // 都已删除；这个 class 只剩三个 e2e spec 的定位钩子，等它们改掉再摘。
         className="rvx-feed-card"
         dataAttributes={{ 'data-feed-item-key': item.key, 'data-resource-key': feedResourceIdentity(item) }}
         source={<span className="rvx-source-chip">{sourceLabel}</span>}

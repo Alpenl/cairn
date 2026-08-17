@@ -78,7 +78,6 @@ export function AddSubscriptionDialog({
     <ReaderDialog
       title="添加订阅"
       titleId="add-feed-title"
-      className="rss-dialog"
       initialFocusRef={urlRef}
       onClose={onClose}
     >
@@ -190,7 +189,6 @@ export function FolderDialog({ open, folder, onClose, onSave }: FolderDialogProp
       title={folder ? '重命名文件夹' : '新建文件夹'}
       titleId="folder-dialog-title"
       size="compact"
-      className="rss-dialog"
       initialFocusRef={nameRef}
       onClose={onClose}
     >

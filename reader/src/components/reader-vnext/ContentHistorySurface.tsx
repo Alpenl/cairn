@@ -4,7 +4,8 @@ import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
 import type { ReaderContentHistoryResponse } from '../../lib/api/types'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { Icon } from '../Icon'
-import { SurfaceError, SurfaceLoading, SurfaceShell, errorMessage, formatRelativeDate } from './SurfaceShell'
+import { readerErrorMessage, formatRelativeDate } from '../../lib/reader-surface'
+import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 
 export interface ContentHistorySurfaceProps {
   readonly client: IdentityBoundReaderClient
@@ -93,7 +94,7 @@ export function ContentHistorySurface({
         currentRevisionRef.current = nextRevision
         setCurrentRevision(nextRevision)
       } else if (!result.ok) {
-        setError(errorMessage(result.error))
+        setError(readerErrorMessage(result.error))
       }
     }).catch((requestError: unknown) => {
       if (!cancelled && client.isIdentityCurrent()) {
@@ -111,7 +112,7 @@ export function ContentHistorySurface({
       const result = await client.listContentHistory(linkID)
       if (request !== requestID.current || !client.isIdentityCurrent()) return
       if (result.ok) setItems(result.data)
-      else setError(errorMessage(result.error))
+      else setError(readerErrorMessage(result.error))
     } catch (requestError: unknown) {
       if (request === requestID.current && client.isIdentityCurrent()) {
         setError(requestError instanceof Error && requestError.message ? requestError.message : '正文历史加载失败，请稍后重试。')
@@ -137,7 +138,7 @@ export function ContentHistorySurface({
       })
       if (request !== restoreRequestID.current || !client.isIdentityCurrent()) return
       if (!result.ok) {
-        setError(errorMessage(result.error))
+        setError(readerErrorMessage(result.error))
         return
       }
       if (result.data.link_id !== linkID) {

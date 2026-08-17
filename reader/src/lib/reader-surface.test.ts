@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ReaderTodoResponse } from './api/types'
 import {
-  errorMessage,
   formatRelativeDate,
   identityIsCurrent,
   isIdentityError,
@@ -103,13 +102,15 @@ describe('readerErrorMessage', () => {
   })
 })
 
-describe('errorMessage', () => {
+// 迁移前 SurfaceShell 导出的 errorMessage 已经删掉，这条留作它的行为契约：
+// 结构化 API 错误走同一批文案，一个字都不能变。
+describe('readerErrorMessage 对 SurfaceShell.errorMessage 的行为兼容', () => {
   it('matches the shell behaviour it replaces', () => {
-    expect(errorMessage({ message: '冲突', status: 409 })).toBe('内容已经被其他窗口更新，请刷新后重试。')
-    expect(errorMessage({ message: '过期', status: 412 })).toBe('版本已经变化，请刷新后重试。')
-    expect(errorMessage({ message: '拒绝', status: 403 })).toBe('当前身份没有执行此操作的权限。')
-    expect(errorMessage({ message: '服务端说明', status: 500 })).toBe('服务端说明')
-    expect(errorMessage({ message: '' })).toBe('请求失败，请稍后重试。')
+    expect(readerErrorMessage({ message: '冲突', status: 409 })).toBe('内容已经被其他窗口更新，请刷新后重试。')
+    expect(readerErrorMessage({ message: '过期', status: 412 })).toBe('版本已经变化，请刷新后重试。')
+    expect(readerErrorMessage({ message: '拒绝', status: 403 })).toBe('当前身份没有执行此操作的权限。')
+    expect(readerErrorMessage({ message: '服务端说明', status: 500 })).toBe('服务端说明')
+    expect(readerErrorMessage({ message: '' })).toBe('请求失败，请稍后重试。')
   })
 })
 
