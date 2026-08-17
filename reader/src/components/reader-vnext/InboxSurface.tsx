@@ -10,7 +10,12 @@ import type {
   ReaderInboxResponse,
 } from '../../lib/api/types'
 import type { ReaderRoute } from '../../lib/navigation/route'
+import type { TocHeading } from '../../lib/toc'
+import { useReaderToc } from '../../hooks/useReaderToc'
+import { NO_ANNOTATIONS } from '../../lib/annotations'
 import { Icon } from '../Icon'
+import { PlainTextView } from '../PlainTextView'
+import { ArticleOutline } from '../detail/ArticleOutline'
 import { SurfaceError, SurfaceLoading, SurfaceShell, formatRelativeDate, errorMessage } from './SurfaceShell'
 import { refreshPendingInboxCount } from './PendingInboxCount'
 
@@ -27,6 +32,15 @@ export interface InboxDraftLeaveState {
   readonly dirty: boolean
   readonly saving: boolean
 }
+
+const INBOX_EDITOR_OUTLINE: TocHeading[] = [
+  { id: 'inbox-overview', level: 1, text: '概览' },
+  { id: 'inbox-note', level: 1, text: '笔记' },
+  { id: 'inbox-content', level: 1, text: '正文' },
+  { id: 'inbox-organization', level: 1, text: '整理' },
+]
+
+function ignoreInboxHighlight(): void {}
 
 function parseTags(value: string): string[] {
   return [...new Set(value.split(/[\s,，]+/).map((tag) => tag.trim()).filter(Boolean))]
@@ -277,6 +291,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   const inboxSavingGenerationRef = useRef(0)
   const inboxTargetLoadGenerationRef = useRef(0)
   const inboxDataClientRef = useRef(client)
+  const detailScrollRef = useRef<HTMLDivElement>(null)
 
   const partitionRef = useRef(partition)
   const page = inboxPages[partition]
@@ -359,6 +374,22 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     !(drafts[item.id]?.title ?? item.title ?? '').trim())
   const allPendingSelected = pendingItems.length > 0 && selectedPendingCount === pendingItems.length
   const displayError = error ?? inboxError
+  const {
+    items: editorOutlineItems,
+    activeId: activeEditorOutlineID,
+    onHeadings: setEditorOutlineHeadings,
+    onScroll: syncEditorOutline,
+    jumpTo: jumpToEditorSection,
+  } = useReaderToc({
+    scrollRef: detailScrollRef,
+    sourceKey: selected?.id ?? '',
+    layoutKey: previewBody ? 'preview' : 'edit',
+    enabled: selected !== null,
+  })
+
+  useEffect(() => {
+    setEditorOutlineHeadings(selected ? INBOX_EDITOR_OUTLINE : [])
+  }, [selected, setEditorOutlineHeadings])
 
   useEffect(() => {
     inboxOperationGenerationRef.current += 1
@@ -483,10 +514,14 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       else {
         if (aggregateRequestGeneration > aggregateAppliedGenerationRef.current) {
           aggregateAppliedGenerationRef.current = aggregateRequestGeneration
-          setInboxCounts({
-            activeCount: inboxResult.data.active_count,
-            expiredCount: inboxResult.data.expired_count,
-          })
+          setInboxCounts((current) => ({
+            activeCount: Number.isFinite(inboxResult.data.active_count)
+              ? inboxResult.data.active_count
+              : current.activeCount,
+            expiredCount: Number.isFinite(inboxResult.data.expired_count)
+              ? inboxResult.data.expired_count
+              : current.expiredCount,
+          }))
         }
         const skippedIDs = new Set(inboxResult.data.items
           .filter((item) =>
@@ -1217,115 +1252,252 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       active="pending"
       onNavigate={onNavigate}
       capabilityPolicy={capabilityPolicy}
-      actions={<button className="rvx-button primary" type="button" onClick={() => setCreateOpen((open) => !open)}><Icon name="plus" size={15} />添加条目</button>}
+      workspaceClassName="rvx-inbox-workspace"
+      actions={(
+        <button className="rvx-button primary" type="button" onClick={() => setCreateOpen(true)}>
+          <Icon name="plus" size={15} />添加条目
+        </button>
+      )}
     >
-      <div className="rvx-editor-actions" role="tablist" aria-label="收件箱分区" style={{ margin: '0 0 18px' }}>
-        <button
-          className={partition === 'active' ? 'rvx-button primary' : 'rvx-button secondary'}
-          type="button"
-          role="tab"
-          aria-selected={partition === 'active'}
-          onClick={() => selectPartition('active')}
-        >
-          活跃 ({inboxCounts.activeCount})
-        </button>
-        <button
-          className={partition === 'expired' ? 'rvx-button primary' : 'rvx-button secondary'}
-          type="button"
-          role="tab"
-          aria-selected={partition === 'expired'}
-          onClick={() => selectPartition('expired')}
-        >
-          已过期 ({inboxCounts.expiredCount})
-        </button>
-      </div>
-      {displayError && <SurfaceError message={displayError} onRetry={() => void load()} />}
+      {displayError && (
+        <div className="inbox-global-message">
+          <SurfaceError message={displayError} onRetry={() => void load()} />
+        </div>
+      )}
       {bulkResult && (
-        <section className="rvx-proposal" aria-label="批量操作结果" role="status" aria-live="polite">
-          <div className="rvx-section-head">
-            <div>
-              <h3>{bulkResult.action === 'confirm-ai'
-                ? 'AI 建议确认已完成'
-                : `批量${bulkResult.action === 'confirm' ? '确认' : '丢弃'}完成`}</h3>
-            </div>
+        <section className="inbox-result" aria-label="批量操作结果" role="status" aria-live="polite">
+          <Icon name="check" size={16} />
+          <div>
+            <strong>{bulkResult.action === 'confirm-ai'
+              ? 'AI 建议确认已完成'
+              : `批量${bulkResult.action === 'confirm' ? '确认' : '丢弃'}完成`}</strong>
+            <span>本次操作共完成 {bulkResult.response.items.length} 项</span>
           </div>
-          <p>本次操作共完成 {bulkResult.response.items.length} 项。</p>
-          <ul style={{ margin: '8px 0 0', paddingLeft: '18px' }}>
+          <details>
+            <summary>查看结果</summary>
+            <ul>
             {bulkResult.response.items.map((item, index) => (
               <li key={`${item.inbox_id}-${index}`}>
                 <span>{item.inbox_id} · {item.status === 'confirmed' ? '已确认入库' : '已丢弃'}</span>
                 {item.link_id && <button className="rvx-link-button" type="button" onClick={() => onOpenLink(item.link_id as string)}>打开已确认链接 {item.link_id}</button>}
               </li>
             ))}
-          </ul>
+            </ul>
+          </details>
         </section>
       )}
       {createOpen && (
-        <section className="rvx-editor rvx-create-panel" aria-label="添加条目">
-          <div className="rvx-form-grid">
-            <label>网址<input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://..." type="url" /></label>
-            <label>标题<input value={createTitle} onChange={(event) => setCreateTitle(event.target.value)} /></label>
-			<label>笔记<textarea value={createNote} onChange={(event) => setCreateNote(event.target.value)} rows={2} /></label>
-            <label>标签<input value={createTags} onChange={(event) => setCreateTags(event.target.value)} placeholder="用逗号或空格分隔" /></label>
-            <label>原始内容<textarea value={createBody} onChange={(event) => setCreateBody(event.target.value)} rows={3} /></label>
-          </div>
-          <div className="rvx-editor-actions"><button className="rvx-button secondary" type="button" onClick={() => setCreateOpen(false)}>取消</button><button className="rvx-button primary" type="button" disabled={saving || !url.trim()} onClick={() => void createInbox()}>创建</button></div>
-        </section>
-      )}
-      {(loading || loadingTarget) && items.length === 0 ? <SurfaceLoading /> : inboxError && items.length === 0 ? null : items.length === 0 ? <div className="rvx-empty"><Icon name="inbox" size={24} /><h2>{partition === 'expired' ? '没有已过期内容' : '收件箱是空的'}</h2><p>{partition === 'expired' ? '过期内容会保留在这里，可恢复有效期、确认或丢弃。' : '从扩展、批量采集或上面的手动入口添加内容。'}</p></div> : (
-        <>
-          {pendingItems.length > 0 && (
-            <section className="rvx-editor" aria-label="批量操作" style={{ marginBottom: '18px' }}>
-              <div className="rvx-section-head">
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
-                  <input type="checkbox" aria-label="全选" checked={allPendingSelected} disabled={saving} onChange={toggleAllSelection} />
-                  <span>全选</span>
-                </label>
-                <span className="rvx-muted">已选择 {selectedPendingCount} 项</span>
-                <div className="rvx-editor-actions" style={{ marginTop: 0 }}>
-                  <button className="rvx-button primary" type="button" disabled={saving} onClick={() => void confirmAIProposals()}><Icon name="sparkles" size={15} />确认全部 AI 建议</button>
-                  <button className="rvx-button secondary" type="button" disabled={saving || selectedPendingCount === 0 || selectedPendingHasEmptyTitle} onClick={() => void runBulk('confirm')}><Icon name="check" size={15} />确认所选</button>
-                  <button className="rvx-button secondary danger" type="button" disabled={saving || selectedPendingCount === 0} onClick={() => void runBulk('discard')}><Icon name="trash" size={15} />批量丢弃</button>
-                </div>
+        <div className="inbox-dialog-backdrop">
+          <section className="inbox-dialog" role="dialog" aria-modal="true" aria-labelledby="inbox-create-title">
+            <header>
+              <div>
+                <span className="rvx-eyebrow">新收件</span>
+                <h2 id="inbox-create-title">添加条目</h2>
               </div>
-            </section>
-          )}
-        <div className="rvx-split">
-          <aside className="rvx-list-column" aria-label="收件箱列表">
-            <ul className="rvx-compact-list">
-              {items.map((item) => <li key={item.id}>
-                <div style={{ display: 'flex', alignItems: 'stretch' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', padding: '0 8px' }}>
-                    <input type="checkbox" aria-label={`选择 ${item.title || item.url}`} checked={selectedIDs.has(item.id)} disabled={saving || item.status !== 'pending'} onChange={() => toggleSelection(item.id)} />
-                  </label>
-                  <button type="button" className={item.id === selected?.id ? 'active' : ''} onClick={() => void selectInbox(item.id)}><strong>{item.title || item.url}</strong><small>{item.expired ? '已过期 · ' : ''}{statusLabel(item.status)} · {formatRelativeDate(item.updated_at)}</small></button>
-                </div>
-              </li>)}
-            </ul>
-            {nextCursor && <button className="rvx-load-more" type="button" disabled={loadingMore || saving} onClick={() => void load(partition, true, nextCursor)}>{loadingMore ? '加载中…' : '更多'}</button>}
-          </aside>
-          {selected && (
-            <section className="rvx-detail-column" aria-label="条目编辑器">
-              <div className="rvx-detail-heading"><div><span className="rvx-source-chip">{selected.source_kind}</span><h2>{selected.title || '未命名条目'}</h2><a href={selected.url} target="_blank" rel="noreferrer">{selected.url}</a></div><span className="rvx-status-chip">{selected.expired ? '已过期' : statusLabel(selected.status)}</span></div>
-              {selectedDraft?.conflict && <p className="rvx-proposal" role="status">检测到其他位置的更新。本地草稿已保留，并会在下次保存时使用最新版本。</p>}
-              <label className="rvx-field">标题<input value={title} disabled={saving} onChange={(event) => updateSelectedDraft({ title: event.target.value })} /></label>
-              <label className="rvx-field">笔记<textarea value={note} disabled={saving} onChange={(event) => updateSelectedDraft({ note: event.target.value })} rows={4} /></label>
-              <label className="rvx-field">摘要<textarea value={summary} disabled={saving} onChange={(event) => updateSelectedDraft({ summary: event.target.value })} rows={4} /></label>
-              <label className="rvx-field">标签<input value={tags} disabled={saving} onChange={(event) => updateSelectedDraft({ tags: event.target.value })} /></label>
-              <div className="rvx-field"><span>正文</span><div className="rvx-editor-actions"><button type="button" className="rvx-button secondary" disabled={saving} onClick={() => setPreviewBody(false)} aria-pressed={!previewBody}>编辑</button><button type="button" className="rvx-button secondary" disabled={saving} onClick={() => setPreviewBody(true)} aria-pressed={previewBody}>预览</button></div>{previewBody ? <pre>{body || '暂无正文'}</pre> : <textarea aria-label="正文" value={body} disabled={saving} onChange={(event) => updateSelectedDraft({ body: event.target.value })} rows={9} />}</div>
-              <div className="rvx-proposal"><span className="rvx-eyebrow">AI 建议标签</span><div className="rvx-chip-row">{selected.suggested_tags.filter((tag) => !parseTags(tags).includes(tag)).map((tag) => <button key={tag} type="button" className="rvx-tag-chip" disabled={saving} onClick={() => adoptSuggestedTag(tag)}>采用 #{tag}</button>)}</div></div>
-              <div className="rvx-category-row"><span>分类</span>{categories.map((category) => <button key={category.id} type="button" disabled={saving} className={'rvx-tag-chip' + (memberships.has(category.id) ? ' active' : '')} onClick={() => void toggleCategory(category)}>{category.name}</button>)}<input value={newCategory} disabled={saving} onChange={(event) => setNewCategory(event.target.value)} placeholder="新分类" onKeyDown={(event) => { if (event.key === 'Enter') void addCategory() }} /></div>
-              <details className="rvx-source-details"><summary>查看原始内容</summary><pre>{selected.body}</pre></details>
-              {selected.job_id && <p className="rvx-muted">摘要任务：{job?.status ?? 'queued'} · {selected.job_id}</p>}
-              <div className="rvx-editor-actions">
-                {selected.status === 'discarded' ? <button className="rvx-button primary" type="button" disabled={saving} onClick={() => void restore()}><Icon name="refresh" size={15} />恢复到收件箱</button> : selected.status === 'pending' ? <>{selected.expired && <button className="rvx-button secondary" type="button" disabled={saving} onClick={() => void restore()}><Icon name="refresh" size={15} />恢复有效期</button>}<button className="rvx-button secondary" type="button" disabled={saving} onClick={() => void resummarize()}><Icon name="sparkles" size={15} />重新生成摘要</button><button className="rvx-button secondary danger" type="button" disabled={saving} onClick={() => void discard()}><Icon name="trash" size={15} />丢弃</button><button className="rvx-button primary" type="button" disabled={saving || !title.trim()} onClick={() => void confirm()}><Icon name="check" size={15} />确认入库</button></> : <span className="rvx-muted">该内容已确认入库。</span>}
-                {selected.status !== 'confirmed' && <button className="rvx-button secondary" type="button" disabled={saving} onClick={() => void saveMetadata()}>保存元数据</button>}
-              </div>
-            </section>
-          )}
+              <button className="rvx-icon-button" type="button" aria-label="关闭" title="关闭" disabled={saving} onClick={() => setCreateOpen(false)}>
+                <Icon name="close" size={16} />
+              </button>
+            </header>
+            <div className="rvx-form-grid">
+              <label>网址<input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://..." type="url" autoFocus /></label>
+              <label>标题<input value={createTitle} onChange={(event) => setCreateTitle(event.target.value)} /></label>
+              <label>笔记<textarea value={createNote} onChange={(event) => setCreateNote(event.target.value)} rows={2} /></label>
+              <label>标签<input value={createTags} onChange={(event) => setCreateTags(event.target.value)} placeholder="用逗号或空格分隔" /></label>
+              <label>原始内容<textarea value={createBody} onChange={(event) => setCreateBody(event.target.value)} rows={4} /></label>
+            </div>
+            <footer>
+              <button className="rvx-button secondary" type="button" disabled={saving} onClick={() => setCreateOpen(false)}>取消</button>
+              <button className="rvx-button primary" type="button" disabled={saving || !url.trim()} onClick={() => void createInbox()}><Icon name="plus" size={15} />创建</button>
+            </footer>
+          </section>
         </div>
-        </>
       )}
+      <div className="inbox-workbench">
+        <aside className="inbox-queue" aria-label="收件箱列表">
+          <div className="inbox-queue-head">
+            <div className="rvx-segmented" role="tablist" aria-label="收件箱分区">
+              <button
+                className={partition === 'active' ? 'active' : ''}
+                type="button"
+                role="tab"
+                aria-selected={partition === 'active'}
+                aria-label={`活跃 (${inboxCounts.activeCount})`}
+                onClick={() => selectPartition('active')}
+              >
+                活跃 <span>{inboxCounts.activeCount}</span>
+              </button>
+              <button
+                className={partition === 'expired' ? 'active' : ''}
+                type="button"
+                role="tab"
+                aria-selected={partition === 'expired'}
+                aria-label={`已过期 (${inboxCounts.expiredCount})`}
+                onClick={() => selectPartition('expired')}
+              >
+                已过期 <span>{inboxCounts.expiredCount}</span>
+              </button>
+            </div>
+            {pendingItems.length > 0 && (
+              <label className="inbox-select-all">
+                <input type="checkbox" aria-label="全选" checked={allPendingSelected} disabled={saving} onChange={toggleAllSelection} />
+                <span>全选</span>
+              </label>
+            )}
+          </div>
+
+          {pendingItems.length > 0 && (
+            <section className={'inbox-bulkbar' + (selectedPendingCount > 0 ? ' active' : '')} aria-label="批量操作">
+              <span>{selectedPendingCount > 0 ? `已选择 ${selectedPendingCount} 项` : `${pendingItems.length} 项待处理`}</span>
+              <div>
+                <button type="button" title="确认全部 AI 建议" aria-label="确认全部 AI 建议" disabled={saving} onClick={() => void confirmAIProposals()}><Icon name="sparkles" size={15} /></button>
+                <button type="button" title="确认所选" aria-label="确认所选" disabled={saving || selectedPendingCount === 0 || selectedPendingHasEmptyTitle} onClick={() => void runBulk('confirm')}><Icon name="check" size={15} /></button>
+                <button className="danger" type="button" title="批量丢弃" aria-label="批量丢弃" disabled={saving || selectedPendingCount === 0} onClick={() => void runBulk('discard')}><Icon name="trash" size={15} /></button>
+              </div>
+            </section>
+          )}
+
+          <div className="inbox-queue-scroll">
+            {(loading || loadingTarget) && items.length === 0 ? (
+              <SurfaceLoading />
+            ) : inboxError && items.length === 0 ? null : items.length === 0 ? (
+              <div className="inbox-queue-empty">
+                <Icon name="inbox" size={22} />
+                <strong>{partition === 'expired' ? '没有已过期内容' : '收件箱是空的'}</strong>
+                <span>{partition === 'expired' ? '过期内容会保留在这里。' : '新采集的内容会出现在这里。'}</span>
+              </div>
+            ) : (
+              <ul className="inbox-list">
+                {items.map((item) => (
+                  <li key={item.id} className={item.id === selected?.id ? 'active' : ''}>
+                    <label className="inbox-row-check">
+                      <input type="checkbox" aria-label={`选择 ${item.title || item.url}`} checked={selectedIDs.has(item.id)} disabled={saving || item.status !== 'pending'} onChange={() => toggleSelection(item.id)} />
+                    </label>
+                    <button type="button" className={item.id === selected?.id ? 'active' : ''} onClick={() => void selectInbox(item.id)}>
+                      <span className="inbox-row-meta">
+                        <span>{item.source_kind}</span>
+                        <time>{formatRelativeDate(item.updated_at)}</time>
+                      </span>
+                      <strong>{item.title || item.url}</strong>
+                      <p>{item.summary || item.note || item.body || '暂无内容'}</p>
+                      <span className="inbox-row-foot">
+                        <span className={'inbox-state-dot ' + item.status} />
+                        {item.expired ? '已过期' : statusLabel(item.status)}
+                        {item.tags.slice(0, 2).map((tag) => <span key={tag}>#{tag}</span>)}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {nextCursor && <button className="rvx-load-more" type="button" disabled={loadingMore || saving} onClick={() => void load(partition, true, nextCursor)}>{loadingMore ? '加载中…' : '更多'}</button>}
+          </div>
+        </aside>
+
+        <section className="inbox-detail" aria-label="条目编辑器">
+          {selected ? (
+            <>
+              <header className="inbox-detail-toolbar">
+                <div className="inbox-detail-state">
+                  <span className="rvx-source-chip">{selected.source_kind}</span>
+                  <span className="rvx-status-chip">{selected.expired ? '已过期' : statusLabel(selected.status)}</span>
+                  {dirty && <span className="inbox-unsaved">未保存</span>}
+                </div>
+                <div className="inbox-detail-actions">
+                  {selected.status === 'discarded' ? (
+                    <button className="rvx-button primary" type="button" disabled={saving} onClick={() => void restore()}><Icon name="refresh" size={15} />恢复到收件箱</button>
+                  ) : selected.status === 'pending' ? (
+                    <>
+                      {selected.expired && <button className="rvx-icon-button" type="button" title="恢复有效期" aria-label="恢复有效期" disabled={saving} onClick={() => void restore()}><Icon name="refresh" size={16} /></button>}
+                      <button className="rvx-icon-button" type="button" title="重新生成摘要" aria-label="重新生成摘要" disabled={saving} onClick={() => void resummarize()}><Icon name="sparkles" size={16} /></button>
+                      <button className="rvx-icon-button danger" type="button" title="丢弃" aria-label="丢弃" disabled={saving} onClick={() => void discard()}><Icon name="trash" size={16} /></button>
+                      <button className="rvx-button primary" type="button" disabled={saving || !title.trim()} onClick={() => void confirm()}><Icon name="check" size={15} />确认入库</button>
+                    </>
+                  ) : <span className="rvx-muted">该内容已确认入库</span>}
+                  {selected.status !== 'confirmed' && <button className="rvx-button secondary" type="button" aria-label="保存元数据" disabled={saving} onClick={() => void saveMetadata()}><Icon name="bookmark" size={14} />保存</button>}
+                </div>
+              </header>
+
+              <div className="inbox-detail-scroll" ref={detailScrollRef} onScroll={syncEditorOutline}>
+                <div className="inbox-reader-layout">
+                  <article className="inbox-reader-document">
+                    <section id="inbox-overview" className="inbox-editor-section" data-toc-heading tabIndex={-1}>
+                      <div className="inbox-source-line">
+                        <span>{formatRelativeDate(selected.created_at)} 收件</span>
+                        <span>修订 {selected.metadata_revision}</span>
+                        <a href={selected.url} target="_blank" rel="noreferrer" title="打开原网页">
+                          {selected.url.replace(/^https?:\/\//, '')}<Icon name="external" size={13} />
+                        </a>
+                      </div>
+                      <h1>{title || '未命名条目'}</h1>
+                      {selectedDraft?.conflict && <p className="inbox-conflict" role="status"><Icon name="alert" size={15} />检测到其他位置的更新。本地草稿已保留，并会在下次保存时使用最新版本。</p>}
+                      <label className="inbox-clean-field">
+                        <span>标题</span>
+                        <input value={title} disabled={saving} onChange={(event) => updateSelectedDraft({ title: event.target.value })} />
+                      </label>
+                      <label className="inbox-clean-field inbox-summary-field">
+                        <span><Icon name="sparkles" size={13} />摘要</span>
+                        <textarea value={summary} disabled={saving} onChange={(event) => updateSelectedDraft({ summary: event.target.value })} rows={4} placeholder="暂无摘要" />
+                      </label>
+                      {selected.job_id && <p className="inbox-job"><Icon name={job?.status === 'failed' ? 'alert' : 'loader'} size={13} />摘要任务 {job?.status ?? 'queued'} · {selected.job_id}</p>}
+                    </section>
+
+                    <section id="inbox-note" className="inbox-editor-section" data-toc-heading tabIndex={-1}>
+                      <header className="inbox-section-title"><Icon name="edit" size={15} /><h2>笔记</h2></header>
+                      <label className="inbox-clean-field">
+                        <span className="sr-only">笔记</span>
+                        <textarea value={note} disabled={saving} onChange={(event) => updateSelectedDraft({ note: event.target.value })} rows={5} placeholder="记录为什么要留下它" />
+                      </label>
+                    </section>
+
+                    <section id="inbox-content" className="inbox-editor-section" data-toc-heading tabIndex={-1}>
+                      <header className="inbox-section-title">
+                        <span><Icon name="doc" size={15} /><h2>正文</h2></span>
+                        <div className="rvx-segmented">
+                          <button type="button" className={!previewBody ? 'active' : ''} disabled={saving} onClick={() => setPreviewBody(false)} aria-pressed={!previewBody}>编辑</button>
+                          <button type="button" className={previewBody ? 'active' : ''} disabled={saving} onClick={() => setPreviewBody(true)} aria-pressed={previewBody}>预览</button>
+                        </div>
+                      </header>
+                      {previewBody ? (
+                        <PlainTextView className="inbox-body-preview reader-flow" text={body || '暂无正文'} blockKey="inbox-body" anns={NO_ANNOTATIONS} onClickHL={ignoreInboxHighlight} />
+                      ) : (
+                        <textarea className="inbox-body-editor" aria-label="正文" value={body} disabled={saving} onChange={(event) => updateSelectedDraft({ body: event.target.value })} rows={14} />
+                      )}
+                      <details className="rvx-source-details"><summary>查看收件时的原始内容</summary><pre>{selected.body}</pre></details>
+                    </section>
+
+                    <section id="inbox-organization" className="inbox-editor-section" data-toc-heading tabIndex={-1}>
+                      <header className="inbox-section-title"><Icon name="tag" size={15} /><h2>整理</h2></header>
+                      <label className="inbox-clean-field">
+                        <span>标签</span>
+                        <input value={tags} disabled={saving} onChange={(event) => updateSelectedDraft({ tags: event.target.value })} placeholder="用逗号或空格分隔" />
+                      </label>
+                      {selected.suggested_tags.some((tag) => !parseTags(tags).includes(tag)) && (
+                        <div className="inbox-suggestions">
+                          <span><Icon name="sparkles" size={13} />AI 建议</span>
+                          <div className="rvx-chip-row">{selected.suggested_tags.filter((tag) => !parseTags(tags).includes(tag)).map((tag) => <button key={tag} type="button" className="rvx-tag-chip" disabled={saving} onClick={() => adoptSuggestedTag(tag)}>采用 #{tag}</button>)}</div>
+                        </div>
+                      )}
+                      <div className="inbox-categories">
+                        <span>分类</span>
+                        <div>{categories.map((category) => <button key={category.id} type="button" disabled={saving} className={'rvx-tag-chip' + (memberships.has(category.id) ? ' active' : '')} onClick={() => void toggleCategory(category)}>{category.name}</button>)}<input value={newCategory} disabled={saving} onChange={(event) => setNewCategory(event.target.value)} placeholder="新分类" onKeyDown={(event) => { if (event.key === 'Enter') void addCategory() }} /></div>
+                      </div>
+                    </section>
+                  </article>
+
+                  <aside className="inbox-outline" aria-label="条目目录">
+                    <ArticleOutline items={editorOutlineItems} activeId={activeEditorOutlineID} onJump={jumpToEditorSection} />
+                  </aside>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="inbox-detail-empty">
+              <Icon name="doc" size={25} />
+              <strong>{items.length === 0 ? '没有待处理条目' : '选择一项开始整理'}</strong>
+            </div>
+          )}
+        </section>
+      </div>
     </SurfaceShell>
   )
 }

@@ -158,6 +158,27 @@ afterEach(() => {
 })
 
 describe('InboxSurface', () => {
+  it('renders the Inbox as a queue and reader workbench', async () => {
+    const { client } = makeClient([inbox({ body: '可阅读的正文' })])
+
+    renderInbox(client)
+
+    await screen.findByRole('heading', { name: '第一篇' })
+    expect(screen.getByRole('complementary', { name: '收件箱列表' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '条目编辑器' })).toBeInTheDocument()
+    expect(screen.getByRole('complementary', { name: '条目目录' })).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: '正文目录' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '概览' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: '正文' })).toHaveValue('可阅读的正文')
+
+    fireEvent.click(screen.getByRole('button', { name: '预览' }))
+    expect(screen.queryByRole('textbox', { name: '正文' })).not.toBeInTheDocument()
+    expect(document.querySelector('.inbox-body-preview')).toHaveTextContent('可阅读的正文')
+
+    fireEvent.click(screen.getByRole('button', { name: '添加条目' }))
+    expect(screen.getByRole('dialog', { name: '添加条目' })).toBeInTheDocument()
+  })
+
   it('shows loading before an empty Inbox state', async () => {
     let resolveList!: (value: ReturnType<typeof ok>) => void
     const listInbox = vi.fn(() => new Promise((resolve) => { resolveList = resolve }))
