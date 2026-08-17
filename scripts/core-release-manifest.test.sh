@@ -294,6 +294,29 @@ if DIST_DIR="$MISSING_READER" bash "$SCRIPT" preview >/dev/null 2>"$TMP/no-reade
 	fail 'a release without the Reader archive was described by a manifest'
 fi
 
+# 4b. The workflow's real ordering: generate signs BEFORE SHA256SUMS is sealed,
+# so that the list can cover the manifest and its signature. A list that has not
+# reached an artifact yet is ordering, not inconsistency — but a listed digest
+# that disagrees is inconsistency at any point. Neither case had a test, which
+# is why a release refused itself for "SHA256SUMS does not list <reader>".
+ORDER="$TMP/dist-ordering"
+build_dist "$ORDER" '' yes
+# What the candidate stage leaves behind: the core archives listed, the Reader
+# archive not yet.
+( cd "$ORDER" && sha256sum cairn_*_linux_*.tar.gz > SHA256SUMS )
+if ! DIST_DIR="$ORDER" bash "$SCRIPT" preview >/dev/null 2>"$TMP/ordering.log"; then
+	cat "$TMP/ordering.log" >&2
+	fail 'the manifest build refused a SHA256SUMS that simply had not been sealed yet'
+fi
+# A digest that disagrees is refused even before sealing.
+DISAGREE="$TMP/dist-disagree"
+build_dist "$DISAGREE" '' yes
+( cd "$DISAGREE" && sha256sum cairn_*_linux_*.tar.gz > SHA256SUMS \
+	&& printf '%064d  cairn-reader-%s.tar.gz\n' 0 "$VERSION" >> SHA256SUMS )
+if DIST_DIR="$DISAGREE" bash "$SCRIPT" preview >/dev/null 2>"$TMP/disagree.log"; then
+	fail 'the manifest build accepted a SHA256SUMS digest that disagrees with the manifest'
+fi
+
 # 5. Identity inputs are validated before anything is read.
 for name in bad-tag bad-commit bad-time bad-repo; do
 	case $name in
