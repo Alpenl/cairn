@@ -128,6 +128,16 @@ describe('Reader responsive content width', () => {
     expect(css).toMatch(/\.reader-toc\s*\{/) // RSS workspace compatibility
   })
 
+  it('keeps the wide article and reading rail in the first grid row', () => {
+    const article = firstRule('.reader-pane:not(.rss-detail-pane) .reader-inner')
+
+    expect(article).toMatch(/grid-column:\s*2\s*;/)
+    expect(article).toMatch(/grid-row:\s*1\s*;/)
+    expect(css).toMatch(
+      /@container\s+readerpane\s*\(min-width:\s*1240px\)[\s\S]*?\.reader-rail\s*\{[^}]*grid-column:\s*4\s*;[^}]*grid-row:\s*1\s*;/,
+    )
+  })
+
   it('gives the RSS reader the shared reading controls and focus canvas', () => {
     expect(css).toMatch(
       /\.rss-detail-pane \.rss-feed-summary,[\s\S]*?\.rss-detail-pane \.rss-article-footer\s*\{[\s\S]*?--reading-font-size[\s\S]*?--reading-line-height/,

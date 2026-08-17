@@ -832,7 +832,7 @@ body {
 .reader-inner { width: 100%; max-width: var(--reader-content-width); margin: 0 auto; padding: 44px 0 120px; }
 .reader-pane:not(.rss-detail-pane) .reader-rail { display: none; }
 .reader-pane:not(.rss-detail-pane) .reader-scroll { display: block; }
-.reader-pane:not(.rss-detail-pane) .reader-inner { grid-column: 2; }
+.reader-pane:not(.rss-detail-pane) .reader-inner { grid-column: 2; grid-row: 1; }
 .reader-prose {
   width: 100%;
 }
@@ -1954,6 +1954,7 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   .reader-pane:not(.rss-detail-pane) .reader-rail {
     display: block;
     grid-column: 4;
+    grid-row: 1;
   }
   .reader-pane:not(.rss-detail-pane) .art-tags { display: none; }
 }
