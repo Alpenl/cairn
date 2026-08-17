@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import { err, ok } from '../../lib/api/result'
-import type { ReaderInboxResponse } from '../../lib/api/types'
+import type { ReaderInboxListItemResponse, ReaderInboxResponse } from '../../lib/api/types'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { enabledReaderCapabilityPolicy } from '../../test/capabilities'
 import { InboxSurface } from './InboxSurface'
@@ -33,6 +33,24 @@ function inbox(overrides: Partial<ReaderInboxResponse> = {}): ReaderInboxRespons
   }
 }
 
+// GET /api/inbox returns the narrow queue card; the editor reads
+// GET /api/inbox/{id} on demand. The stub projects the same way the server
+// does, so a test that wants body/note has to go through getInbox.
+export function inboxCard(item: ReaderInboxResponse): ReaderInboxListItemResponse {
+  return {
+    id: item.id,
+    url: item.url,
+    source_kind: item.source_kind,
+    title: item.title,
+    preview: ((item.summary ?? '').trim() || item.note.trim() || item.body).slice(0, 280),
+    tags: item.tags,
+    status: item.status,
+    metadata_revision: item.metadata_revision,
+    expired: item.expired,
+    updated_at: item.updated_at,
+  }
+}
+
 function makeClient(
   items: ReaderInboxResponse[],
   overrides: Record<string, unknown> = {},
@@ -44,14 +62,18 @@ function makeClient(
       items: serverItems.filter((item) => {
         if (item.status === 'confirmed') return false
         return params.partition === 'expired' ? item.expired : !item.expired
-      }),
+      }).map(inboxCard),
       next_cursor: undefined,
       active_count: pendingItems.filter((item) => !item.expired).length,
       expired_count: pendingItems.filter((item) => item.expired).length,
     })
   })
   const listCategories = vi.fn(async () => ok({ items: [] }))
-  const getInbox = vi.fn(async (id: string) => ok(serverItems.find((item) => item.id === id) ?? inbox({ id })))
+  // Detail records the stub has served on the list path but that are not part
+  // of `serverItems` (tests that install their own listInbox).
+  const listedDetails = new Map<string, ReaderInboxResponse>()
+  const getInbox = vi.fn(async (id: string) =>
+    ok(serverItems.find((item) => item.id === id) ?? listedDetails.get(id) ?? inbox({ id })))
   const patchInbox = vi.fn(async (id: string, _revision: number, request: { title: string | null; body: string; note: string; summary: string | null; tags: string[] }) => {
     const current = serverItems.find((item) => item.id === id) ?? inbox({ id })
     const patched = {
@@ -106,7 +128,7 @@ function makeClient(
   const getInboxJob = vi.fn(async () => ok({ inbox_id: 'inbox-1', status: 'queued', job_id: 'job-1' }))
   const createCategory = vi.fn(async () => ok({ id: 'category-1', name: '分类', count: 0, created_at: '2026-08-10T01:00:00Z' }))
   const setCategoryMembership = vi.fn(async () => ok(true))
-  const client = {
+  const stub: Record<string, unknown> = {
     listInbox,
     listCategories,
     getInbox,
@@ -124,7 +146,25 @@ function makeClient(
     setCategoryMembership,
     isIdentityCurrent: vi.fn(() => true),
     ...overrides,
-  } as unknown as IdentityBoundReaderClient
+  }
+  // The list endpoint returns cards. Tests declare detail records, so the stub
+  // projects whatever a (possibly overridden) listInbox returned and remembers
+  // the detail for the on-demand GET /api/inbox/{id} the editor now issues.
+  const listedInbox = stub.listInbox as (...args: unknown[]) => Promise<{ ok: boolean; data?: { items: unknown[] } }>
+  stub.listInbox = (async (...args: unknown[]) => {
+    const result = await listedInbox(...args)
+    if (!result.ok || !result.data) return result
+    return ok({
+      ...result.data,
+      items: result.data.items.map((item) => {
+        if (!item || typeof item !== 'object' || !('body' in item)) return item
+        const detail = item as ReaderInboxResponse
+        listedDetails.set(detail.id, detail)
+        return inboxCard(detail)
+      }),
+    })
+  }) as typeof stub.listInbox
+  const client = stub as unknown as IdentityBoundReaderClient
   return {
     client,
     listInbox,
@@ -140,6 +180,21 @@ function makeClient(
     resummarizeInbox,
     setCategoryMembership,
   }
+}
+
+/**
+ * The editor fetches its detail record on demand, so the first
+ * GET /api/inbox/{id} in a scenario is that load. Tests that want to control a
+ * later reread (a CAS conflict refresh, a completed-job refresh) install this:
+ * the first call answers with the record the queue is showing, and every later
+ * call is deferred for the test to resolve.
+ */
+function deferredInboxReread(initial: ReaderInboxResponse) {
+  let resolveReread!: (value: ReturnType<typeof ok>) => void
+  const getInbox = vi.fn(() => getInbox.mock.calls.length === 1
+    ? Promise.resolve(ok(initial))
+    : new Promise<ReturnType<typeof ok>>((resolve) => { resolveReread = resolve }))
+  return { getInbox, resolveReread: (value: ReturnType<typeof ok>) => resolveReread(value) }
 }
 
 function renderInbox(client: IdentityBoundReaderClient, initialInboxID?: string) {
@@ -177,6 +232,68 @@ describe('InboxSurface', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '添加条目' }))
     expect(screen.getByRole('dialog', { name: '添加条目' })).toBeInTheDocument()
+  })
+
+  it('renders queue cards from the bounded preview and fetches each detail on demand', async () => {
+    const first = inbox({ body: '第一篇正文', summary: '第一篇摘要' })
+    const second = inbox({ id: 'inbox-2', title: '第二篇', url: 'https://example.com/two', body: '第二篇正文', summary: '' })
+    const resolvers = new Map<string, (value: ReturnType<typeof ok>) => void>()
+    const getInbox = vi.fn((id: string) => new Promise<ReturnType<typeof ok>>((resolve) => { resolvers.set(id, resolve) }))
+    const { client } = makeClient([first, second], { getInbox })
+
+    renderInbox(client)
+
+    // The queue renders from cards alone. The card has no body, so the editor
+    // cannot open until its own record arrives.
+    const firstRow = await screen.findByRole('button', { name: /第一篇/ })
+    expect(firstRow).toHaveTextContent('第一篇摘要')
+    expect(firstRow).not.toHaveTextContent('第一篇正文')
+    await waitFor(() => expect(getInbox).toHaveBeenCalledWith('inbox-1'))
+    expect(screen.queryByRole('textbox', { name: '正文' })).not.toBeInTheDocument()
+
+    await act(async () => { resolvers.get('inbox-1')!(ok(first)) })
+    expect(await screen.findByRole('textbox', { name: '正文' })).toHaveValue('第一篇正文')
+
+    // Clicking a card fetches that card's record; nothing else is requested.
+    fireEvent.click(screen.getByRole('button', { name: /第二篇/ }))
+    await waitFor(() => expect(getInbox).toHaveBeenCalledWith('inbox-2'))
+    await act(async () => { resolvers.get('inbox-2')!(ok(second)) })
+    await waitFor(() => expect(screen.getByRole('textbox', { name: '正文' })).toHaveValue('第二篇正文'))
+
+    // Switching back reuses the cached record instead of asking again.
+    fireEvent.click(screen.getByRole('button', { name: /第一篇/ }))
+    await waitFor(() => expect(screen.getByRole('textbox', { name: '正文' })).toHaveValue('第一篇正文'))
+    expect(getInbox).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops a detail response that arrives after the selected item or its revision moved on', async () => {
+    const first = inbox({ body: '第一篇正文' })
+    const second = inbox({ id: 'inbox-2', title: '第二篇', url: 'https://example.com/two', body: '第二篇正文' })
+    const resolvers = new Map<string, (value: ReturnType<typeof ok>) => void>()
+    const getInbox = vi.fn((id: string) => new Promise<ReturnType<typeof ok>>((resolve) => { resolvers.set(id, resolve) }))
+    const { client } = makeClient([first, second], { getInbox })
+
+    renderInbox(client)
+
+    await waitFor(() => expect(getInbox).toHaveBeenCalledWith('inbox-1'))
+    fireEvent.click(await screen.findByRole('button', { name: /第二篇/ }))
+    await waitFor(() => expect(getInbox).toHaveBeenCalledWith('inbox-2'))
+
+    await act(async () => { resolvers.get('inbox-2')!(ok(second)) })
+    expect(await screen.findByRole('textbox', { name: '正文' })).toHaveValue('第二篇正文')
+
+    // The first item's request only settles now. It belongs to another ID, so
+    // it must not reach the open editor.
+    await act(async () => {
+      resolvers.get('inbox-1')!(ok({ ...first, body: '迟到的第一篇正文', metadata_revision: 9 }))
+    })
+    expect(screen.getByRole('textbox', { name: '正文' })).toHaveValue('第二篇正文')
+
+    // An older revision of the item that *is* open is dropped as well.
+    await act(async () => {
+      resolvers.get('inbox-2')!(ok({ ...second, body: '过期的第二篇正文', metadata_revision: 0 }))
+    })
+    expect(screen.getByRole('textbox', { name: '正文' })).toHaveValue('第二篇正文')
   })
 
   it('labels a queue row by host and only flags rows that left the pending flow', async () => {
@@ -295,7 +412,7 @@ describe('InboxSurface', () => {
 
     await screen.findByRole('heading', { name: '活跃版本' })
     fireEvent.click(screen.getByRole('tab', { name: '已过期 (0)' }))
-    await screen.findByRole('heading', { name: '过期版本' })
+    await screen.findByRole('button', { name: /过期版本/ })
     fireEvent.click(screen.getByRole('tab', { name: '活跃 (0)' }))
 
     expect(await screen.findByText('收件箱是空的')).toBeInTheDocument()
@@ -659,15 +776,15 @@ describe('InboxSurface', () => {
 
   it('does not revive a discarded row from a completed job refresh started before the mutation', async () => {
     const item = inbox({ job_id: 'job-1' })
-    let resolveRefresh!: (value: ReturnType<typeof ok>) => void
-    const getInbox = vi.fn(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveRefresh = resolve }))
+    const { getInbox, resolveReread: resolveRefresh } = deferredInboxReread(item)
     const getInboxJob = vi.fn(async () => ok({ inbox_id: item.id, status: 'completed' as const, job_id: 'job-1' }))
     const { client, discardInbox } = makeClient([item], { getInbox, getInboxJob })
 
     renderInbox(client)
 
     await screen.findByRole('heading', { name: '第一篇' })
-    await waitFor(() => expect(getInbox).toHaveBeenCalledWith('inbox-1'))
+    // Call 1 loaded the detail; call 2 is the job-completion refresh under test.
+    await waitFor(() => expect(getInbox).toHaveBeenCalledTimes(2))
     fireEvent.click(screen.getByRole('button', { name: '丢弃' }))
     await waitFor(() => expect(discardInbox).toHaveBeenCalledWith('inbox-1'))
     expect(await screen.findByRole('button', { name: '恢复到收件箱' })).toBeInTheDocument()
@@ -792,7 +909,7 @@ describe('InboxSurface', () => {
       .mockResolvedValueOnce(ok({ items: [first], next_cursor: undefined }))
       .mockImplementationOnce(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveReload = resolve }))
     const patchInbox = vi.fn(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolvePatch = resolve }))
-    const getInbox = vi.fn(() => new Promise<ReturnType<typeof ok>>(() => {}))
+    const getInbox = vi.fn(async (id: string) => ok(id === 'inbox-b' ? second : first))
     const { client } = makeClient([first], { listInbox, patchInbox, getInbox })
     const rendered = renderInbox(client, 'inbox-a')
 
@@ -1022,7 +1139,7 @@ describe('InboxSurface', () => {
         _revision: number,
         request: { title: string | null; body: string; note: string; summary: string | null; tags: string[] },
       ) => ok(inbox({ id, ...request, metadata_revision: 6 })))
-    const getInbox = vi.fn(async () => ok(inbox({
+    const getInbox = vi.fn(async (id: string) => ok(id === 'inbox-2' ? second : inbox({
       title: '远端标题',
       body: '远端正文',
       note: '远端备注',
@@ -1089,7 +1206,15 @@ describe('InboxSurface', () => {
         _revision: number,
         request: { title: string | null; body: string; note: string; summary: string | null; tags: string[] },
       ) => ok(inbox({ id, ...request, metadata_revision: 4 })))
-    const getInbox = vi.fn(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveConflictRefresh = resolve }))
+    // Call 1 loads the detail the queue is showing, call 2 is the CAS conflict
+    // reread the test delays, and call 3 is the detail refetch the retried list
+    // triggers by publishing a newer revision.
+    const getInbox = vi.fn(() => {
+      const call = getInbox.mock.calls.length
+      if (call === 1) return Promise.resolve(ok(initial))
+      if (call === 2) return new Promise<ReturnType<typeof ok>>((resolve) => { resolveConflictRefresh = resolve })
+      return Promise.resolve(ok(listRevision))
+    })
     const { client } = makeClient([initial], { listInbox, patchInbox, getInbox })
 
     renderInbox(client)
@@ -1099,7 +1224,7 @@ describe('InboxSurface', () => {
     await waitFor(() => expect(listInbox).toHaveBeenCalledTimes(2))
     fireEvent.click(screen.getByRole('button', { name: '保存元数据' }))
     await waitFor(() => expect(patchInbox).toHaveBeenCalledWith('inbox-1', 1, expect.any(Object)))
-    await waitFor(() => expect(getInbox).toHaveBeenCalledWith('inbox-1'))
+    await waitFor(() => expect(getInbox).toHaveBeenCalledTimes(2))
 
     await act(async () => {
       resolveAppend(err({ kind: 'other' as const, message: '追加加载失败' }))
@@ -1143,14 +1268,13 @@ describe('InboxSurface', () => {
       metadata_revision: 3,
     })
     let resolveAppend!: (value: ReturnType<typeof ok>) => void
-    let resolveConflictRefresh!: (value: ReturnType<typeof ok>) => void
     const listInbox = vi.fn()
       .mockResolvedValueOnce(ok({ items: [initial], next_cursor: 'cursor-1' }))
       .mockImplementationOnce(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveAppend = resolve }))
     const patchInbox = vi.fn()
       .mockResolvedValueOnce(err({ kind: 'other' as const, message: '冲突', status: 409 }))
       .mockResolvedValueOnce(ok(inbox({ metadata_revision: 4 })))
-    const getInbox = vi.fn(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveConflictRefresh = resolve }))
+    const { getInbox, resolveReread: resolveConflictRefresh } = deferredInboxReread(initial)
     const { client } = makeClient([initial], { listInbox, patchInbox, getInbox })
 
     renderInbox(client)
@@ -1161,7 +1285,7 @@ describe('InboxSurface', () => {
     fireEvent.change(title, { target: { value: '本地分歧标题' } })
     fireEvent.click(screen.getByRole('button', { name: '保存元数据' }))
     await waitFor(() => expect(patchInbox).toHaveBeenCalledWith('inbox-1', 1, expect.any(Object)))
-    await waitFor(() => expect(getInbox).toHaveBeenCalledWith('inbox-1'))
+    await waitFor(() => expect(getInbox).toHaveBeenCalledTimes(2))
 
     await act(async () => {
       resolveAppend(ok({ items: [stalePageItem], next_cursor: undefined }))
@@ -1213,7 +1337,9 @@ describe('InboxSurface', () => {
         _revision: number,
         request: { title: string | null; body: string; note: string; summary: string | null; tags: string[] },
       ) => ok({ ...conflicted, id, ...request, metadata_revision: 4 }))
-    const getInbox = vi.fn(async () => ok(conflicted))
+    // The replacement client loads its own detail first; only the later reread
+    // is the CAS conflict this test is about.
+    const getInbox = vi.fn(async () => ok(getInbox.mock.calls.length === 1 ? refreshed : conflicted))
     const initialClient = makeClient([original])
     const refreshedClient = makeClient([refreshed], { patchInbox, getInbox })
     const rendered = renderInbox(initialClient.client)
@@ -1419,9 +1545,11 @@ describe('InboxSurface', () => {
       metadata_revision: 5,
     })
     const refreshResolvers = new Map<string, (value: ReturnType<typeof ok>) => void>()
-    const getInbox = vi.fn((id: string) => new Promise<ReturnType<typeof ok>>((resolve) => {
-      refreshResolvers.set(id, resolve)
-    }))
+    // inbox-1 is the open editor's own detail load; the bulk rereads under test
+    // are the ones for the two selected rows.
+    const getInbox = vi.fn((id: string) => id === first.id
+      ? Promise.resolve(ok(first))
+      : new Promise<ReturnType<typeof ok>>((resolve) => { refreshResolvers.set(id, resolve) }))
     const confirmInboxBulk = vi.fn()
       .mockResolvedValueOnce(err({ kind: 'other' as const, message: '批量冲突', status: 409 }))
       .mockImplementationOnce(async (request: { inbox_ids: string[] }) => ok({
@@ -1879,6 +2007,9 @@ describe('InboxSurface', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: '选择 旧 owner' }))
     fireEvent.click(screen.getByRole('button', { name: '确认所选' }))
     await waitFor(() => expect(confirmInboxBulk).toHaveBeenCalledTimes(1))
+    // The editor's own detail load already happened; what must not happen is a
+    // conflict reread issued after the owner changed.
+    const rereadsBeforeBulkFailure = firstClient.getInbox.mock.calls.length
 
     rendered.rerender(
       <InboxSurface
@@ -1895,7 +2026,7 @@ describe('InboxSurface', () => {
       resolveBulk(err({ kind: 'other', message: '旧 owner 冲突', status: 409 }))
     })
 
-    expect(firstClient.getInbox).not.toHaveBeenCalled()
+    expect(firstClient.getInbox).toHaveBeenCalledTimes(rereadsBeforeBulkFailure)
     expect(screen.queryByText('旧 owner 冲突')).not.toBeInTheDocument()
   })
 

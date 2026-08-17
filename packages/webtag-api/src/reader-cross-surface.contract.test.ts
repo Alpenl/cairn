@@ -4,6 +4,18 @@ type IngestRequestBody = NonNullable<paths['/api/ingest']['post']['requestBody']
 type IngestResponseBody = paths['/api/ingest']['post']['responses'][202]['content']['application/json']
 type InboxListResponseBody = paths['/api/inbox']['get']['responses'][200]['content']['application/json']
 type InboxConfirmResponseBody = paths['/api/inbox/{id}/confirm']['post']['responses'][200]['content']['application/json']
+type InboxCard = InboxListResponseBody['items'][number]
+/**
+ * A capture accepts a 4 MiB body and a 1 MiB note, and the Inbox list is read
+ * on every open. The queue page type must not admit either, nor the raw AI
+ * proposal payload or the detail-only category memberships: this alias stops
+ * compiling the moment the projection widens back.
+ */
+type DetailOnlyFieldsOnCard = Extract<
+  keyof InboxCard,
+  'body' | 'note' | 'summary' | 'suggested_tags' | 'proposal_signals' | 'category_ids'
+>
+export const inboxCardCarriesNoDetailPayload: [DetailOnlyFieldsOnCard] extends [never] ? true : false = true
 type ThoughtOpsRequestBody = NonNullable<paths['/api/annotations/ops']['post']['requestBody']>['content']['application/json']
 type ThoughtOpsResponseBody = paths['/api/annotations/ops']['post']['responses'][200]['content']['application/json']
 type ThoughtSyncResponseBody = paths['/api/annotations/sync']['get']['responses'][200]['content']['application/json']
@@ -138,27 +150,20 @@ export const readerCrossSurfaceContractExamples = {
     destination: 'inbox',
     status: 'pending',
   } satisfies components['schemas']['SubmitResponse'] & IngestResponseBody,
+  // The queue page carries cards only. The capture body, the user note and the
+  // AI proposal payload are reachable through GET /api/inbox/{id} alone, which
+  // is what keeps a 4 MiB capture out of every Inbox open.
   inboxPage: {
     items: [{
       id: inboxID,
       url: 'https://capture.example.test/article',
       source_kind: 'browser_capture',
       title: 'Captured article',
-      body: 'Captured body from the browser extension.',
-      note: '',
-      summary: 'Captured summary',
-      suggested_tags: ['capture'],
-      proposal_signals: {},
-      proposal_status: 'completed',
+      preview: 'Captured summary',
       tags: ['capture'],
-      category_ids: [],
       status: 'pending',
       metadata_revision: 1,
-      job_id: null,
-      expires_at: '2026-09-09T08:00:00Z',
-      expired_at: null,
       expired: false,
-      created_at: now,
       updated_at: now,
     }],
     active_count: 1,
@@ -330,7 +335,14 @@ export function assertReaderCrossSurfaceContract(): void {
   assertArray(examples.inboxPage.items, 'inboxPage.items')
   assertRecord(examples.inboxPage.items[0], 'inboxPage.items[0]')
   assertString(examples.inboxPage.items[0].id, 'inboxPage.items[0].id')
+  assertString(examples.inboxPage.items[0].preview, 'inboxPage.items[0].preview')
   if (examples.inboxPage.items[0].status !== 'pending') throw new Error('inbox item must start pending')
+  for (const detailOnly of ['body', 'note', 'proposal_signals', 'suggested_tags', 'category_ids']) {
+    if (detailOnly in examples.inboxPage.items[0]) {
+      throw new Error(`inbox list card must not carry ${detailOnly}; it belongs to GET /api/inbox/{id}`)
+    }
+  }
+  if (!inboxCardCarriesNoDetailPayload) throw new Error('inbox list card type widened back to the detail payload')
   if (examples.inboxConfirmResponse.target_kind !== 'link' || examples.inboxConfirmResponse.status !== 'confirmed') throw new Error('confirm must produce a link')
 
   assertArray(examples.thoughtOpsRequest.ops, 'thoughtOpsRequest.ops')

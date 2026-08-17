@@ -1008,18 +1008,25 @@ func TestClaimExpiredInboxUsesDeadlineAndRecoverableLease(t *testing.T) {
 	}
 }
 
+func readerInboxListColumnsForTest() []string {
+	return []string{"id", "url", "source_kind", "title", "preview", "tags", "status", "metadata_revision", "expired", "updated_at"}
+}
+
+func readerInboxListRowForTest(id uuid.UUID, preview string, expired bool, now time.Time) []any {
+	return []any{id, "https://example.com/inbox", "url", nil, preview, []string{"tag"}, "pending", int64(1), expired, now}
+}
+
 func TestListInboxSeparatesMaterializedExpiryPartitionsAndReturnsBothCounts(t *testing.T) {
 	tests := []struct {
 		name         string
 		partition    model.ReaderInboxPartition
-		expiredAt    any
 		wantExpired  bool
 		partitionSQL string
 		activeCount  int
 		expiredCount int
 	}{
 		{name: "active", partition: model.ReaderInboxPartitionActive, partitionSQL: "expired_at IS NULL", activeCount: 1, expiredCount: 2},
-		{name: "expired", partition: model.ReaderInboxPartitionExpired, expiredAt: time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC), wantExpired: true, partitionSQL: "expired_at IS NOT NULL", activeCount: 1, expiredCount: 2},
+		{name: "expired", partition: model.ReaderInboxPartitionExpired, wantExpired: true, partitionSQL: "expired_at IS NOT NULL", activeCount: 1, expiredCount: 2},
 	}
 
 	for _, test := range tests {
@@ -1032,10 +1039,10 @@ func TestListInboxSeparatesMaterializedExpiryPartitionsAndReturnsBothCounts(t *t
 
 			now := time.Date(2026, 8, 10, 11, 0, 0, 0, time.UTC)
 			inboxID := uuid.New()
-			mock.ExpectQuery(regexp.QuoteMeta("SELECT " + readerInboxColumns + " FROM reader_inbox WHERE status='pending' AND deleted_at IS NULL AND " + test.partitionSQL + " ORDER BY updated_at DESC,id DESC LIMIT $1")).
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT " + readerInboxListColumns + " FROM reader_inbox WHERE status='pending' AND deleted_at IS NULL AND " + test.partitionSQL + " ORDER BY updated_at DESC,id DESC LIMIT $1")).
 				WithArgs(2).
-				WillReturnRows(mock.NewRows(readerInboxExpiryColumnsForTest()).
-					AddRow(readerInboxExpiryRowForTest(inboxID, now.Add(time.Hour), test.expiredAt, now)...))
+				WillReturnRows(mock.NewRows(readerInboxListColumnsForTest()).
+					AddRow(readerInboxListRowForTest(inboxID, "card preview", test.wantExpired, now)...))
 			mock.ExpectQuery("(?s)SELECT\\s+count\\(\\*\\) FILTER \\(WHERE expired_at IS NULL\\)::int,\\s+count\\(\\*\\) FILTER \\(WHERE expired_at IS NOT NULL\\)::int\\s+FROM reader_inbox\\s+WHERE status='pending' AND deleted_at IS NULL").
 				WillReturnRows(mock.NewRows([]string{"active_count", "expired_count"}).AddRow(test.activeCount, test.expiredCount))
 

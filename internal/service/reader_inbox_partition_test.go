@@ -14,7 +14,7 @@ import (
 
 type readerInboxPartitionStoreStub struct {
 	repository.ReaderVNextStore
-	items            []model.ReaderInbox
+	items            []model.ReaderInboxListItem
 	activeCount      int
 	expiredCount     int
 	next             string
@@ -25,10 +25,10 @@ type readerInboxPartitionStoreStub struct {
 	confirmPartition model.ReaderInboxPartition
 }
 
-func (s *readerInboxPartitionStoreStub) ListInbox(_ context.Context, partition model.ReaderInboxPartition, _ string, _ int) ([]model.ReaderInbox, int, int, string, error) {
+func (s *readerInboxPartitionStoreStub) ListInbox(_ context.Context, partition model.ReaderInboxPartition, _ string, _ int) ([]model.ReaderInboxListItem, int, int, string, error) {
 	s.listCalls++
 	s.listPartition = partition
-	return append([]model.ReaderInbox(nil), s.items...), s.activeCount, s.expiredCount, s.next, nil
+	return append([]model.ReaderInboxListItem(nil), s.items...), s.activeCount, s.expiredCount, s.next, nil
 }
 
 func (s *readerInboxPartitionStoreStub) ConfirmAIProposals(_ context.Context, partition model.ReaderInboxPartition) (model.ReaderInboxAIProposalConfirmation, error) {
@@ -39,16 +39,19 @@ func (s *readerInboxPartitionStoreStub) ConfirmAIProposals(_ context.Context, pa
 
 func TestListInboxDefaultsToActiveAndMapsExpiryCounts(t *testing.T) {
 	now := time.Date(2026, 8, 11, 9, 0, 0, 0, time.UTC)
-	expiresAt := now.Add(30 * 24 * time.Hour)
+	title := "Active capture"
 	store := &readerInboxPartitionStoreStub{
-		items: []model.ReaderInbox{{
-			ID:        uuid.New(),
-			URL:       "https://example.com/active",
-			Status:    "pending",
-			ExpiresAt: &expiresAt,
-			Expired:   false,
-			CreatedAt: now,
-			UpdatedAt: now,
+		items: []model.ReaderInboxListItem{{
+			ID:               uuid.New(),
+			URL:              "https://example.com/active",
+			SourceKind:       "manual",
+			Title:            &title,
+			Preview:          "bounded card text",
+			Tags:             []string{"reading"},
+			Status:           "pending",
+			MetadataRevision: 4,
+			Expired:          false,
+			UpdatedAt:        now,
 		}},
 		activeCount:  3,
 		expiredCount: 2,
@@ -65,8 +68,12 @@ func TestListInboxDefaultsToActiveAndMapsExpiryCounts(t *testing.T) {
 	if page.ActiveCount != 3 || page.ExpiredCount != 2 || page.NextCursor != "next-page" || len(page.Items) != 1 {
 		t.Fatalf("ListInbox() page = %#v", page)
 	}
-	if page.Items[0].ExpiresAt == nil || !page.Items[0].ExpiresAt.Equal(expiresAt) || page.Items[0].ExpiredAt != nil || page.Items[0].Expired {
-		t.Fatalf("ListInbox() expiry mapping = %#v", page.Items[0])
+	item := page.Items[0]
+	if item.Expired || item.Status != "pending" || item.MetadataRevision != 4 || item.Preview != "bounded card text" || !item.UpdatedAt.Equal(now) {
+		t.Fatalf("ListInbox() card mapping = %#v", item)
+	}
+	if item.Title == nil || *item.Title != title || len(item.Tags) != 1 || item.Tags[0] != "reading" || item.SourceKind != "manual" {
+		t.Fatalf("ListInbox() card identity = %#v", item)
 	}
 }
 

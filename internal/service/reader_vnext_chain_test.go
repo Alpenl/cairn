@@ -76,14 +76,37 @@ func (s *readerVNextChainStore) CreateInbox(_ context.Context, item model.Reader
 	return cloneReaderInbox(s.inbox), nil
 }
 
-func (s *readerVNextChainStore) ListInbox(_ context.Context, partition model.ReaderInboxPartition, _ string, _ int) ([]model.ReaderInbox, int, int, string, error) {
+func (s *readerVNextChainStore) ListInbox(_ context.Context, partition model.ReaderInboxPartition, _ string, _ int) ([]model.ReaderInboxListItem, int, int, string, error) {
 	if s.inbox.Status != "pending" {
-		return []model.ReaderInbox{}, 0, 0, "", nil
+		return []model.ReaderInboxListItem{}, 0, 0, "", nil
 	}
 	if partition != model.ReaderInboxPartitionActive || s.inbox.ExpiredAt != nil {
-		return []model.ReaderInbox{}, 0, 1, "", nil
+		return []model.ReaderInboxListItem{}, 0, 1, "", nil
 	}
-	return []model.ReaderInbox{*cloneReaderInbox(s.inbox)}, 1, 0, "", nil
+	return []model.ReaderInboxListItem{readerInboxListItemFixture(*cloneReaderInbox(s.inbox))}, 1, 0, "", nil
+}
+
+// readerInboxListItemFixture mirrors what the repository projection selects:
+// the card fields only, never the body or note the chain fixture carries.
+func readerInboxListItemFixture(item model.ReaderInbox) model.ReaderInboxListItem {
+	preview := item.Body
+	if item.Summary != nil && *item.Summary != "" {
+		preview = *item.Summary
+	} else if item.Note != "" {
+		preview = item.Note
+	}
+	return model.ReaderInboxListItem{
+		ID:               item.ID,
+		URL:              item.URL,
+		SourceKind:       item.SourceKind,
+		Title:            item.Title,
+		Preview:          preview,
+		Tags:             append([]string(nil), item.Tags...),
+		Status:           item.Status,
+		MetadataRevision: item.MetadataRevision,
+		Expired:          item.ExpiredAt != nil,
+		UpdatedAt:        item.UpdatedAt,
+	}
 }
 
 func (s *readerVNextChainStore) GetInbox(_ context.Context, id uuid.UUID) (*model.ReaderInbox, error) {
