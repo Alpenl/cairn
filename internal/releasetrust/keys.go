@@ -93,11 +93,10 @@ func mustDecodePublicKey(encoded string) ed25519.PublicKey {
 var trustedKeys = []TrustedKey{
 	{
 		KeyID:     "cairn-release-2026a",
-		PublicKey: mustDecodePublicKey("jU8lfNUpa25v5cmBWA1pjjPjsGt9+eRS0zfvw09FoeM="),
+		PublicKey: mustDecodePublicKey("LLlmtU4R6FpKOiVDApYoM7bKgHMgK4uz39fMNMTiv3A="),
 		NotBefore: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
-		Note: "Bootstrap release signing key for issue #41 stage 0. " +
-			"Rotate to a successor generated on the maintainer's own machine " +
-			"before the first production page-triggered update.",
+		Note: "Release signing key for issue #41 stage 0, generated on the " +
+			"maintainer's own machine and held only in the workflow secret.",
 	},
 }
 
