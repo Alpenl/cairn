@@ -93,11 +93,12 @@ core-legal-check: ## 重建并校验 Core 法律材料与冻结生产依赖闭�
 	$(PNPM) install --frozen-lockfile
 	node scripts/core-legal.mjs check
 
-core-release-test: core-legal-check ## 验证法律材料、draft 与 digest promotion 合同
+core-release-test: core-legal-check ## 验证法律材料、签名 manifest、draft 与 digest promotion 合同
 	$(GO) test ./scripts
 	bash scripts/core-legal.test.sh
 	bash scripts/core-release-build.test.sh
 	bash scripts/core-release-verify.test.sh
+	bash scripts/core-release-manifest.test.sh
 	bash scripts/core-release-promote.test.sh
 
 # Live fetcher integration tests — hits real ArXiv / GitHub / DuckDuckGo /

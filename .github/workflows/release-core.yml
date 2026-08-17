@@ -436,6 +436,15 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+      # The signed manifest binds the archives to the migration targets compiled
+      # into this commit, so producing it needs the toolchain, not just the
+      # artifacts.
+      - name: Setup Go for the signed release manifest
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Download candidate assets
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
         with:
@@ -462,6 +471,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/core-release-promote.sh prepare-channel-record release-assets/CHANNEL-ROLLBACK.json
 
+      # The independent trust root for the page-triggered Core update path
+      # (issue #41). SHA256SUMS lives in the same Release as the archives it
+      # describes, so it can only detect corruption; this manifest is signed
+      # with a key whose public half is compiled into the cairn-updater helper.
+      #
+      # There is no unsigned fallback. Without CAIRN_RELEASE_SIGNING_KEY the
+      # step fails and no draft is prepared, because the alternative is shipping
+      # a manifest whose meaning the helper has to decide at root.
+      - name: Sign the canonical release manifest
+        env:
+          DIST_DIR: release-assets
+          CAIRN_RELEASE_SIGNING_KEY: ${{ secrets.CAIRN_RELEASE_SIGNING_KEY }}
+        run: bash scripts/core-release-manifest.sh generate
+
       - name: Seal security evidence and checksums
         shell: bash
         run: |
@@ -471,7 +494,16 @@ jobs:
           rm -rf release-assets/security-evidence
           (cd release-assets && sha256sum \
             cairn_*.tar.gz core-security-evidence-*.tar.gz cairn-reader-*.tar.gz \
+            cairn-release-manifest.json cairn-release-manifest.json.sig \
             CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json > SHA256SUMS)
+
+      # Runs after the checksum list is rebuilt so it also proves SHA256SUMS and
+      # the signed manifest agree. It needs no secret: this is exactly the code
+      # path the helper executes on the production host.
+      - name: Verify the signed release manifest the way the helper will
+        env:
+          DIST_DIR: release-assets
+        run: bash scripts/core-release-manifest.sh verify
 
       - name: Prepare complete draft Release idempotently
         env:
