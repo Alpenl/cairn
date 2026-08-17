@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -251,4 +252,160 @@ func readerExistingHostTodoProjections(ctx context.Context, db database.Querier,
 		return nil, err
 	}
 	return existing, nil
+}
+
+// ReaderTodoProjectionBackfillID names the one-shot backfill in the ledger.
+// It is a constant rather than a parameter because "has this installation been
+// back-filled" must be one question with one answer.
+const ReaderTodoProjectionBackfillID = "reader-todo-projection-v1"
+
+// readerTodoProjectionBackfillLockKey serializes concurrent backfill runners.
+// Two deploy jobs racing would otherwise both find an empty ledger, both
+// rebuild, and one would fail on the primary key after doing all the work.
+const readerTodoProjectionBackfillLockKey = "reader-todo-projection-backfill"
+
+// ReaderTodoProjectionBackfillResult reports what one backfill call did.
+// AlreadyComplete distinguishes "this run rebuilt the projection" from "a
+// previous run already did", which is what makes a repeated call observably
+// idempotent rather than merely harmless.
+type ReaderTodoProjectionBackfillResult struct {
+	AlreadyComplete bool
+	ProjectedCount  int
+	CompletedAt     time.Time
+}
+
+// BackfillTodoProjections rebuilds every projection from the current Thoughts
+// and published Notes, verifies the result against those sources, and only
+// then records completion — all inside one transaction. A verification failure
+// therefore rolls back both the projections and the ledger row: a failed run
+// can never leave a "completed" marker behind, and the next run starts from
+// the same place this one did.
+func (r *PGXReaderVNextRepository) BackfillTodoProjections(ctx context.Context) (ReaderTodoProjectionBackfillResult, error) {
+	var out ReaderTodoProjectionBackfillResult
+	err := r.withTx(ctx, func(db database.Querier) error {
+		if _, err := db.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, readerTodoProjectionBackfillLockKey); err != nil {
+			return fmt.Errorf("lock todo projection backfill: %w", err)
+		}
+		var completedAt time.Time
+		var projectedCount int
+		err := db.QueryRow(ctx, `
+			SELECT projected_count,completed_at
+			FROM reader_todo_projection_backfills
+			WHERE id=$1`, ReaderTodoProjectionBackfillID).Scan(&projectedCount, &completedAt)
+		if err == nil {
+			out = ReaderTodoProjectionBackfillResult{AlreadyComplete: true, ProjectedCount: projectedCount, CompletedAt: completedAt}
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read todo projection backfill ledger: %w", err)
+		}
+
+		sources, err := listHomeTodoSourcesOn(ctx, db)
+		if err != nil {
+			return err
+		}
+		desired := homeChecklistTodos(sources)
+		if err := r.reconcileTodoProjectionsOn(ctx, db, desired); err != nil {
+			return err
+		}
+		if err := verifyTodoProjectionsOn(ctx, db, desired); err != nil {
+			return err
+		}
+		if err := db.QueryRow(ctx, `
+			INSERT INTO reader_todo_projection_backfills (id,projected_count)
+			VALUES ($1,$2)
+			RETURNING projected_count,completed_at`, ReaderTodoProjectionBackfillID, len(desired)).
+			Scan(&projectedCount, &completedAt); err != nil {
+			return fmt.Errorf("record todo projection backfill: %w", err)
+		}
+		out = ReaderTodoProjectionBackfillResult{ProjectedCount: projectedCount, CompletedAt: completedAt}
+		return nil
+	})
+	if err != nil {
+		return ReaderTodoProjectionBackfillResult{}, err
+	}
+	return out, nil
+}
+
+// ErrReaderTodoProjectionUnverified reports that the rebuilt projection does
+// not match the sources it was built from. It is deliberately fatal to the
+// backfill transaction: recording completion over an unverified projection
+// would turn a recoverable state into a permanent one.
+var ErrReaderTodoProjectionUnverified = errors.New("reader todo projection failed verification")
+
+const readerLiveTodoProjectionsSQL = `
+SELECT origin_kind,COALESCE(origin_host_id,''),origin_ref,text,done,host_revision
+FROM reader_todos
+WHERE origin_kind <> 'standalone' AND deleted_at IS NULL`
+
+// verifyTodoProjectionsOn re-reads what was just written and checks it against
+// the sources. Every live projection must correspond to a source block, and
+// every source block must either be live or carry a tombstone.
+func verifyTodoProjectionsOn(ctx context.Context, db database.Querier, desired []model.ReaderTodo) error {
+	wanted := make(map[string]model.ReaderTodo, len(desired))
+	for _, todo := range desired {
+		wanted[readerTodoProjectionKey(todo.OriginKind, valueOrEmpty(todo.OriginHostID), todo.OriginRef)] = todo
+	}
+	rows, err := db.Query(ctx, readerLiveTodoProjectionsSQL)
+	if err != nil {
+		return fmt.Errorf("verify todo projections: %w", err)
+	}
+	live := make(map[string]struct{}, len(desired))
+	for rows.Next() {
+		var originKind, hostID, text string
+		var originRef []byte
+		var done bool
+		var hostRevision int64
+		if err := rows.Scan(&originKind, &hostID, &originRef, &text, &done, &hostRevision); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan verified todo projection: %w", err)
+		}
+		key := readerTodoProjectionKey(originKind, hostID, originRef)
+		todo, ok := wanted[key]
+		if !ok {
+			rows.Close()
+			return fmt.Errorf("%w: %s/%s has no source block", ErrReaderTodoProjectionUnverified, originKind, hostID)
+		}
+		if todo.Text != text || todo.Done != done || todo.HostRevision != hostRevision {
+			rows.Close()
+			return fmt.Errorf("%w: %s/%s disagrees with its source block", ErrReaderTodoProjectionUnverified, originKind, hostID)
+		}
+		live[key] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read verified todo projections: %w", err)
+	}
+	rows.Close()
+	return verifyTodoProjectionTombstonesOn(ctx, db, wanted, live)
+}
+
+// verifyTodoProjectionTombstonesOn accounts for every source block that is not
+// live. The only legitimate reason is a tombstone the user created by
+// dismissing it; anything else means the rebuild dropped a block.
+func verifyTodoProjectionTombstonesOn(ctx context.Context, db database.Querier, wanted map[string]model.ReaderTodo, live map[string]struct{}) error {
+	if len(wanted) == len(live) {
+		return nil
+	}
+	existing, err := readerExistingTodoProjections(ctx, db)
+	if err != nil {
+		return err
+	}
+	tombstoned := make(map[string]struct{}, len(existing))
+	for _, item := range existing {
+		if item.deletedAt != nil {
+			tombstoned[readerTodoProjectionKey(item.origin, valueOrEmpty(item.hostID), item.originRef)] = struct{}{}
+		}
+	}
+	for key, todo := range wanted {
+		if _, ok := live[key]; ok {
+			continue
+		}
+		if _, ok := tombstoned[key]; ok {
+			continue
+		}
+		return fmt.Errorf("%w: %s/%s was not projected and has no tombstone",
+			ErrReaderTodoProjectionUnverified, todo.OriginKind, valueOrEmpty(todo.OriginHostID))
+	}
+	return nil
 }

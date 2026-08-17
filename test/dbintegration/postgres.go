@@ -293,6 +293,7 @@ func truncateAllTables(ctx context.Context, pool *pgxpool.Pool) error {
 		reader_thought_supersession_events,
 		reader_thought_tombstones,
 		reader_thoughts,
+		reader_todo_projection_backfills,
 		reader_todos,
 		site_entries,
 		site_identities,

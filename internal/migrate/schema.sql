@@ -1498,6 +1498,19 @@ CREATE TABLE public.reader_thoughts (
 
 
 --
+-- Name: reader_todo_projection_backfills; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.reader_todo_projection_backfills (
+    id text NOT NULL,
+    projected_count integer NOT NULL,
+    completed_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    CONSTRAINT chk_reader_todo_projection_backfills_count CHECK ((projected_count >= 0)),
+    CONSTRAINT chk_reader_todo_projection_backfills_id CHECK ((btrim(id) <> ''::text))
+);
+
+
+--
 -- Name: reader_todos; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2124,6 +2137,14 @@ ALTER TABLE ONLY public.reader_thought_tombstones
 
 ALTER TABLE ONLY public.reader_thoughts
     ADD CONSTRAINT reader_thoughts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: reader_todo_projection_backfills reader_todo_projection_backfills_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reader_todo_projection_backfills
+    ADD CONSTRAINT reader_todo_projection_backfills_pkey PRIMARY KEY (id);
 
 
 --
