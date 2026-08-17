@@ -1,4 +1,4 @@
-.PHONY: help build build-full reader-build reader-clean run migrate migrate-fresh test test-integration test-dbintegration test-dbintegration-required test-no-skip arch-contract ci-contracts version-test core-legal-check core-release-test vet tools lint actionlint fmt tidy modules-verify vuln race fuzz-smoke bench frontend-verify docker-build db-migrate schema-dump schema-check container-smoke gate verify clean
+.PHONY: help build build-full reader-build reader-clean run migrate migrate-fresh test test-integration test-dbintegration test-dbintegration-required test-no-skip arch-contract ci-contracts version-test core-legal-check core-release-test vet tools lint actionlint fmt tidy modules-verify vuln race fuzz-smoke bench frontend-verify reader-perf-postgres reader-perf-fixture-manifest reader-perf-browser docker-build db-migrate schema-dump schema-check container-smoke gate verify clean
 
 GO ?= go
 BIN_DIR ?= bin
@@ -230,6 +230,32 @@ bench: ## 跑热路径 benchmark（concept / analyzer / service / fetcher 各热
 		./internal/service/analyzer/... \
 		./internal/service/ \
 		./internal/fetcher/...
+
+# Reader 热路径基线（issue #40 阶段 0）。三条都是 opt-in，都需要 Docker，
+# 都**不**进 gate / verify——它们产出的是记录，不是判据。抖动的微秒阈值卡 PR
+# 只会训练人去重跑，不会让代码变快。
+#
+# 确定性的部分（fixture 行数与摘要、每条路径的语句数、返回体上限、关键
+# plan shape）由 test-dbintegration 里的 TestReaderScaleFixtureContract 守着，
+# 那条是默认跑的。
+#
+# 结果一律写进 artifacts/，该目录整体 gitignore：基线数字属于某台机器某一次
+# 运行，提交它只会制造「谁的机器是标准」的争论。
+reader-perf-postgres: ## 跑 Reader 六条热路径的 PostgreSQL 基线测量（需要 Docker，数分钟）
+	WEBTAG_READER_PERF_MEASURE=1 $(GO) test -C test/dbintegration -tags=dbintegration \
+		-count=1 -timeout=3000s -v -run TestReaderScaleHotPathMeasurements ./...
+
+# 从空库重建 fixture 并把行数、每表摘要、语句数、返回体上限与 plan shape
+# 写回 tracked manifest。只在有意改动 fixture 或热路径之后跑，跑完必须审 diff：
+# 它把「断言」换成了「记录」，在 CI 上跑等于什么都没断言。
+reader-perf-fixture-manifest: ## 重新生成规模 fixture manifest（需要 Docker）
+	WEBTAG_READER_PERF_WRITE_MANIFEST=1 $(GO) test -C test/dbintegration -tags=dbintegration \
+		-count=1 -timeout=900s -v -run TestReaderScaleFixtureContract ./...
+
+reader-perf-browser: ## 跑 Reader 规模 fixture 的浏览器旅程与 API timing 基线
+	READER_PERF_FIXTURE_MANIFEST=$(abspath test/fixtures/reader-vnext-performance/manifest.json) \
+	READER_PERF_OUTPUT_DIR=$(abspath artifacts/reader-vnext-performance/browser) \
+	$(PNPM) --filter webtag-reader test:browser reader-vnext-performance.spec.ts
 
 docker-build: ## 构建 slim + full 两种容器镜像
 	docker build \

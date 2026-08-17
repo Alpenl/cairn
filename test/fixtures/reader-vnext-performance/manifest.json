@@ -1,15 +1,162 @@
 {
-  "schema_version": 1,
-  "fixture_id": "reader-vnext-wave0",
-  "fixture_status": "candidate-seeded",
-  "seed": "reader-vnext-wave0-2026-08-09",
+  "schema_version": 2,
+  "fixture_id": "reader-vnext-scale-i40",
+  "fixture_status": "frozen",
+  "seed": "reader-vnext-scale-40-2026-08-17",
   "reader_journey": "reader-vnext-performance",
   "postgres_plan_artifact_env": "READER_PERF_POSTGRES_PLAN_FILE",
+  "measurement_env": "WEBTAG_READER_PERF_MEASURE",
+  "regenerate_env": "WEBTAG_READER_PERF_WRITE_MANIFEST",
+  "search_token": "cairnbaseline",
+  "warmup_iterations": 10,
+  "warm_samples": 100,
   "data_scale": {
-    "link_count": 10,
-    "thought_count": 3,
-    "note_count": 2,
-    "inbox_item_count": 3,
-    "feed_item_count": 5
+    "link_count": 10000,
+    "thought_count": 10000,
+    "thought_tombstone_count": 500,
+    "note_count": 2000,
+    "inbox_item_count": 1000,
+    "feed_item_count": 10000,
+    "feed_subscription_count": 50,
+    "feed_folder_count": 5,
+    "site_count": 500,
+    "category_count": 24,
+    "categorizable_count": 2500,
+    "engagement_count": 3000,
+    "standalone_todo_count": 200,
+    "todo_projection_source_count": 980
+  },
+  "row_counts": {
+    "feed_folders": 5,
+    "feed_items": 10000,
+    "feed_subscriptions": 50,
+    "links": 10000,
+    "reader_categories": 24,
+    "reader_categorizables": 2500,
+    "reader_engagement": 3000,
+    "reader_inbox": 1000,
+    "reader_notes": 2000,
+    "reader_thought_tombstones": 500,
+    "reader_thoughts": 10000,
+    "reader_todos": 200,
+    "site_entries": 500,
+    "sites": 500
+  },
+  "row_digests": {
+    "feed_folders": "76bcb381fc5c22cfda67216b6e7e6098",
+    "feed_items": "d63e5f850aebff3055e37e52d8e9c73c",
+    "feed_subscriptions": "c590960aaccf29e3488cc4690a10f043",
+    "links": "a2fa74493fecf09d6e1895120b6528aa",
+    "reader_categories": "4bb9583ff29c91f9af74f854337737c6",
+    "reader_categorizables": "dbdc54c6309a903aff88838c5afca0dd",
+    "reader_engagement": "cb7a45a305d003d40b9c5c6a8753fbd0",
+    "reader_inbox": "127021e4f1e5d0842de7f216f9322af3",
+    "reader_notes": "377d55fa85e42a817a7edc4236b75d37",
+    "reader_thought_tombstones": "7d22588f80b0c6c653ebacad2bb0b2de",
+    "reader_thoughts": "f9b5182f8296b6ee0ccf21549119eb62",
+    "reader_todos": "2da1aebe94e56a404fcfdfb78eba8d78",
+    "site_entries": "2dd35883bdf929238dd5641e298a9c9c",
+    "sites": "f21b7c9112abd3508a8465a9aac1771e"
+  },
+  "deterministic_locks": {
+    "query_counts": {
+      "activity": 4,
+      "home": 4,
+      "inbox_first_screen": 2,
+      "recommended_feed": 4,
+      "thought_search": 1,
+      "todos": 1
+    },
+    "response_byte_ceilings": {
+      "activity": 12288,
+      "home": 71680,
+      "inbox_first_screen": 17408,
+      "recommended_feed": 40960,
+      "thought_search": 12288,
+      "todos": 11264
+    },
+    "plan_shapes": {
+      "activity": [
+        "Aggregate",
+        "CTE Scan on cte current",
+        "Hash",
+        "Hash Join",
+        "ModifyTable on reader_tag_activity",
+        "ProjectSet",
+        "Seq Scan on links",
+        "Seq Scan on reader_tag_activity",
+        "Sort",
+        "Subquery Scan"
+      ],
+      "home": [
+        "Aggregate",
+        "Hash",
+        "Hash Join",
+        "Index Scan on feed_items using idx_feed_items_unread",
+        "Result",
+        "Seq Scan on feed_subscriptions",
+        "Seq Scan on links",
+        "Seq Scan on reader_inbox",
+        "Seq Scan on reader_notes",
+        "Seq Scan on reader_thought_tombstones",
+        "Seq Scan on reader_thoughts",
+        "Seq Scan on reader_todos",
+        "Seq Scan on sites"
+      ],
+      "inbox_first_screen": [
+        "Index Scan on reader_inbox using idx_reader_inbox_pending",
+        "Limit"
+      ],
+      "recommended_feed": [
+        "Hash",
+        "Hash Join",
+        "Limit",
+        "Nested Loop",
+        "Seq Scan on links",
+        "Seq Scan on reader_engagement",
+        "Seq Scan on reader_feed_feedback",
+        "Sort"
+      ],
+      "thought_search": [
+        "Aggregate",
+        "Append",
+        "Bitmap Heap Scan on reader_thoughts",
+        "Bitmap Index Scan using idx_reader_thoughts_search_trgm",
+        "CTE Scan on cte search_candidates",
+        "Index Scan on reader_thought_tombstones using reader_thought_tombstones_pkey",
+        "Index Scan on reader_thoughts using reader_thoughts_pkey",
+        "Limit",
+        "Nested Loop",
+        "Seq Scan on reader_thought_ops",
+        "Seq Scan on reader_thought_tombstones",
+        "Seq Scan on reader_thoughts",
+        "Sort",
+        "Unique",
+        "WindowAgg"
+      ],
+      "todos": [
+        "Limit",
+        "Seq Scan on reader_todos",
+        "Sort"
+      ]
+    }
+  },
+  "browser_journey": {
+    "steps": [
+      "home",
+      "todos",
+      "inbox",
+      "thought_search",
+      "recommended_feed",
+      "activity"
+    ],
+    "api_paths": [
+      "/api/home",
+      "/api/todos",
+      "/api/inbox",
+      "/api/annotations",
+      "/api/reader-feed",
+      "/api/reader/activity"
+    ]
   }
 }
