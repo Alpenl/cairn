@@ -91,7 +91,7 @@ expect() {
 }
 
 expect "SELECT count(*) FROM schema_migrations WHERE version = 'f03e51d6911b'" "1"
-expect "SELECT count(*) FROM schema_migrations" "8"
+expect "SELECT count(*) FROM schema_migrations" "9"
 expect "SELECT version FROM schema_migrations WHERE version = 'reader2026081301'" "reader2026081301"
 expect "SELECT version FROM schema_migrations WHERE version = 'integrity2026081401'" "integrity2026081401"
 expect "SELECT version FROM schema_migrations WHERE version = 'historical2026081401'" "historical2026081401"

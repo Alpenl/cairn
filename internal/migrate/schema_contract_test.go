@@ -81,17 +81,30 @@ func TestFreshSchemaKeepsNoLexemeIndexForSubstringThoughtSearch(t *testing.T) {
 			t.Errorf("fresh schema still carries unusable thought-search index fragment %q", forbidden)
 		}
 	}
-	tail := strings.Join(steps[len(steps)-1].SQL, "\n")
+	// Address the step by ID rather than by position: it stopped being the last
+	// one the moment another step was appended, and a positional lookup would
+	// then assert against whatever unrelated migration happens to be at the tail.
+	var trigram *Step
+	for i := range steps {
+		if steps[i].ID == readerThoughtSearchTrigramMigrationID {
+			trigram = &steps[i]
+			break
+		}
+	}
+	if trigram == nil {
+		t.Fatalf("migration plan has no %s step", readerThoughtSearchTrigramMigrationID)
+	}
+	body := strings.Join(trigram.SQL, "\n")
 	for _, want := range []string{
 		"CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_reader_thoughts_search_trgm",
 		"CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_reader_thought_tombstones_search_trgm",
 		"DROP INDEX CONCURRENTLY IF EXISTS public.idx_reader_thought_search",
 	} {
-		if !strings.Contains(tail, want) {
+		if !strings.Contains(body, want) {
 			t.Errorf("trigram search migration missing %q", want)
 		}
 	}
-	if !steps[len(steps)-1].NonTransactional {
+	if !trigram.NonTransactional {
 		t.Error("CONCURRENTLY index migration must be NonTransactional")
 	}
 }

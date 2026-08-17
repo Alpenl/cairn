@@ -48,7 +48,7 @@ expect() {
 # remains a compatibility alias and must be idempotent on the same database.
 DATABASE_URL="$database_url" make migrate-fresh
 expect "select count(*) from schema_migrations where version = 'f03e51d6911b'" "1"
-expect "select count(*) from schema_migrations" "8"
+expect "select count(*) from schema_migrations" "9"
 expect "select to_regclass('public.idx_link_translations_saved_revision_unique')" "idx_link_translations_saved_revision_unique"
 expect "select to_regclass('public.idx_link_translations_legacy_source_unique')" "idx_link_translations_legacy_source_unique"
 
@@ -69,7 +69,11 @@ expect "select version from schema_migrations where version = 'readersearch20260
 expect "select indisvalid::text from pg_index where indexrelid = to_regclass('public.idx_reader_thoughts_search_trgm')" "true"
 expect "select indisvalid::text from pg_index where indexrelid = to_regclass('public.idx_reader_thought_tombstones_search_trgm')" "true"
 expect "select coalesce(to_regclass('public.idx_reader_thought_search')::text,'none')" "none"
+expect "select version from schema_migrations where version = 'readertodoprojection2026081701'" "readertodoprojection2026081701"
 expect "select to_regclass('public.feed_lifecycle_repair_audit')" "feed_lifecycle_repair_audit"
+# The backfill ledger is what stops a second run from rebuilding every
+# projection, so the forward migration has to actually create it.
+expect "select to_regclass('public.reader_todo_projection_backfills')" "reader_todo_projection_backfills"
 # The River index is built with CREATE INDEX CONCURRENTLY. A canceled or
 # failed build leaves a same-name index with indisvalid=false that IF NOT EXISTS
 # would accept, so recording the migration is not evidence the index is usable —
