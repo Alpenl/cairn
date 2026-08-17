@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"webtag/internal/deployplan"
 )
 
 // The harness stands up a whole fake host: real directories with real
@@ -99,25 +101,33 @@ func (host *host) readControl(name string) string {
 // writeDefaultMigrationReports installs the happy-path plan and apply reports.
 func (host *host) writeDefaultMigrationReports() {
 	host.t.Helper()
-	host.writeControl("plan.json", mustJSON(host.t, MigrationReport{
-		SchemaVersion: MigrationReportSchemaVersion,
+	host.writeControl("plan.json", mustJSON(host.t, deployplan.Report{
+		SchemaVersion: deployplan.ReportSchemaVersion,
 		Tool:          "cairn-migrate",
 		OK:            true,
 		Mode:          "target",
 		Target:        fixtureSchema,
-		OnlineUpdate: &OnlineUpdatePlan{
+		Applied:       []string{},
+		PlanOnly:      true,
+		OnlineUpdate: &deployplan.OnlineUpdatePlan{
 			Target:   fixtureSchema,
 			Pending:  []string{fixtureSchema},
 			Allowed:  true,
-			Blockers: []OnlineUpdateBlocker{},
+			Blockers: []deployplan.OnlineUpdateBlocker{},
+		},
+		Ledgers: &deployplan.LedgerReconciliation{
+			OK:       false,
+			Schema:   deployplan.SchemaLedgerState{Present: true, Target: fixtureSchema, Head: "previousstep2026010101", Missing: []string{fixtureSchema}},
+			River:    deployplan.RiverLedgerState{Present: true, Target: fixtureRiver, Head: fixtureRiver, AtTarget: true},
+			Problems: []deployplan.LedgerProblem{{Ledger: "schema_migrations", Kind: deployplan.ProblemBehind, Detail: "one step short, which is what this update is for"}},
 		},
 	}))
 	host.writeControl("apply.json", mustJSON(host.t, host.successfulApplyReport()))
 }
 
-func (host *host) successfulApplyReport() MigrationReport {
-	return MigrationReport{
-		SchemaVersion: MigrationReportSchemaVersion,
+func (host *host) successfulApplyReport() deployplan.Report {
+	return deployplan.Report{
+		SchemaVersion: deployplan.ReportSchemaVersion,
 		Tool:          "cairn-migrate",
 		OK:            true,
 		Mode:          "target",
@@ -125,11 +135,11 @@ func (host *host) successfulApplyReport() MigrationReport {
 		StartVersion:  "previousstep2026010101",
 		EndVersion:    fixtureSchema,
 		Applied:       []string{fixtureSchema},
-		Ledgers: &LedgerReconciliation{
+		Ledgers: &deployplan.LedgerReconciliation{
 			OK:       true,
-			Schema:   SchemaLedgerState{Present: true, Target: fixtureSchema, Head: fixtureSchema, AtTarget: true},
-			River:    RiverLedgerState{Present: true, Target: fixtureRiver, Head: fixtureRiver, AtTarget: true},
-			Problems: []LedgerProblem{},
+			Schema:   deployplan.SchemaLedgerState{Present: true, Target: fixtureSchema, Head: fixtureSchema, AtTarget: true},
+			River:    deployplan.RiverLedgerState{Present: true, Target: fixtureRiver, Head: fixtureRiver, AtTarget: true},
+			Problems: []deployplan.LedgerProblem{},
 		},
 	}
 }

@@ -100,6 +100,9 @@ func identityScript() []byte {
 // values: the plan that refuses, the migration that exits non-zero after
 // committing two steps, and the run that prints an overshot ledger are all this
 // program doing exactly what a broken release would do.
+// The plan branch mirrors the real --plan-json contract: it applies nothing and
+// carries the plan_only marker the helper requires. A test that needs to
+// reproduce an older binary silently ignoring the flag writes plan.no_marker.
 func migrateScript(controlDir string) []byte {
 	return []byte(fmt.Sprintf(`#!/bin/sh
 if [ "$1" = "--version" ]; then

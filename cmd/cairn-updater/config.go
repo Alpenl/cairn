@@ -268,6 +268,11 @@ const (
 	ServiceStopTimeout = 2 * time.Minute
 	// BackupTimeout bounds pg_dump.
 	BackupTimeout = 30 * time.Minute
+	// PlanTimeout bounds the read-only eligibility question. It is far shorter
+	// than MigrateTimeout because a plan applies nothing: an hour spent here
+	// would be an hour of an operator watching a page that cannot yet say
+	// whether the update is even permitted.
+	PlanTimeout = 5 * time.Minute
 	// MigrateTimeout bounds the migration subprocess.
 	MigrateTimeout = 60 * time.Minute
 	// ReadyTimeout is how long the new binary has to answer /ready with the

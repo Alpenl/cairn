@@ -282,8 +282,15 @@ var layer = map[string]int{
 	"service":    3,
 	"repository": 2,
 	// migrate 是 cmd/migrate 的迁移源，直接使用 database，故位于其上而非 0 层。
-	"migrate":  2,
-	"database": 1,
+	"migrate": 2,
+	// deployplan 与 migrate 同层：它是 cairn-updater 用来驱动**目标 Release 自带
+	// 的** migrate 二进制的子进程契约。它刻意不 import migrate——helper 以 root
+	// 运行，链进迁移引擎 + pgx + River 既扩大攻击面，又会重新诱惑「在进程内规划
+	// 升级范围」，而 helper 编译进来的计划永远是旧那一版。代价是手抄的 JSON 形状
+	// 会漂移，所以漂移由 TestTheMirrorDecodesTheRealTypes 机械封死（测试里才
+	// import migrate，同层无约束）。
+	"deployplan": 2,
+	"database":   1,
 
 	// 0 层：领域模型与工具包。显式列出而非依赖默认值，这样新增包时
 	// allInternalPackagesAreLayered 会强制作者主动定级。
@@ -555,6 +562,9 @@ var skipLayerExempt = map[string]bool{
 	// 它必须在服务开始只读投影之前跑完，因此挂在部署期的 migrate 入口上，与
 	// 其他 step 一样是「跑完即退出」的一次性任务。
 	"cmd/migrate -> repository": true,
+	// cmd/cairn-updater 通过 deployplan 驱动目标 Release 的 migrate 子进程；它
+	// 自己不 import migrate，理由见 layer 表里 deployplan 的说明。
+	"cmd/cairn-updater -> deployplan": true,
 	// cmd/release-manifest 在发布期读取本次发布编译进来的迁移计划，把精确的
 	// schema target 与 online-update 分类写进签名 manifest。它必须直读迁移源：
 	// 经 service 中转会让「manifest 里的目标」与「二进制真正会执行的目标」变成

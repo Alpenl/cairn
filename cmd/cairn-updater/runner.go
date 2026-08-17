@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"webtag/internal/deploybackup"
+	"webtag/internal/deployplan"
 	"webtag/internal/releasetrust"
 )
 
@@ -456,6 +457,11 @@ func (runner *Runner) checkBackupTooling(ctx context.Context) error {
 	return nil
 }
 
+// planner builds the driver for the target release's migrate binary.
+func (runner *Runner) planner(state *runState) *deployplan.Planner {
+	return deployplan.New(backupRunner{inner: runner.commands}, state.migrateBinary, runner.config.DatabaseURL)
+}
+
 // backup builds the dump driver for this run.
 func (runner *Runner) backup() *deploybackup.Backup {
 	return deploybackup.New(backupRunner{inner: runner.commands},
@@ -470,8 +476,19 @@ func (runner *Runner) backup() *deploybackup.Backup {
 // question in the wrong order.
 func (runner *Runner) checkMigrationPlan(ctx context.Context, state *runState) error {
 	manifest := state.verified.Manifest
-	migrator := NewMigrator(runner.commands, state.migrateBinary, runner.config.DatabaseURL)
-	report, err := migrator.Plan(ctx, manifest.SchemaTarget)
+	planCtx, cancel := context.WithTimeout(ctx, PlanTimeout)
+	defer cancel()
+
+	report, err := runner.planner(state).Plan(planCtx, manifest.SchemaTarget)
+	if errors.Is(err, deployplan.ErrPlanApplied) {
+		// The plan flag was supposed to change nothing. If the binary answered
+		// without the marker it may have migrated instead, which means the
+		// database moved outside any maintenance window.
+		return holdf(HoldIntegrity,
+			"Stop and read the ledgers by hand before anything else runs. The plan step was supposed to change "+
+				"nothing, and the target release's answer does not prove that it did not.",
+			err, "the migration plan for %s did not come back as a plan", manifest.SchemaTarget)
+	}
 	if err != nil {
 		return holdf(HoldEnvironment,
 			"The database could not be reached or the migration plan could not be evaluated. Nothing has been changed; "+
@@ -479,22 +496,27 @@ func (runner *Runner) checkMigrationPlan(ctx context.Context, state *runState) e
 			err, "the migration plan for schema target %s could not be evaluated", manifest.SchemaTarget)
 	}
 	if report.Error != nil {
+		return runner.planErrorHold(report, manifest.SchemaTarget)
+	}
+	// The plan reconciles the ledgers as they stand today. Most findings are
+	// expected here — a database that has not been migrated yet is behind its
+	// target, which is the whole point of the update. An overshoot is not: it
+	// means a newer release already migrated this database, and no amount of
+	// migrating forward can undo that. Catching it now costs nothing; catching
+	// it after quiesce costs an outage.
+	if report.Ledgers.Overshot() {
 		return holdf(HoldIntegrity,
-			"Do not submit this update again until the ledger state is understood. The service has not been stopped.",
-			nil, "the target release refused to plan the migration (%s): %s", report.Error.Kind, report.Error.Message)
+			"Stop. A ledger past its target means a different release already migrated this database. Migrating "+
+				"further cannot correct it and neither can restoring binaries. Escalate before anything else runs.",
+			nil, "this database is already ahead of %s (schema extra: %v, River extra: %v)",
+			manifest.SchemaTarget, report.Ledgers.Schema.Extra, report.Ledgers.River.Extra)
 	}
-	plan := report.OnlineUpdate
-	if plan == nil {
-		return holdf(HoldPolicy,
-			"This release cannot be applied from the page. Use the manual upgrade runbook.",
-			nil, "the target release did not produce an online update decision for schema target %s", manifest.SchemaTarget)
-	}
-	if !plan.Allowed {
+	if blocked, blockers := report.Blocked(); blocked {
 		return &holdError{
 			class: HoldPolicy,
 			reason: fmt.Sprintf("the migration range to %s contains %d step(s) a page-triggered update may not apply",
-				manifest.SchemaTarget, len(plan.Blockers)),
-			blockers: toBlockers(plan.Blockers),
+				manifest.SchemaTarget, len(blockers)),
+			blockers: toBlockers(blockers),
 			remediation: "Apply these steps by hand, following the runbook for each one. The service has not been " +
 				"stopped and nothing on this host has changed.",
 		}
@@ -502,13 +524,49 @@ func (runner *Runner) checkMigrationPlan(ctx context.Context, state *runState) e
 	return nil
 }
 
-func toBlockers(blockers []OnlineUpdateBlocker) []Blocker {
+// planErrorHold classifies the target release's own refusal to plan.
+//
+// The distinction that matters is whether the answer describes this host or the
+// request. A ledger that is ahead, or a target behind what is applied, is a
+// statement about the database that no retry will change; an unknown target is
+// a statement about the release. Both stop before quiesce, but an operator
+// reading them has to do completely different things.
+func (runner *Runner) planErrorHold(report *deployplan.Report, target string) *holdError {
+	switch report.Error.Kind {
+	case deployplan.ErrorLedgerAhead:
+		return holdf(HoldIntegrity,
+			"Stop. Some newer release already migrated this database. Escalate before anything else runs; "+
+				"the service has not been stopped.",
+			nil, "the migration ledger is ahead of the release being installed: %s", report.Error.Message)
+	case deployplan.ErrorTargetBehindLedger:
+		return holdf(HoldIntegrity,
+			"This would be a downgrade, and this migration system has no down direction. Only a restore can get "+
+				"here. The service has not been stopped.",
+			nil, "schema target %s is behind what this database has already applied: %s", target, report.Error.Message)
+	case deployplan.ErrorUnknownTarget:
+		return holdf(HoldTrust,
+			"The signed manifest and the shipped migrate binary disagree about what this release contains. Do not "+
+				"retry; treat the release as mis-built.",
+			nil, "the release's own migrate binary does not know schema target %s: %s", target, report.Error.Message)
+	case deployplan.ErrorManualStep:
+		return holdf(HoldPolicy,
+			"Apply the gated step by hand, following its runbook. The service has not been stopped.",
+			nil, "the migration range to %s crosses a release-gated manual step: %s", target, report.Error.Message)
+	default:
+		return holdf(HoldEnvironment,
+			"Nothing has been changed and the service has not been stopped. Resolve the reported problem and "+
+				"submit the update again.",
+			nil, "the target release could not plan the migration (%s): %s", report.Error.Kind, report.Error.Message)
+	}
+}
+
+func toBlockers(blockers []deployplan.OnlineUpdateBlocker) []Blocker {
 	out := make([]Blocker, 0, len(blockers))
 	for _, blocker := range blockers {
 		out = append(out, Blocker{
 			StepID: blocker.StepID,
 			Class:  blocker.Reason,
-			Manual: blocker.Reason == "manual_gate",
+			Manual: blocker.Reason == deployplan.BlockManualGate,
 			Reason: blocker.Detail,
 		})
 	}
@@ -564,15 +622,16 @@ func (runner *Runner) takeBackup(ctx context.Context, state *runState) error {
 
 func (runner *Runner) migrate(ctx context.Context, state *runState) error {
 	manifest := state.verified.Manifest
-	migrator := NewMigrator(runner.commands, state.migrateBinary, runner.config.DatabaseURL)
+	applyCtx, cancel := context.WithTimeout(ctx, MigrateTimeout)
+	defer cancel()
 
-	report, err := migrator.Apply(ctx, manifest.SchemaTarget)
+	report, err := runner.planner(state).Apply(applyCtx, manifest.SchemaTarget)
 	// Whether the process exited zero is not the question. A migration that
 	// exits non-zero may still have committed several steps, and a migration
 	// that exits zero has proved nothing until its own report says so. The
 	// state flag is therefore set from what the report shows was applied, not
 	// from the exit status.
-	if report != nil && (len(report.Applied) > 0 || report.EndVersion != report.StartVersion) {
+	if report.Changed() {
 		state.databaseMigrated = true
 	}
 	if err != nil {
@@ -589,7 +648,7 @@ func (runner *Runner) migrate(ctx context.Context, state *runState) error {
 	return runner.checkLedgers(state, report)
 }
 
-func (runner *Runner) migrationHold(report *MigrationReport, cause error, target string) *holdError {
+func (runner *Runner) migrationHold(report *deployplan.Report, cause error, target string) *holdError {
 	hold := holdf(HoldIntegrity,
 		"The database may have moved partway. Do not start either release until the ledgers have been read by hand; "+
 			"the recovery runbook is bound to the dump recorded in backup_path.",
@@ -616,7 +675,7 @@ func (runner *Runner) postMigrationRemediation(state *runState) string {
 // the database contains. An overshoot is the one finding that cannot be fixed
 // by migrating further — a forward-only system has no way back — so it is
 // always an integrity hold rather than something to retry past.
-func (runner *Runner) checkLedgers(state *runState, report *MigrationReport) error {
+func (runner *Runner) checkLedgers(state *runState, report *deployplan.Report) error {
 	manifest := state.verified.Manifest
 	ledgers := report.Ledgers
 	if ledgers == nil {

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"webtag/internal/deployplan"
 )
 
 // TestASignedUpdateReachesTheTargetCommit is the reference run every fault
@@ -244,18 +246,20 @@ func TestAReleaseThatDeclaresItselfNotOnlineUpdatableIsRefused(t *testing.T) {
 
 func TestAManualGateStopsTheUpdateBeforeTheServiceIsStopped(t *testing.T) {
 	host := newHost(t)
-	host.writeControl("plan.json", mustJSON(t, MigrationReport{
-		SchemaVersion: MigrationReportSchemaVersion,
+	host.writeControl("plan.json", mustJSON(t, deployplan.Report{
+		SchemaVersion: deployplan.ReportSchemaVersion,
 		Tool:          "cairn-migrate",
 		OK:            true,
 		Mode:          "target",
 		Target:        fixtureSchema,
-		OnlineUpdate: &OnlineUpdatePlan{
+		Applied:       []string{},
+		PlanOnly:      true,
+		OnlineUpdate: &deployplan.OnlineUpdatePlan{
 			Target:  fixtureSchema,
 			Pending: []string{"conceptbackfill2026072001", fixtureSchema},
 			Allowed: false,
-			Blockers: []OnlineUpdateBlocker{
-				{StepID: "conceptbackfill2026072001", Reason: "manual_gate",
+			Blockers: []deployplan.OnlineUpdateBlocker{
+				{StepID: "conceptbackfill2026072001", Reason: deployplan.BlockManualGate,
 					Detail: "this step is release-gated and must be applied by hand"},
 			},
 		},
@@ -290,17 +294,19 @@ func TestAManualGateStopsTheUpdateBeforeTheServiceIsStopped(t *testing.T) {
 
 func TestAnUnclassifiedStepBlocksTheUpdate(t *testing.T) {
 	host := newHost(t)
-	host.writeControl("plan.json", mustJSON(t, MigrationReport{
-		SchemaVersion: MigrationReportSchemaVersion,
+	host.writeControl("plan.json", mustJSON(t, deployplan.Report{
+		SchemaVersion: deployplan.ReportSchemaVersion,
 		Tool:          "cairn-migrate",
 		OK:            true,
 		Target:        fixtureSchema,
-		OnlineUpdate: &OnlineUpdatePlan{
+		Applied:       []string{},
+		PlanOnly:      true,
+		OnlineUpdate: &deployplan.OnlineUpdatePlan{
 			Target:  fixtureSchema,
 			Pending: []string{fixtureSchema},
 			Allowed: false,
-			Blockers: []OnlineUpdateBlocker{
-				{StepID: fixtureSchema, Reason: "unclassified", Detail: "classification defaults to deny"},
+			Blockers: []deployplan.OnlineUpdateBlocker{
+				{StepID: fixtureSchema, Reason: deployplan.BlockUnclassified, Detail: "classification defaults to deny"},
 			},
 		},
 	}))
@@ -415,12 +421,12 @@ func TestAFailedDumpStopsTheUpdate(t *testing.T) {
 func TestALedgerShortOfItsTargetStopsTheSwitch(t *testing.T) {
 	host := newHost(t)
 	report := host.successfulApplyReport()
-	report.Ledgers = &LedgerReconciliation{
+	report.Ledgers = &deployplan.LedgerReconciliation{
 		OK: false,
-		Schema: SchemaLedgerState{Present: true, Target: fixtureSchema, Head: "previousstep2026010101",
+		Schema: deployplan.SchemaLedgerState{Present: true, Target: fixtureSchema, Head: "previousstep2026010101",
 			Missing: []string{fixtureSchema}, AtTarget: false},
-		River:    RiverLedgerState{Present: true, Target: fixtureRiver, Head: fixtureRiver, AtTarget: true},
-		Problems: []LedgerProblem{{Ledger: "schema_migrations", Kind: "behind", Detail: "one step short"}},
+		River:    deployplan.RiverLedgerState{Present: true, Target: fixtureRiver, Head: fixtureRiver, AtTarget: true},
+		Problems: []deployplan.LedgerProblem{{Ledger: "schema_migrations", Kind: "behind", Detail: "one step short"}},
 	}
 	host.writeControl("apply.json", mustJSON(t, report))
 
@@ -437,12 +443,12 @@ func TestALedgerShortOfItsTargetStopsTheSwitch(t *testing.T) {
 func TestAnOvershotLedgerIsAnIntegrityHold(t *testing.T) {
 	host := newHost(t)
 	report := host.successfulApplyReport()
-	report.Ledgers = &LedgerReconciliation{
+	report.Ledgers = &deployplan.LedgerReconciliation{
 		OK: false,
-		Schema: SchemaLedgerState{Present: true, Target: fixtureSchema, Head: "somethingnewer2026090101",
+		Schema: deployplan.SchemaLedgerState{Present: true, Target: fixtureSchema, Head: "somethingnewer2026090101",
 			Extra: []string{"somethingnewer2026090101"}, AtTarget: false},
-		River:    RiverLedgerState{Present: true, Target: fixtureRiver, Head: fixtureRiver, AtTarget: true},
-		Problems: []LedgerProblem{{Ledger: "schema_migrations", Kind: LedgerProblemAhead, Detail: "the ledger overshot its target"}},
+		River:    deployplan.RiverLedgerState{Present: true, Target: fixtureRiver, Head: fixtureRiver, AtTarget: true},
+		Problems: []deployplan.LedgerProblem{{Ledger: "schema_migrations", Kind: deployplan.ProblemAhead, Detail: "the ledger overshot its target"}},
 	}
 	host.writeControl("apply.json", mustJSON(t, report))
 
@@ -463,8 +469,8 @@ func TestAMigrationThatExitsNonZeroAfterCommittingStepsHolds(t *testing.T) {
 	host := newHost(t)
 	// The dangerous shape: some steps committed, then a later one failed. The
 	// exit code is non-zero but the database has already moved.
-	host.writeControl("apply.json", mustJSON(t, MigrationReport{
-		SchemaVersion: MigrationReportSchemaVersion,
+	host.writeControl("apply.json", mustJSON(t, deployplan.Report{
+		SchemaVersion: deployplan.ReportSchemaVersion,
 		Tool:          "cairn-migrate",
 		OK:            false,
 		Mode:          "target",
@@ -472,7 +478,7 @@ func TestAMigrationThatExitsNonZeroAfterCommittingStepsHolds(t *testing.T) {
 		StartVersion:  "previousstep2026010101",
 		EndVersion:    "middlestep2026050101",
 		Applied:       []string{"middlestep2026050101"},
-		Error:         &MigrationReportError{Kind: "failed", Message: "relation already exists"},
+		Error:         &deployplan.ReportError{Kind: "failed", Message: "relation already exists"},
 	}))
 	host.writeControl("apply.exit", "1")
 
@@ -635,5 +641,155 @@ func withTrust(host *host, trust ReleaseTrust) func() *Runner {
 			readyBudget: 2 * time.Second,
 			readyPoll:   50 * time.Millisecond,
 		}
+	}
+}
+
+// --- the plan contract with the target release's migrate binary -------------
+
+// TestAPlanThatDoesNotSayItPlannedIsAnIntegrityHold is the fail-closed guard
+// against an older migrate binary that does not know --plan-json. Such a binary
+// would treat the flag as an unrecognised argument and could run the migration
+// for real, so a plan report without the marker has to be read as "the database
+// may already have moved" rather than as a formatting quirk.
+func TestAPlanThatDoesNotSayItPlannedIsAnIntegrityHold(t *testing.T) {
+	host := newHost(t)
+	host.writeControl("plan.json", mustJSON(t, deployplan.Report{
+		SchemaVersion: deployplan.ReportSchemaVersion,
+		Tool:          "cairn-migrate",
+		OK:            true,
+		Target:        fixtureSchema,
+		// No PlanOnly marker, and it claims to have applied a step.
+		Applied: []string{fixtureSchema},
+		OnlineUpdate: &deployplan.OnlineUpdatePlan{
+			Target: fixtureSchema, Allowed: true, Blockers: []deployplan.OnlineUpdateBlocker{},
+		},
+	}))
+
+	job := host.runUpdate(fixtureTag)
+	assertHold(t, job, PhasePreflight, HoldIntegrity)
+	if !strings.Contains(job.Hold.Reason, "did not come back as a plan") {
+		t.Fatalf("the hold must name the broken plan contract, got %q", job.Hold.Reason)
+	}
+	// It stops before quiesce even though it is an integrity hold: the point is
+	// to avoid entering a maintenance window nobody agreed to.
+	if host.serviceWasStopped() {
+		t.Fatal("a suspect plan must not be followed by stopping the service")
+	}
+	if job.Hold.ServiceStopped {
+		t.Fatal("the hold must record that the service is still running")
+	}
+}
+
+// TestADatabaseAlreadyAheadOfTheTargetIsCaughtBeforeQuiesce covers the case
+// where a newer release already migrated this host. Migrating forward cannot
+// correct it, so discovering it after the service is stopped would be a pure
+// outage.
+func TestADatabaseAlreadyAheadOfTheTargetIsCaughtBeforeQuiesce(t *testing.T) {
+	host := newHost(t)
+	host.writeControl("plan.json", mustJSON(t, deployplan.Report{
+		SchemaVersion: deployplan.ReportSchemaVersion,
+		Tool:          "cairn-migrate",
+		OK:            true,
+		Target:        fixtureSchema,
+		Applied:       []string{},
+		PlanOnly:      true,
+		OnlineUpdate: &deployplan.OnlineUpdatePlan{
+			Target: fixtureSchema, Allowed: true, Blockers: []deployplan.OnlineUpdateBlocker{},
+		},
+		Ledgers: &deployplan.LedgerReconciliation{
+			OK: false,
+			Schema: deployplan.SchemaLedgerState{Present: true, Target: fixtureSchema,
+				Head: "somethingnewer2026090101", Extra: []string{"somethingnewer2026090101"}},
+			River: deployplan.RiverLedgerState{Present: true, Target: fixtureRiver, Head: fixtureRiver, AtTarget: true},
+			Problems: []deployplan.LedgerProblem{
+				{Ledger: "schema_migrations", Kind: deployplan.ProblemAhead, Detail: "the ledger overshot its target"},
+			},
+		},
+	}))
+
+	job := host.runUpdate(fixtureTag)
+	assertHold(t, job, PhasePreflight, HoldIntegrity)
+	if !strings.Contains(job.Hold.Remediation, "Escalate") {
+		t.Fatalf("an overshoot must escalate, got %q", job.Hold.Remediation)
+	}
+	if host.serviceWasStopped() {
+		t.Fatal("an already-overshot database must be found before quiesce")
+	}
+	if host.migrationRan() {
+		t.Fatal("an already-overshot database must not be migrated")
+	}
+}
+
+// TestAPlanBehindItsTargetIsNormalAndProceeds guards the opposite mistake. A
+// database that has not been migrated yet is behind its target — that is what
+// the update is for — and treating the plan's ledger reconciliation as a
+// pass/fail gate would refuse every real update.
+func TestAPlanBehindItsTargetIsNormalAndProceeds(t *testing.T) {
+	host := newHost(t)
+
+	job := host.runUpdate(fixtureTag)
+	if job.State != JobSucceeded {
+		t.Fatalf("a database behind its target must be updatable, got %s (%+v)", job.State, job.Hold)
+	}
+	// The default plan fixture reports ok=false with a "behind" problem, so
+	// this passing proves the helper reads allowed/blockers rather than ok.
+}
+
+// TestTheTargetReleasesOwnPlanRefusalsAreClassified checks that each refusal
+// kind the migrate binary can emit lands on the right hold class. An operator
+// reading "ledger ahead" and one reading "unknown target" have to do completely
+// different things, and both are different again from a retryable failure.
+func TestTheTargetReleasesOwnPlanRefusalsAreClassified(t *testing.T) {
+	cases := []struct {
+		kind    string
+		class   HoldClass
+		mention string
+	}{
+		{deployplan.ErrorLedgerAhead, HoldIntegrity, "ahead of the release"},
+		{deployplan.ErrorTargetBehindLedger, HoldIntegrity, "behind what this database"},
+		{deployplan.ErrorUnknownTarget, HoldTrust, "does not know schema target"},
+		{deployplan.ErrorManualStep, HoldPolicy, "manual step"},
+		{"failed", HoldEnvironment, "could not plan"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.kind, func(t *testing.T) {
+			host := newHost(t)
+			host.writeControl("plan.json", mustJSON(t, deployplan.Report{
+				SchemaVersion: deployplan.ReportSchemaVersion,
+				Tool:          "cairn-migrate",
+				OK:            false,
+				Target:        fixtureSchema,
+				Applied:       []string{},
+				PlanOnly:      true,
+				Error:         &deployplan.ReportError{Kind: testCase.kind, Message: "the target release said so"},
+			}))
+
+			job := host.runUpdate(fixtureTag)
+			assertHold(t, job, PhasePreflight, testCase.class)
+			if !strings.Contains(job.Hold.Reason, testCase.mention) {
+				t.Fatalf("expected the reason to mention %q, got %q", testCase.mention, job.Hold.Reason)
+			}
+			// Every plan refusal, whatever its class, happens before quiesce.
+			if host.serviceWasStopped() {
+				t.Fatalf("%s was discovered after the service was stopped", testCase.kind)
+			}
+		})
+	}
+}
+
+// TestThePlanIsAskedForTheManifestTargetAndNothingElse pins the two values that
+// decide what gets migrated.
+func TestThePlanIsAskedForTheManifestTargetAndNothingElse(t *testing.T) {
+	host := newHost(t)
+
+	job := host.runUpdate(fixtureTag)
+	if job.State != JobSucceeded {
+		t.Fatalf("update failed: %+v", job.Hold)
+	}
+	if got := host.readControl("plan.target"); got != fixtureSchema {
+		t.Fatalf("the plan must be asked about the signed schema target %s, got %q", fixtureSchema, got)
+	}
+	if got := host.readControl("plan.dsn"); got != host.config.DatabaseURL {
+		t.Fatalf("the plan must run against the configured database, got %q", got)
 	}
 }
