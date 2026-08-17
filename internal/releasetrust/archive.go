@@ -95,6 +95,15 @@ func InspectArchive(source io.Reader) (*ArchiveContents, error) {
 		if len(contents.Entries) >= MaxArchiveEntries {
 			return nil, fmt.Errorf("archive holds more than %d entries", MaxArchiveEntries)
 		}
+		// `tar czf - -C dir .` writes the archive root as its own entry
+		// ("./" or "."). It carries no path of its own and nothing is ever
+		// extracted from it, so it is skipped rather than treated as an entry
+		// with an empty name — which is what it looks like after normalisation.
+		// Rejecting it would refuse every archive built that way, including the
+		// Reader release tarball.
+		if isArchiveRootEntry(header) {
+			continue
+		}
 		name, err := cleanArchivePath(header.Name)
 		if err != nil {
 			return nil, err
@@ -149,6 +158,17 @@ func InspectArchive(source io.Reader) (*ArchiveContents, error) {
 		return nil, errors.New("archive is empty")
 	}
 	return contents, nil
+}
+
+// isArchiveRootEntry reports whether the header is the archive's own root
+// directory rather than a member of it. Only a directory entry qualifies: a
+// *file* named "." or "./" is malformed and must still be refused.
+func isArchiveRootEntry(header *tar.Header) bool {
+	if header.Typeflag != tar.TypeDir {
+		return false
+	}
+	trimmed := strings.TrimSuffix(strings.TrimPrefix(header.Name, "./"), "/")
+	return trimmed == "" || trimmed == "."
 }
 
 func cleanArchivePath(name string) (string, error) {
@@ -295,6 +315,11 @@ func ReadArchiveFile(source io.Reader, name string) ([]byte, error) {
 		}
 		if err != nil {
 			return nil, fmt.Errorf("read archive entry: %w", err)
+		}
+		// Same reason as InspectArchive: the archive's own root entry carries
+		// no path and is never the member being looked for.
+		if isArchiveRootEntry(header) {
+			continue
 		}
 		cleaned, err := cleanArchivePath(header.Name)
 		if err != nil {

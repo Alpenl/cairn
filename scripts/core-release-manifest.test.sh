@@ -50,6 +50,21 @@ def add(tar, name, data, mode):
     tar.addfile(info, io.BytesIO(data))
 
 
+def add_root_entry(tar):
+    """Write the archive's own root the way `tar czf - -C dir .` does.
+
+    The real Reader tarball is built that way, so a fixture that omits this
+    entry cannot see a checker that refuses it — which is exactly how an
+    archive every release produces reached the release pipeline unrejected
+    by the local gate.
+    """
+    info = tarfile.TarInfo("./")
+    info.type = tarfile.DIRTYPE
+    info.mode = 0o755
+    info.mtime = 0
+    tar.addfile(info)
+
+
 for arch in ("amd64", "arm64"):
     root = f"cairn_{version}_linux_{arch}"
     webtag = f"ELF-webtag-{arch}".encode()
@@ -106,6 +121,7 @@ if include_reader == "yes":
         ],
     }
     with tarfile.open(os.path.join(dist, f"cairn-reader-{version}.tar.gz"), "w:gz") as tar:
+        add_root_entry(tar)
         add(tar, "reader-vnext-release-manifest.json",
             (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(), 0o644)
         for files in builds.values():
