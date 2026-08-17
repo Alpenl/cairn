@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -13,7 +12,6 @@ import (
 
 	"webtag/internal/database"
 	"webtag/internal/model"
-	"webtag/internal/readertext"
 )
 
 const (
@@ -50,7 +48,8 @@ type readerHomeSnapshotBeginner interface {
 }
 
 const readerHomeTodoSourcesSQL = `
-SELECT 'thought'::text AS host_kind, t.id::text AS host_id, t.last_sequence AS host_revision, t.body
+SELECT 'thought'::text AS host_kind, t.id::text AS host_id, t.last_sequence AS host_revision, t.body,
+	t.host_kind AS source_kind, t.host_id AS source_id, t.link_id
 FROM reader_thoughts t
 WHERE t.deleted=false
 	AND NOT EXISTS (
@@ -58,7 +57,8 @@ WHERE t.deleted=false
 		WHERE tt.thought_id=t.id
 	)
 UNION ALL
-SELECT 'note'::text AS host_kind, n.id::text AS host_id, n.published_revision AS host_revision, n.published_content
+SELECT 'note'::text AS host_kind, n.id::text AS host_id, n.published_revision AS host_revision, n.published_content,
+	'note'::text AS source_kind, n.id::text AS source_id, NULL::uuid AS link_id
 FROM reader_notes n
 WHERE n.deleted_at IS NULL
 ORDER BY host_kind, host_id`
@@ -195,25 +195,24 @@ func (r *PGXReaderVNextRepository) loadHomeAggregateOn(ctx context.Context, db d
 	}, nil
 }
 
-type homeTodoSource struct {
-	hostKind     string
-	hostID       string
-	hostRevision int64
-	body         string
-}
-
-func listHomeTodoSourcesOn(ctx context.Context, db database.Querier) ([]homeTodoSource, error) {
+func listHomeTodoSourcesOn(ctx context.Context, db database.Querier) ([]readerTodoHostSource, error) {
 	rows, err := db.Query(ctx, readerHomeTodoSourcesSQL)
 	if err != nil {
 		return nil, fmt.Errorf("list home todo sources: %w", err)
 	}
 	defer rows.Close()
 
-	sources := make([]homeTodoSource, 0, 32)
+	sources := make([]readerTodoHostSource, 0, 32)
 	for rows.Next() {
-		var source homeTodoSource
-		if err := rows.Scan(&source.hostKind, &source.hostID, &source.hostRevision, &source.body); err != nil {
+		source := readerTodoHostSource{live: true}
+		if err := rows.Scan(
+			&source.originKind, &source.hostID, &source.hostRevision, &source.body,
+			&source.sourceKind, &source.sourceID, &source.linkID,
+		); err != nil {
 			return nil, fmt.Errorf("scan home todo source: %w", err)
+		}
+		if source.sourceKind == "" || source.sourceID == "" {
+			source.sourceKind, source.sourceID = source.originKind, source.hostID
 		}
 		sources = append(sources, source)
 	}
@@ -223,30 +222,13 @@ func listHomeTodoSourcesOn(ctx context.Context, db database.Querier) ([]homeTodo
 	return sources, nil
 }
 
-func homeChecklistTodos(sources []homeTodoSource) []model.ReaderTodo {
-	projectionCount := 0
+// homeChecklistTodos builds the same projections the single-host replace pass
+// builds, so a Home read cannot rewrite an origin_ref that a Thought or Note
+// write just stored.
+func homeChecklistTodos(sources []readerTodoHostSource) []model.ReaderTodo {
+	out := make([]model.ReaderTodo, 0, len(sources))
 	for _, source := range sources {
-		projectionCount += len(readertext.List(source.body))
-	}
-	out := make([]model.ReaderTodo, 0, projectionCount)
-	for _, source := range sources {
-		originHostKind, originHostID := source.hostKind, source.hostID
-		for _, block := range readertext.List(source.body) {
-			originRef, _ := json.Marshal(map[string]any{
-				"block_ref":  block.BlockRef,
-				"text":       block.Text,
-				"occurrence": block.Occurrence,
-			})
-			out = append(out, model.ReaderTodo{
-				Text:           block.Text,
-				Done:           block.Done,
-				OriginKind:     source.hostKind,
-				OriginHostKind: &originHostKind,
-				OriginHostID:   &originHostID,
-				OriginRef:      originRef,
-				HostRevision:   source.hostRevision,
-			})
-		}
+		out = append(out, readerChecklistTodos(source)...)
 	}
 	return out
 }

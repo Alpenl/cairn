@@ -4553,29 +4553,11 @@ func (r *PGXReaderVNextRepository) ReconcileTodoProjections(ctx context.Context,
 // without the soft-deleted keys it could not tell a tombstone from a missing
 // row and silently resurrected a projection the user had already dismissed.
 func (r *PGXReaderVNextRepository) reconcileTodoProjectionsOn(ctx context.Context, db database.Querier, todos []model.ReaderTodo) error {
-	desired := make(map[string]struct{}, len(todos))
-	for _, todo := range todos {
-		if todo.OriginKind == "standalone" {
-			continue
-		}
-		desired[readerTodoProjectionKey(todo.OriginKind, valueOrEmpty(todo.OriginHostID), todo.OriginRef)] = struct{}{}
-	}
-
 	existing, err := readerExistingTodoProjections(ctx, db)
 	if err != nil {
 		return err
 	}
-
-	deleted := make(map[string]struct{}, len(existing))
-	for _, item := range existing {
-		if item.deletedAt != nil {
-			deleted[readerTodoProjectionKey(item.origin, valueOrEmpty(item.hostID), item.originRef)] = struct{}{}
-		}
-	}
-	if err := r.refreshTodoProjections(ctx, db, todos, deleted); err != nil {
-		return err
-	}
-	return dismissStaleTodoProjections(ctx, db, existing, desired)
+	return r.applyTodoProjectionsOn(ctx, db, todos, existing)
 }
 
 // refreshTodoProjections writes back every projection the authoritative host
@@ -4631,16 +4613,21 @@ func readerExistingTodoProjections(ctx context.Context, db database.Querier) ([]
 		SELECT id,origin_kind,origin_host_id,origin_ref,deleted_at
 		FROM reader_todos
 		WHERE origin_kind <> 'standalone'
+		ORDER BY id
 		FOR UPDATE`)
 	if err != nil {
 		return nil, fmt.Errorf("list existing todo projections: %w", err)
 	}
+	return scanReaderExistingTodoProjections(rows)
+}
+
+func scanReaderExistingTodoProjections(rows pgx.Rows) ([]readerExistingTodoProjection, error) {
+	defer rows.Close()
 	existing := make([]readerExistingTodoProjection, 0, 32)
 	for rows.Next() {
 		var item readerExistingTodoProjection
 		var deletedAt pgtype.Timestamptz
 		if err := rows.Scan(&item.id, &item.origin, &item.hostID, &item.originRef, &deletedAt); err != nil {
-			rows.Close()
 			return nil, fmt.Errorf("scan existing todo projection: %w", err)
 		}
 		if deletedAt.Valid {
@@ -4650,10 +4637,8 @@ func readerExistingTodoProjections(ctx context.Context, db database.Querier) ([]
 		existing = append(existing, item)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return nil, fmt.Errorf("read existing todo projections: %w", err)
 	}
-	rows.Close()
 	return existing, nil
 }
 

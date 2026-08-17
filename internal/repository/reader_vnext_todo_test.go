@@ -398,7 +398,7 @@ func TestReconcileTodoProjectionsDoesNotRecreateDeletedProjection(t *testing.T) 
 	}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id,origin_kind,origin_host_id,origin_ref,deleted_at FROM reader_todos WHERE origin_kind <> 'standalone' FOR UPDATE")).
+	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
 		WillReturnRows(mock.NewRows([]string{"id", "origin_kind", "origin_host_id", "origin_ref", "deleted_at"}).AddRow(id, "thought", &hostID, []byte(projection.OriginRef), deletedAt))
 	mock.ExpectCommit()
 
@@ -469,7 +469,7 @@ func TestReconcileTodoProjectionsSetsCompletedAtForNewCompletedProjection(t *tes
 	row := readerTodoRowForTest(uuid.New(), "thought", true, 4)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id,origin_kind,origin_host_id,origin_ref,deleted_at FROM reader_todos WHERE origin_kind <> 'standalone' FOR UPDATE")).
+	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
 		WillReturnRows(mock.NewRows([]string{"id", "origin_kind", "origin_host_id", "origin_ref", "deleted_at"}))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM reader_todos")).
 		WithArgs("thought", hostID, "task:done", "1").
@@ -546,7 +546,7 @@ func TestReconcileTodoProjectionsKeepsDismissedProjectionDismissed(t *testing.T)
 
 	body := "- [ ] resurrect me\n"
 	block := readertext.List(body)[0]
-	projection := homeChecklistTodos([]homeTodoSource{{hostKind: "thought", hostID: "thought-1", hostRevision: 4, body: body}})[0]
+	projection := homeChecklistTodos([]readerTodoHostSource{{originKind: "thought", hostID: "thought-1", hostRevision: 4, body: body, sourceKind: "thought", sourceID: "thought-1", live: true}})[0]
 	projectionID := uuid.New()
 	hostID := "thought-1"
 	dismissedAt := testReaderTime

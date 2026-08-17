@@ -14,6 +14,14 @@ import (
 	"webtag/internal/readertext"
 )
 
+func readerHomeTodoSourceColumns() []string {
+	return []string{"host_kind", "host_id", "host_revision", "body", "source_kind", "source_id", "link_id"}
+}
+
+func readerHomeTodoSourceRow(thoughtID string, revision int64, body string) []any {
+	return []any{"thought", thoughtID, revision, body, "thought", thoughtID, (*uuid.UUID)(nil)}
+}
+
 func readerHomeTodoRowForTest(id uuid.UUID, originKind string, done bool, hostRevision int64, dueAt, completedAt *time.Time) []any {
 	row := readerTodoRowForTest(id, originKind, done, hostRevision)
 	row[2] = dueAt
@@ -41,11 +49,14 @@ func TestReaderHomeFreshnessHasStableRawStates(t *testing.T) {
 }
 
 func TestHomeChecklistTodosPreservesStableProjectionIdentity(t *testing.T) {
-	sources := []homeTodoSource{{
-		hostKind:     "note",
+	sources := []readerTodoHostSource{{
+		originKind:   "note",
 		hostID:       "note-1",
 		hostRevision: 8,
 		body:         "# Plan\n- [ ] same\ncontext\n- [x] same\ncontext\n",
+		sourceKind:   "note",
+		sourceID:     "note-1",
+		live:         true,
 	}}
 
 	items := homeChecklistTodos(sources)
@@ -76,7 +87,7 @@ func TestLoadHomeAggregateUsesOneRepeatableReadSnapshot(t *testing.T) {
 	todoID := uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
-		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}))
+		WillReturnRows(mock.NewRows(readerHomeTodoSourceColumns()))
 	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
 		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()))
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeListTodosSQL)).
@@ -128,12 +139,12 @@ func TestLoadHomeAggregateReconcilesSourceTodosBeforeReadingCounts(t *testing.T)
 
 	body := "- [ ] ship the aggregate\n"
 	block := readertext.List(body)[0]
-	projection := homeChecklistTodos([]homeTodoSource{{hostKind: "thought", hostID: "thought-1", hostRevision: 9, body: body}})[0]
+	projection := homeChecklistTodos([]readerTodoHostSource{{originKind: "thought", hostID: "thought-1", hostRevision: 9, body: body, sourceKind: "thought", sourceID: "thought-1", live: true}})[0]
 	projectionID := uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc")
 
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
-		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}).AddRow("thought", "thought-1", int64(9), body))
+		WillReturnRows(mock.NewRows(readerHomeTodoSourceColumns()).AddRow(readerHomeTodoSourceRow("thought-1", 9, body)...))
 	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
 		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()))
 	mock.ExpectQuery("(?s)SELECT id FROM reader_todos.*FOR UPDATE").
@@ -178,14 +189,14 @@ func TestLoadHomeAggregateProjectsCompletedTodoWithCompletionTimestamp(t *testin
 
 	body := "- [x] ship the aggregate\n"
 	block := readertext.List(body)[0]
-	projection := homeChecklistTodos([]homeTodoSource{{hostKind: "thought", hostID: "thought-1", hostRevision: 9, body: body}})[0]
+	projection := homeChecklistTodos([]readerTodoHostSource{{originKind: "thought", hostID: "thought-1", hostRevision: 9, body: body, sourceKind: "thought", sourceID: "thought-1", live: true}})[0]
 	projectionID := uuid.MustParse("dddddddd-dddd-dddd-dddd-dddddddddddd")
 	completedAt := time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
 	row := readerHomeTodoRowForTest(projectionID, "thought", true, 9, nil, &completedAt)
 
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
-		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}).AddRow("thought", "thought-1", int64(9), body))
+		WillReturnRows(mock.NewRows(readerHomeTodoSourceColumns()).AddRow(readerHomeTodoSourceRow("thought-1", 9, body)...))
 	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
 		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()))
 	mock.ExpectQuery("(?s)SELECT id FROM reader_todos.*FOR UPDATE").
@@ -237,7 +248,7 @@ func TestLoadHomeAggregateReopensProjectionAndPreservesDueDate(t *testing.T) {
 
 	body := "- [ ] reopen the aggregate\n"
 	block := readertext.List(body)[0]
-	projection := homeChecklistTodos([]homeTodoSource{{hostKind: "thought", hostID: "thought-1", hostRevision: 9, body: body}})[0]
+	projection := homeChecklistTodos([]readerTodoHostSource{{originKind: "thought", hostID: "thought-1", hostRevision: 9, body: body, sourceKind: "thought", sourceID: "thought-1", live: true}})[0]
 	projectionID := uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
 	hostID := "thought-1"
 	dueAt := time.Now().UTC().Add(-time.Hour)
@@ -245,7 +256,7 @@ func TestLoadHomeAggregateReopensProjectionAndPreservesDueDate(t *testing.T) {
 
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
-		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}).AddRow("thought", "thought-1", int64(9), body))
+		WillReturnRows(mock.NewRows(readerHomeTodoSourceColumns()).AddRow(readerHomeTodoSourceRow("thought-1", 9, body)...))
 	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
 		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()).AddRow(projectionID, "thought", &hostID, []byte(projection.OriginRef), nil))
 	mock.ExpectQuery("(?s)SELECT id FROM reader_todos.*FOR UPDATE").
@@ -299,7 +310,7 @@ func TestLoadHomeAggregateDismissesStaleProjectionBeforeReading(t *testing.T) {
 	hostID := "thought-1"
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
-		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}))
+		WillReturnRows(mock.NewRows(readerHomeTodoSourceColumns()))
 	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
 		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()).AddRow(projectionID, "thought", &hostID, []byte(`{"block_ref":"task:stale","occurrence":1}`), nil))
 	mock.ExpectExec("UPDATE reader_todos SET deleted_at=COALESCE\\(deleted_at,NOW\\(\\)\\),updated_at=NOW\\(\\) WHERE id=\\$1 AND deleted_at IS NULL").
@@ -339,7 +350,7 @@ func TestLoadHomeAggregateRollsBackInsteadOfReturningPartialData(t *testing.T) {
 	failure := errors.New("todo list failed")
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
-		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}))
+		WillReturnRows(mock.NewRows(readerHomeTodoSourceColumns()))
 	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
 		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()))
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeListTodosSQL)).
@@ -370,14 +381,14 @@ func TestLoadHomeAggregateDoesNotResurrectDismissedProjection(t *testing.T) {
 	defer mock.Close()
 
 	body := "- [ ] dismissed by the user\n"
-	projection := homeChecklistTodos([]homeTodoSource{{hostKind: "thought", hostID: "thought-1", hostRevision: 3, body: body}})[0]
+	projection := homeChecklistTodos([]readerTodoHostSource{{originKind: "thought", hostID: "thought-1", hostRevision: 3, body: body, sourceKind: "thought", sourceID: "thought-1", live: true}})[0]
 	projectionID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	hostID := "thought-1"
 	dismissedAt := time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)
 
 	mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	mock.ExpectQuery(regexp.QuoteMeta(readerHomeTodoSourcesSQL)).
-		WillReturnRows(mock.NewRows([]string{"host_kind", "host_id", "host_revision", "body"}).AddRow("thought", "thought-1", int64(3), body))
+		WillReturnRows(mock.NewRows(readerHomeTodoSourceColumns()).AddRow(readerHomeTodoSourceRow("thought-1", 3, body)...))
 	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
 		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()).
 			AddRow(projectionID, "thought", &hostID, []byte(projection.OriginRef), dismissedAt))
