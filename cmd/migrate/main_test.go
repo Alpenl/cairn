@@ -17,8 +17,8 @@ func TestVersionDoesNotRequireConfiguration(t *testing.T) {
 	buildinfo.Commit = "0123456789abcdef"
 	buildinfo.BuildTime = "2026-08-14T01:02:03Z"
 
-	var stdout bytes.Buffer
-	if err := execute([]string{"--version"}, &stdout); err != nil {
+	var stdout, stderr bytes.Buffer
+	if err := execute([]string{"--version"}, &stdout, &stderr); err != nil {
 		t.Fatalf("execute(--version) error = %v", err)
 	}
 	const want = "cairn 1.2.3\ncommit: 0123456789abcdef\nbuilt: 2026-08-14T01:02:03Z\n"
