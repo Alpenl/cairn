@@ -13,6 +13,7 @@ const (
 	historicalRepairMigrationID                = "historical2026081401"
 	conceptMergeAuditRepairMigrationID         = "conceptaudit2026081401"
 	lifecycleRepairMigrationID                 = "lifecycle2026081401"
+	readerThoughtSearchTrigramMigrationID      = "readersearch2026081701"
 )
 
 // singleInstallSchemaSQL is the complete application-owned schema for a new
@@ -2402,13 +2403,6 @@ CREATE INDEX idx_reader_thought_ops_sequence ON public.reader_thought_ops USING 
 
 
 --
--- Name: idx_reader_thought_search; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_reader_thought_search ON public.reader_thoughts USING gin (to_tsvector('simple'::regconfig, body));
-
-
---
 -- Name: idx_reader_thought_supersession_events_sequence; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2423,10 +2417,24 @@ CREATE INDEX idx_reader_thought_tombstones_order ON public.reader_thought_tombst
 
 
 --
+-- Name: idx_reader_thought_tombstones_search_trgm; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_reader_thought_tombstones_search_trgm ON public.reader_thought_tombstones USING gin ((((((COALESCE((snapshot ->> 'body'::text), ''::text) || ' '::text) || COALESCE((snapshot ->> 'source'::text), ''::text)) || ' '::text) || COALESCE(((snapshot -> 'quote'::text))::text, ''::text))) public.gin_trgm_ops);
+
+
+--
 -- Name: idx_reader_thoughts_host; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_reader_thoughts_host ON public.reader_thoughts USING btree (host_kind, host_id, deleted, updated_at DESC);
+
+
+--
+-- Name: idx_reader_thoughts_search_trgm; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_reader_thoughts_search_trgm ON public.reader_thoughts USING gin ((((((body || ' '::text) || source) || ' '::text) || COALESCE((quote)::text, ''::text))) public.gin_trgm_ops);
 
 
 --
@@ -3539,6 +3547,41 @@ var steps = []Step{
 				 SELECT 1 FROM public.reader_feed_saves AS save WHERE save.link_id=link.id)
 				 ON CONFLICT (link_id,classification) DO UPDATE
 				 SET last_observed_at=CURRENT_TIMESTAMP`,
+		},
+	},
+	{
+		// Thought search has always been `%query%` ILIKE over the active body /
+		// source / quote and over the tombstone snapshot's frozen copies of the
+		// same three fields. idx_reader_thought_search indexed
+		// to_tsvector('simple', body) instead, which no lexeme-free substring
+		// predicate can ever use, so every search paid a full scan of both
+		// tables while still maintaining a GIN index nothing read.
+		//
+		// These two trigram indexes cover exactly the concatenation the rewritten
+		// query pre-filters on. The concatenation is a *necessary* condition of
+		// the original OR (a substring of any part is a substring of the whole),
+		// so the pre-filter is lossless and the untouched OR still rechecks —
+		// the result set stays literally byte-for-byte the same as before.
+		//
+		// CONCURRENTLY keeps the build off the write path of installations whose
+		// reader_thoughts is already large; that forces NonTransactional, and
+		// RecoverInvalidIndexes cleans up an interrupted build so a replay cannot
+		// record the migration against an indisvalid=false relation.
+		ID:               readerThoughtSearchTrigramMigrationID,
+		NonTransactional: true,
+		RecoverInvalidIndexes: []string{
+			"public.idx_reader_thoughts_search_trgm",
+			"public.idx_reader_thought_tombstones_search_trgm",
+		},
+		SQL: []string{
+			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_reader_thoughts_search_trgm
+			 ON public.reader_thoughts USING gin (
+				(body || ' ' || source || ' ' || COALESCE(quote::text, '')) public.gin_trgm_ops)`,
+			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_reader_thought_tombstones_search_trgm
+			 ON public.reader_thought_tombstones USING gin (
+				(COALESCE(snapshot->>'body', '') || ' ' || COALESCE(snapshot->>'source', '')
+					|| ' ' || COALESCE((snapshot->'quote')::text, '')) public.gin_trgm_ops)`,
+			`DROP INDEX CONCURRENTLY IF EXISTS public.idx_reader_thought_search`,
 		},
 	},
 }

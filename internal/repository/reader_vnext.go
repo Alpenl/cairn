@@ -1693,6 +1693,21 @@ func (r *PGXReaderVNextRepository) SearchThoughts(ctx context.Context, query, af
 			(SELECT COALESCE(max(last_sequence),0) FROM reader_thoughts)
 		)) AS snapshot_sequence,
 		COALESCE($3::timestamptz,statement_timestamp()) AS snapshot_at
+	), search_candidates AS MATERIALIZED (
+		-- 唯一目的是让 planner 分别命中 active / tombstone 的两个 trigram 索引。
+		-- 两个分支的表达式与下面 WHERE 里那组 ILIKE 完全同构：某一列包含
+		-- %query% 的子串，拼接串必然也包含它，所以这里是**必要条件**，
+		-- 不是新的过滤器——多进来的行照样被下面原封不动的 OR 复核掉。
+		-- 语义因此逐字不变；变的只有扫描方式。
+		-- UNION（非 UNION ALL）保证一个 thought_id 至多出现一次，JOIN 不会放大行数。
+		SELECT thought.id AS thought_id
+		FROM reader_thoughts thought
+		WHERE (thought.body || ' ' || thought.source || ' ' || COALESCE(thought.quote::text,'')) ILIKE $1
+		UNION
+		SELECT tombstone.thought_id
+		FROM reader_thought_tombstones tombstone
+		WHERE (COALESCE(tombstone.snapshot->>'body','') || ' ' || COALESCE(tombstone.snapshot->>'source','')
+			|| ' ' || COALESCE((tombstone.snapshot->'quote')::text,'')) ILIKE $1
 	), matching_thoughts AS (
 		SELECT thought.id AS thought_id,
 			CASE WHEN tombstone.thought_id IS NULL THEN thought.host_kind ELSE tombstone.snapshot->>'host_kind' END AS host_kind,
@@ -1707,6 +1722,7 @@ func (r *PGXReaderVNextRepository) SearchThoughts(ctx context.Context, query, af
 			authority.snapshot_sequence,
 			authority.snapshot_at
 		FROM reader_thoughts thought
+		JOIN search_candidates candidate ON candidate.thought_id=thought.id
 		CROSS JOIN search_authority authority
 		LEFT JOIN reader_thought_tombstones tombstone ON tombstone.thought_id=thought.id AND (
 			CASE WHEN (tombstone.snapshot->>'lifecycle_sequence') ~ '^[0-9]+$'
@@ -5875,6 +5891,46 @@ func (r *PGXReaderVNextRepository) loadReaderFeedSnapshot(ctx context.Context, s
 	}, nil
 }
 
+// readerFeedSnapshotSweepBatch caps how many expired snapshots one feed request
+// may reclaim. A snapshot row carries a whole materialised feed (up to 2200
+// items of JSONB), so an unbounded DELETE could hold a long transaction on the
+// read path after an outage-induced backlog. One bounded batch per created
+// snapshot converges on its own: snapshots are only produced by the same call
+// that runs the sweep, so the sweep rate always matches the creation rate.
+const readerFeedSnapshotSweepBatch = 200
+
+// createReaderFeedSnapshotSQL persists the new snapshot and, in the same round
+// trip, reclaims one bounded batch of snapshots that loadReaderFeedSnapshot can
+// no longer accept.
+//
+// `created_at <= NOW() - INTERVAL '24 hours'` is the exact complement of the
+// reader's `created_at > NOW() - INTERVAL '24 hours'`, so a cursor that is still
+// valid can never be swept and an expired cursor keeps failing with ErrNotFound
+// exactly as it does today — the 24 hour contract is unchanged, only the dead
+// rows stop accumulating.
+//
+// The ORDER BY + LIMIT feeds idx_reader_feed_snapshots_expiry (btree created_at)
+// so the batch is picked without scanning the table. SKIP LOCKED keeps two
+// concurrent feed requests from queueing on the same rows: the loser simply
+// takes the next batch instead of blocking a user-facing read.
+//
+// `id = ANY(ARRAY(...))` rather than `id IN (SELECT ...)`: the array form
+// collapses the batch into an InitPlan constant, which the planner resolves
+// against the primary key. `IN (SELECT ...)` measurably plans as a hash semi
+// join over a *sequential* scan of the whole snapshot table — the exact
+// table-size-proportional read this sweep exists to remove, and it would come
+// back precisely after the backlog that makes the sweep matter.
+const createReaderFeedSnapshotSQL = `WITH expired AS (
+	SELECT id FROM reader_feed_snapshots
+	WHERE created_at <= NOW() - INTERVAL '24 hours'
+	ORDER BY created_at
+	LIMIT $3
+	FOR UPDATE SKIP LOCKED
+), swept AS (
+	DELETE FROM reader_feed_snapshots WHERE id = ANY(ARRAY(SELECT id FROM expired))
+)
+INSERT INTO reader_feed_snapshots (mode,items) VALUES ($1,$2::jsonb) RETURNING id`
+
 // createReaderFeedSnapshot builds, orders and persists a new feed so that
 // subsequent pages read a frozen ordering instead of re-ranking live data.
 func (r *PGXReaderVNextRepository) createReaderFeedSnapshot(ctx context.Context, mode string, normalizedSources []string) (readerFeedSnapshotState, error) {
@@ -5892,7 +5948,7 @@ func (r *PGXReaderVNextRepository) createReaderFeedSnapshot(ctx context.Context,
 		return readerFeedSnapshotState{}, err
 	}
 	var snapshot uuid.UUID
-	if err := r.db.QueryRow(ctx, `INSERT INTO reader_feed_snapshots (mode,items) VALUES ($1,$2::jsonb) RETURNING id`, modeOrDefault(mode), raw).Scan(&snapshot); err != nil {
+	if err := r.db.QueryRow(ctx, createReaderFeedSnapshotSQL, modeOrDefault(mode), raw, readerFeedSnapshotSweepBatch).Scan(&snapshot); err != nil {
 		return readerFeedSnapshotState{}, fmt.Errorf("create feed snapshot: %w", err)
 	}
 	capabilities, sections, sourceMeta := readerFeedMetadata(items, normalizedSources)

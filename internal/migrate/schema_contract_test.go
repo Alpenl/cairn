@@ -26,6 +26,8 @@ func TestFreshSchemaContainsInstallationContracts(t *testing.T) {
 		"CREATE INDEX idx_reader_inbox_pending_expiry",
 		"CREATE UNIQUE INDEX idx_link_translations_saved_revision_unique",
 		"CREATE UNIQUE INDEX idx_link_translations_legacy_source_unique",
+		"CREATE INDEX idx_reader_thoughts_search_trgm",
+		"CREATE INDEX idx_reader_thought_tombstones_search_trgm",
 		"INSERT INTO public.installation_state (singleton) VALUES (true)",
 		"INSERT INTO public.library_read_revision (singleton) VALUES (true)",
 		"INSERT INTO public.global_read_revision (singleton) VALUES (true)",
@@ -64,6 +66,36 @@ func TestFreshSchemaExcludesCommercialAndIsolationStructures(t *testing.T) {
 	}
 }
 
+// TestFreshSchemaKeepsNoLexemeIndexForSubstringThoughtSearch pins the reason the
+// tsvector index was dropped: thought search is a `%query%` ILIKE contract, and
+// no substring predicate can consume to_tsvector output. Reintroducing it would
+// re-add write amplification on every thought for a reader that cannot use it.
+func TestFreshSchemaKeepsNoLexemeIndexForSubstringThoughtSearch(t *testing.T) {
+	t.Parallel()
+
+	for _, forbidden := range []string{
+		"idx_reader_thought_search ",
+		"to_tsvector('simple'::regconfig, body)",
+	} {
+		if strings.Contains(singleInstallSchemaSQL, forbidden) {
+			t.Errorf("fresh schema still carries unusable thought-search index fragment %q", forbidden)
+		}
+	}
+	tail := strings.Join(steps[len(steps)-1].SQL, "\n")
+	for _, want := range []string{
+		"CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_reader_thoughts_search_trgm",
+		"CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_reader_thought_tombstones_search_trgm",
+		"DROP INDEX CONCURRENTLY IF EXISTS public.idx_reader_thought_search",
+	} {
+		if !strings.Contains(tail, want) {
+			t.Errorf("trigram search migration missing %q", want)
+		}
+	}
+	if !steps[len(steps)-1].NonTransactional {
+		t.Error("CONCURRENTLY index migration must be NonTransactional")
+	}
+}
+
 func TestFreshSchemaLeavesRiverObjectsToRiverMigrations(t *testing.T) {
 	t.Parallel()
 
@@ -77,10 +109,10 @@ func TestFreshSchemaLeavesRiverObjectsToRiverMigrations(t *testing.T) {
 			t.Errorf("application schema duplicates River-owned object %q", forbidden)
 		}
 	}
-	if len(steps) != 7 || steps[1].ID != translationTerminalHistoryIndexMigrationID ||
+	if len(steps) != 8 || steps[1].ID != translationTerminalHistoryIndexMigrationID ||
 		steps[2].ID != readerThoughtTombstoneSnapshotMigrationID || steps[3].ID != integrityRepairMigrationID ||
 		steps[4].ID != historicalRepairMigrationID || steps[5].ID != conceptMergeAuditRepairMigrationID ||
-		steps[6].ID != lifecycleRepairMigrationID {
+		steps[6].ID != lifecycleRepairMigrationID || steps[7].ID != readerThoughtSearchTrigramMigrationID {
 		t.Fatalf("migration plan IDs = %v, want fresh schema and all ordered forward repairs", stepIDs(steps))
 	}
 	if got := strings.Join(steps[1].SQL, "\n"); !strings.Contains(got, "idx_river_job_translation_terminal_history") {

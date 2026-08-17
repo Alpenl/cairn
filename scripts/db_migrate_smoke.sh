@@ -48,7 +48,7 @@ expect() {
 # remains a compatibility alias and must be idempotent on the same database.
 DATABASE_URL="$database_url" make migrate-fresh
 expect "select count(*) from schema_migrations where version = 'f03e51d6911b'" "1"
-expect "select count(*) from schema_migrations" "7"
+expect "select count(*) from schema_migrations" "8"
 expect "select to_regclass('public.idx_link_translations_saved_revision_unique')" "idx_link_translations_saved_revision_unique"
 expect "select to_regclass('public.idx_link_translations_legacy_source_unique')" "idx_link_translations_legacy_source_unique"
 
@@ -62,6 +62,13 @@ expect "select version from schema_migrations where version = 'integrity20260814
 expect "select version from schema_migrations where version = 'historical2026081401'" "historical2026081401"
 expect "select version from schema_migrations where version = 'conceptaudit2026081401'" "conceptaudit2026081401"
 expect "select version from schema_migrations where version = 'lifecycle2026081401'" "lifecycle2026081401"
+expect "select version from schema_migrations where version = 'readersearch2026081701'" "readersearch2026081701"
+# Thought search is a `%query%` ILIKE contract, so the two trigram indexes are
+# the ones the planner can actually consume; the tsvector index it replaced must
+# be gone. Both are built CONCURRENTLY, so presence alone proves nothing.
+expect "select indisvalid::text from pg_index where indexrelid = to_regclass('public.idx_reader_thoughts_search_trgm')" "true"
+expect "select indisvalid::text from pg_index where indexrelid = to_regclass('public.idx_reader_thought_tombstones_search_trgm')" "true"
+expect "select coalesce(to_regclass('public.idx_reader_thought_search')::text,'none')" "none"
 expect "select to_regclass('public.feed_lifecycle_repair_audit')" "feed_lifecycle_repair_audit"
 # The River index is built with CREATE INDEX CONCURRENTLY. A canceled or
 # failed build leaves a same-name index with indisvalid=false that IF NOT EXISTS

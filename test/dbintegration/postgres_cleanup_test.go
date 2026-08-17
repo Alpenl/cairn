@@ -47,6 +47,7 @@ func TestTruncateAllTablesClearsBusinessRowsAndPreservesSingletons(t *testing.T)
 		historicalApplied   bool
 		conceptAuditApplied bool
 		lifecycleApplied    bool
+		searchIndexApplied  bool
 	)
 	if err := pool.QueryRow(t.Context(), `
 		SELECT
@@ -62,11 +63,12 @@ func TestTruncateAllTablesClearsBusinessRowsAndPreservesSingletons(t *testing.T)
 			EXISTS (SELECT 1 FROM public.schema_migrations WHERE version = 'integrity2026081401'),
 			EXISTS (SELECT 1 FROM public.schema_migrations WHERE version = 'historical2026081401'),
 			EXISTS (SELECT 1 FROM public.schema_migrations WHERE version = 'conceptaudit2026081401'),
-			EXISTS (SELECT 1 FROM public.schema_migrations WHERE version = 'lifecycle2026081401')
+			EXISTS (SELECT 1 FROM public.schema_migrations WHERE version = 'lifecycle2026081401'),
+			EXISTS (SELECT 1 FROM public.schema_migrations WHERE version = 'readersearch2026081701')
 	`).Scan(
 		&installationRows, &libraryRows, &globalRows, &feedRows, &migrationRows,
 		&libraryRevision, &globalRevision, &feedRevision, &storedNamespace,
-		&integrityApplied, &historicalApplied, &conceptAuditApplied, &lifecycleApplied,
+		&integrityApplied, &historicalApplied, &conceptAuditApplied, &lifecycleApplied, &searchIndexApplied,
 	); err != nil {
 		t.Fatalf("read singleton state after cleanup: %v", err)
 	}
@@ -74,14 +76,17 @@ func TestTruncateAllTablesClearsBusinessRowsAndPreservesSingletons(t *testing.T)
 		t.Fatalf("singleton row counts = installation:%d library:%d global:%d feed:%d, want one each",
 			installationRows, libraryRows, globalRows, feedRows)
 	}
-	if migrationRows != 7 {
-		t.Fatalf("schema migration rows after cleanup = %d, want 7", migrationRows)
+	if migrationRows != 8 {
+		t.Fatalf("schema migration rows after cleanup = %d, want 8", migrationRows)
 	}
 	if !integrityApplied {
 		t.Fatal("integrity migration was not recorded after cleanup")
 	}
 	if !historicalApplied {
 		t.Fatal("historical repair migration was not recorded after cleanup")
+	}
+	if !searchIndexApplied {
+		t.Fatal("thought search trigram index migration was not recorded after cleanup")
 	}
 	if !conceptAuditApplied {
 		t.Fatal("concept audit repair migration was not recorded after cleanup")
