@@ -532,6 +532,10 @@ var skipLayerExempt = map[string]bool{
 	// cmd/migrate 是迁移执行器，直连迁移源与连接池。
 	"cmd/migrate -> database": true,
 	"cmd/migrate -> migrate":  true,
+	// TODO 投影 backfill 要解析 Markdown 清单，无法写成 SQL step，只能是 Go。
+	// 它必须在服务开始只读投影之前跑完，因此挂在部署期的 migrate 入口上，与
+	// 其他 step 一样是「跑完即退出」的一次性任务。
+	"cmd/migrate -> repository": true,
 }
 
 // TestEverySkipLayerPairIsRegistered 保证 knownSkipLayer 覆盖每一个真实存在的

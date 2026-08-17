@@ -381,6 +381,7 @@ func TestMaterializeThoughtOnlyMarksUserDeleteWhenDeleteWinsLWW(t *testing.T) {
 					WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), int64(42)).
 					WillReturnResult(pgxmock.NewResult("INSERT", 1))
 			}
+			expectThoughtTodoProjectionRefresh(mock, "thought-delete")
 
 			repo := NewPGXReaderVNextRepository(mock)
 			err = repo.materializeThought(context.Background(), mock, model.ReaderThoughtOp{
@@ -705,6 +706,7 @@ func TestReattachThoughtReadsTargetBodyAndReanchorsUniqueQuote(t *testing.T) {
 			opID,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectThoughtTodoProjectionRefresh(mock, thoughtID)
 	expectThoughtSupersessionEvent(mock, thoughtID, 9, 10)
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM reader_thought_tombstones WHERE thought_id=$1")).
 		WithArgs(thoughtID).

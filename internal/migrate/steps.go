@@ -14,6 +14,12 @@ const (
 	conceptMergeAuditRepairMigrationID         = "conceptaudit2026081401"
 	lifecycleRepairMigrationID                 = "lifecycle2026081401"
 	readerThoughtSearchTrigramMigrationID      = "readersearch2026081701"
+
+	// ReaderTodoProjectionLedgerMigrationID creates the ledger the one-shot
+	// TODO projection backfill records its completion in. The backfill itself
+	// is Go code — rebuilding a projection means parsing Markdown checklists,
+	// which is not something this SQL-only step set can express.
+	ReaderTodoProjectionLedgerMigrationID = "readertodoprojection2026081701"
 )
 
 // singleInstallSchemaSQL is the complete application-owned schema for a new
@@ -3582,6 +3588,19 @@ var steps = []Step{
 				(COALESCE(snapshot->>'body', '') || ' ' || COALESCE(snapshot->>'source', '')
 					|| ' ' || COALESCE((snapshot->'quote')::text, '')) public.gin_trgm_ops)`,
 			`DROP INDEX CONCURRENTLY IF EXISTS public.idx_reader_thought_search`,
+		},
+	},
+	{
+		ID: ReaderTodoProjectionLedgerMigrationID,
+		SQL: []string{
+			`CREATE TABLE IF NOT EXISTS public.reader_todo_projection_backfills (
+				id text NOT NULL,
+				projected_count integer NOT NULL,
+				completed_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+				CONSTRAINT reader_todo_projection_backfills_pkey PRIMARY KEY (id),
+				CONSTRAINT chk_reader_todo_projection_backfills_id CHECK ((btrim(id) <> ''::text)),
+				CONSTRAINT chk_reader_todo_projection_backfills_count CHECK ((projected_count >= 0))
+			)`,
 		},
 	},
 }

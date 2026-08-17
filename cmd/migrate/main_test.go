@@ -26,3 +26,26 @@ func TestVersionDoesNotRequireConfiguration(t *testing.T) {
 		t.Fatalf("execute(--version) stdout = %q, want %q", got, want)
 	}
 }
+
+func TestWantsTodoProjectionRepairRequiresTheExplicitFlag(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "no arguments"},
+		{name: "unrelated argument", args: []string{"--version"}},
+		{name: "explicit flag", args: []string{repairTodoProjectionsFlag}, want: true},
+		{name: "explicit flag after another", args: []string{"--version", " " + repairTodoProjectionsFlag + " "}, want: true},
+		{name: "near miss", args: []string{"--repair-reader-todo"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := wantsTodoProjectionRepair(tt.args); got != tt.want {
+				t.Fatalf("wantsTodoProjectionRepair(%v) = %t, want %t", tt.args, got, tt.want)
+			}
+		})
+	}
+}

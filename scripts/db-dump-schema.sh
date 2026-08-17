@@ -91,7 +91,7 @@ expect() {
 }
 
 expect "SELECT count(*) FROM schema_migrations WHERE version = 'f03e51d6911b'" "1"
-expect "SELECT count(*) FROM schema_migrations" "8"
+expect "SELECT count(*) FROM schema_migrations" "9"
 expect "SELECT version FROM schema_migrations WHERE version = 'reader2026081301'" "reader2026081301"
 expect "SELECT version FROM schema_migrations WHERE version = 'integrity2026081401'" "integrity2026081401"
 expect "SELECT version FROM schema_migrations WHERE version = 'historical2026081401'" "historical2026081401"
@@ -105,7 +105,10 @@ expect "SELECT coalesce(to_regclass('public.idx_reader_thought_search')::text,'n
 # Both trigram indexes must be valid: CREATE INDEX CONCURRENTLY can leave an
 # indisvalid=false relation behind, and to_regclass would still resolve it.
 expect "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname IN ('idx_reader_thoughts_search_trgm','idx_reader_thought_tombstones_search_trgm') AND i.indisvalid AND i.indisready" "2"
+expect "SELECT version FROM schema_migrations WHERE version = 'readertodoprojection2026081701'" "readertodoprojection2026081701"
 expect "SELECT to_regclass('public.feed_lifecycle_repair_audit')" "feed_lifecycle_repair_audit"
+expect "SELECT to_regclass('public.reader_todo_projection_backfills')" "reader_todo_projection_backfills"
+expect "SELECT count(*) FROM reader_todo_projection_backfills" "1"
 expect "SELECT to_regclass('public.idx_link_translations_saved_revision_unique')" "idx_link_translations_saved_revision_unique"
 expect "SELECT to_regclass('public.idx_link_translations_legacy_source_unique')" "idx_link_translations_legacy_source_unique"
 expect "SELECT to_regclass('public.idx_river_job_translation_terminal_history')" "idx_river_job_translation_terminal_history"

@@ -156,6 +156,7 @@ func expectThoughtLifecycleAppend(
 			opID,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectThoughtTodoProjectionRefresh(mock, thoughtID)
 	expectThoughtSupersessionEvent(mock, thoughtID, winnerClock, sequence)
 	return opID
 }

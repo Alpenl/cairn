@@ -103,6 +103,7 @@ func TestUnsaveSubscriptionTrashesLastFeedManagedClaimRegardlessOfCreator(t *tes
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectExec(regexp.QuoteMeta(deleteLinkSQL)).WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	expectLinkThoughtTodoProjectionRefresh(mock, linkID)
 
 	association, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID)
 	if err != nil || association == nil || association.LinkID != linkID || association.CreatedLink {
