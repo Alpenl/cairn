@@ -119,7 +119,7 @@ final class ShareViewController: UIViewController {
                 guard let activation, activation.identity.isSupported,
                       let storedConfiguration,
                       storedConfiguration.activation == activation else {
-                    await self.showTerminal("请先打开 WebTag 完成设置", complete: false)
+                    await self.showTerminal("请先打开 Cairn 完成设置", complete: false)
                     return
                 }
                 let submission = ShareSubmissionCoordinator(
