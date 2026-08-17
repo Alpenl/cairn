@@ -35,7 +35,7 @@ const SURFACES: ReadonlyArray<NarrowSurface> = [
   { query: '?tool=todo', content: '.rvx-todo-item' },
   { query: '?tool=history&thought_view=live', content: '.rvx-history-item' },
   { query: '?view=notes', content: '.rvx-list-column' },
-  { query: '?view=pending', content: '.rvx-list-column' },
+  { query: '?view=pending', content: '.inbox-workbench' },
 ]
 
 interface SurfaceGeometry {
