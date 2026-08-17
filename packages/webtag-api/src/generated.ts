@@ -3786,7 +3786,7 @@ export interface paths {
         };
         /**
          * List a Reader inbox partition
-         * @description Pending Inbox captures are partitioned by their materialized expiration marker. active is the default and contains pending rows whose expired_at is null; expired contains pending rows whose expired_at is set. Pagination is stable within the requested partition.
+         * @description Pending Inbox captures are partitioned by their materialized expiration marker. active is the default and contains pending rows whose expired_at is null; expired contains pending rows whose expired_at is set. Pagination is stable within the requested partition. Items carry the narrow queue projection (ReaderInboxListItemResponse): the capture body, the user note, the raw AI proposal payload and the category memberships are served only by GET /api/inbox/{id}.
          */
         get: {
             parameters: {
@@ -6937,8 +6937,34 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        /** @description Queue projection of an Inbox capture. It deliberately omits body, note, proposal_signals, suggested_tags and category_ids: a capture accepts a 4 MiB body and a 1 MiB note, and this list is read every time the Inbox opens. Clients that need those fields read GET /api/inbox/{id}, whose contract is unchanged. */
+        ReaderInboxListItemResponse: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uri */
+            url: string;
+            source_kind: string;
+            title?: string | null;
+            /** @description Bounded card text resolved server-side from summary, then note, then body. It is a display string, not a prefix of the capture body; a truncated preview ends with an ellipsis. */
+            preview: string;
+            tags: string[];
+            /** @enum {string} */
+            status: "pending" | "confirmed" | "discarded";
+            /**
+             * Format: int64
+             * @description The revision the batch confirm/discard actions send back as expected_revisions.
+             */
+            metadata_revision: number;
+            /** @description Derived from the materialized expired_at; clients must not infer it from wall-clock comparison. */
+            expired: boolean;
+            /**
+             * Format: date-time
+             * @description Card timestamp and the keyset cursor field behind next_cursor.
+             */
+            updated_at: string;
+        };
         ReaderInboxResponsePage: {
-            items: components["schemas"]["ReaderInboxResponse"][];
+            items: components["schemas"]["ReaderInboxListItemResponse"][];
             next_cursor?: string;
             /** @description Installation-scoped count of active pending Inbox captures. */
             active_count: number;
@@ -7822,6 +7848,7 @@ export type ReaderTrashResponse = components['schemas']['ReaderTrashResponse'];
 export type ReaderInboxCreateRequest = components['schemas']['ReaderInboxCreateRequest'];
 export type ReaderInboxPatchRequest = components['schemas']['ReaderInboxPatchRequest'];
 export type ReaderInboxResponse = components['schemas']['ReaderInboxResponse'];
+export type ReaderInboxListItemResponse = components['schemas']['ReaderInboxListItemResponse'];
 export type ReaderInboxResponsePage = components['schemas']['ReaderInboxResponsePage'];
 export type ReaderInboxConfirmAiProposalsRequest = components['schemas']['ReaderInboxConfirmAIProposalsRequest'];
 export type ReaderInboxBulkRequest = components['schemas']['ReaderInboxBulkRequest'];

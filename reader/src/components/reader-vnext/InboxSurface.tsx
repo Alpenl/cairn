@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type SetStateAction } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
 import type {
@@ -6,6 +6,7 @@ import type {
   ReaderInboxBulkResponse,
   ReaderInboxConfirmAIProposalsResponse,
   ReaderInboxJobResponse,
+  ReaderInboxListItemResponse,
   ReaderInboxPartition,
   ReaderInboxResponse,
 } from '../../lib/api/types'
@@ -51,7 +52,7 @@ function parseTags(value: string): string[] {
   return [...new Set(value.split(/[\s,，]+/).map((tag) => tag.trim()).filter(Boolean))]
 }
 
-function statusLabel(status: ReaderInboxResponse['status']): string {
+function statusLabel(status: ReaderInboxListItemResponse['status']): string {
   if (status === 'pending') return '待处理'
   if (status === 'discarded') return '已丢弃'
   return '已入库'
@@ -94,18 +95,55 @@ function otherInboxPartition(partition: ReaderInboxPartition): ReaderInboxPartit
   return partition === 'active' ? 'expired' : 'active'
 }
 
+// The card preview mirrors what the server projects: summary, else note, else
+// body, collapsed to one line and bounded. It exists for the cards the client
+// builds itself from a write response (create, patch, deep-link detail) so
+// those rows do not jump when the next list refresh replaces them.
+const INBOX_PREVIEW_LIMIT = 280
+const INBOX_PREVIEW_SOURCE_LIMIT = 2048
+
+function inboxPreviewSource(item: ReaderInboxResponse): string {
+  // Slice before trimming: body may be megabytes, and only the head can ever
+  // reach a bounded preview.
+  if (item.summary && /\S/.test(item.summary)) return item.summary.slice(0, INBOX_PREVIEW_SOURCE_LIMIT)
+  if (/\S/.test(item.note)) return item.note.slice(0, INBOX_PREVIEW_SOURCE_LIMIT)
+  return item.body.slice(0, INBOX_PREVIEW_SOURCE_LIMIT)
+}
+
+function inboxPreview(item: ReaderInboxResponse): string {
+  const collapsed = inboxPreviewSource(item).replace(/\s+/g, ' ').trim()
+  const runes = [...collapsed]
+  return runes.length > INBOX_PREVIEW_LIMIT ? runes.slice(0, INBOX_PREVIEW_LIMIT).join('') + '…' : collapsed
+}
+
+/** Projects a detail record onto the queue card the list endpoint returns. */
+function listItemFromInbox(item: ReaderInboxResponse): ReaderInboxListItemResponse {
+  return {
+    id: item.id,
+    url: item.url,
+    source_kind: item.source_kind,
+    title: item.title,
+    preview: inboxPreview(item),
+    tags: item.tags,
+    status: item.status,
+    metadata_revision: item.metadata_revision,
+    expired: item.expired,
+    updated_at: item.updated_at,
+  }
+}
+
 function preferNewerInbox(
-  current: ReaderInboxResponse | undefined,
-  incoming: ReaderInboxResponse,
-): ReaderInboxResponse {
+  current: ReaderInboxListItemResponse | undefined,
+  incoming: ReaderInboxListItemResponse,
+): ReaderInboxListItemResponse {
   return current && incoming.metadata_revision < current.metadata_revision ? current : incoming
 }
 
 function upsertInboxItem(
-  current: ReaderInboxResponse[],
-  incoming: ReaderInboxResponse,
+  current: ReaderInboxListItemResponse[],
+  incoming: ReaderInboxListItemResponse,
   placement: 'append' | 'prepend' | 'ignore' = 'ignore',
-): ReaderInboxResponse[] {
+): ReaderInboxListItemResponse[] {
   const index = current.findIndex((item) => item.id === incoming.id)
   if (index < 0) {
     if (placement === 'prepend') return [incoming, ...current]
@@ -118,15 +156,15 @@ function upsertInboxItem(
 }
 
 function mergeInboxItems(
-  current: ReaderInboxResponse[],
-  incoming: ReaderInboxResponse[],
+  current: ReaderInboxListItemResponse[],
+  incoming: ReaderInboxListItemResponse[],
   append: boolean,
   preserveIDs?: ReadonlySet<string>,
-): ReaderInboxResponse[] {
+): ReaderInboxListItemResponse[] {
   if (append) return incoming.reduce((items, item) => upsertInboxItem(items, item, 'append'), current)
 
   const currentByID = new Map(current.map((item) => [item.id, item]))
-  const incomingByID = new Map<string, ReaderInboxResponse>()
+  const incomingByID = new Map<string, ReaderInboxListItemResponse>()
   const incomingIDs: string[] = []
   for (const item of incoming) {
     const previous = incomingByID.get(item.id)
@@ -141,10 +179,10 @@ function mergeInboxItems(
 }
 
 function updateInboxStatus(
-  items: ReaderInboxResponse[],
+  items: ReaderInboxListItemResponse[],
   ids: ReadonlySet<string>,
-  status: ReaderInboxResponse['status'],
-): ReaderInboxResponse[] {
+  status: ReaderInboxListItemResponse['status'],
+): ReaderInboxListItemResponse[] {
   return items.map((item) => ids.has(item.id) ? { ...item, status } : item)
 }
 
@@ -154,7 +192,7 @@ interface InboxBulkResult {
 }
 
 interface InboxPartitionPage {
-  readonly items: ReaderInboxResponse[]
+  readonly items: ReaderInboxListItemResponse[]
   readonly nextCursor?: string
   readonly loaded: boolean
   readonly loading: boolean
@@ -200,6 +238,8 @@ interface InboxDraft extends InboxDraftFields {
  * 请求通道。分页按分区各占一条：切到「已过期」不该顶掉「活跃」的在途请求。
  * `mutation` 是所有写操作共用的身份/目标快照通道——写操作之间由
  * `useExclusiveAction` 单飞互斥，通道本身只回答「这次写还属于当前 owner 吗」。
+ * `detail:*` 每个条目各占一条：详情按需取，给另一个条目取详情不该顶掉这一条，
+ * 同一条目改了修订再取才顶掉先发的。
  */
 type InboxRequestChannel =
   | 'page:active'
@@ -208,6 +248,7 @@ type InboxRequestChannel =
   | 'target'
   | 'mutation'
   | `category:${string}`
+  | `detail:${string}`
 
 type InboxRequestToken = SurfaceRequestToken<InboxRequestChannel>
 
@@ -228,6 +269,10 @@ function inboxPageChannel(partition: ReaderInboxPartition): InboxRequestChannel 
 
 function inboxCategoryChannel(inboxID: string, categoryID: string): InboxRequestChannel {
   return `category:${inboxID}:${categoryID}`
+}
+
+function inboxDetailChannel(inboxID: string): InboxRequestChannel {
+  return `detail:${inboxID}`
 }
 
 function draftFieldsFromInbox(item: ReaderInboxResponse): InboxDraftFields {
@@ -300,12 +345,13 @@ function mergeDraftsAfterServerRefresh(
   return next
 }
 
+// Without a local draft there is nothing to preserve, so the refreshed record
+// is its own baseline; the conflict flag is what the editor surfaces.
 function mergeDraftAfterConflict(
-  baseline: ReaderInboxResponse,
   refreshed: ReaderInboxResponse,
   current?: InboxDraft,
 ): InboxDraft {
-  return mergeDraftAfterServerRefresh(refreshed, current ?? draftFromInbox(baseline), true)
+  return mergeDraftAfterServerRefresh(refreshed, current ?? draftFromInbox(refreshed), true)
 }
 
 export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy, initialInboxID, onDraftStateChange }: InboxSurfaceProps) {
@@ -316,6 +362,11 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   }))
   const [inboxCounts, setInboxCounts] = useState<InboxCounts>({ activeCount: 0, expiredCount: 0 })
   const [categories, setCategories] = useState<ReaderCategoryResponse[]>([])
+  // The list is a card projection, so the editor's record is fetched per item
+  // and cached by ID. Keying by ID is also what makes a late detail response
+  // unable to land in another item's editor.
+  const [details, setDetails] = useState<Record<string, ReaderInboxResponse>>({})
+  const [detailReloadToken, setDetailReloadToken] = useState(0)
   const [selectedID, setSelectedID] = useState<string | null>(null)
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
   const [drafts, setDrafts] = useState<Record<string, InboxDraft>>({})
@@ -352,6 +403,13 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   const inboxLifecycleGenerationRef = useRef(0)
   // CAS rereads may run in bulk, so each Inbox item needs an independent token.
   const inboxRefreshGenerationsRef = useRef(new Map<string, number>())
+  // 每个 Inbox ID 一个代次：一次详情回包只有在仍是该 ID 最新一次请求时才写回。
+  // 闸门只知道通道被谁顶掉，记不住这条回包问的是哪个条目——领域语义留在这里。
+  const inboxDetailGenerationsRef = useRef(new Map<string, number>())
+  // Inbox ID -> the card revision an in-flight detail request was issued for.
+  // A card whose revision has not moved does not need a second request.
+  const inboxDetailRequestsRef = useRef(new Map<string, number>())
+  const detailsRef = useRef(details)
   const inboxOperationGenerationRef = useRef(0)
   const inboxDataClientRef = useRef(client)
   const detailScrollRef = useRef<HTMLDivElement>(null)
@@ -395,38 +453,51 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     }))
   }, [])
 
+  // A detail record only ever replaces an older revision of the same item, so
+  // a response that arrives after a newer write is dropped instead of undoing
+  // it.
+  const cacheInboxDetail = useCallback((incoming: ReaderInboxResponse) => {
+    setDetails((current) => {
+      const previous = current[incoming.id]
+      if (previous && incoming.metadata_revision < previous.metadata_revision) return current
+      return { ...current, [incoming.id]: incoming }
+    })
+  }, [])
+
   const upsertAuthoritativeInbox = useCallback((
     incoming: ReaderInboxResponse,
     placement: 'append' | 'prepend' | 'ignore' = 'ignore',
   ) => {
+    cacheInboxDetail(incoming)
     const target: ReaderInboxPartition = incoming.expired ? 'expired' : 'active'
     const ids = new Set([incoming.id])
     updatePartitionAndEvictOther(target, ids, (current) => ({
       ...current,
-      items: upsertInboxItem(current.items, incoming, placement),
+      items: upsertInboxItem(current.items, listItemFromInbox(incoming), placement),
     }))
     return target
-  }, [updatePartitionAndEvictOther])
-
-  const setItems = useCallback((update: SetStateAction<ReaderInboxResponse[]>) => {
-    updateInboxPage(partition, (current) => ({
-      ...current,
-      items: typeof update === 'function'
-        ? update(current.items)
-        : update,
-    }))
-  }, [partition, updateInboxPage])
+  }, [cacheInboxDetail, updatePartitionAndEvictOther])
 
   const selected = useMemo(() => items.find((item) => item.id === selectedID) ?? items[0] ?? null, [items, selectedID])
-  const selectedDraft = selected ? drafts[selected.id] ?? draftFromInbox(selected) : null
+  // The detail fetch keys on these two primitives rather than the card object:
+  // a list refresh replaces the object on every merge, and re-running the
+  // effect for an unchanged card would issue a redundant request.
+  const selectedCardID = selected?.id ?? null
+  const selectedCardRevision = selected?.metadata_revision ?? 0
+  const selectedDetail = selected ? details[selected.id] ?? null : null
+  const selectedDraft = selectedDetail
+    ? drafts[selectedDetail.id] ?? draftFromInbox(selectedDetail)
+    : null
   const title = selectedDraft?.title ?? ''
   const note = selectedDraft?.note ?? ''
   const summary = selectedDraft?.summary ?? ''
   const tags = selectedDraft?.tags ?? ''
   const body = selectedDraft?.body ?? ''
   const memberships = useMemo(
-    () => selected ? membershipsByInbox[selected.id] ?? new Set(selected.category_ids) : new Set<string>(),
-    [membershipsByInbox, selected],
+    () => selectedDetail
+      ? membershipsByInbox[selectedDetail.id] ?? new Set(selectedDetail.category_ids)
+      : new Set<string>(),
+    [membershipsByInbox, selectedDetail],
   )
   const pendingItems = useMemo(() => items.filter((item) => item.status === 'pending'), [items])
   const discardedCount = items.filter((item) => item.status === 'discarded').length
@@ -447,14 +518,14 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     jumpTo: jumpToEditorSection,
   } = useReaderToc({
     scrollRef: detailScrollRef,
-    sourceKey: selected?.id ?? '',
+    sourceKey: selectedDetail?.id ?? '',
     layoutKey: previewBody ? 'preview' : 'edit',
-    enabled: selected !== null,
+    enabled: selectedDetail !== null,
   })
 
-  useEffect(() => {
-    setEditorOutlineHeadings(selected ? INBOX_EDITOR_OUTLINE : [])
-  }, [selected, setEditorOutlineHeadings])
+  useLayoutEffect(() => {
+    setEditorOutlineHeadings(selectedDetail ? INBOX_EDITOR_OUTLINE : [])
+  }, [selectedDetail, setEditorOutlineHeadings])
 
   // The title is a textarea so long titles wrap the way the reader renders
   // them; it grows to its content instead of scrolling inside one line.
@@ -474,6 +545,8 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   useLayoutEffect(() => {
     inboxOperationGenerationRef.current += 1
     inboxRefreshGenerationsRef.current.clear()
+    inboxDetailGenerationsRef.current.clear()
+    inboxDetailRequestsRef.current.clear()
     clearInboxAction()
   }, [clearInboxAction, client, initialInboxID])
 
@@ -559,7 +632,9 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
           loadingMore: false,
           error: null,
         }))
-        setDrafts((current) => mergeDraftsAfterServerRefresh(current, mergedItems))
+        // Cards carry no editable fields, so a list refresh cannot reconcile a
+        // draft. It only publishes the newer revision; the detail effect below
+        // refetches the open item and merges the local draft against it.
         const requested = initialInboxID ? mergedItems.find((item) => item.id === initialInboxID) : undefined
         if (partitionRef.current === target) {
           setSelectedID((current) => requested?.id ?? current ?? mergedItems[0]?.id ?? null)
@@ -587,6 +662,11 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       setInboxPages({ active: emptyInboxPartitionPage(), expired: emptyInboxPartitionPage() })
       setInboxCounts({ activeCount: 0, expiredCount: 0 })
       setCategories([])
+      // Detail records belong to the identity that fetched them; a replacement
+      // client must not read another identity's cached capture. The mirror ref
+      // follows the state instead of being cleared here, so the render that
+      // still holds the previous list does not read this as a cache miss.
+      setDetails({})
       setSelectedID(null)
       setSelectedIDs(new Set())
       setMembershipsByInbox({})
@@ -637,9 +717,10 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       const target: ReaderInboxPartition = result.data.expired ? 'expired' : 'active'
       const ids = new Set([result.data.id])
       advanceInboxLifecycle([result.data.id])
+      cacheInboxDetail(result.data)
       updatePartitionAndEvictOther(target, ids, (current) => ({
         ...current,
-        items: upsertInboxItem(current.items, result.data, 'prepend'),
+        items: upsertInboxItem(current.items, listItemFromInbox(result.data), 'prepend'),
       }))
       setDrafts((current) => mergeDraftsAfterServerRefresh(current, [result.data]))
       setPartition(target)
@@ -650,7 +731,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     // effect 重跑（含走到上面提前返回那一支）先跑这段 cleanup，在途的目标读取
     // 就此作废——否则条目已经出现在列表里之后，迟到的回包还会把选中项拽回去。
     return () => { gate.invalidate('target') }
-  }, [advanceInboxLifecycle, client, gate, initialInboxID, items, loading, updatePartitionAndEvictOther])
+  }, [advanceInboxLifecycle, cacheInboxDetail, client, gate, initialInboxID, items, loading, updatePartitionAndEvictOther])
 
   useEffect(() => {
     const pendingIDs = new Set(pendingItems.map((item) => item.id))
@@ -660,30 +741,88 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     })
   }, [pendingItems])
 
+  useLayoutEffect(() => {
+    detailsRef.current = details
+  }, [details])
+
   useEffect(() => {
-    if (!selected) return
-    setDrafts((current) => {
-      const draft = current[selected.id]
-      return {
-        ...current,
-        [selected.id]: mergeDraftAfterServerRefresh(selected, draft),
+    setPreviewBody(false)
+  }, [selected?.id])
+
+  // The first card, a clicked card and a deep link all reach the editor the
+  // same way: the detail record is fetched on demand for the selected ID.
+  //
+  // The effect keys on (id, metadata_revision), so a card that the list
+  // refreshed to a newer revision refetches, and the same pair never fetches
+  // twice. `detailsRef` is read instead of `details` on purpose: depending on
+  // the cache would re-run the effect on every write it performs.
+  useEffect(() => {
+    if (!selectedCardID) return
+    const inboxID = selectedCardID
+    const cached = detailsRef.current[inboxID]
+    if (cached && cached.metadata_revision >= selectedCardRevision) return
+    const inFlight = inboxDetailRequestsRef.current.get(inboxID)
+    if (inFlight !== undefined && inFlight >= selectedCardRevision) return
+    // 每个条目各占一条通道：同一条目的更新修订顶掉它自己的旧请求，而给另一个
+    // 条目取详情不该作废这一条——它的回包按 ID 落进缓存，本来就到不了别人的编辑器。
+    const detailToken = gate.begin(inboxDetailChannel(inboxID))
+    if (!gate.isCurrent(detailToken)) return
+    const requestGeneration = (inboxDetailGenerationsRef.current.get(inboxID) ?? 0) + 1
+    inboxDetailGenerationsRef.current.set(inboxID, requestGeneration)
+    inboxDetailRequestsRef.current.set(inboxID, selectedCardRevision)
+    void client.getInbox(inboxID).then((result) => {
+      // 三道互相独立的拦截：闸门（挂载、owner、通道代次、身份权威）、这个 ID
+      // 自己的代次（闸门不记得回包问的是哪个条目），以及 cacheInboxDetail 里的
+      // 修订下界（更旧的修订不能盖掉已经写进去的更新版本）。
+      if (
+        !gate.isCurrent(detailToken) ||
+        inboxDetailGenerationsRef.current.get(inboxID) !== requestGeneration
+      ) return
+      if (!result.ok) {
+        setError(readerErrorMessage(result.error))
+        return
+      }
+      cacheInboxDetail(result.data)
+    }).finally(() => {
+      // 放掉自己置上的在途标记不看身份，只看 owner 与通道代次；值比较保证换了
+      // owner 之后不会误删新 owner 刚置上的同名标记。
+      if (
+        gate.isSameOwner(detailToken) &&
+        inboxDetailRequestsRef.current.get(inboxID) === selectedCardRevision
+      ) {
+        inboxDetailRequestsRef.current.delete(inboxID)
       }
     })
-    setMembershipsByInbox((current) => current[selected.id]
+  }, [cacheInboxDetail, client, detailReloadToken, gate, selectedCardID, selectedCardRevision])
+
+  // Seeding the draft from the detail record is what binds the editor fields.
+  // It runs for a cached record too, so switching back to an item restores its
+  // unsaved draft without another request.
+  useEffect(() => {
+    if (!selectedDetail) return
+    setDrafts((current) => ({
+      ...current,
+      [selectedDetail.id]: mergeDraftAfterServerRefresh(selectedDetail, current[selectedDetail.id]),
+    }))
+    setMembershipsByInbox((current) => current[selectedDetail.id]
       ? current
-      : { ...current, [selected.id]: new Set(selected.category_ids) })
-    setPreviewBody(false)
-  }, [selected])
+      : { ...current, [selectedDetail.id]: new Set(selectedDetail.category_ids) })
+  }, [selectedDetail])
+
+  const reloadInbox = useCallback((target: ReaderInboxPartition = partitionRef.current) => {
+    setDetailReloadToken((current) => current + 1)
+    void load(target)
+  }, [load])
 
   const dirty = Boolean(selectedDraft && draftHasLocalChanges(selectedDraft))
 
   const updateSelectedDraft = useCallback((update: Partial<Pick<InboxDraft, 'title' | 'body' | 'note' | 'summary' | 'tags'>>) => {
-    if (!selected) return
+    if (!selectedDetail) return
     setDrafts((current) => ({
       ...current,
-      [selected.id]: { ...(current[selected.id] ?? draftFromInbox(selected)), ...update, conflict: false },
+      [selectedDetail.id]: { ...(current[selectedDetail.id] ?? draftFromInbox(selectedDetail)), ...update, conflict: false },
     }))
-  }, [selected])
+  }, [selectedDetail])
 
   useLayoutEffect(() => {
     onDraftStateChange?.({ dirty, saving })
@@ -694,7 +833,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   }, [onDraftStateChange])
 
   useEffect(() => {
-    const jobID = selected?.job_id
+    const jobID = selectedDetail?.job_id
     if (!jobID) {
       setJob(null)
       return
@@ -711,7 +850,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       setJob(result.data)
       if (result.data.status === 'completed') {
         const lifecycleGeneration = inboxLifecycleGenerationRef.current
-        const refreshed = await client.getInbox(selected?.id ?? '')
+        const refreshed = await client.getInbox(selectedDetail?.id ?? '')
         if (
           !active ||
           !client.isIdentityCurrent() ||
@@ -736,29 +875,31 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       active = false
       if (timer !== null) window.clearTimeout(timer)
     }
-  }, [advanceInboxLifecycle, client, selected?.id, selected?.job_id, upsertAuthoritativeInbox])
+  }, [advanceInboxLifecycle, client, selectedDetail?.id, selectedDetail?.job_id, upsertAuthoritativeInbox])
 
+  // Takes the ID rather than a record: the reread's whole job is to replace
+  // whatever the caller was holding, and the caller may only hold a card.
   const refreshConflictRevision = useCallback(async (
-    item: ReaderInboxResponse,
+    inboxID: string,
     requestToken: InboxRequestToken,
   ): Promise<ReaderInboxResponse | null> => {
     if (!gate.isCurrent(requestToken)) return null
-    const requestGeneration = beginInboxRefresh(item.id)
-    const refreshed = await client.getInbox(item.id)
+    const requestGeneration = beginInboxRefresh(inboxID)
+    const refreshed = await client.getInbox(inboxID)
     if (
       !gate.isCurrent(requestToken) ||
-      inboxRefreshGenerationsRef.current.get(item.id) !== requestGeneration ||
+      inboxRefreshGenerationsRef.current.get(inboxID) !== requestGeneration ||
       !refreshed.ok
     ) return null
-    advanceInboxLifecycle([item.id])
+    advanceInboxLifecycle([inboxID])
     upsertAuthoritativeInbox(refreshed.data)
     setDrafts((current) => ({
       ...current,
-      [item.id]: mergeDraftAfterConflict(item, refreshed.data, current[item.id]),
+      [inboxID]: mergeDraftAfterConflict(refreshed.data, current[inboxID]),
     }))
     setMembershipsByInbox((current) => ({
       ...current,
-      [item.id]: current[item.id] ?? new Set(refreshed.data.category_ids),
+      [inboxID]: current[inboxID] ?? new Set(refreshed.data.category_ids),
     }))
     return refreshed.data
   }, [advanceInboxLifecycle, beginInboxRefresh, client, gate, upsertAuthoritativeInbox])
@@ -771,8 +912,8 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     const isCurrentSave = () =>
       gate.isCurrent(requestToken) &&
       inboxOperationGenerationRef.current === operationGeneration
-    if (!selected || selected.status === 'confirmed') return selected
-    const submittedDraft = selectedDraft ?? draftFromInbox(selected)
+    if (!selected || !selectedDetail || selected.status === 'confirmed') return selectedDetail
+    const submittedDraft = selectedDraft ?? draftFromInbox(selectedDetail)
     const actionToken = beginInboxAction('save')
     if (!actionToken) return null
     setError(null)
@@ -790,7 +931,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
           setDrafts((current) => current[selected.id]
             ? { ...current, [selected.id]: { ...current[selected.id], conflict: true } }
             : current)
-          const refreshed = await refreshConflictRevision(selected, requestToken)
+          const refreshed = await refreshConflictRevision(selected.id, requestToken)
           if (!isCurrentSave()) return null
           setError(refreshed
             ? '此条目已在其他位置更新。已保留本地草稿并同步最新版本，请再次保存。'
@@ -825,7 +966,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     } finally {
       finishInboxAction(actionToken)
     }
-  }, [advanceInboxLifecycle, beginInboxAction, body, client, finishInboxAction, gate, note, refreshConflictRevision, selected, selectedDraft, summary, tags, title, upsertAuthoritativeInbox])
+  }, [advanceInboxLifecycle, beginInboxAction, body, client, finishInboxAction, gate, note, refreshConflictRevision, selected, selectedDetail, selectedDraft, summary, tags, title, upsertAuthoritativeInbox])
 
   const selectInbox = useCallback(async (id: string) => {
     if (id === selected?.id) return
@@ -901,7 +1042,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
           setDrafts((current) => current[inboxID]
             ? { ...current, [inboxID]: { ...current[inboxID], conflict: true } }
             : current)
-          const refreshed = await refreshConflictRevision(saved, requestToken)
+          const refreshed = await refreshConflictRevision(saved.id, requestToken)
           if (!isCurrentConfirmation()) return
           setError(refreshed
             ? '此条目已在其他位置更新。已保留本地草稿并同步最新版本，请再次确认。'
@@ -1058,7 +1199,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       if (!gate.isCurrent(requestToken)) return
       if (!result.ok) {
         if (action === 'confirm' && result.error.status === 409) {
-          await Promise.all(selectedPendingItems.map((item) => refreshConflictRevision(item, requestToken)))
+          await Promise.all(selectedPendingItems.map((item) => refreshConflictRevision(item.id, requestToken)))
           if (!gate.isCurrent(requestToken)) return
         }
         setError(readerErrorMessage(result.error))
@@ -1199,12 +1340,14 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       else {
         advanceInboxLifecycle([selected.id])
         setJob(result.data)
-        setItems((current) => current.map((item) => item.id === selected.id ? { ...item, job_id: result.data.job_id } : item))
+        setDetails((current) => current[selected.id]
+          ? { ...current, [selected.id]: { ...current[selected.id], job_id: result.data.job_id } }
+          : current)
       }
     } finally {
       finishInboxAction(actionToken)
     }
-  }, [advanceInboxLifecycle, beginInboxAction, client, finishInboxAction, gate, selected, setItems])
+  }, [advanceInboxLifecycle, beginInboxAction, client, finishInboxAction, gate, selected])
 
   const addCategory = useCallback(async () => {
     const requestToken = gate.capture('mutation')
@@ -1220,10 +1363,10 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   }, [client, gate, newCategory])
 
   const toggleCategory = useCallback(async (category: ReaderCategoryResponse) => {
-    if (!selected) return
-    const inboxID = selected.id
+    if (!selectedDetail) return
+    const inboxID = selectedDetail.id
     const present = memberships.has(category.id)
-    const initialCategoryIDs = selected.category_ids
+    const initialCategoryIDs = selectedDetail.category_ids
     // 每个 (条目, 分类) 对各占一条通道：连点同一个 chip 时后发顶掉先发，
     // 而给另一个条目打标签不该让这一条失效。
     const requestToken = gate.begin(inboxCategoryChannel(inboxID, category.id))
@@ -1239,16 +1382,21 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         else next.add(category.id)
         return { ...current, [inboxID]: next }
       })
-      setItems((current) => current.map((item) => item.id === inboxID
+      // Category memberships are detail-only state; the queue card never
+      // rendered them, so only the cached detail record moves.
+      setDetails((current) => current[inboxID]
         ? {
-            ...item,
-            category_ids: present
-              ? item.category_ids.filter((id) => id !== category.id)
-              : [...new Set([...item.category_ids, category.id])],
+            ...current,
+            [inboxID]: {
+              ...current[inboxID],
+              category_ids: present
+                ? current[inboxID].category_ids.filter((id) => id !== category.id)
+                : [...new Set([...current[inboxID].category_ids, category.id])],
+            },
           }
-        : item))
+        : current)
     }
-  }, [advanceInboxLifecycle, client, gate, memberships, selected, setItems])
+  }, [advanceInboxLifecycle, client, gate, memberships, selectedDetail])
 
   const adoptSuggestedTag = useCallback((tag: string) => {
     updateSelectedDraft({ tags: parseTags([...parseTags(tags), tag].join(', ')).join(', ') })
@@ -1270,7 +1418,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     >
       {displayError && (
         <div className="inbox-global-message">
-          <SurfaceError message={displayError} onRetry={() => void load()} />
+          <SurfaceError message={displayError} onRetry={() => reloadInbox()} />
         </div>
       )}
       {bulkResult && (
@@ -1397,7 +1545,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                       )}
                       time={<time>{formatRelativeDate(item.updated_at)}</time>}
                       title={rowTitle}
-                      summary={item.summary || item.note || item.body || '暂无内容'}
+                      summary={item.preview || '暂无内容'}
                       details={(flagged || rowTags.length > 0) ? (
                         <span className="inbox-row-foot">
                           {flagged && (
@@ -1421,7 +1569,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         </aside>
 
         <section className="inbox-detail" aria-label="条目编辑器">
-          {selected ? (
+          {selected && selectedDetail ? (
             <>
               <header className="inbox-detail-toolbar">
                 <div className="inbox-detail-state">
@@ -1452,7 +1600,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                   <article className="inbox-reader-document">
                     <section id="inbox-overview" className="inbox-editor-section" data-toc-heading tabIndex={-1}>
                       <div className="inbox-source-line">
-                        <span>{formatRelativeDate(selected.created_at)} 收件</span>
+                        <span>{formatRelativeDate(selectedDetail.created_at)} 收件</span>
                         <span>修订 {selected.metadata_revision}</span>
                         <a href={selected.url} target="_blank" rel="noreferrer" title="打开原网页">
                           <span>{selected.url.replace(/^https?:\/\//, '')}</span>
@@ -1478,7 +1626,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                         <span><Icon name="sparkles" size={13} />摘要</span>
                         <textarea value={summary} disabled={saving} onChange={(event) => updateSelectedDraft({ summary: event.target.value })} rows={3} placeholder="暂无摘要" />
                       </label>
-                      {selected.job_id && <p className="inbox-job"><Icon name={job?.status === 'failed' ? 'alert' : 'loader'} size={13} />摘要任务 {job?.status ?? 'queued'} · {selected.job_id}</p>}
+                      {selectedDetail.job_id && <p className="inbox-job"><Icon name={job?.status === 'failed' ? 'alert' : 'loader'} size={13} />摘要任务 {job?.status ?? 'queued'} · {selectedDetail.job_id}</p>}
                     </section>
 
                     <section id="inbox-note" className="inbox-editor-section" data-toc-heading tabIndex={-1}>
@@ -1502,7 +1650,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                       ) : (
                         <textarea className="inbox-body-editor" aria-label="正文" value={body} disabled={saving} onChange={(event) => updateSelectedDraft({ body: event.target.value })} rows={10} />
                       )}
-                      <details className="rvx-source-details"><summary>查看收件时的原始内容</summary><pre>{selected.body}</pre></details>
+                      <details className="rvx-source-details"><summary>查看收件时的原始内容</summary><pre>{selectedDetail.body}</pre></details>
                     </section>
 
                     <section id="inbox-organization" className="inbox-editor-section" data-toc-heading tabIndex={-1}>
@@ -1511,10 +1659,10 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                         <span>标签</span>
                         <input value={tags} disabled={saving} onChange={(event) => updateSelectedDraft({ tags: event.target.value })} placeholder="用逗号或空格分隔" />
                       </label>
-                      {selected.suggested_tags.some((tag) => !parseTags(tags).includes(tag)) && (
+                      {selectedDetail.suggested_tags.some((tag) => !parseTags(tags).includes(tag)) && (
                         <div className="inbox-suggestions">
                           <span><Icon name="sparkles" size={13} />AI 建议</span>
-                          <div className="rvx-chip-row">{selected.suggested_tags.filter((tag) => !parseTags(tags).includes(tag)).map((tag) => <button key={tag} type="button" className="rvx-tag-chip" disabled={saving} onClick={() => adoptSuggestedTag(tag)}>采用 #{tag}</button>)}</div>
+                          <div className="rvx-chip-row">{selectedDetail.suggested_tags.filter((tag) => !parseTags(tags).includes(tag)).map((tag) => <button key={tag} type="button" className="rvx-tag-chip" disabled={saving} onClick={() => adoptSuggestedTag(tag)}>采用 #{tag}</button>)}</div>
                         </div>
                       )}
                       <div className="inbox-categories">
@@ -1530,6 +1678,8 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                 </div>
               </div>
             </>
+          ) : selected ? (
+            <SurfaceLoading />
           ) : (
             <div className="inbox-detail-empty">
               <Icon name="doc" size={25} />

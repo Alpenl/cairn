@@ -4481,7 +4481,7 @@
           "reader"
         ],
         "summary": "List a Reader inbox partition",
-        "description": "Pending Inbox captures are partitioned by their materialized expiration marker. active is the default and contains pending rows whose expired_at is null; expired contains pending rows whose expired_at is set. Pagination is stable within the requested partition.",
+        "description": "Pending Inbox captures are partitioned by their materialized expiration marker. active is the default and contains pending rows whose expired_at is null; expired contains pending rows whose expired_at is set. Pagination is stable within the requested partition. Items carry the narrow queue projection (ReaderInboxListItemResponse): the capture body, the user note, the raw AI proposal payload and the category memberships are served only by GET /api/inbox/{id}.",
         "parameters": [
           {
             "name": "partition",
@@ -12848,6 +12848,74 @@
           }
         }
       },
+      "ReaderInboxListItemResponse": {
+        "type": "object",
+        "description": "Queue projection of an Inbox capture. It deliberately omits body, note, proposal_signals, suggested_tags and category_ids: a capture accepts a 4 MiB body and a 1 MiB note, and this list is read every time the Inbox opens. Clients that need those fields read GET /api/inbox/{id}, whose contract is unchanged.",
+        "required": [
+          "id",
+          "url",
+          "source_kind",
+          "preview",
+          "tags",
+          "status",
+          "metadata_revision",
+          "expired",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preview": {
+            "type": "string",
+            "maxLength": 281,
+            "description": "Bounded card text resolved server-side from summary, then note, then body. It is a display string, not a prefix of the capture body; a truncated preview ends with an ellipsis."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "confirmed",
+              "discarded"
+            ]
+          },
+          "metadata_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "description": "The revision the batch confirm/discard actions send back as expected_revisions."
+          },
+          "expired": {
+            "type": "boolean",
+            "description": "Derived from the materialized expired_at; clients must not infer it from wall-clock comparison."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Card timestamp and the keyset cursor field behind next_cursor."
+          }
+        }
+      },
       "ReaderInboxResponsePage": {
         "type": "object",
         "required": [
@@ -12859,7 +12927,7 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ReaderInboxResponse"
+              "$ref": "#/components/schemas/ReaderInboxListItemResponse"
             }
           },
           "next_cursor": {

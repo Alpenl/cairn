@@ -55,7 +55,7 @@ type ReaderVNextStore interface {
 	ListNoteHistory(context.Context, uuid.UUID, int) ([]model.ReaderNoteHistory, error)
 	RestoreNoteRevision(context.Context, model.ReaderNoteRestoreCommand) (*model.ReaderNote, error)
 	CreateInbox(context.Context, model.ReaderInbox) (*model.ReaderInbox, error)
-	ListInbox(context.Context, model.ReaderInboxPartition, string, int) ([]model.ReaderInbox, int, int, string, error)
+	ListInbox(context.Context, model.ReaderInboxPartition, string, int) ([]model.ReaderInboxListItem, int, int, string, error)
 	GetInbox(context.Context, uuid.UUID) (*model.ReaderInbox, error)
 	PatchInbox(context.Context, model.ReaderInboxPatch) (*model.ReaderInbox, error)
 	UpdateInboxStatus(context.Context, uuid.UUID, string) (*model.ReaderInbox, error)
@@ -555,6 +555,44 @@ func scanReaderInbox(row readerScanner) (*model.ReaderInbox, error) {
 	return &out, nil
 }
 
+// readerInboxPreviewLimit bounds the queue card text in runes. The card clamps
+// to a few lines; anything past this is invisible in the UI and would only be
+// list payload.
+const readerInboxPreviewLimit = 280
+
+// readerInboxPreviewSourceLimit is the character cut applied inside PostgreSQL
+// so a 4 MiB body never crosses the wire on the list path. It is larger than
+// the rendered bound because the raw prefix may be mostly whitespace.
+const readerInboxPreviewSourceLimit = 2048
+
+// readerInboxPreview turns the SQL-truncated card source into the bounded
+// single-line preview the queue renders. The input is already clamped to
+// readerInboxPreviewSourceLimit characters, so the rune conversion here is
+// bounded regardless of how large the stored body is.
+func readerInboxPreview(raw string) string {
+	preview := []rune(strings.Join(strings.Fields(raw), " "))
+	if len(preview) <= readerInboxPreviewLimit {
+		return string(preview)
+	}
+	return string(preview[:readerInboxPreviewLimit]) + "…"
+}
+
+func scanReaderInboxListItem(row readerScanner) (*model.ReaderInboxListItem, error) {
+	var out model.ReaderInboxListItem
+	var title, preview pgtype.Text
+	if err := row.Scan(&out.ID, &out.URL, &out.SourceKind, &title, &preview, &out.Tags, &out.Status, &out.MetadataRevision, &out.Expired, &out.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if title.Valid {
+		value := title.String
+		out.Title = &value
+	}
+	if preview.Valid {
+		out.Preview = readerInboxPreview(preview.String)
+	}
+	return &out, nil
+}
+
 func scanReaderInboxJob(row readerScanner) (*model.ReaderInboxJob, error) {
 	var out model.ReaderInboxJob
 	if err := row.Scan(
@@ -602,6 +640,16 @@ const readerNoteColumns = `id, title, published_content, published_revision, dra
 const readerInboxColumns = `id, url, identity_key, source_kind, title, body, note, summary, suggested_tags, proposal_signals, proposal_status, tags, COALESCE((SELECT array_agg(category_id ORDER BY category_id) FROM reader_categorizables WHERE host_kind='inbox' AND host_id=reader_inbox.id::text),'{}'::uuid[]) AS category_ids, status, metadata_revision, job_id, expires_at, expired_at, deleted_at, created_at, updated_at`
 const readerInboxColumnsQualified = `inbox.id, inbox.url, inbox.identity_key, inbox.source_kind, inbox.title, inbox.body, inbox.note, inbox.summary, inbox.suggested_tags, inbox.proposal_signals, inbox.proposal_status, inbox.tags, COALESCE((SELECT array_agg(category_id ORDER BY category_id) FROM reader_categorizables WHERE host_kind='inbox' AND host_id=inbox.id::text),'{}'::uuid[]) AS category_ids, inbox.status, inbox.metadata_revision, inbox.job_id, inbox.expires_at, inbox.expired_at, inbox.deleted_at, inbox.created_at, inbox.updated_at`
 const readerInboxJobColumns = `id, inbox_id, expected_metadata_revision, status, attempts, error_message, created_at, updated_at, started_at, finished_at`
+
+// readerInboxListColumns is the queue projection. It never selects body, note,
+// proposal_signals, suggested_tags or the per-row category_ids subquery: the
+// card cannot render them, and selecting them made every Inbox open pay for a
+// multi-megabyte transfer plus one categorizables lookup per row. The preview
+// is cut inside PostgreSQL so the oversized column never leaves the server.
+var readerInboxListColumns = fmt.Sprintf(
+	`id, url, source_kind, title, left(COALESCE(NULLIF(btrim(summary), ''), NULLIF(btrim(note), ''), body), %d) AS preview, tags, status, metadata_revision, (expired_at IS NOT NULL) AS expired, updated_at`,
+	readerInboxPreviewSourceLimit,
+)
 
 // Qualified columns keep the sync/history joins unambiguous while remaining
 // valid for the other queries that read directly from reader_thoughts.
@@ -3391,7 +3439,11 @@ func (r *PGXReaderVNextRepository) createInboxOn(ctx context.Context, db databas
 	return created, nil
 }
 
-func (r *PGXReaderVNextRepository) ListInbox(ctx context.Context, partition model.ReaderInboxPartition, after string, limit int) ([]model.ReaderInbox, int, int, string, error) {
+// ListInbox returns the narrow queue projection, not the detail record. The
+// list is the Inbox first-screen read; the detail contract lives on
+// GET /api/inbox/{id} so one oversized capture cannot make the queue expensive
+// for every other row.
+func (r *PGXReaderVNextRepository) ListInbox(ctx context.Context, partition model.ReaderInboxPartition, after string, limit int) ([]model.ReaderInboxListItem, int, int, string, error) {
 	if !partition.Valid() {
 		return nil, 0, 0, "", ErrReaderInboxStateConflict
 	}
@@ -3403,7 +3455,7 @@ func (r *PGXReaderVNextRepository) ListInbox(ctx context.Context, partition mode
 		return nil, 0, 0, "", err
 	}
 	args := []any{}
-	sql := `SELECT ` + readerInboxColumns + ` FROM reader_inbox WHERE status='pending' AND deleted_at IS NULL`
+	sql := `SELECT ` + readerInboxListColumns + ` FROM reader_inbox WHERE status='pending' AND deleted_at IS NULL`
 	if partition == model.ReaderInboxPartitionActive {
 		sql += ` AND expired_at IS NULL`
 	} else {
@@ -3424,9 +3476,9 @@ func (r *PGXReaderVNextRepository) ListInbox(ctx context.Context, partition mode
 		return nil, 0, 0, "", fmt.Errorf("list inbox: %w", err)
 	}
 	defer rows.Close()
-	items := make([]model.ReaderInbox, 0, alloc.Hint(limit))
+	items := make([]model.ReaderInboxListItem, 0, alloc.Hint(limit))
 	for rows.Next() {
-		item, err := scanReaderInbox(rows)
+		item, err := scanReaderInboxListItem(rows)
 		if err != nil {
 			return nil, 0, 0, "", err
 		}

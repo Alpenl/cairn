@@ -73,6 +73,7 @@ import type {
   ReaderInboxCreateRequest as WireReaderInboxCreateRequest,
   ReaderInboxPatchRequest as WireReaderInboxPatchRequest,
   ReaderInboxResponse as WireReaderInboxResponse,
+  ReaderInboxListItemResponse as WireReaderInboxListItemResponse,
   ReaderInboxResponsePage as WireReaderInboxResponsePage,
   ReaderInboxConfirmAiProposalsRequest as WireReaderInboxConfirmAIProposalsRequest,
   ReaderInboxBulkRequest as WireReaderInboxBulkRequest,
@@ -194,6 +195,8 @@ export type ReaderTrashResponse = WireReaderTrashResponse
 export type ReaderInboxCreateRequest = WireReaderInboxCreateRequest
 export type ReaderInboxPatchRequest = WireReaderInboxPatchRequest
 export type ReaderInboxResponse = WireReaderInboxResponse
+/** The narrow Inbox queue card. GET /api/inbox/{id} still returns the full detail. */
+export type ReaderInboxListItemResponse = WireReaderInboxListItemResponse
 export type ReaderInboxResponsePage = WireReaderInboxResponsePage
 export type ReaderInboxPartition = WireReaderInboxConfirmAIProposalsRequest['partition']
 export type ReaderInboxConfirmAIProposalsRequest = WireReaderInboxConfirmAIProposalsRequest

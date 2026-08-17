@@ -79,15 +79,19 @@ func TestOpenAPIFrontendSchemasMatchDTOs(t *testing.T) {
 		"ReaderNoteSearchResponse":        dto.ReaderNoteSearchResponse{},
 		"ReaderNoteSearchGroup":           dto.ReaderNoteSearchGroup{},
 		"GroupedSearchResponse":           dto.GroupedSearchResponse{},
-		"FeedFolder":                      model.FeedFolder{},
-		"FeedSubscription":                model.FeedSubscription{},
-		"FeedCounts":                      model.FeedCounts{},
-		"FeedSubscriptionsResponse":       model.FeedSubscriptionsResponse{},
-		"FeedItem":                        model.FeedItem{},
-		"PaginatedFeedItems":              model.PaginatedFeedItems{},
-		"FeedCandidate":                   model.FeedCandidate{},
-		"FeedDiscoveryResponse":           model.FeedDiscoveryResponse{},
-		"OPMLImportResponse":              model.OPMLImportResponse{},
+		// The Inbox list projection is registered here on purpose: the whole
+		// point of the narrow DTO is that it cannot drift back into carrying
+		// the capture body, and the spec is what the TypeScript client trusts.
+		"ReaderInboxListItemResponse": dto.ReaderInboxListItemResponse{},
+		"FeedFolder":                  model.FeedFolder{},
+		"FeedSubscription":            model.FeedSubscription{},
+		"FeedCounts":                  model.FeedCounts{},
+		"FeedSubscriptionsResponse":   model.FeedSubscriptionsResponse{},
+		"FeedItem":                    model.FeedItem{},
+		"PaginatedFeedItems":          model.PaginatedFeedItems{},
+		"FeedCandidate":               model.FeedCandidate{},
+		"FeedDiscoveryResponse":       model.FeedDiscoveryResponse{},
+		"OPMLImportResponse":          model.OPMLImportResponse{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			assertOpenAPISchemaMatchesJSONTags(t, schemas, name, reflect.TypeOf(value))

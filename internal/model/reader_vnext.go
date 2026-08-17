@@ -269,6 +269,27 @@ type ReaderInbox struct {
 	UpdatedAt time.Time
 }
 
+// ReaderInboxListItem is the queue projection of an Inbox capture. It carries
+// only what a queue card renders, what the batch actions address, the revision
+// the CAS writes compare, and the keyset cursor fields — never the capture
+// body, the user note, the raw AI proposal payload, or the detail-only
+// category memberships. A capture may hold a 4 MiB body and a 1 MiB note; the
+// list is read on every Inbox open, so those belong to GET /api/inbox/{id}
+// alone. Preview is the already-bounded card text, not a prefix of the body
+// the client may expand.
+type ReaderInboxListItem struct {
+	ID               uuid.UUID
+	URL              string
+	SourceKind       string
+	Title            *string
+	Preview          string
+	Tags             []string
+	Status           string
+	MetadataRevision int64
+	Expired          bool
+	UpdatedAt        time.Time
+}
+
 // ReaderInboxPartition is the stable, server-owned split of pending Inbox
 // items. Expiry never changes the pending lifecycle: it only moves an item
 // from Active to Expired after the maintenance worker records ExpiredAt.

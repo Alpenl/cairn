@@ -14,6 +14,7 @@ import {
   isReaderInboxConfirmAIProposalsResponse,
   isReaderInboxBulkResponse,
   isReaderInboxResponse,
+  isReaderInboxListItemResponse,
   isReaderInboxResponsePage,
   isReaderFeedFeedbackResponse,
   isReaderFeedResponse,
@@ -829,20 +830,49 @@ describe('Reader Inbox expiration and AI confirmation guards', () => {
     updated_at: '2026-08-11T01:00:00Z',
   }
 
+  // The list endpoint returns cards, not detail records: a capture may hold a
+  // 4 MiB body and a 1 MiB note, and the queue is read on every Inbox open.
+  const activeInboxCard = {
+    id: 'inbox-1',
+    url: 'https://example.com/article',
+    source_kind: 'manual',
+    title: 'Article',
+    preview: 'Body',
+    tags: [],
+    status: 'pending',
+    metadata_revision: 1,
+    expired: false,
+    updated_at: '2026-08-11T01:00:00Z',
+  }
+
   it('requires the materialized expiration fields and their derived relation', () => {
     expect(isReaderInboxResponse(activeInbox)).toBe(true)
     expect(isReaderInboxResponse({ ...activeInbox, expired: true })).toBe(false)
     expect(isReaderInboxResponse({ ...activeInbox, expired_at: undefined })).toBe(false)
     expect(isReaderInboxResponsePage({
-      items: [activeInbox],
+      items: [activeInboxCard],
       active_count: 1,
       expired_count: 0,
     })).toBe(true)
     expect(isReaderInboxResponsePage({
-      items: [activeInbox],
+      items: [activeInboxCard],
       active_count: -1,
       expired_count: 0,
     })).toBe(false)
+  })
+
+  it('accepts the narrow list card and refuses one without a bounded preview', () => {
+    expect(isReaderInboxListItemResponse(activeInboxCard)).toBe(true)
+    expect(isReaderInboxListItemResponse({ ...activeInboxCard, preview: undefined })).toBe(false)
+    expect(isReaderInboxListItemResponse({ ...activeInboxCard, metadata_revision: '1' })).toBe(false)
+    expect(isReaderInboxListItemResponse({ ...activeInboxCard, expired: 'no' })).toBe(false)
+    // The card guard must not start demanding the detail payload back: that
+    // is exactly the regression the list/detail split removes.
+    const withoutDetail: Record<string, unknown> = { ...activeInbox, preview: 'Body' }
+    for (const detailOnly of ['body', 'note', 'summary', 'suggested_tags', 'proposal_signals', 'category_ids']) {
+      delete withoutDetail[detailOnly]
+    }
+    expect(isReaderInboxListItemResponse(withoutDetail)).toBe(true)
   })
 
   it('requires an atomic response with a nonnegative remaining count', () => {

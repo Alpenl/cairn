@@ -844,15 +844,37 @@ func (s *ReaderVNextService) ListInbox(ctx context.Context, rawPartition, after 
 		return dto.ReaderInboxResponsePage{}, mapReaderError(err)
 	}
 	out := dto.ReaderInboxResponsePage{
-		Items:        make([]dto.ReaderInboxResponse, 0, len(items)),
+		Items:        make([]dto.ReaderInboxListItemResponse, 0, len(items)),
 		NextCursor:   next,
 		ActiveCount:  activeCount,
 		ExpiredCount: expiredCount,
 	}
 	for _, item := range items {
-		out.Items = append(out.Items, inboxResponse(item))
+		out.Items = append(out.Items, inboxListItemResponse(item))
 	}
 	return out, nil
+}
+
+// inboxListItemResponse maps the queue projection. It exists so the list path
+// cannot accidentally reuse inboxResponse and reintroduce the body/note the
+// projection was created to leave behind.
+func inboxListItemResponse(item model.ReaderInboxListItem) dto.ReaderInboxListItemResponse {
+	tags := item.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	return dto.ReaderInboxListItemResponse{
+		ID:               item.ID.String(),
+		URL:              item.URL,
+		SourceKind:       item.SourceKind,
+		Title:            item.Title,
+		Preview:          item.Preview,
+		Tags:             tags,
+		Status:           item.Status,
+		MetadataRevision: item.MetadataRevision,
+		Expired:          item.Expired,
+		UpdatedAt:        item.UpdatedAt,
+	}
 }
 
 func (s *ReaderVNextService) GetInbox(ctx context.Context, rawID string) (dto.ReaderInboxResponse, error) {

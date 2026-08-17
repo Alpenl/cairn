@@ -59,6 +59,7 @@ import type {
   ReaderTrashResponse,
   ReaderInboxJobResponse,
   ReaderInboxResponse,
+  ReaderInboxListItemResponse,
   ReaderInboxResponsePage,
   ReaderInboxBulkItemResponse,
   ReaderInboxBulkResponse,
@@ -925,11 +926,35 @@ export function isReaderInboxResponse(v: unknown): v is ReaderInboxResponse {
   return isReaderInbox(v)
 }
 
+// The queue card contract is narrower than the detail record on purpose: a
+// capture may hold a 4 MiB body and a 1 MiB note, and the list is read on every
+// Inbox open. This guard therefore validates the card fields and nothing else —
+// it must not start requiring body/note back, or the projection is undone.
+function isReaderInboxListItem(value: unknown): value is ReaderInboxListItemResponse {
+  return (
+    isRecord(value) &&
+    isString(value.id) &&
+    isString(value.url) &&
+    isString(value.source_kind) &&
+    isOptionalNullableString(value.title) &&
+    isString(value.preview) &&
+    isStringArray(value.tags) &&
+    (value.status === 'pending' || value.status === 'confirmed' || value.status === 'discarded') &&
+    isInteger(value.metadata_revision) &&
+    typeof value.expired === 'boolean' &&
+    isString(value.updated_at)
+  )
+}
+
+export function isReaderInboxListItemResponse(v: unknown): v is ReaderInboxListItemResponse {
+  return isReaderInboxListItem(v)
+}
+
 export function isReaderInboxResponsePage(v: unknown): v is ReaderInboxResponsePage {
   return (
     isRecord(v) &&
     Array.isArray(v.items) &&
-    v.items.every(isReaderInbox) &&
+    v.items.every(isReaderInboxListItem) &&
     isOptionalString(v.next_cursor) &&
     isInteger(v.active_count) &&
     v.active_count >= 0 &&

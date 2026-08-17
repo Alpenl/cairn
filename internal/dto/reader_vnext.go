@@ -268,11 +268,38 @@ type ReaderInboxResponse struct {
 	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
+// ReaderInboxListItemResponse is the queue card contract. It deliberately has
+// no Body, Note, ProposalSignals, SuggestedTags or CategoryIDs field: a
+// capture accepts a 4 MiB body and a 1 MiB note, and the list is read every
+// time the Inbox opens. Clients that need those read GET /api/inbox/{id},
+// whose contract is unchanged.
+//
+// Preview is the bounded card text the server already resolved from summary,
+// then note, then body. It is a display string, not a truncated body — clients
+// must not treat it as the beginning of the capture content.
+type ReaderInboxListItemResponse struct {
+	ID         string   `json:"id"`
+	URL        string   `json:"url"`
+	SourceKind string   `json:"source_kind"`
+	Title      *string  `json:"title,omitempty"`
+	Preview    string   `json:"preview"`
+	Tags       []string `json:"tags"`
+	Status     string   `json:"status"`
+	// MetadataRevision is what the batch confirm/discard actions send back as
+	// the expected revision, so the list must carry it.
+	MetadataRevision int64 `json:"metadata_revision"`
+	// Expired mirrors the detail contract: it is the materialized partition
+	// flag, never a wall-clock comparison performed by the client.
+	Expired bool `json:"expired"`
+	// UpdatedAt is both the card timestamp and the keyset cursor field.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type ReaderInboxResponsePage struct {
-	Items        []ReaderInboxResponse `json:"items"`
-	NextCursor   string                `json:"next_cursor,omitempty"`
-	ActiveCount  int                   `json:"active_count"`
-	ExpiredCount int                   `json:"expired_count"`
+	Items        []ReaderInboxListItemResponse `json:"items"`
+	NextCursor   string                        `json:"next_cursor,omitempty"`
+	ActiveCount  int                           `json:"active_count"`
+	ExpiredCount int                           `json:"expired_count"`
 }
 
 type ReaderInboxJobResponse struct {

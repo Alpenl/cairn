@@ -96,12 +96,27 @@ func (s *readerVNextChainHandler) CreateInbox(_ context.Context, request dto.Rea
 
 func (s *readerVNextChainHandler) ListInbox(_ context.Context, partition, _ string, _ int) (dto.ReaderInboxResponsePage, error) {
 	if s.inbox.Status != "pending" {
-		return dto.ReaderInboxResponsePage{Items: []dto.ReaderInboxResponse{}, ActiveCount: 0, ExpiredCount: 0}, nil
+		return dto.ReaderInboxResponsePage{Items: []dto.ReaderInboxListItemResponse{}, ActiveCount: 0, ExpiredCount: 0}, nil
 	}
 	if partition == "expired" {
-		return dto.ReaderInboxResponsePage{Items: []dto.ReaderInboxResponse{}, ActiveCount: 1, ExpiredCount: 0}, nil
+		return dto.ReaderInboxResponsePage{Items: []dto.ReaderInboxListItemResponse{}, ActiveCount: 1, ExpiredCount: 0}, nil
 	}
-	return dto.ReaderInboxResponsePage{Items: []dto.ReaderInboxResponse{s.inbox}, ActiveCount: 1, ExpiredCount: 0}, nil
+	return dto.ReaderInboxResponsePage{
+		Items: []dto.ReaderInboxListItemResponse{{
+			ID:               s.inbox.ID,
+			URL:              s.inbox.URL,
+			SourceKind:       s.inbox.SourceKind,
+			Title:            s.inbox.Title,
+			Preview:          s.inbox.Body,
+			Tags:             s.inbox.Tags,
+			Status:           s.inbox.Status,
+			MetadataRevision: s.inbox.MetadataRevision,
+			Expired:          s.inbox.Expired,
+			UpdatedAt:        s.inbox.UpdatedAt,
+		}},
+		ActiveCount:  1,
+		ExpiredCount: 0,
+	}, nil
 }
 
 func (s *readerVNextChainHandler) ConfirmInbox(context.Context, string, int64) (map[string]string, error) {

@@ -16,6 +16,7 @@ import type {
   PaginatedLinksResponse,
   ReaderHomeResponse,
   ReaderInboxResponse,
+  ReaderInboxListItemResponse,
   ReaderNoteResponse,
   CapabilitiesResponse,
   ReaderThoughtResponse,
@@ -328,6 +329,23 @@ function makeReaderInbox(overrides: Partial<ReaderInboxResponse> = {}): ReaderIn
     created_at: '2026-08-10T01:00:00Z',
     updated_at: '2026-08-10T01:00:00Z',
     ...overrides,
+  }
+}
+
+// The Inbox list endpoint returns cards, not detail records: the editor reads
+// GET /api/inbox/{id} on demand. Tests project the same way the server does.
+function makeReaderInboxCard(item: ReaderInboxResponse): ReaderInboxListItemResponse {
+  return {
+    id: item.id,
+    url: item.url,
+    source_kind: item.source_kind,
+    title: item.title,
+    preview: (item.summary ?? '') || item.note || item.body,
+    tags: item.tags,
+    status: item.status,
+    metadata_revision: item.metadata_revision,
+    expired: item.expired,
+    updated_at: item.updated_at,
   }
 }
 
@@ -1570,7 +1588,7 @@ describe('MainView Inbox beforeunload protection', () => {
       let serverItem = makeReaderInbox({ id: 'I-beforeunload' })
       const { client } = makeClient()
       client.listInbox = vi.fn(async () => ok({
-        items: [serverItem],
+        items: [makeReaderInboxCard(serverItem)],
         active_count: 1,
         expired_count: 0,
       }))
