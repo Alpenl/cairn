@@ -1,4 +1,5 @@
 import type { Annotation } from '../annotations'
+import { isRecord } from '../records'
 import type {
   AnnotationTarget,
   AnnotationUpdatePatch,
@@ -28,10 +29,6 @@ export interface InboxThoughtTarget {
 // target separate from the interactive AnnotationTarget union: Inbox has no
 // document-annotation editor to bind into the local annotation projection.
 export type ThoughtTarget = AnnotationTarget | InboxThoughtTarget
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0

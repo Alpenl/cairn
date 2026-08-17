@@ -174,6 +174,19 @@ describe('feed scroll anchor storage', () => {
     expect(parseFeedScrollAnchor(null)).toBeNull()
   })
 
+  // 共享的 isRecord 拒绝数组：本地的旧守卫只查 typeof/null，会把 JSON 里
+  // malformed 的列表放进字段读取，靠 version 缺失才碰巧兜住。
+  it('rejects a stored array instead of leaning on the field checks', () => {
+    expect(parseFeedScrollAnchor([])).toBeNull()
+    expect(parseFeedScrollAnchor([{ version: 1, item_key: 'link:b', offset: -180, scroll_top: 940 }])).toBeNull()
+    // 就算列表被硬塞上合法字段也不算位置：写入端永远写对象。
+    const decorated = Object.assign([], { version: 1, item_key: 'link:b', offset: -180, scroll_top: 940 })
+    expect(parseFeedScrollAnchor(decorated)).toBeNull()
+
+    window.sessionStorage.setItem(key, JSON.stringify([{ version: 1, item_key: 'link:b', offset: -180, scroll_top: 940 }]))
+    expect(readFeedScrollAnchor(key)).toBeNull()
+  })
+
   it('treats an unparsable stored value as no position', () => {
     window.sessionStorage.setItem(key, '{oops')
     expect(readFeedScrollAnchor(key)).toBeNull()

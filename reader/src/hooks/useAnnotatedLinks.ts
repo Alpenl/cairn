@@ -10,6 +10,7 @@ import {
 } from '../lib/article/document-channel'
 import { resourceStore } from '../lib/cache/store'
 import type { IdentityLease } from '../lib/identity'
+import { READER_EVENTS, subscribeReaderEvents } from '../lib/reader-events'
 import { isCompletedReadingLink } from '../lib/stats'
 import { listAnnotatedLinks } from '../lib/user-data/annotation-store'
 import type { AnnotatedLinkRecord } from '../lib/user-data/annotation-types'
@@ -413,12 +414,15 @@ export function useAnnotatedLinks(
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') requestReload()
     }
-    window.addEventListener('webtag:annotations-change', requestReload)
+    const unsubscribeAnnotationsChanged = subscribeReaderEvents(
+      [READER_EVENTS.annotationsChanged],
+      requestReload,
+    )
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       unsubscribeInvalidation()
       channel.dispose()
-      window.removeEventListener('webtag:annotations-change', requestReload)
+      unsubscribeAnnotationsChanged()
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [enabled, lease, reload, sessionActive, versionHighWater])

@@ -1,13 +1,13 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderCapabilityLease } from '../../lib/capabilities'
+import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
 
-const PENDING_INBOX_CHANGED = 'webtag:pending-inbox-changed'
 const PendingInboxCountContext = createContext<number | null>(null)
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function refreshPendingInboxCount(): void {
-  window.dispatchEvent(new Event(PENDING_INBOX_CHANGED))
+  emitReaderEvent(READER_EVENTS.pendingInboxChanged)
 }
 
 async function readPendingCount(
@@ -38,10 +38,10 @@ export function PendingInboxCountProvider({ client, capabilityLease, children }:
       })
     }
     refresh()
-    window.addEventListener(PENDING_INBOX_CHANGED, refresh)
+    const unsubscribe = subscribeReaderEvents([READER_EVENTS.pendingInboxChanged], refresh)
     return () => {
       active = false
-      window.removeEventListener(PENDING_INBOX_CHANGED, refresh)
+      unsubscribe()
     }
   }, [capabilityLease, client])
 

@@ -1,14 +1,11 @@
 import type { Annotation, AnnotationQuote } from '../annotations'
+import { isRecord } from '../records'
 import {
   canonicalAnnotationTarget,
   type AnnotationAddDraft,
   type AnnotationTarget,
   type SavedContentAnnotationBlockKey,
 } from './annotation-types'
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0

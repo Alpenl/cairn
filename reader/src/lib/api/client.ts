@@ -17,6 +17,7 @@ import {
   normalizeThrownError,
   parseRetryAfter as parseRetryAfterValue,
 } from '@webtag/api'
+import { isRecord } from '../records'
 import type {
   DiscoverFeedsResponse,
   FeedFolder,
@@ -345,10 +346,6 @@ function normalizeReaderFeedSources(values: readonly string[] | undefined): Read
 function readerLimit(limit: number | undefined, fallback: number): number | undefined {
   if (limit === undefined) return fallback
   return limit > 0 ? Math.min(Math.floor(limit), 200) : fallback
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 const SESSION_IDENTITY_KEYS = new Set([

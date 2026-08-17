@@ -1,4 +1,5 @@
 import type { Annotation } from '../annotations'
+import { isRecord } from '../records'
 import {
   annotationTargetKey,
   canonicalAnnotationTarget,
@@ -159,10 +160,6 @@ interface PlannedEntry {
   readonly createdAt: number
   readonly preserveVersionKey: boolean
   readonly synthetic: boolean
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function nonEmpty(value: unknown): value is string {

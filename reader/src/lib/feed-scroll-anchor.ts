@@ -9,6 +9,8 @@
  * the case where the anchored card is no longer in the snapshot at all.
  */
 
+import { isRecord } from './records'
+
 export interface FeedScrollAnchor {
   /** Key of the first card still intersecting the viewport when the reader left. */
   readonly itemKey: string
@@ -29,10 +31,6 @@ export const FEED_ITEM_KEY_ATTRIBUTE = 'data-feed-item-key'
 
 const FEED_SCROLL_ANCHOR_PREFIX = 'webtag:reader:mixed-feed:v1'
 const FEED_SCROLL_ANCHOR_VERSION = 1
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
 
 function sessionStorageOrNull(): Storage | null {
   if (typeof window === 'undefined') return null

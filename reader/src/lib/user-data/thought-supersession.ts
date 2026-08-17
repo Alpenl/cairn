@@ -5,6 +5,7 @@ import type {
   ReaderThoughtSupersessionOperationResponse,
 } from '../api/types'
 import type { IdentityLease } from '../identity'
+import { isRecord } from '../records'
 import {
   annotationTargetKey,
   canonicalAnnotationTarget,
@@ -62,10 +63,6 @@ export type ThoughtSupersessionRecoveryState =
   | 'pending'
   | 'blocked'
   | 'recovery-conflict'
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
 
 function eventCursorSequence(value: string): number | null {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) return null

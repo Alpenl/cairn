@@ -1,4 +1,5 @@
 import type { IdentityLease } from '../identity'
+import { isRecord } from '../records'
 import { isSafeNonNegativeInteger } from './annotation-codec'
 import { allocateThoughtClocks } from './annotation-store'
 import {
@@ -125,10 +126,6 @@ export async function readThoughtActionSnapshot(
       }
     },
   )
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function cloneJSON<T>(value: T): T | null {

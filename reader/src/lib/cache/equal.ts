@@ -14,9 +14,7 @@
  * 多通知一次，也不能吞掉一次真实更新。
  */
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
+import { isRecord } from '../records'
 
 /**
  * 逐字段浅比较两个条目。

@@ -4,6 +4,8 @@ import type {
 } from '../api/types'
 import type { IdentityBoundReaderClient } from '../api/client'
 import type { ApiError } from '../api/result'
+import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../reader-events'
+import { isRecord } from '../records'
 import {
   cloneTargetAnnotation,
   decodeAnnotationWire,
@@ -336,10 +338,6 @@ async function readPreparedState(
       historyRequest.onsuccess = () => { historyDone = true; finish() }
     },
   )
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function isTarget(value: unknown): value is ThoughtTarget {
@@ -2458,7 +2456,7 @@ async function performSync(
   const blockedCode = blockedFailureCode(finalRecords)
   const errorCode = storedFailureCode(finalPrepared.value.state.lastErrorCode) ?? blockedCode
   if (lease.isCurrent(lease.capture('thought sync event'))) {
-    window.dispatchEvent(new Event('webtag:thoughts-sync'))
+    emitReaderEvent(READER_EVENTS.thoughtsSynced)
   }
   if (blockedCode !== undefined || finalRetryAt !== undefined) {
     return {
@@ -2661,6 +2659,7 @@ class NamespaceThoughtSyncController implements ThoughtSyncController {
   private lifecycleOwners = 0
   private timer: number | null = null
   private channel: BroadcastChannel | null = null
+  private unsubscribeReaderEvents: (() => void)[] = []
   private repairFingerprint = ''
   private repairFingerprintUntil = 0
   private disposed = false
@@ -2807,7 +2806,7 @@ class NamespaceThoughtSyncController implements ThoughtSyncController {
       prepared?.state.pullInProgress === true &&
       (this.snapshot.retryAt === undefined || this.snapshot.retryAt <= Date.now()),
     )
-    window.dispatchEvent(new Event('webtag:thoughts-sync'))
+    emitReaderEvent(READER_EVENTS.thoughtsSynced)
   }
 
   private schedule(immediateReplay = false): void {
@@ -2846,8 +2845,10 @@ class NamespaceThoughtSyncController implements ThoughtSyncController {
     document.addEventListener('visibilitychange', this.onVisibility)
     window.addEventListener('online', this.onOnline)
     window.addEventListener('offline', this.onOffline)
-    window.addEventListener('webtag:annotations-change', this.onLocalChange)
-    window.addEventListener('webtag:thoughts-sync-request', this.onRequest)
+    this.unsubscribeReaderEvents = [
+      subscribeReaderEvents([READER_EVENTS.annotationsChanged], this.onLocalChange),
+      subscribeReaderEvents([READER_EVENTS.thoughtsSyncRequested], this.onRequest),
+    ]
     this.wake()
   }
 
@@ -2857,8 +2858,8 @@ class NamespaceThoughtSyncController implements ThoughtSyncController {
     document.removeEventListener('visibilitychange', this.onVisibility)
     window.removeEventListener('online', this.onOnline)
     window.removeEventListener('offline', this.onOffline)
-    window.removeEventListener('webtag:annotations-change', this.onLocalChange)
-    window.removeEventListener('webtag:thoughts-sync-request', this.onRequest)
+    for (const unsubscribe of this.unsubscribeReaderEvents) unsubscribe()
+    this.unsubscribeReaderEvents = []
     if (this.channel) {
       this.channel.removeEventListener('message', this.onBroadcast)
       this.channel.close()

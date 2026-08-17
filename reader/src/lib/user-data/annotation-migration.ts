@@ -2,6 +2,8 @@ import type { Annotation } from '../annotations'
 import { AnnotationDocumentChannel } from '../article/document-channel'
 import { isValidLinkId, isValidSourceHash } from '../article/source-block'
 import type { IdentityLease } from '../identity'
+import { emitReaderEvent, READER_EVENTS } from '../reader-events'
+import { isRecord } from '../records'
 import {
   readOwnedStorageForLease,
   type OwnedStorageID,
@@ -42,10 +44,6 @@ interface PreparedAnnotation {
   readonly linkId: string
   readonly target: AnnotationTarget
   readonly annotation: Annotation
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function isPositiveRevision(value: unknown): value is number {
@@ -331,7 +329,7 @@ async function migrateStorageImpl(
       })
     }
     channel.dispose()
-    window.dispatchEvent(new Event('webtag:annotations-change'))
+    emitReaderEvent(READER_EVENTS.annotationsChanged)
   }
   // Web Storage has no compare-and-delete primitive. Even a value check
   // immediately before removeItem can erase a newer snapshot written by an

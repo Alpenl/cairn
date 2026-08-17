@@ -14,6 +14,7 @@ import {
   isSubmitResponse,
   isTagCountResponse,
 } from '@webtag/api'
+import { isRecord } from '../records'
 import type {
 	ConversionPreviewResponse,
 	ConversionExecuteResponse,
@@ -171,7 +172,7 @@ const DISABLED_READER_CAPABILITIES: ReaderCapabilitiesResponse = {
 }
 
 function isBooleanRecord(value: unknown, keys: readonly string[]): value is Record<string, boolean> {
-  return isObject(value) && keys.every((key) => typeof value[key] === 'boolean')
+  return isRecord(value) && keys.every((key) => typeof value[key] === 'boolean')
 }
 
 export function isReaderCapabilitiesResponse(v: unknown): v is ReaderCapabilitiesResponse {
@@ -185,7 +186,7 @@ export function isReaderCapabilitiesResponse(v: unknown): v is ReaderCapabilitie
  * missing field as support for the new surfaces.
  */
 export function normalizeCapabilitiesResponse(value: unknown): CapabilitiesResponse {
-  const source = isObject(value) ? value : {}
+  const source = isRecord(value) ? value : {}
   const reader = isReaderCapabilitiesResponse(source.reader)
     ? source.reader
     : DISABLED_READER_CAPABILITIES
@@ -204,7 +205,7 @@ export function normalizeCapabilitiesResponse(value: unknown): CapabilitiesRespo
 }
 
 export function isCapabilitiesResponse(v: unknown): v is CapabilitiesResponse {
-  if (!isObject(v) || typeof v.library_kinds !== 'boolean' ||
+  if (!isRecord(v) || typeof v.library_kinds !== 'boolean' ||
     typeof v.site_library !== 'boolean' ||
     typeof v.site_auto_classification !== 'boolean' ||
     typeof v.site_management !== 'boolean' ||
@@ -221,15 +222,11 @@ export function isCapabilitiesResponse(v: unknown): v is CapabilitiesResponse {
  * same origin, not a Cairn backend with unknown version.
  */
 export function isHealthResponse(v: unknown): v is HealthResponse {
-  return isObject(v) &&
+  return isRecord(v) &&
     v.status === 'ok' &&
     isString(v.version) &&
     isString(v.commit) &&
     isString(v.build_time)
-}
-
-function isObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
 function isString(v: unknown): v is string {
@@ -456,7 +453,7 @@ function hasEnumValue(values: Record<string, true>, value: unknown): boolean {
  * present so the confirmation UI never hides a deletion behind a partial API
  * response. */
 export function isConversionPreviewResponse(v: unknown): v is ConversionPreviewResponse {
-	return isObject(v) &&
+	return isRecord(v) &&
 		isString(v.link_id) &&
 		(v.current_kind === 'reading' || v.current_kind === 'site') &&
 		(v.target_kind === 'reading' || v.target_kind === 'site') &&
@@ -469,10 +466,10 @@ export function isConversionPreviewResponse(v: unknown): v is ConversionPreviewR
 }
 
 export function isConversionExecuteResponse(v: unknown): v is ConversionExecuteResponse {
-	if (!isObject(v) || !isString(v.link_id) ||
+	if (!isRecord(v) || !isString(v.link_id) ||
 		(v.library_kind !== 'reading' && v.library_kind !== 'site') ||
 		!isInteger(v.content_revision) || !isString(v.status) ||
-		typeof v.reparse_required !== 'boolean' || !isObject(v.reader_target) || !isString(v.reader_target.view)) return false
+		typeof v.reparse_required !== 'boolean' || !isRecord(v.reader_target) || !isString(v.reader_target.view)) return false
 	const target = v.reader_target
 	return (target.view === 'sites' || target.view === 'processing' || target.view === 'reading' || target.view === 'failed' || target.view === 'review') &&
 		(v.site_id === undefined || isString(v.site_id)) &&
@@ -483,7 +480,7 @@ export function isConversionExecuteResponse(v: unknown): v is ConversionExecuteR
 
 export function isTranslationResponse(v: unknown): v is TranslationResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isString(v.id) &&
     isString(v.link_id) &&
     (v.scope === 'selection' || v.scope === 'full') &&
@@ -511,7 +508,7 @@ export function isTranslationListResponse(
   v: unknown,
 ): v is TranslationListResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isNonNegativeInteger(v.current_content_revision) &&
     (v.current_summary_source_hash === null ||
       isValidSourceHash(v.current_summary_source_hash)) &&
@@ -521,70 +518,70 @@ export function isTranslationListResponse(
 }
 
 export function isReaderThoughtSearchResponse(v: unknown): v is ReaderThoughtSearchResponse {
-	return isObject(v) && isString(v.id) && isString(v.host_kind) && isString(v.host_id) &&
+	return isRecord(v) && isString(v.id) && isString(v.host_kind) && isString(v.host_id) &&
 		isOptionalNullableString(v.link_id) && isString(v.snippet) && isString(v.updated_at)
 }
 
 export function isReaderNoteSearchResponse(v: unknown): v is ReaderNoteSearchResponse {
-	return isObject(v) && isString(v.id) && isString(v.title) && isString(v.snippet) &&
+	return isRecord(v) && isString(v.id) && isString(v.title) && isString(v.snippet) &&
 		isInteger(v.published_revision) && isString(v.updated_at)
 }
 
 /** Grouped library search must retain independently valid reading and site groups. */
 export function isGroupedSearchResponse(v: unknown): v is GroupedSearchResponse {
-	if (!isObject(v) || !isObject(v.reading) || !isObject(v.sites)) return false
+	if (!isRecord(v) || !isRecord(v.reading) || !isRecord(v.sites)) return false
 	const reading = v.reading
 	const sites = v.sites
 	if (!(isInteger(reading.total_hint) && Array.isArray(reading.items) && reading.items.every(isLinkResponse) &&
 		isInteger(sites.total_hint) && Array.isArray(sites.items) && sites.items.every((site) =>
-			isObject(site) && isString(site.id) && isString(site.name) && Array.isArray(site.matched_entries) &&
-			site.matched_entries.every((entry) => isObject(entry) && isString(entry.id) && isString(entry.name) && isString(entry.url)),
+			isRecord(site) && isString(site.id) && isString(site.name) && Array.isArray(site.matched_entries) &&
+			site.matched_entries.every((entry) => isRecord(entry) && isString(entry.id) && isString(entry.name) && isString(entry.url)),
 		))) return false
-	if (v.thoughts !== undefined && (!isObject(v.thoughts) || !isInteger(v.thoughts.total_hint) || !isOptionalString(v.thoughts.next_cursor) || !Array.isArray(v.thoughts.items) || !v.thoughts.items.every(isReaderThoughtSearchResponse))) return false
-	if (v.notes !== undefined && (!isObject(v.notes) || !isInteger(v.notes.total_hint) || !Array.isArray(v.notes.items) || !v.notes.items.every(isReaderNoteSearchResponse))) return false
+	if (v.thoughts !== undefined && (!isRecord(v.thoughts) || !isInteger(v.thoughts.total_hint) || !isOptionalString(v.thoughts.next_cursor) || !Array.isArray(v.thoughts.items) || !v.thoughts.items.every(isReaderThoughtSearchResponse))) return false
+	if (v.notes !== undefined && (!isRecord(v.notes) || !isInteger(v.notes.total_hint) || !Array.isArray(v.notes.items) || !v.notes.items.every(isReaderNoteSearchResponse))) return false
 	return true
 }
 
 export function isSiteListItem(v: unknown): v is SiteListItemResponse {
-	return isObject(v) && isString(v.id) && isString(v.name) && isString(v.intro) &&
+	return isRecord(v) && isString(v.id) && isString(v.name) && isString(v.intro) &&
 		isString(v.display_host) && isStringArray(v.tags) && isInteger(v.entry_count) &&
 		typeof v.pinned === 'boolean' && typeof v.needs_review === 'boolean' &&
 		isInteger(v.revision) && isString(v.first_collected_at) && isString(v.last_collected_at)
 }
 
 export function isPaginatedSites(v: unknown): v is PaginatedSitesResponse {
-	return isObject(v) && Array.isArray(v.items) && v.items.every(isSiteListItem) &&
+	return isRecord(v) && Array.isArray(v.items) && v.items.every(isSiteListItem) &&
 		isInteger(v.total) && isInteger(v.page) && isInteger(v.limit) &&
 		(v.recent_cutoff === undefined || isString(v.recent_cutoff))
 }
 
 export function isSiteDetail(v: unknown): v is SiteDetailResponse {
-	if (!isObject(v)) return false
+	if (!isRecord(v)) return false
 	const raw: Record<string, unknown> = v
 	if (!isSiteListItem(raw)) return false
 	const detail = raw as unknown as Record<string, unknown>
 	return isString(detail['user_note']) && typeof detail['grouping_locked'] === 'boolean' &&
 		Array.isArray(detail['tags_with_source']) && Array.isArray(detail['entries']) &&
-		Array.isArray(detail['related_readings']) && detail['related_readings'].every((item) => isObject(item) && isString(item.id) && isString(item.title) && isString(item.url) && isString(item.created_at))
+		Array.isArray(detail['related_readings']) && detail['related_readings'].every((item) => isRecord(item) && isString(item.id) && isString(item.title) && isString(item.url) && isString(item.created_at))
 }
 
 export function isSiteEntryDeleteResponse(v: unknown): v is SiteEntryDeleteResponse {
-	return isObject(v) && typeof v.deleted_site === 'boolean'
+	return isRecord(v) && typeof v.deleted_site === 'boolean'
 }
 
 export function isSiteMergePreviewResponse(v: unknown): v is SiteMergePreviewResponse {
-	return isObject(v) && isString(v.target_site_id) && isInteger(v.target_revision) &&
-		Array.isArray(v.entries) && v.entries.every((entry) => isObject(entry) && isString(entry.id) && isString(entry.site_id) && isString(entry.link_id) && isString(entry.name) && isString(entry.url) && typeof entry.duplicate === 'boolean') &&
+	return isRecord(v) && isString(v.target_site_id) && isInteger(v.target_revision) &&
+		Array.isArray(v.entries) && v.entries.every((entry) => isRecord(entry) && isString(entry.id) && isString(entry.site_id) && isString(entry.link_id) && isString(entry.name) && isString(entry.url) && typeof entry.duplicate === 'boolean') &&
 		isStringArray(v.user_tags) && isStringArray(v.identity_keys) &&
-		Array.isArray(v.field_conflicts) && v.field_conflicts.every((conflict) => isObject(conflict) && isString(conflict.field) && isString(conflict.target_value) && isString(conflict.source_site_id) && isString(conflict.source_value)) &&
+		Array.isArray(v.field_conflicts) && v.field_conflicts.every((conflict) => isRecord(conflict) && isString(conflict.field) && isString(conflict.target_value) && isString(conflict.source_site_id) && isString(conflict.source_value)) &&
 		typeof v.requires_resolution === 'boolean'
 }
 
 export function isSiteMergeExecuteResponse(v: unknown): v is SiteMergeExecuteResponse {
-	return isObject(v) && isString(v.site_id) && isInteger(v.revision) && isInteger(v.moved_entries) && isInteger(v.deleted_duplicate_links)
+	return isRecord(v) && isString(v.site_id) && isInteger(v.revision) && isInteger(v.moved_entries) && isInteger(v.deleted_duplicate_links)
 }
 function isSiteSplitRequest(v: unknown): boolean {
-	return isObject(v) && isInteger(v.expected_revision) && isStringArray(v.entry_ids) &&
+	return isRecord(v) && isInteger(v.expected_revision) && isStringArray(v.entry_ids) &&
 		isString(v.name) && isString(v.primary_entry_id) &&
 		(v.intro === undefined || isString(v.intro)) &&
 		(v.homepage_url === undefined || isString(v.homepage_url)) &&
@@ -593,15 +590,15 @@ function isSiteSplitRequest(v: unknown): boolean {
 		(v.identity_keys_for_new_site === undefined || isStringArray(v.identity_keys_for_new_site))
 }
 export function isSiteSplitPreviewResponse(v: unknown): v is SiteSplitPreviewResponse {
-	return isObject(v) && isString(v.source_site_id) && isInteger(v.source_revision) && isSiteSplitRequest(v.payload) &&
-		Array.isArray(v.entries) && v.entries.every((entry) => isObject(entry) && isString(entry.id) && isString(entry.site_id) && isString(entry.link_id) && isString(entry.name) && isString(entry.url) && typeof entry.duplicate === 'boolean') &&
-		Array.isArray(v.identities) && v.identities.every((identity) => isObject(identity) && isString(identity.identity_key) && typeof identity.eligible_for_new_site === 'boolean' && (identity.owner === 'source' || identity.owner === 'new_site')) &&
+	return isRecord(v) && isString(v.source_site_id) && isInteger(v.source_revision) && isSiteSplitRequest(v.payload) &&
+		Array.isArray(v.entries) && v.entries.every((entry) => isRecord(entry) && isString(entry.id) && isString(entry.site_id) && isString(entry.link_id) && isString(entry.name) && isString(entry.url) && typeof entry.duplicate === 'boolean') &&
+		Array.isArray(v.identities) && v.identities.every((identity) => isRecord(identity) && isString(identity.identity_key) && typeof identity.eligible_for_new_site === 'boolean' && (identity.owner === 'source' || identity.owner === 'new_site')) &&
 		isStringArray(v.user_tags)
 }
-export function isSiteSplitExecuteResponse(v: unknown): v is SiteSplitExecuteResponse { return isObject(v) && isString(v.source_site_id) && isInteger(v.source_revision) && isString(v.new_site_id) && isInteger(v.new_site_revision) && isInteger(v.moved_entries) }
+export function isSiteSplitExecuteResponse(v: unknown): v is SiteSplitExecuteResponse { return isRecord(v) && isString(v.source_site_id) && isInteger(v.source_revision) && isString(v.new_site_id) && isInteger(v.new_site_revision) && isInteger(v.moved_entries) }
 
 export function isClassificationRuleResponse(v: unknown): v is ClassificationRuleResponse {
-	return isObject(v) && isString(v.id) && isString(v.host) &&
+	return isRecord(v) && isString(v.id) && isString(v.host) &&
 		isOptionalNullableString(v.identity_adapter) && isOptionalNullableString(v.path_prefix) &&
 		(v.target_kind === 'reading' || v.target_kind === 'site') && typeof v.enabled === 'boolean' &&
 		isInteger(v.revision) && isString(v.created_at) && isString(v.updated_at)
@@ -612,9 +609,9 @@ export function isClassificationRuleArray(v: unknown): v is ClassificationRuleRe
 }
 
 export function isLibraryReviewResponse(v: unknown): v is LibraryReviewResponse {
-	return isObject(v) && isString(v.id) &&
+	return isRecord(v) && isString(v.id) &&
 		(v.kind === 'classification_uncertain' || v.kind === 'migration_suggestion' || v.kind === 'note_conflict' || v.kind === 'merge_conflict') &&
-		isObject(v.payload) && (v.status === 'pending' || v.status === 'applied' || v.status === 'dismissed') &&
+		isRecord(v.payload) && (v.status === 'pending' || v.status === 'applied' || v.status === 'dismissed') &&
 		isInteger(v.revision) && isString(v.created_at) && isOptionalNullableString(v.link_id) && isOptionalNullableString(v.site_id) && isOptionalNullableString(v.resolved_at)
 }
 
@@ -630,12 +627,12 @@ export function isDomainTreeSummaryEnvelope(
   v: unknown,
 ): v is DomainTreeSummaryEnvelope {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isInteger(v.total) &&
     (v.library_kind === undefined || v.library_kind === 'reading' || v.library_kind === 'site') &&
     Array.isArray(v.domains) &&
     v.domains.every(
-      (d) => isObject(d) && isString(d.domain) && isInteger(d.count),
+      (d) => isRecord(d) && isString(d.domain) && isInteger(d.count),
     )
   )
 }
@@ -660,7 +657,7 @@ function isThoughtIdentifier(value: unknown): value is string {
 }
 
 function isThoughtVersionKey(value: unknown): boolean {
-  return isObject(value) && Number.isSafeInteger(value.logical_clock) &&
+  return isRecord(value) && Number.isSafeInteger(value.logical_clock) &&
     (value.logical_clock as number) >= 0 &&
     (value.logical_clock as number) <= Number.MAX_SAFE_INTEGER &&
     isThoughtIdentifier(value.device_id) && isThoughtIdentifier(value.op_id)
@@ -668,7 +665,7 @@ function isThoughtVersionKey(value: unknown): boolean {
 
 function isReaderThought(value: unknown): value is ReaderThoughtResponse {
   return (
-    isObject(value) &&
+    isRecord(value) &&
     value.contract_version === 1 &&
     isString(value.id) &&
     isString(value.host_kind) &&
@@ -690,7 +687,7 @@ function isReaderThought(value: unknown): value is ReaderThoughtResponse {
 }
 
 export function isReaderThoughtAckResponse(v: unknown): v is ReaderThoughtAckResponse {
-  return isObject(v) && v.contract_version === 1 && isThoughtIdentifier(v.op_id) &&
+  return isRecord(v) && v.contract_version === 1 && isThoughtIdentifier(v.op_id) &&
     isInteger(v.sequence) && v.sequence > 0 &&
     (v.disposition === 'applied' || v.disposition === 'superseded' ||
       v.disposition === 'duplicate') &&
@@ -703,7 +700,7 @@ export function isReaderThoughtResponse(v: unknown): v is ReaderThoughtResponse 
 
 export function isReaderThoughtsResponse(v: unknown): v is ReaderThoughtsResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     v.contract_version === 1 &&
     Array.isArray(v.items) &&
     v.items.every(isReaderThought) &&
@@ -712,7 +709,7 @@ export function isReaderThoughtsResponse(v: unknown): v is ReaderThoughtsRespons
 }
 
 function isReaderThoughtTarget(value: unknown, hostID: string): boolean {
-  if (!isObject(value) || value.host_id !== hostID || !isObject(value.version)) return false
+  if (!isRecord(value) || value.host_id !== hostID || !isRecord(value.version)) return false
   const version = value.version
   switch (value.kind) {
     case 'saved-content':
@@ -729,10 +726,10 @@ function isReaderThoughtTarget(value: unknown, hostID: string): boolean {
 }
 
 function isReaderThoughtPayload(value: unknown, operationKind: unknown): boolean {
-  if (!isObject(value) || !isString(value.body) ||
+  if (!isRecord(value) || !isString(value.body) ||
     (value.source !== 'self' && value.source !== 'ai' && value.source !== 'user')) return false
   if (operationKind === 'delete' && value.quote === undefined) return true
-  if (!isObject(value.quote) || !isString(value.quote.exact)) return false
+  if (!isRecord(value.quote) || !isString(value.quote.exact)) return false
   return (value.quote.start === undefined || isNonNegativeInteger(value.quote.start)) &&
     (value.quote.end === undefined || isNonNegativeInteger(value.quote.end)) &&
     (value.quote.prefix === undefined || isString(value.quote.prefix)) &&
@@ -744,8 +741,8 @@ function isReaderThoughtSupersessionOperation(
   value: unknown,
   annotationID: string,
 ): value is ReaderThoughtSupersessionOperationResponse {
-  const logicalClock = isObject(value) ? value.logical_clock : undefined
-  if (!isObject(value) || value.contract_version !== 1 ||
+  const logicalClock = isRecord(value) ? value.logical_clock : undefined
+  if (!isRecord(value) || value.contract_version !== 1 ||
     !isSafePositiveInteger(value.sequence) || !isThoughtIdentifier(value.op_id) ||
     !isThoughtIdentifier(value.device_id) || typeof logicalClock !== 'number' ||
     !Number.isSafeInteger(logicalClock) ||
@@ -802,11 +799,11 @@ function isReaderThoughtSupersessionCursor(value: unknown): boolean {
 export function isReaderThoughtSupersessionEventsResponse(
   value: unknown,
 ): value is ReaderThoughtSupersessionEventsResponse {
-  return isObject(value) && value.contract_version === 1 &&
+  return isRecord(value) && value.contract_version === 1 &&
     Array.isArray(value.items) &&
     (value.next_cursor === undefined || isReaderThoughtSupersessionCursor(value.next_cursor)) &&
     value.items.every((item) => {
-      if (!isObject(item) || !isSafePositiveInteger(item.sequence) ||
+      if (!isRecord(item) || !isSafePositiveInteger(item.sequence) ||
         !isThoughtIdentifier(item.annotation_id) ||
         !isReaderThoughtSupersessionOperation(item.loser, item.annotation_id) ||
         !isReaderThoughtSupersessionOperation(item.winner_at_detection, item.annotation_id)) {
@@ -821,7 +818,7 @@ export function isReaderThoughtSupersessionEventsResponse(
 
 function isReaderNote(value: unknown): value is ReaderNoteResponse {
   return (
-    isObject(value) &&
+    isRecord(value) &&
     isString(value.id) &&
     isString(value.title) &&
     isString(value.published_content) &&
@@ -842,7 +839,7 @@ export function isReaderNoteResponse(v: unknown): v is ReaderNoteResponse {
 
 export function isReaderNotesResponse(v: unknown): v is ReaderNotesResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     Array.isArray(v.items) &&
     v.items.every(isReaderNote) &&
     isInteger(v.count) &&
@@ -852,7 +849,7 @@ export function isReaderNotesResponse(v: unknown): v is ReaderNotesResponse {
 
 export function isReaderNoteHistoryResponse(v: unknown): v is ReaderNoteHistoryResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isInteger(v.id) &&
     isInteger(v.revision) &&
     isString(v.title) &&
@@ -868,7 +865,7 @@ function isReaderHostKind(value: unknown): boolean {
 
 export function isReaderHostLifecycleResponse(v: unknown): v is ReaderHostLifecycleResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isReaderHostKind(v.host_kind) &&
     isString(v.host_id) &&
     (v.state === 'live' || v.state === 'trashed') &&
@@ -878,7 +875,7 @@ export function isReaderHostLifecycleResponse(v: unknown): v is ReaderHostLifecy
 
 function isReaderTrashItem(value: unknown): value is ReaderTrashItemResponse {
   return (
-    isObject(value) &&
+    isRecord(value) &&
     isReaderHostKind(value.host_kind) &&
     isString(value.host_id) &&
     isOptionalNullableString(value.title) &&
@@ -889,7 +886,7 @@ function isReaderTrashItem(value: unknown): value is ReaderTrashItemResponse {
 
 export function isReaderTrashResponse(v: unknown): v is ReaderTrashResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     Array.isArray(v.items) &&
     v.items.every(isReaderTrashItem) &&
     isInteger(v.count) && v.count >= 0 &&
@@ -899,7 +896,7 @@ export function isReaderTrashResponse(v: unknown): v is ReaderTrashResponse {
 
 function isReaderInbox(value: unknown): value is ReaderInboxResponse {
   return (
-    isObject(value) &&
+    isRecord(value) &&
     isString(value.id) &&
     isString(value.url) &&
     isString(value.source_kind) &&
@@ -908,7 +905,7 @@ function isReaderInbox(value: unknown): value is ReaderInboxResponse {
     isString(value.note) &&
     isOptionalNullableString(value.summary) &&
     isStringArray(value.suggested_tags) &&
-    isObject(value.proposal_signals) &&
+    isRecord(value.proposal_signals) &&
     (value.proposal_status === 'pending' || value.proposal_status === 'running' || value.proposal_status === 'completed' || value.proposal_status === 'failed') &&
     isStringArray(value.tags) &&
     isStringArray(value.category_ids) &&
@@ -930,7 +927,7 @@ export function isReaderInboxResponse(v: unknown): v is ReaderInboxResponse {
 
 export function isReaderInboxResponsePage(v: unknown): v is ReaderInboxResponsePage {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     Array.isArray(v.items) &&
     v.items.every(isReaderInbox) &&
     isOptionalString(v.next_cursor) &&
@@ -943,7 +940,7 @@ export function isReaderInboxResponsePage(v: unknown): v is ReaderInboxResponseP
 
 function isReaderInboxBulkItem(value: unknown): value is ReaderInboxBulkItemResponse {
   return (
-    isObject(value) &&
+    isRecord(value) &&
     isString(value.inbox_id) &&
     (value.status === 'confirmed' || value.status === 'discarded') &&
     isOptionalString(value.link_id)
@@ -951,14 +948,14 @@ function isReaderInboxBulkItem(value: unknown): value is ReaderInboxBulkItemResp
 }
 
 export function isReaderInboxBulkResponse(v: unknown): v is ReaderInboxBulkResponse {
-  return isObject(v) && v.atomic === true && Array.isArray(v.items) && v.items.every(isReaderInboxBulkItem)
+  return isRecord(v) && v.atomic === true && Array.isArray(v.items) && v.items.every(isReaderInboxBulkItem)
 }
 
 export function isReaderInboxConfirmAIProposalsResponse(
   v: unknown,
 ): v is ReaderInboxConfirmAIProposalsResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     v.atomic === true &&
     Array.isArray(v.items) &&
     v.items.every(isReaderInboxBulkItem) &&
@@ -968,15 +965,15 @@ export function isReaderInboxConfirmAIProposalsResponse(
 }
 
 export function isReaderInboxJobResponse(v: unknown): v is ReaderInboxJobResponse {
-  return isObject(v) && isString(v.inbox_id) && isString(v.status) && isString(v.job_id)
+  return isRecord(v) && isString(v.inbox_id) && isString(v.status) && isString(v.job_id)
 }
 
 export function isReaderConfirmResponse(v: unknown): v is ReaderConfirmResponse {
-  return isObject(v) && v.target_kind === 'link' && isString(v.link_id) && v.status === 'confirmed'
+  return isRecord(v) && v.target_kind === 'link' && isString(v.link_id) && v.status === 'confirmed'
 }
 
 function isReaderCategory(value: unknown): value is ReaderCategoryResponse {
-  return isObject(value) && isString(value.id) && isString(value.name) && isInteger(value.count) && isString(value.created_at)
+  return isRecord(value) && isString(value.id) && isString(value.name) && isInteger(value.count) && isString(value.created_at)
 }
 
 export function isReaderCategoryResponse(v: unknown): v is ReaderCategoryResponse {
@@ -984,12 +981,12 @@ export function isReaderCategoryResponse(v: unknown): v is ReaderCategoryRespons
 }
 
 export function isReaderCategoriesResponse(v: unknown): v is ReaderCategoriesResponse {
-  return isObject(v) && Array.isArray(v.items) && v.items.every(isReaderCategory)
+  return isRecord(v) && Array.isArray(v.items) && v.items.every(isReaderCategory)
 }
 
 function isReaderTodo(value: unknown): value is ReaderTodoResponse {
   return (
-    isObject(value) &&
+    isRecord(value) &&
     isString(value.id) &&
     isString(value.text) &&
     isOptionalDateTime(value.due_at) &&
@@ -1021,7 +1018,7 @@ export function isReaderTodoResponse(v: unknown): v is ReaderTodoResponse {
 
 export function isReaderTodosResponse(v: unknown): v is ReaderTodosResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isReaderResponseMetadata(v) &&
     Array.isArray(v.items) &&
     v.items.every(isReaderTodo) &&
@@ -1031,7 +1028,7 @@ export function isReaderTodosResponse(v: unknown): v is ReaderTodosResponse {
 
 export function isReaderEngagementResponse(v: unknown): v is ReaderEngagementResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isString(v.link_id) &&
     typeof v.read === 'boolean' &&
     isNumber(v.progress) &&
@@ -1053,14 +1050,14 @@ function isReaderFeedReasonCode(value: unknown): value is keyof typeof READER_FE
 
 function isReaderFeedScoreContributions(value: unknown): value is Record<keyof typeof READER_FEED_REASON_CODES, number> {
   return (
-    isObject(value) &&
+    isRecord(value) &&
     Object.keys(READER_FEED_REASON_CODES).every((code) => isInteger(value[code])) &&
     Object.keys(value).every((code) => Object.prototype.hasOwnProperty.call(READER_FEED_REASON_CODES, code))
   )
 }
 
 function isReaderFeedReasonParams(code: keyof typeof READER_FEED_REASON_CODES, value: unknown): boolean {
-  if (!isObject(value)) return false
+  if (!isRecord(value)) return false
   switch (code) {
     case 'pending_confirmation':
       return value.source === 'inbox' && Object.keys(value).length === 1
@@ -1092,7 +1089,7 @@ function isUniqueReaderFeedArray(
 
 function isReaderFeedSection(value: unknown): value is ReaderFeedSectionResponse {
   return (
-    isObject(value) &&
+    isRecord(value) &&
     isString(value.id) &&
     isString(value.source) &&
     Object.prototype.hasOwnProperty.call(READER_FEED_ITEM_TYPES, value.source) &&
@@ -1104,7 +1101,7 @@ function isReaderFeedSection(value: unknown): value is ReaderFeedSectionResponse
 
 function isReaderFeedSource(value: unknown): value is ReaderFeedSourceResponse {
   return (
-    isObject(value) &&
+    isRecord(value) &&
     isString(value.id) &&
     Object.prototype.hasOwnProperty.call(READER_FEED_ITEM_TYPES, value.id) &&
     isString(value.label) &&
@@ -1115,7 +1112,7 @@ function isReaderFeedSource(value: unknown): value is ReaderFeedSourceResponse {
 }
 
 function isReaderFeedItem(value: unknown): value is ReaderFeedItemResponse {
-  if (!isObject(value)) return false
+  if (!isRecord(value)) return false
   if (
     !isString(value.key) ||
     !isString(value.source) ||
@@ -1178,14 +1175,14 @@ export function isReaderFeedItemResponse(v: unknown): v is ReaderFeedItemRespons
 }
 
 export function isReaderFeedFeedbackResponse(value: unknown): value is ReaderFeedFeedbackResponse {
-  if (!isObject(value) || !isString(value.item_key) || !isReaderFeedAction(value.action) || typeof value.saved !== 'boolean') return false
+  if (!isRecord(value) || !isString(value.item_key) || !isReaderFeedAction(value.action) || typeof value.saved !== 'boolean') return false
   if (value.association === undefined) return true
-  return isObject(value.association) && isString(value.association.feed_item_id) && isString(value.association.link_id) && typeof value.association.created_link === 'boolean'
+  return isRecord(value.association) && isString(value.association.feed_item_id) && isString(value.association.link_id) && typeof value.association.created_link === 'boolean'
 }
 
 export function isReaderFeedResponse(v: unknown): v is ReaderFeedResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     Array.isArray(v.items) &&
     v.items.every(isReaderFeedItem) &&
     isOptionalString(v.next_cursor) &&
@@ -1199,11 +1196,11 @@ export function isReaderFeedResponse(v: unknown): v is ReaderFeedResponse {
 
 export function isReaderHomeResponse(v: unknown): v is ReaderHomeResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isReaderResponseMetadata(v) &&
     isString(v.today) &&
     isString(v.summary) &&
-    isObject(v.counts) &&
+    isRecord(v.counts) &&
     Object.values(v.counts).every(isInteger) &&
     Array.isArray(v.continue_reading) &&
     v.continue_reading.every(isReaderFeedItem) &&
@@ -1222,12 +1219,12 @@ export function isReaderHomeResponse(v: unknown): v is ReaderHomeResponse {
 }
 
 export function isReaderLinkMetadataResponse(v: unknown): v is ReaderLinkMetadataResponse {
-  return isObject(v) && isString(v.link_id) && isSafePositiveInteger(v.metadata_revision)
+  return isRecord(v) && isString(v.link_id) && isSafePositiveInteger(v.metadata_revision)
 }
 
 export function isReaderContentHistoryResponse(v: unknown): v is ReaderContentHistoryResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isInteger(v.id) &&
     isInteger(v.revision) &&
     isOptionalNullableString(v.content) &&
@@ -1239,24 +1236,24 @@ export function isReaderContentHistoryResponse(v: unknown): v is ReaderContentHi
 }
 
 export function isReaderContentHistoryRestoreResponse(v: unknown): v is ReaderContentHistoryRestoreResponse {
-  return isObject(v) && isString(v.link_id) && isPositiveInteger(v.content_revision)
+  return isRecord(v) && isString(v.link_id) && isPositiveInteger(v.content_revision)
 }
 
 export function isReaderRelatedTagsResponse(v: unknown): v is ReaderRelatedTagsResponse {
-  return isObject(v) && isStringArray(v.items) && isString(v.model) && typeof v.degraded === 'boolean'
+  return isRecord(v) && isStringArray(v.items) && isString(v.model) && typeof v.degraded === 'boolean'
 }
 
 export function isReaderTagActivityResponse(v: unknown): v is ReaderTagActivityResponse {
-  return isObject(v) && isString(v.tag) && isString(v.last_at)
+  return isRecord(v) && isString(v.tag) && isString(v.last_at)
 }
 
 export function isReaderDomainActivityResponse(v: unknown): v is ReaderDomainActivityResponse {
-  return isObject(v) && isString(v.domain) && isString(v.last_at)
+  return isRecord(v) && isString(v.domain) && isString(v.last_at)
 }
 
 export function isReaderActivityResponse(v: unknown): v is ReaderActivityResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     (v.kind === 'all' || v.kind === 'tag' || v.kind === 'domain') &&
     Array.isArray(v.tags) &&
     v.tags.every(isReaderTagActivityResponse) &&
@@ -1267,7 +1264,7 @@ export function isReaderActivityResponse(v: unknown): v is ReaderActivityRespons
 }
 
 export function isReaderAIResponse(v: unknown): v is ReaderAIResponse {
-  return isObject(v) && typeof v.enabled === 'boolean' && isString(v.answer) && isOptionalString(v.model)
+  return isRecord(v) && typeof v.enabled === 'boolean' && isString(v.answer) && isOptionalString(v.model)
 }
 
 const FEED_ANALYSIS_STATUSES = {
@@ -1297,7 +1294,7 @@ function isOptionalInteger(v: unknown): boolean {
 /** RSS folder guard: identity and display name are the stable core. */
 export function isFeedFolder(v: unknown): v is FeedFolder {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isString(v.id) &&
     isString(v.name) &&
     isOptionalString(v.created_at) &&
@@ -1307,7 +1304,7 @@ export function isFeedFolder(v: unknown): v is FeedFolder {
 
 /** Accept `feed_url` canonically and the early `url` alias. */
 export function isFeedSubscription(v: unknown): v is FeedSubscription {
-  if (!isObject(v) || !isString(v.id)) return false
+  if (!isRecord(v) || !isString(v.id)) return false
   if (!isString(v.feed_url) && !isString(v.url)) return false
   return (
     isOptionalNullableString(v.site_url) &&
@@ -1331,14 +1328,14 @@ export function isFeedSubscription(v: unknown): v is FeedSubscription {
 }
 
 export function isSubscriptionsResponse(v: unknown): v is SubscriptionsResponse {
-  if (!isObject(v) || !Array.isArray(v.folders) || !Array.isArray(v.subscriptions)) {
+  if (!isRecord(v) || !Array.isArray(v.folders) || !Array.isArray(v.subscriptions)) {
     return false
   }
   if (!v.folders.every(isFeedFolder) || !v.subscriptions.every(isFeedSubscription)) {
     return false
   }
   return (
-    isObject(v.counts) &&
+    isRecord(v.counts) &&
     isInteger(v.counts.all) &&
     isInteger(v.counts.unread) &&
     isInteger(v.counts.starred) &&
@@ -1348,7 +1345,7 @@ export function isSubscriptionsResponse(v: unknown): v is SubscriptionsResponse 
 
 export function isOPMLImportResponse(v: unknown): v is OPMLImportResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     isInteger(v.imported) &&
     isInteger(v.folders) &&
     isInteger(v.skipped) &&
@@ -1358,11 +1355,11 @@ export function isOPMLImportResponse(v: unknown): v is OPMLImportResponse {
 
 export function isDiscoverFeedsResponse(v: unknown): v is DiscoverFeedsResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     Array.isArray(v.feeds) &&
     v.feeds.every(
       (feed) =>
-        isObject(feed) &&
+        isRecord(feed) &&
         (isString(feed.feed_url) || isString(feed.url)) &&
         isOptionalNullableString(feed.title) &&
         isOptionalNullableString(feed.type),
@@ -1372,7 +1369,7 @@ export function isDiscoverFeedsResponse(v: unknown): v is DiscoverFeedsResponse 
 
 export function isFeedItem(v: unknown): v is FeedItem {
   if (
-    !isObject(v) ||
+    !isRecord(v) ||
     !isString(v.id) ||
     !isString(v.subscription_id) ||
     !isString(v.title) ||
@@ -1407,7 +1404,7 @@ export function isFeedItem(v: unknown): v is FeedItem {
 
 export function isPaginatedFeedItems(v: unknown): v is PaginatedFeedItemsResponse {
   return (
-    isObject(v) &&
+    isRecord(v) &&
     Array.isArray(v.items) &&
     v.items.every(isFeedItem) &&
     isInteger(v.total) &&
@@ -1417,7 +1414,7 @@ export function isPaginatedFeedItems(v: unknown): v is PaginatedFeedItemsRespons
 }
 
 export function isFeedItemAnalyzeResponse(v: unknown): v is FeedItemAnalyzeResponse {
-  if (!isObject(v)) return false
+  if (!isRecord(v)) return false
   return (
     (v.item === undefined || isFeedItem(v.item)) &&
     isOptionalString(v.link_id) &&
