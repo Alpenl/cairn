@@ -3388,6 +3388,8 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .rvx-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 17px; border-top: .5px solid var(--divider); }
 .rvx-settings-row h2 { margin: 6px 0 4px; color: var(--text-primary); font-size: 15px; }
 .rvx-settings-row p { max-width: 620px; margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.55; }
+/* 「关于」把版本、构建时间与 Release 结果分成几段，需要行距才读得开。 */
+.rvx-settings-row p + p { margin-top: 6px; }
 .rvx-settings-control { display: grid; justify-items: end; gap: 7px; }
 
 @media (max-width: 900px) {

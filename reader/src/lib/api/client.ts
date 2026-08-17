@@ -115,6 +115,7 @@ import type {
   ReaderAIRequest,
   ReaderAIResponse,
   CapabilitiesResponse,
+  HealthResponse,
 } from './types'
 import {
   isDiscoverFeedsResponse,
@@ -131,6 +132,7 @@ import {
 	isLibraryReviewArray,
 	isLibraryReviewResponse,
 	isGroupedSearchResponse,
+  isHealthResponse,
   isLinkResponse,
   isOPMLImportResponse,
   isPaginatedFeedItems,
@@ -583,6 +585,49 @@ export class ReaderClient {
           message: 'Authenticated response identity marker is missing or inconsistent',
         })
       }
+      return ok(body)
+    } finally {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', abortForCaller)
+    }
+  }
+
+  /**
+   * Read the build identity the backend already publishes on `/health`.
+   *
+   * Deliberately bypasses `send`: the probe is unauthenticated and carries no
+   * per-identity data, so requiring a lease would only make "which Core am I
+   * talking to" unanswerable exactly when something is wrong. Nothing is sent
+   * either — no credential is needed to read a version string.
+   */
+  async getHealth(signal?: AbortSignal): Promise<ApiResult<HealthResponse>> {
+    const controller = new AbortController()
+    const abortForCaller = () => controller.abort()
+    if (signal?.aborted) controller.abort()
+    else signal?.addEventListener('abort', abortForCaller, { once: true })
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    try {
+      let response: Response
+      try {
+        response = await fetch(`${this.baseURL}/health`, {
+          method: 'GET',
+          cache: 'no-store',
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        })
+      } catch (e) {
+        return err(normalizeThrown(e, this.timeoutMs))
+      }
+
+      let body: unknown = null
+      try {
+        const text = await response.text()
+        body = text ? JSON.parse(text) : null
+      } catch (e) {
+        if (controller.signal.aborted) return err(normalizeThrown(e, this.timeoutMs))
+      }
+      if (!response.ok) return err(normalizeHttpError(response.status, body, undefined))
+      if (!isHealthResponse(body)) return shapeMismatch('HealthResponse')
       return ok(body)
     } finally {
       clearTimeout(timer)

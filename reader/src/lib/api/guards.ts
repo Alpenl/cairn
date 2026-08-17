@@ -23,6 +23,7 @@ import type {
 	ReaderThoughtSearchResponse,
 	ReaderNoteSearchResponse,
   CapabilitiesResponse,
+  HealthResponse,
   ReaderCapabilitiesResponse,
   DomainTreeSummaryEnvelope,
   DiscoverFeedsResponse,
@@ -211,6 +212,20 @@ export function isCapabilitiesResponse(v: unknown): v is CapabilitiesResponse {
     !Array.isArray(v.archive_versions) || !v.archive_versions.every(isInteger) ||
     typeof v.reader_vnext !== 'boolean') return false
   return isReaderCapabilitiesResponse(v.reader)
+}
+
+/**
+ * `/health` is the liveness probe that also carries the build identity the
+ * settings surface shows. All four identity fields are required by the spec,
+ * so a response missing any of them is a different service answering on the
+ * same origin, not a Cairn backend with unknown version.
+ */
+export function isHealthResponse(v: unknown): v is HealthResponse {
+  return isObject(v) &&
+    v.status === 'ok' &&
+    isString(v.version) &&
+    isString(v.commit) &&
+    isString(v.build_time)
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

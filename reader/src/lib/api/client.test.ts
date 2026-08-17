@@ -329,6 +329,37 @@ describe('ReaderClient capability negotiation', () => {
   })
 })
 
+describe('ReaderClient build identity probe', () => {
+  it('reads /health without sending a credential', async () => {
+    const fetchMock = mockFetch(() => jsonResponse({
+      status: 'ok',
+      version: '1.4.0',
+      commit: '0123456789abcdef0123456789abcdef01234567',
+      build_time: '2026-08-01T10:00:00Z',
+    }, undefined, null))
+
+    const result = await authenticatedClient({ installationToken: 'secret-token' }).getHealth()
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.version).toBe('1.4.0')
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe(`${BASE}/health`)
+    const headers = init.headers as Record<string, string>
+    expect(headers.Authorization).toBeUndefined()
+    expect(headers[SESSION_HEADER]).toBeUndefined()
+    expect(init.credentials).toBeUndefined()
+  })
+
+  it('rejects a same-origin service that answers /health without a build identity', async () => {
+    mockFetch(() => jsonResponse({ status: 'ok' }, undefined, null))
+
+    const result = await authenticatedClient().getHealth()
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.message).toContain('HealthResponse')
+  })
+})
+
 describe('ReaderClient activity pagination', () => {
   it('encodes kind, cursor, limit, and cancellation on the activity request', async () => {
     const fetchMock = mockFetch(() => jsonResponse({
