@@ -150,7 +150,7 @@ func TestReaderDismissedTodoProjectionSurvivesSourceRewrite(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE reader_notes SET published_content=$1,published_revision=2,updated_at=NOW() WHERE id=$2`, "no checklist left", note.ID); err != nil {
 		t.Fatalf("drop source checkbox: %v", err)
 	}
-	if err := service.RepairProjectedTodos(ctx); err != nil {
+	if _, err := service.RepairProjectedTodos(ctx); err != nil {
 		t.Fatalf("repair after dropping the checkbox: %v", err)
 	}
 	dismissed := readReaderTodoProjections(t, pool, "note", note.ID.String())
@@ -167,7 +167,7 @@ func TestReaderDismissedTodoProjectionSurvivesSourceRewrite(t *testing.T) {
 	if _, err := service.ListTodos(ctx, "", 200); err != nil {
 		t.Fatalf("ListTodos after restoring the checkbox: %v", err)
 	}
-	if err := service.RepairProjectedTodos(ctx); err != nil {
+	if _, err := service.RepairProjectedTodos(ctx); err != nil {
 		t.Fatalf("repair after restoring the checkbox: %v", err)
 	}
 	after := readReaderTodoProjections(t, pool, "note", note.ID.String())

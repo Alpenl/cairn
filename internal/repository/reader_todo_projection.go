@@ -174,11 +174,14 @@ func readTodoHostSourceOn(ctx context.Context, db database.Querier, originKind, 
 		source.live = true
 		return source, nil
 	case readerTodoHostNote:
-		noteID, parseErr := uuid.Parse(hostID)
-		if parseErr != nil {
-			return source, nil
+		// A host id that is not a UUID cannot name a note, so the host emits
+		// nothing. Reporting it as an error would fail the write that changed
+		// some other host instead of retiring an impossible projection.
+		noteID, err := uuid.Parse(hostID)
+		if err != nil {
+			return source, nil //nolint:nilerr // an unparseable host id is a dead host, not a failure
 		}
-		err := db.QueryRow(ctx, readerNoteTodoSourceSQL, noteID).Scan(&source.body, &source.hostRevision)
+		err = db.QueryRow(ctx, readerNoteTodoSourceSQL, noteID).Scan(&source.body, &source.hostRevision)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return source, nil
 		}
@@ -466,4 +469,26 @@ func checklistTodosForSources(sources []readerTodoHostSource) []model.ReaderTodo
 		out = append(out, readerChecklistTodos(source)...)
 	}
 	return out
+}
+
+// RepairTodoProjections rebuilds every projection from the current sources and
+// reports how many blocks those sources emit. Unlike BackfillTodoProjections it
+// ignores the ledger and always runs: it is the escape hatch for drift, not the
+// one-shot upgrade. It shares the reconcile body, so a dismissed projection
+// stays dismissed here as well.
+func (r *PGXReaderVNextRepository) RepairTodoProjections(ctx context.Context) (int, error) {
+	projected := 0
+	err := r.withTx(ctx, func(db database.Querier) error {
+		sources, err := listTodoHostSourcesOn(ctx, db)
+		if err != nil {
+			return err
+		}
+		desired := checklistTodosForSources(sources)
+		projected = len(desired)
+		return r.reconcileTodoProjectionsOn(ctx, db, desired)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return projected, nil
 }

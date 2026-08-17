@@ -22,7 +22,6 @@ import (
 	"webtag/internal/httperr"
 	"webtag/internal/model"
 	"webtag/internal/notetitle"
-	"webtag/internal/readertext"
 	"webtag/internal/repository"
 )
 
@@ -1136,83 +1135,21 @@ func (s *ReaderVNextService) DiscardInboxBulk(ctx context.Context, rawIDs []stri
 	return items, nil
 }
 
-type readerTodoOriginTarget struct {
-	Kind   string
-	ID     string
-	LinkID *uuid.UUID
-}
-
-func checklistTodos(hostKind, hostID string, hostRevision int64, content string, targets ...readerTodoOriginTarget) []model.ReaderTodo {
-	blocks := readertext.List(content)
-	out := make([]model.ReaderTodo, 0, len(blocks))
-	target := readerTodoOriginTarget{Kind: hostKind, ID: hostID}
-	if len(targets) > 0 {
-		target = targets[0]
-	}
-	for _, block := range blocks {
-		originRefValue := map[string]any{
-			"block_ref":  block.BlockRef,
-			"text":       block.Text,
-			"occurrence": block.Occurrence,
-		}
-		if target.Kind != "" && target.ID != "" {
-			originRefValue["source_kind"] = target.Kind
-			originRefValue["source_id"] = target.ID
-		}
-		if target.LinkID != nil {
-			originRefValue["link_id"] = target.LinkID.String()
-		}
-		originRef, _ := json.Marshal(originRefValue)
-		originHostKind, originHostID := hostKind, hostID
-		out = append(out, model.ReaderTodo{Text: block.Text, Done: block.Done, OriginKind: hostKind, OriginHostKind: &originHostKind, OriginHostID: &originHostID, OriginRef: originRef, HostRevision: hostRevision})
-	}
-	return out
-}
-
-func (s *ReaderVNextService) syncProjectedTodos(ctx context.Context) error {
-	projections := make([]model.ReaderTodo, 0)
-	thoughtAfter := ""
-	for {
-		thoughts, next, err := s.store.ListThoughts(ctx, "", thoughtAfter, 200)
-		if err != nil {
-			return err
-		}
-		for _, thought := range thoughts {
-			target := readerTodoOriginTarget{Kind: thought.HostKind, ID: thought.HostID, LinkID: thought.LinkID}
-			if target.Kind == "" || target.ID == "" {
-				target = readerTodoOriginTarget{Kind: "thought", ID: thought.ID, LinkID: thought.LinkID}
-			}
-			projections = append(projections, checklistTodos("thought", thought.ID, thought.LastSequence, thought.Body, target)...)
-		}
-		if next == "" {
-			break
-		}
-		thoughtAfter = next
-	}
-	noteAfter := ""
-	for {
-		notes, _, next, err := s.store.ListNotes(ctx, noteAfter, 100)
-		if err != nil {
-			return err
-		}
-		for _, note := range notes {
-			projections = append(projections, checklistTodos("note", note.ID.String(), note.PublishedRevision, note.PublishedContent, readerTodoOriginTarget{Kind: "note", ID: note.ID.String()})...)
-		}
-		if next == "" {
-			break
-		}
-		noteAfter = next
-	}
-	return s.store.ReconcileTodoProjections(ctx, projections)
-}
-
 // RepairProjectedTodos rebuilds every host's TODO projection from the current
-// Thoughts and published Notes. Thought and Note commands already maintain the
-// projection inside their own transaction, so this is a drift repair rather
-// than part of any read: it exists for the backfill and for tests that need to
-// prove a write path left nothing for it to do.
-func (s *ReaderVNextService) RepairProjectedTodos(ctx context.Context) error {
-	return s.syncProjectedTodos(ctx)
+// Thoughts and published Notes and reports how many blocks the sources emit.
+//
+// Thought and Note commands maintain the projection inside their own
+// transaction, so this is a drift repair, not part of any read. It stays an
+// explicit operator command and a test entry point on purpose: putting a
+// whole-installation rebuild back behind GET is exactly the cost this change
+// removed. Dismissed projections stay dismissed here too — the repair shares
+// the same tombstone rule as every other path.
+func (s *ReaderVNextService) RepairProjectedTodos(ctx context.Context) (int, error) {
+	projected, err := s.store.RepairTodoProjections(ctx)
+	if err != nil {
+		return 0, mapReaderError(err)
+	}
+	return projected, nil
 }
 
 func (s *ReaderVNextService) CreateTodo(ctx context.Context, request dto.ReaderTodoCreateRequest) (dto.ReaderTodoResponse, error) {

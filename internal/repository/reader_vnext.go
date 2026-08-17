@@ -80,6 +80,7 @@ type ReaderVNextStore interface {
 	CreateTodo(context.Context, model.ReaderTodo) (*model.ReaderTodo, error)
 	UpsertTodoProjection(context.Context, model.ReaderTodo) (*model.ReaderTodo, error)
 	ReconcileTodoProjections(context.Context, []model.ReaderTodo) error
+	RepairTodoProjections(context.Context) (int, error)
 	ListTodos(context.Context, string, int) (model.ReaderTodoPage, error)
 	PatchTodo(context.Context, model.ReaderTodoPatch) (*model.ReaderTodo, error)
 	DeleteTodo(context.Context, uuid.UUID) error

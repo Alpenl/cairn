@@ -77,7 +77,7 @@ func liveReaderTodoTexts(facts []readerTodoProjectionFact) []string {
 func assertProjectionsNeedNoRepair(t *testing.T, pool *pgxpool.Pool, service *readerservice.ReaderVNextService, label string) []readerTodoProjectionFact {
 	t.Helper()
 	before := readReaderTodoProjectionFacts(t, pool)
-	if err := service.RepairProjectedTodos(t.Context()); err != nil {
+	if _, err := service.RepairProjectedTodos(t.Context()); err != nil {
 		t.Fatalf("%s: repair projections: %v", label, err)
 	}
 	after := readReaderTodoProjectionFacts(t, pool)

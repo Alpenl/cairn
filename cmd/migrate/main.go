@@ -30,18 +30,32 @@ func main() {
 	}
 }
 
+// repairTodoProjectionsFlag is the explicit operator entry point for TODO
+// projection drift. Drift repair is deliberately not reachable from any HTTP
+// read: rebuilding the whole installation is what the read path stopped doing.
+const repairTodoProjectionsFlag = "--repair-reader-todos"
+
 func execute(args []string, stdout io.Writer) error {
 	if handled, err := buildinfo.PrintVersion(args, stdout); handled {
 		return err
 	}
-	return run(stdout)
+	return run(stdout, wantsTodoProjectionRepair(args))
+}
+
+func wantsTodoProjectionRepair(args []string) bool {
+	for _, arg := range args {
+		if strings.TrimSpace(arg) == repairTodoProjectionsFlag {
+			return true
+		}
+	}
+	return false
 }
 
 // run 把启动逻辑从 main 抽离，使 defer（signal stop / pool.Close）能在
 // 任何失败路径上正常执行——main 里 log.Fatal 会直接 os.Exit，defer 不
 // 会跑（gocritic exitAfterDefer）。把错误冒泡到 main 由 main 一次性
 // Fatal，是 Go 的标准 idiom。
-func run(stdout io.Writer) error {
+func run(stdout io.Writer, repairTodoProjections bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -55,6 +69,10 @@ func run(stdout io.Writer) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer pool.Close()
+
+	if repairTodoProjections {
+		return repairReaderTodoProjections(ctx, stdout, pool)
+	}
 
 	target := strings.TrimSpace(os.Getenv("MIGRATION_TARGET"))
 	switch target {
@@ -82,10 +100,22 @@ func backfillTodoProjections(ctx context.Context, stdout io.Writer, pool *pgxpoo
 		return fmt.Errorf("backfill reader TODO projections: %w", err)
 	}
 	if result.AlreadyComplete {
-		fmt.Fprintf(stdout, "reader TODO projection backfill already completed at %s (%d projections)\n",
+		_, err = fmt.Fprintf(stdout, "reader TODO projection backfill already completed at %s (%d projections)\n",
 			result.CompletedAt.UTC().Format(time.RFC3339), result.ProjectedCount)
-		return nil
+		return err
 	}
-	fmt.Fprintf(stdout, "reader TODO projection backfill completed (%d projections)\n", result.ProjectedCount)
-	return nil
+	_, err = fmt.Fprintf(stdout, "reader TODO projection backfill completed (%d projections)\n", result.ProjectedCount)
+	return err
+}
+
+// repairReaderTodoProjections rebuilds every TODO projection from its sources.
+// It skips migrations entirely because it is a data repair an operator reaches
+// for after drift, not part of a deploy.
+func repairReaderTodoProjections(ctx context.Context, stdout io.Writer, pool *pgxpool.Pool) error {
+	projected, err := repository.NewPGXReaderVNextRepository(pool).RepairTodoProjections(ctx)
+	if err != nil {
+		return fmt.Errorf("repair reader TODO projections: %w", err)
+	}
+	_, err = fmt.Fprintf(stdout, "reader TODO projection repair rebuilt %d projections\n", projected)
+	return err
 }
