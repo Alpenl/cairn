@@ -7,6 +7,7 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -50,6 +51,12 @@ type Step struct {
 	SQL              []string
 	Manual           bool
 	NonTransactional bool
+	// OnlineUpdate is the reviewed answer to "can the previous release's
+	// binary keep serving once this step lands?" — see OnlineUpdateReview.
+	// Its zero value refuses the page-triggered update, so a new step gets no
+	// online-update permission by omission; the contract test in
+	// online_compat_test.go fails until the author reviews it explicitly.
+	OnlineUpdate OnlineUpdateReview
 	// RecoverInvalidIndexes lists schema-qualified indexes that this
 	// non-transactional step creates concurrently. PostgreSQL can leave an
 	// index with indisvalid=false when CREATE INDEX CONCURRENTLY is canceled
@@ -95,27 +102,123 @@ func Steps() []Step {
 // 自动退化为逐句 Exec，与 H7 之前的行为完全一致——保证单测无需 mock
 // 出 pgx.Tx 也能继续工作。
 func Up(ctx context.Context, db database.Querier) error {
-	return up(ctx, db, -1)
+	_, err := Run(ctx, db, RunRequest{})
+	return err
 }
 
 // UpTo applies all ordered migrations through targetID, including manual
 // steps. The target is validated against the in-memory migration plan before
 // any database call, so a typo cannot partially mutate the target database.
+//
+// This is the human operator's entry point: AllowManual is on, because naming
+// a manual step by hand *is* the approval. The page-triggered helper must use
+// Run with AllowManual left false.
 func UpTo(ctx context.Context, db database.Querier, targetID string) error {
-	targetIndex, err := stepIndex(targetID)
-	if err != nil {
-		return err
+	_, err := Run(ctx, db, RunRequest{Target: targetID, AllowManual: true})
+	return err
+}
+
+// RunRequest is one migration run's complete input. It maps one-to-one onto
+// cmd/migrate's MIGRATION_TARGET / MIGRATION_ALLOW_MANUAL environment.
+type RunRequest struct {
+	// Target selects the plan prefix:
+	//   ""                  — default release-gated run: apply every automatic
+	//                         step, stop successfully before the first pending
+	//                         manual step.
+	//   FreshInstallTarget  — compatibility alias for provisioning an empty
+	//                         database; identical plan to "".
+	//   <step ID>           — exact target: apply through that step and not one
+	//                         step further.
+	Target string
+	// AllowManual permits an exact-target run to cross a pending manual step.
+	// It is meaningless for the default and fresh plans, which stop at the
+	// first manual gate by construction. Leave it false for anything a page
+	// can trigger.
+	AllowManual bool
+}
+
+// RunResult is the evidence a migration run actually did something. The migrate
+// command used to be completely silent on success, which once let a deploy
+// rebuild containers on top of migrations that had never been applied; every
+// caller now gets the start version, the end version and the exact steps.
+type RunResult struct {
+	// Mode is "default", "fresh" or "target".
+	Mode string `json:"mode"`
+	// Target echoes the requested exact step ID; empty for default/fresh.
+	Target string `json:"target"`
+	// StartVersion is the newest plan step already recorded before the run,
+	// empty when the ledger held none.
+	StartVersion string `json:"start_version"`
+	// EndVersion is the newest plan step recorded after the run.
+	EndVersion string `json:"end_version"`
+	// Applied lists, in plan order, the step IDs this run recorded.
+	Applied []string `json:"applied"`
+	// AlreadyAtTarget reports an exact-target run that had nothing to do. It
+	// is a success: the helper may retry the same job safely.
+	AlreadyAtTarget bool `json:"already_at_target"`
+	// StoppedAtManual names the pending manual step that ended a default run
+	// early, empty when no manual gate was reached.
+	StoppedAtManual string `json:"stopped_at_manual"`
+}
+
+// Run applies the requested plan and reports what it did.
+//
+// An exact-target request is fail-closed. It refuses, without touching the
+// database in the target-validation case:
+//
+//   - ErrUnknownTarget — the target is not a step this binary defines;
+//   - ErrLedgerAhead — schema_migrations holds versions this binary does not
+//     know, so a newer migrate already ran here;
+//   - ErrTargetBehindLedger — the target is older than the applied ledger;
+//     there is no down direction, so this needs a restore, not a migration;
+//   - ErrManualStepInRange — the span contains a release-gated manual step and
+//     AllowManual is false.
+func Run(ctx context.Context, db database.Querier, request RunRequest) (RunResult, error) {
+	target := strings.TrimSpace(request.Target)
+	result := RunResult{Mode: "default"}
+	targetIndex := -1
+	switch target {
+	case "":
+	case FreshInstallTarget:
+		result.Mode = "fresh"
+	default:
+		index, err := stepIndex(target)
+		if err != nil {
+			return RunResult{}, err
+		}
+		result.Mode = "target"
+		result.Target = target
+		targetIndex = index
 	}
-	return up(ctx, db, targetIndex)
+
+	if db == nil {
+		return RunResult{}, fmt.Errorf("nil querier")
+	}
+	// The partial result travels with the error on purpose. Non-transactional
+	// steps commit individually, so "which steps did land before this failed"
+	// is exactly what the operator needs at a HOLD point.
+	err := withMigrationRunnerSession(ctx, db, func(sessionDB database.Querier) error {
+		return upLocked(ctx, sessionDB, targetIndex, request.AllowManual, &result)
+	})
+	return result, err
 }
 
 func stepIndex(targetID string) (int, error) {
+	if index, ok := stepIndexOf(targetID); ok {
+		return index, nil
+	}
+	return -1, fmt.Errorf("%w %q; known targets: %s", ErrUnknownTarget, targetID, strings.Join(stepIDList(), ", "))
+}
+
+// stepIndexOf is the boolean form, for callers that treat an unknown target as
+// a reportable state rather than an error.
+func stepIndexOf(targetID string) (int, bool) {
 	for index, step := range steps {
 		if step.ID == targetID {
-			return index, nil
+			return index, true
 		}
 	}
-	return -1, fmt.Errorf("unknown migration target %q", targetID)
+	return -1, false
 }
 
 // UpFreshInstall provisions a known-empty database. It remains a separate API
@@ -125,20 +228,10 @@ func UpFreshInstall(ctx context.Context, db database.Querier) error {
 	return Up(ctx, db)
 }
 
-// up executes the default release-gated path when targetIndex is negative,
-// or the explicit prefix ending at targetIndex otherwise.
-func up(ctx context.Context, db database.Querier, targetIndex int) error {
-	if db == nil {
-		return fmt.Errorf("nil querier")
-	}
-
-	return withMigrationRunnerSession(ctx, db, func(sessionDB database.Querier) error {
-		return upLocked(ctx, sessionDB, targetIndex)
-	})
-}
-
-// upLocked is up's body without lock acquisition.
-func upLocked(ctx context.Context, db database.Querier, targetIndex int) error {
+// upLocked is Run's body without lock acquisition. It fills result in place so
+// a failure mid-run still leaves the caller's own error path in charge of what
+// gets reported.
+func upLocked(ctx context.Context, db database.Querier, targetIndex int, allowManual bool, result *RunResult) error {
 	if _, err := db.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version TEXT PRIMARY KEY,
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -147,6 +240,11 @@ func upLocked(ctx context.Context, db database.Querier, targetIndex int) error {
 	}
 
 	applied, err := loadAppliedMigrations(ctx, db)
+	if err != nil {
+		return err
+	}
+
+	pending, err := planRun(applied, targetIndex, allowManual, result)
 	if err != nil {
 		return err
 	}
@@ -165,23 +263,144 @@ func upLocked(ctx context.Context, db database.Querier, targetIndex int) error {
 	// 当前 Querier 不支持事务（fakeQuerier 等），所有 step 都退回 Exec 模式。
 	txDB, _ := db.(txBeginner)
 
-	limit := len(steps)
-	if targetIndex >= 0 {
-		limit = targetIndex + 1
-	}
-	for _, step := range steps[:limit] {
-		if _, ok := applied[step.ID]; ok {
-			continue
-		}
-		if targetIndex < 0 && step.Manual {
-			break
-		}
+	for _, step := range pending {
 		if err := applyStep(ctx, db, txDB, step); err != nil {
 			return err
 		}
+		result.Applied = append(result.Applied, step.ID)
+		applied[step.ID] = struct{}{}
+		// Recompute rather than assume the last applied step is the newest:
+		// a ledger with a gap replays an older step after a newer one is
+		// already recorded, and reporting that older ID as the end version
+		// would understate where the database actually is.
+		result.EndVersion = headVersion(applied)
+	}
+	return nil
+}
+
+// planRun turns the applied ledger into the ordered steps this run will apply
+// and records the run's start/end reporting fields. Every exact-target
+// fail-closed condition is decided here, before a single step executes.
+func planRun(applied map[string]struct{}, targetIndex int, allowManual bool, result *RunResult) ([]Step, error) {
+	if targetIndex >= 0 {
+		return planExactTargetRun(applied, targetIndex, allowManual, result)
 	}
 
-	return nil
+	result.StartVersion = headVersion(applied)
+	result.EndVersion = result.StartVersion
+	pending := make([]Step, 0, len(steps))
+	for _, step := range steps {
+		if _, ok := applied[step.ID]; ok {
+			continue
+		}
+		if step.Manual {
+			result.StoppedAtManual = step.ID
+			break
+		}
+		pending = append(pending, step)
+	}
+	return pending, nil
+}
+
+func planExactTargetRun(applied map[string]struct{}, targetIndex int, allowManual bool, result *RunResult) ([]Step, error) {
+	appliedList := make([]string, 0, len(applied))
+	for version := range applied {
+		appliedList = append(appliedList, version)
+	}
+	resolved, err := resolveTargetRange(appliedList, steps[targetIndex].ID)
+	if err != nil {
+		return nil, err
+	}
+	if !allowManual {
+		for _, step := range resolved.pending {
+			if step.Manual {
+				return nil, fmt.Errorf("%w: %q is release-gated and stands between %s and target %s; "+
+					"satisfy its rollout preconditions and re-run with MIGRATION_ALLOW_MANUAL=true from the operator "+
+					"runbook — a page-triggered update must never cross it",
+					ErrManualStepInRange, step.ID, startVersionLabel(resolved.startID), steps[targetIndex].ID)
+			}
+		}
+	}
+	result.StartVersion = resolved.startID
+	result.EndVersion = resolved.startID
+	result.AlreadyAtTarget = len(resolved.pending) == 0
+	return resolved.pending, nil
+}
+
+// tolerateMissingLedger reports whether schema_migrations exists yet. A helper
+// pre-check runs before any migration, so "table absent" is an empty ledger,
+// not a failure.
+func tolerateMissingLedger(ctx context.Context, db database.Querier) (bool, error) {
+	var present bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('public.schema_migrations') IS NOT NULL`).Scan(&present); err != nil {
+		return false, fmt.Errorf("probe schema_migrations: %w", err)
+	}
+	return present, nil
+}
+
+// headVersion returns the newest plan step present in the ledger. Versions the
+// plan does not define are ignored here; the exact-target path rejects them
+// outright via ErrLedgerAhead.
+func headVersion(applied map[string]struct{}) string {
+	head := ""
+	for index, step := range steps {
+		if _, ok := applied[step.ID]; ok {
+			head = steps[index].ID
+		}
+	}
+	return head
+}
+
+// stepIDList names every target this binary accepts, so a typo in
+// MIGRATION_TARGET produces a message the operator can act on rather than just
+// "unknown".
+func stepIDList() []string {
+	ids := make([]string, 0, len(steps))
+	for _, step := range steps {
+		ids = append(ids, step.ID)
+	}
+	return ids
+}
+
+func startVersionLabel(startID string) string {
+	if startID == "" {
+		return "an empty ledger"
+	}
+	return startID
+}
+
+// AppliedVersions returns the raw contents of schema_migrations in plan order,
+// with any version this binary does not define appended afterwards. The deploy
+// helper reads it to feed PlanOnlineUpdate before it decides whether a
+// page-triggered update may proceed.
+func AppliedVersions(ctx context.Context, db database.Querier) ([]string, error) {
+	if db == nil {
+		return nil, fmt.Errorf("nil querier")
+	}
+	present, err := tolerateMissingLedger(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return []string{}, nil
+	}
+	applied, err := loadAppliedMigrations(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	ordered := make([]string, 0, len(applied))
+	for _, step := range steps {
+		if _, ok := applied[step.ID]; ok {
+			ordered = append(ordered, step.ID)
+			delete(applied, step.ID)
+		}
+	}
+	unknown := make([]string, 0, len(applied))
+	for version := range applied {
+		unknown = append(unknown, version)
+	}
+	slices.Sort(unknown)
+	return append(ordered, unknown...), nil
 }
 
 // loadAppliedMigrations closes its rows before River starts. This is required
