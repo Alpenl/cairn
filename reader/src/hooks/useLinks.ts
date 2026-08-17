@@ -519,8 +519,3 @@ export function useLinks(
     ],
   )
 }
-
-/** 让全部链接列表缓存失效（写操作之后调用）。 */
-export function invalidateLinks(): void {
-  resourceStore.invalidate(LINKS_CACHE_PREFIX)
-}

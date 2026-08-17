@@ -8,7 +8,6 @@ import { useCallback, useMemo } from 'react'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ApiError, ApiResult } from '../lib/api/result'
 import type { TagCountResponse } from '../lib/api/types'
-import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryReload'
 
@@ -45,9 +44,4 @@ export function useTags(client: IdentityBoundReaderClient): TagsState {
     }),
     [resource.data, resource.error, resource.loading, reload],
   )
-}
-
-/** 让标签聚合缓存失效（写操作之后调用）。 */
-export function invalidateTags(): void {
-  resourceStore.invalidate(TAGS_CACHE_PREFIX)
 }

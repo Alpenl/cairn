@@ -354,16 +354,6 @@ func warnUnsafeBootDefaults(cfg config.Config, logger *slog.Logger) {
 			"endpoint", cfg.OTELEndpoint,
 		)
 	}
-	// v3 (Spec 检索式打标) retired the Wikidata anchoring path and the
-	// pg_trgm + LLM concept judge poller. Their WIKIDATA_* / CONCEPT_JUDGE_*
-	// env vars are still parsed so a stale .env does not fail the boot, but
-	// they no longer do anything. Nudge once per non-empty leftover so an
-	// operator carrying old config knows to drop it.
-	for _, name := range cfg.DeprecatedEnvsSet {
-		logger.Warn("deprecated config ignored",
-			"flag", name,
-		)
-	}
 }
 
 // nonLocalhostCORSOrigins returns the subset of the configured CORS

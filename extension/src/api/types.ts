@@ -29,27 +29,19 @@ import type {
 // ── 枚举类型 ────────────────────────────────────────────────
 
 /** 链接内容形态。 */
-export type ContentType = NonNullable<LinkResponse['content_type']>
 
 /**
  * 链接处理状态。对应 openapi LinkResponse.status 枚举。
  * `skeleton` 仅为兼容历史数据保留；新的树层级不再依赖后端占位祖先行。
  */
-export type LinkStatus = LinkResponse['status']
 
 /** 解析任务状态。对应 openapi JobResponse.status / SubmitResponse.status 枚举。 */
 export type JobStatus = WireSubmitResponse['status']
-
-/** 低置信度原因。对应 openapi LinkResponse.low_confidence_reason 枚举。 */
-export type LowConfidenceReason = NonNullable<
-  LinkResponse['low_confidence_reason']
->
 
 /**
  * 采集来源类型。对应 internal/dto/request.go 的 IngestSource.Kind oneof。
  * 扩展采集当前页时固定使用 `browser_capture`。
  */
-export type IngestSourceKind = WireIngestSource['kind']
 
 /**
  * 归一化后的 API 错误类别。调用方 switch 此字段决定提示文案。
@@ -123,7 +115,6 @@ export type SubmitResponse = WireSubmitResponse
 
 /** POST /api/links/{link_id}/content 保存后的原文快照。 */
 export type LinkContentResponse = WireLinkContentResponse
-export type ContentSource = NonNullable<LinkResponse['content_source']>
 
 /**
  * 解析任务视图。对应 internal/dto/response.go 的 JobResponse。
@@ -146,7 +137,6 @@ export interface SubscriptionSummary {
  * 后端统一错误体的内层细节。对应 internal/dto/response.go 的 ErrorDetail。
  * 客户端应基于稳定的 `error_code` slug 分支，而非解析 `message`。
  */
-export type ApiErrorDetail = WireErrorDetail
 
 /** 后端所有失败响应的统一外层包裹。对应 internal/dto/response.go 的 ErrorResponse。 */
 export type ApiErrorResponse = WireErrorResponse

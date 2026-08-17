@@ -82,7 +82,7 @@ func TestLibrarySearchUsesOneQueryVectorForBothGroups(t *testing.T) {
 	t.Parallel()
 	links, sites := &librarySearchLinksFake{}, &librarySearchSitesFake{}
 	embedder := &stubQueryEmbedder{enabled: true, vec: []float32{0.1, 0.2}}
-	if _, err := NewLibrarySearchService(links, sites, embedder).Search(context.Background(), "tools", 10, 10, 20, ""); err != nil {
+	if _, err := newLibrarySearchService(links, sites, embedder, nil, LibrarySearchServiceOptions{}).Search(context.Background(), "tools", 10, 10, 20, ""); err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
 	if embedder.calls != 1 || links.filter == nil || len(links.filter.QueryEmbedding) != 2 || links.filter.EmbeddingModel != "test-model" {
@@ -99,7 +99,7 @@ func TestLibrarySearchReturnsReadingAndSiteGroups(t *testing.T) {
 	links := &librarySearchLinksFake{items: []model.Link{{ID: linkID, URL: "https://example.com/read", Status: model.LinkStatusDone}}, total: 12}
 	sites := &librarySearchSitesFake{items: []repository.SiteSearchMatch{{SiteID: siteID, SiteName: "Example", MatchedEntries: []repository.SiteSearchEntry{{ID: entryID, Name: "Documentation", URL: "https://example.com/docs"}}}}, total: 3}
 
-	got, err := NewLibrarySearchService(links, sites).Search(context.Background(), "  docs  ", 7, 8, 20, "")
+	got, err := newLibrarySearchService(links, sites, nil, nil, LibrarySearchServiceOptions{}).Search(context.Background(), "  docs  ", 7, 8, 20, "")
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -279,7 +279,7 @@ func assertInvalidThoughtCursor(t *testing.T, service *LibrarySearchService, ctx
 func TestLibrarySearchEmptyQueryAvoidsStores(t *testing.T) {
 	t.Parallel()
 	links, sites := &librarySearchLinksFake{}, &librarySearchSitesFake{}
-	got, err := NewLibrarySearchService(links, sites).Search(context.Background(), " \t", 10, 10, 20, "")
+	got, err := newLibrarySearchService(links, sites, nil, nil, LibrarySearchServiceOptions{}).Search(context.Background(), " \t", 10, 10, 20, "")
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -291,7 +291,7 @@ func TestLibrarySearchEmptyQueryAvoidsStores(t *testing.T) {
 func TestLibrarySearchClampsLimitsAndRejectsLongQuery(t *testing.T) {
 	t.Parallel()
 	links, sites := &librarySearchLinksFake{}, &librarySearchSitesFake{}
-	svc := NewLibrarySearchService(links, sites)
+	svc := newLibrarySearchService(links, sites, nil, nil, LibrarySearchServiceOptions{})
 	if _, err := svc.Search(context.Background(), "find", 99, 0, 0, ""); err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}

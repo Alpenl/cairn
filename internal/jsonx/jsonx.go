@@ -4,9 +4,22 @@
 // surface but is significantly faster on large payloads (analyzer LLM
 // responses, yt-dlp metadata, link JSONB columns).
 //
-// On platforms where sonic does not support JIT (e.g. go1.26+, non-amd64/arm64),
-// sonic transparently falls back to encoding/json via its compat layer, so
-// behaviour is identical across all build targets.
+// On platforms where sonic does not support JIT it transparently falls back to
+// encoding/json via its compat layer, so behaviour is identical across all
+// build targets. That fallback is gated by sonic's own build tags:
+//
+//	//go:build (!amd64 && !arm64) || go1.27 || !go1.17 || (arm64 && !go1.20)
+//
+// so on this module's go1.26 / amd64+arm64 targets the native path is the one
+// actually running. (An earlier version of this comment said the fallback
+// starts at go1.26; it starts at go1.27.)
+//
+// ponytail: this package only earns its keep while the native path is live.
+// The moment the module moves to Go 1.27 sonic silently becomes a wrapper
+// around encoding/json and the dependency plus this package become pure
+// overhead — with no signal that it happened. Re-evaluate at that bump.
+// The "significantly faster on large payloads" claim below is also unmeasured:
+// there is no benchmark for it in this repo. Benchmark before keeping.
 package jsonx
 
 import (

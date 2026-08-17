@@ -1,46 +1,5 @@
 package config
 
-import (
-	"os"
-	"strings"
-)
-
-// deprecatedEnvVars enumerates the env var names v3 (Spec 检索式打标)
-// retired: the Wikidata anchoring path and the pg_trgm + LLM concept
-// judge poller. They are still tolerated (a stale .env does not fail
-// the boot) but ignored. detectDeprecatedEnvs reports which of them an
-// operator has left set so app.warnUnsafeBootDefaults can nudge a
-// cleanup.
-var deprecatedEnvVars = []string{
-	"WIKIDATA_ENABLED",
-	"WIKIDATA_USER_AGENT",
-	"WIKIDATA_RATE_LIMIT_PER_HOUR",
-	"WIKIDATA_BASE_URL",
-	"CONCEPT_JUDGE_ENABLED",
-	"CONCEPT_JUDGE_INTERVAL_MS",
-	"CONCEPT_JUDGE_BATCH_SIZE",
-	"CONCEPT_JUDGE_SIMILARITY_THRESHOLD",
-	"CONCEPT_RETRIEVE_TOP_K",
-	"CONCEPT_AUTO_MERGE_THRESHOLD",
-	"CONCEPT_NEW_THRESHOLD",
-	"CONCEPT_COLD_START_MIN",
-}
-
-// detectDeprecatedEnvs returns the subset of deprecatedEnvVars present
-// with a non-empty (after trim) value in the environment, preserving
-// declaration order so the boot WARNs are stable. Empty / unset vars
-// are silent — only a value an operator deliberately carried over earns
-// a nudge.
-func detectDeprecatedEnvs() []string {
-	var out []string
-	for _, name := range deprecatedEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
 // scalarKnobs 把几个互不相关、各自只读一个 env 的标量配置项收成一束，让
 // loadRuntimeConfig 少几条独立的 err 分支（降圈复杂度），不改变各项语义。
 type scalarKnobs struct {

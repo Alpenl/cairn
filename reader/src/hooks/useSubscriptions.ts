@@ -88,8 +88,3 @@ export function useSubscriptions(client: ReaderClient) {
     ],
   )
 }
-
-/** 让订阅导航缓存失效（订阅增删改之后调用）。 */
-export function invalidateSubscriptions(): void {
-  resourceStore.invalidate(SUBSCRIPTIONS_CACHE_KEY)
-}
