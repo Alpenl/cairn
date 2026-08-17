@@ -37,6 +37,39 @@ func runRiverMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
+// RiverBundleVersions returns the River schema versions this binary can apply,
+// ascending. It is what a release manifest's river_ledger_target must be drawn
+// from: declaring a version outside this list means the manifest was produced
+// by a different River dependency than the binary being deployed.
+//
+// The migrator is constructed against a nil pool on purpose — the bundle is
+// read from River's embedded migration FS and needs no database at all, which
+// lets the release pipeline compute the target offline.
+func RiverBundleVersions() []int {
+	migrator, err := rivermigrate.New(riverpgxv5.New(nil), nil)
+	if err != nil {
+		// River's bundle is embedded in the binary; a failure here means the
+		// dependency itself is broken, not that a caller passed bad input.
+		return nil
+	}
+	all := migrator.AllVersions()
+	versions := make([]int, 0, len(all))
+	for _, migration := range all {
+		versions = append(versions, migration.Version)
+	}
+	return versions
+}
+
+// RiverBundleTarget returns the newest River schema version this binary
+// applies, i.e. where river_migration lands after a successful run.
+func RiverBundleTarget() int {
+	versions := RiverBundleVersions()
+	if len(versions) == 0 {
+		return 0
+	}
+	return versions[len(versions)-1]
+}
+
 // maybeRunRiverMigrations 仅在 db 是真 *pgxpool.Pool 时运行 River 迁移；
 // 单测的 fakeQuerier 不满足断言，直接 no-op 返回。
 func maybeRunRiverMigrations(ctx context.Context, db database.Querier) error {
