@@ -1693,6 +1693,21 @@ func (r *PGXReaderVNextRepository) SearchThoughts(ctx context.Context, query, af
 			(SELECT COALESCE(max(last_sequence),0) FROM reader_thoughts)
 		)) AS snapshot_sequence,
 		COALESCE($3::timestamptz,statement_timestamp()) AS snapshot_at
+	), search_candidates AS MATERIALIZED (
+		-- 唯一目的是让 planner 分别命中 active / tombstone 的两个 trigram 索引。
+		-- 两个分支的表达式与下面 WHERE 里那组 ILIKE 完全同构：某一列包含
+		-- %query% 的子串，拼接串必然也包含它，所以这里是**必要条件**，
+		-- 不是新的过滤器——多进来的行照样被下面原封不动的 OR 复核掉。
+		-- 语义因此逐字不变；变的只有扫描方式。
+		-- UNION（非 UNION ALL）保证一个 thought_id 至多出现一次，JOIN 不会放大行数。
+		SELECT thought.id AS thought_id
+		FROM reader_thoughts thought
+		WHERE (thought.body || ' ' || thought.source || ' ' || COALESCE(thought.quote::text,'')) ILIKE $1
+		UNION
+		SELECT tombstone.thought_id
+		FROM reader_thought_tombstones tombstone
+		WHERE (COALESCE(tombstone.snapshot->>'body','') || ' ' || COALESCE(tombstone.snapshot->>'source','')
+			|| ' ' || COALESCE((tombstone.snapshot->'quote')::text,'')) ILIKE $1
 	), matching_thoughts AS (
 		SELECT thought.id AS thought_id,
 			CASE WHEN tombstone.thought_id IS NULL THEN thought.host_kind ELSE tombstone.snapshot->>'host_kind' END AS host_kind,
@@ -1707,6 +1722,7 @@ func (r *PGXReaderVNextRepository) SearchThoughts(ctx context.Context, query, af
 			authority.snapshot_sequence,
 			authority.snapshot_at
 		FROM reader_thoughts thought
+		JOIN search_candidates candidate ON candidate.thought_id=thought.id
 		CROSS JOIN search_authority authority
 		LEFT JOIN reader_thought_tombstones tombstone ON tombstone.thought_id=thought.id AND (
 			CASE WHEN (tombstone.snapshot->>'lifecycle_sequence') ~ '^[0-9]+$'

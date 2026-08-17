@@ -2627,13 +2627,6 @@ CREATE INDEX idx_reader_thought_ops_sequence ON public.reader_thought_ops USING 
 
 
 --
--- Name: idx_reader_thought_search; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_reader_thought_search ON public.reader_thoughts USING gin (to_tsvector('simple'::regconfig, body));
-
-
---
 -- Name: idx_reader_thought_supersession_events_sequence; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2648,10 +2641,24 @@ CREATE INDEX idx_reader_thought_tombstones_order ON public.reader_thought_tombst
 
 
 --
+-- Name: idx_reader_thought_tombstones_search_trgm; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_reader_thought_tombstones_search_trgm ON public.reader_thought_tombstones USING gin ((((((COALESCE((snapshot ->> 'body'::text), ''::text) || ' '::text) || COALESCE((snapshot ->> 'source'::text), ''::text)) || ' '::text) || COALESCE(((snapshot -> 'quote'::text))::text, ''::text))) public.gin_trgm_ops);
+
+
+--
 -- Name: idx_reader_thoughts_host; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_reader_thoughts_host ON public.reader_thoughts USING btree (host_kind, host_id, deleted, updated_at DESC);
+
+
+--
+-- Name: idx_reader_thoughts_search_trgm; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_reader_thoughts_search_trgm ON public.reader_thoughts USING gin ((((((body || ' '::text) || source) || ' '::text) || COALESCE((quote)::text, ''::text))) public.gin_trgm_ops);
 
 
 --
