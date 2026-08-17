@@ -1169,6 +1169,10 @@ func checklistTodos(hostKind, hostID string, hostRevision int64, content string,
 	return out
 }
 
+// ponytail: GET /todos pages every thought body and note (including drafts)
+// then upserts projections one row at a time. Fine while the library is tens
+// of notes. Upgrade when Home/Todos feel slow: maintain projections on note
+// publish and thought materialize, and make this GET read-only.
 func (s *ReaderVNextService) syncProjectedTodos(ctx context.Context) error {
 	projections := make([]model.ReaderTodo, 0)
 	thoughtAfter := ""
@@ -1933,6 +1937,9 @@ func (s *ReaderVNextService) Activity(ctx context.Context, rawKind, rawAfter str
 
 const readerActivityRefreshInterval = 30 * time.Second
 
+// ponytail: a Reader activity GET may rebuild tag/domain projections from a
+// full unnest of links.tags. Cheap at tens of links. Upgrade when the library
+// is in the thousands: increment the projection on link write, keep GET read-only.
 func (s *ReaderVNextService) refreshActivityIfDue(ctx context.Context) error {
 	now := s.now()
 	s.activityMu.Lock()

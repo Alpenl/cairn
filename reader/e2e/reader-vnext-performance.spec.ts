@@ -15,6 +15,8 @@ function readFixtureManifest(): PerformanceFixtureManifest {
 
 test.use({ trace: 'off' })
 
+// ponytail: records one navigation timing and asserts nothing. Add p95 walls
+// for Home / Inbox / Feed / Todos before treating this file as evidence.
 test('Reader vNext named baseline journey', async ({ page }, testInfo) => {
   test.skip(
     !process.env.READER_PERF_FIXTURE_MANIFEST,

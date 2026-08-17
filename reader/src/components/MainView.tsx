@@ -450,6 +450,9 @@ export interface MainViewProps {
   onRefreshCapabilities?: () => void
 }
 
+// ponytail: this is still the reading-library shell plus routing, corpus merge,
+// and metadata projection. Inbox/Notes/Feed already left. Split the next time a
+// reading-library change has to be made without touching chrome.
 export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabilities }: MainViewProps) {
   const lease = client.identityLease
 	const initialRoute = useMemo(

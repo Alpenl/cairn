@@ -35,6 +35,8 @@ export default defineConfig({
   // 失败仍会红，只有真正的间歇性抖动才会被吸收。
   //
   // ⚠ 这是权宜之计，不是修复。定位到时序根因后应当把 retries 降回 0。
+  // ponytail: CI retries: 2 hide a still-unlocated wp26 delete-confirm race
+  // in the sync controller. Drop back to 0 once that path is deterministic.
   retries: process.env.CI ? 2 : 0,
   timeout: 30_000,
   expect: { timeout: 5_000 },

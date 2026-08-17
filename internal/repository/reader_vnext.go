@@ -33,6 +33,10 @@ import (
 // surfaces. It is intentionally separate from LinkStore: notes, thoughts,
 // inbox, TODO, engagement and feed snapshots have different lifecycles and
 // should not make the existing link repository a second god interface.
+// ponytail: 61 methods, one production adapter. Callers learn the whole Reader
+// persistence surface to test one inbox SQL change. Split by domain (thoughts,
+// notes, inbox, todos, feed/home) when the next feature has to touch two of
+// those areas at once — not as a rename-only cleanup.
 type ReaderVNextStore interface {
 	AppendThoughtOps(context.Context, []model.ReaderThoughtOp) ([]model.ReaderThoughtAck, error)
 	ListThoughts(context.Context, string, string, int) ([]model.ReaderThought, string, error)
@@ -1526,6 +1530,9 @@ func (r *PGXReaderVNextRepository) ListThoughts(ctx context.Context, query, afte
 	}
 	sql := `SELECT ` + readerThoughtColumns + ` FROM reader_thoughts WHERE deleted=false AND NOT EXISTS (SELECT 1 FROM reader_thought_tombstones tt WHERE tt.thought_id=reader_thoughts.id)`
 	args := []any{}
+	// ponytail: ILIKE '%q%' cannot use idx_reader_thought_search (GIN tsvector).
+	// Switch ListThoughts/SearchThoughts to plainto_tsquery('simple', q) when
+	// thought search is used on more than a few hundred rows.
 	if strings.TrimSpace(query) != "" {
 		sql += fmt.Sprintf(` AND body ILIKE $%d`, len(args)+1)
 		args = append(args, "%"+strings.TrimSpace(query)+"%")
@@ -1673,6 +1680,9 @@ func scanThoughtSearchRows(rows pgx.Rows, limit int, query string, cursorTotal i
 	return items, total, nextCursor, nil
 }
 
+// ponytail: same unused GIN as ListThoughts. quote::text ILIKE also seq-scans
+// JSON. Use the tsvector index for body; give quote/source their own columns
+// only if search must cover them.
 func (r *PGXReaderVNextRepository) SearchThoughts(ctx context.Context, query, after string, limit int) ([]model.ReaderThoughtSearch, int, string, error) {
 	query = canonicalThoughtSearchQuery(query)
 	if query == "" {
@@ -3344,6 +3354,10 @@ func (r *PGXReaderVNextRepository) createInboxOn(ctx context.Context, db databas
 	return created, nil
 }
 
+// ponytail: the list projection selects body (up to 4MiB) plus a per-row
+// category subquery. The workbench only needs title/summary/note for cards
+// and refetches the selected row. Split list vs detail columns when an inbox
+// page of long captures shows up in transfer size.
 func (r *PGXReaderVNextRepository) ListInbox(ctx context.Context, partition model.ReaderInboxPartition, after string, limit int) ([]model.ReaderInbox, int, int, string, error) {
 	if !partition.Valid() {
 		return nil, 0, 0, "", ErrReaderInboxStateConflict
@@ -5877,6 +5891,11 @@ func (r *PGXReaderVNextRepository) loadReaderFeedSnapshot(ctx context.Context, s
 
 // createReaderFeedSnapshot builds, orders and persists a new feed so that
 // subsequent pages read a frozen ordering instead of re-ranking live data.
+//
+// ponytail: first page materialises up to 2200 items into JSONB (1000 reading
+// + 200 inbox + 1000 subscription). Right for a frozen chronological cursor;
+// recommended mode can score and LIMIT a page instead. Add snapshot GC when
+// reader_feed_snapshots starts accumulating 24h of unused rows.
 func (r *PGXReaderVNextRepository) createReaderFeedSnapshot(ctx context.Context, mode string, normalizedSources []string) (readerFeedSnapshotState, error) {
 	items, err := r.buildFeedItemsForMode(ctx, modeOrDefault(mode), normalizedSources)
 	if err != nil {

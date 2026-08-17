@@ -111,6 +111,10 @@ ORDER BY updated_at DESC,id DESC LIMIT $1`
 // Home section in one repeatable-read transaction. The transaction is
 // intentionally read-write because reconciliation is part of the authority
 // of the returned TODO list and count.
+//
+// ponytail: opening Home scans every thought/note body inside a read-write
+// RepeatableRead snapshot. Same ceiling as syncProjectedTodos. Upgrade by
+// maintaining projections on write so this GET only reads reader_todos.
 func (r *PGXReaderVNextRepository) LoadHomeAggregate(ctx context.Context) (ReaderHomeAggregate, error) {
 	beginner, ok := r.db.(readerHomeSnapshotBeginner)
 	if !ok {

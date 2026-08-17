@@ -123,6 +123,11 @@ func NewClient(opts Options) *Client {
 
 // Enabled reports whether a model is configured. When false, Embed returns
 // ErrDisabled without making any network call.
+//
+// ponytail: production has never set EMBEDDING_MODEL, so this gate stays off
+// and the retrieve/merge-proposal path never runs. Keep the tests. Either
+// wire an embeddings endpoint or delete the whole retrieval subsystem — do
+// not leave an always-closed gate as a third option.
 func (c *Client) Enabled() bool {
 	return c != nil && c.model != ""
 }

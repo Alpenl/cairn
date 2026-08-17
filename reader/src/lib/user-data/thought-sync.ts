@@ -2274,6 +2274,10 @@ async function pushDueHistoryOperations(
   }
 }
 
+// ponytail: clock allocation, outbox push, pull pages, and the read model
+// share this file with annotation-store. The protocol has to be this careful;
+// the module does not. Split behind ThoughtSyncController when the next sync
+// bug cannot be found without reading both files.
 async function performSync(
   lease: IdentityLease,
   client: IdentityBoundReaderClient,
