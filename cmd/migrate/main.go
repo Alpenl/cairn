@@ -26,6 +26,10 @@
 //	--repair-reader-todos     rebuild every TODO projection; runs no migration.
 //	--report-json             emit exactly one JSON object on stdout and route
 //	                          all human text to stderr.
+//	--plan-json               answer whether MIGRATION_TARGET is eligible for a
+//	                          page-triggered update and apply nothing. Always
+//	                          speaks JSON. `ok` means the question was
+//	                          answerable; the answer is online_update.allowed.
 //
 // # Exit contract
 //
@@ -72,6 +76,17 @@ const repairTodoProjectionsFlag = "--repair-reader-todos"
 // deploy helper consumes that object; see migrationReport for the contract.
 const reportJSONFlag = "--report-json"
 
+// planJSONFlag answers "may a page apply this range?" without applying it.
+//
+// The deploy helper has to know the answer *before* it stops the service: once
+// writes are quiesced, discovering that the range needs a manual gate is a
+// maintenance window spent for nothing. It cannot use its own compiled-in plan
+// either — the helper ships with the *old* release, whose step list by
+// definition does not contain the steps about to be applied. So the target
+// release's own migrate binary answers, and this flag is how it answers
+// without touching the database.
+const planJSONFlag = "--plan-json"
+
 // reportSchemaVersion is bumped whenever a field in migrationReport changes
 // meaning or disappears. The helper must refuse a report whose schema_version
 // it does not recognise rather than guess.
@@ -101,6 +116,10 @@ func wantsJSONReport(args []string) bool {
 	return hasFlag(args, reportJSONFlag) || strings.EqualFold(strings.TrimSpace(os.Getenv("MIGRATION_REPORT_JSON")), "true")
 }
 
+func wantsPlanOnly(args []string) bool {
+	return hasFlag(args, planJSONFlag)
+}
+
 // migrationReport is the machine-readable contract between this command and the
 // root-owned deploy helper. It is written as exactly one JSON object on stdout
 // when --report-json / MIGRATION_REPORT_JSON=true is set, and it is written on
@@ -121,6 +140,11 @@ type migrationReport struct {
 	Applied         []string `json:"applied"`
 	AlreadyAtTarget bool     `json:"already_at_target"`
 	StoppedAtManual string   `json:"stopped_at_manual"`
+
+	// PlanOnly marks a report produced by --plan-json. It is present so a
+	// helper can never mistake an answer about eligibility for evidence that
+	// the range was applied.
+	PlanOnly bool `json:"plan_only,omitempty"`
 
 	// OnlineUpdate is evaluated against the ledger as it stood BEFORE this run
 	// and describes whether the range was eligible for a page-triggered
@@ -202,12 +226,24 @@ func run(stdout, stderr io.Writer, args []string) error {
 		return repairReaderTodoProjections(ctx, stdout, pool)
 	}
 
-	jsonReport := wantsJSONReport(args)
+	// --plan-json always speaks JSON: a plan nobody can parse is not a plan.
+	jsonReport := wantsJSONReport(args) || wantsPlanOnly(args)
 	// With --report-json stdout carries exactly one object, so every human
 	// line moves to stderr. Mixing the two would make the contract unparsable.
 	human := stderr
 	if !jsonReport {
 		human = stdout
+	}
+
+	if wantsPlanOnly(args) {
+		report := planOnly(ctx, pool)
+		if encodeErr := writeReport(stdout, report); encodeErr != nil {
+			return encodeErr
+		}
+		if report.Error != nil {
+			return fmt.Errorf("plan migrations: %s", report.Error.Message)
+		}
+		return nil
 	}
 
 	report, runErr := migrateAndVerify(ctx, human, pool)
@@ -306,6 +342,70 @@ func migrateAndVerify(ctx context.Context, human io.Writer, pool *pgxpool.Pool) 
 	return report, nil
 }
 
+// planOnly answers the eligibility question without applying anything.
+//
+// It reports the same schema-version-1 object the run path reports, so a helper
+// parses one shape either way, but `applied` is always empty and `ok` means
+// only "the question was answerable" — never "the range was applied". The
+// decision itself is in `online_update.allowed` plus `blockers`, and a caller
+// that reads `ok` alone learns nothing about eligibility.
+func planOnly(ctx context.Context, pool *pgxpool.Pool) migrationReport {
+	target := strings.TrimSpace(os.Getenv("MIGRATION_TARGET"))
+	report := migrationReport{
+		SchemaVersion: reportSchemaVersion,
+		Tool:          "cairn-migrate",
+		ToolVersion:   buildinfo.Version,
+		ToolCommit:    buildinfo.Commit,
+		Mode:          requestedMode(target),
+		Target:        target,
+		Applied:       []string{},
+		PlanOnly:      true,
+	}
+
+	applied, err := migrate.AppliedVersions(ctx, pool)
+	if err != nil {
+		report.Error = &reportError{Kind: errorKindFailed, Message: err.Error()}
+		return report
+	}
+	if len(applied) > 0 {
+		report.StartVersion = applied[len(applied)-1]
+	}
+
+	// An empty target means "apply everything this binary knows", so the
+	// eligibility question is about the whole remaining tail.
+	planTarget := target
+	if planTarget == "" || planTarget == migrate.FreshInstallTarget {
+		steps := migrate.Steps()
+		planTarget = steps[len(steps)-1].ID
+		report.Target = planTarget
+	}
+
+	plan, err := migrate.PlanOnlineUpdate(applied, planTarget)
+	if err != nil {
+		report.Error = &reportError{Kind: classifyError(err), Message: err.Error()}
+		return report
+	}
+	report.OnlineUpdate = &plan
+
+	// Report the ledgers as they stand. The helper compares them against the
+	// manifest before it decides to spend a maintenance window.
+	riverTarget, riverErr := riverLedgerTarget()
+	if riverErr != nil {
+		report.Error = &reportError{Kind: errorKindFailed, Message: riverErr.Error()}
+		return report
+	}
+	reconciliation, err := migrate.ReconcileLedgers(ctx, pool, migrate.LedgerTargets{
+		SchemaTarget:      planTarget,
+		RiverLedgerTarget: riverTarget,
+	})
+	if err == nil {
+		report.Ledgers = &reconciliation
+	}
+
+	report.OK = true
+	return report
+}
+
 // requestedMode names the plan the environment asked for, independently of
 // whether the run got far enough to report one.
 func requestedMode(target string) string {
@@ -344,18 +444,29 @@ func reconcileLedgers(ctx context.Context, pool *pgxpool.Pool, result migrate.Ru
 	if result.Target != "" {
 		schemaTarget = result.Target
 	}
-	riverTarget := migrate.RiverBundleTarget()
-	if raw := strings.TrimSpace(os.Getenv("MIGRATION_RIVER_LEDGER_TARGET")); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil {
-			return migrate.LedgerReconciliation{}, fmt.Errorf("MIGRATION_RIVER_LEDGER_TARGET %q is not an integer: %w", raw, err)
-		}
-		riverTarget = parsed
+	riverTarget, err := riverLedgerTarget()
+	if err != nil {
+		return migrate.LedgerReconciliation{}, err
 	}
 	return migrate.ReconcileLedgers(ctx, pool, migrate.LedgerTargets{
 		SchemaTarget:      schemaTarget,
 		RiverLedgerTarget: riverTarget,
 	})
+}
+
+// riverLedgerTarget resolves the River bundle head the manifest pins, falling
+// back to this binary's own bundle when the caller does not pin one.
+func riverLedgerTarget() (int, error) {
+	target := migrate.RiverBundleTarget()
+	raw := strings.TrimSpace(os.Getenv("MIGRATION_RIVER_LEDGER_TARGET"))
+	if raw == "" {
+		return target, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("MIGRATION_RIVER_LEDGER_TARGET %q is not an integer: %w", raw, err)
+	}
+	return parsed, nil
 }
 
 // writeHumanRunSummary prints what the run did. The repository has been burned
