@@ -17,6 +17,7 @@ import {
   type CoreBuildIdentity,
   type CoreReleaseLookup,
 } from '../../lib/core-version'
+import { CoreUpdatePanel } from './CoreUpdatePanel'
 import { SurfaceShell } from './SurfaceShell'
 
 export interface SettingsSurfaceProps {
@@ -220,6 +221,10 @@ export function SettingsSurface({ onNavigate, onOpenConnectionSettings, capabili
           <button className="rvx-button secondary" type="button" onClick={() => void onNavigate({ kind: 'tool', id: 'trash' })}><Icon name="trash" size={15} />打开回收站</button>
         </article>
         <AboutCore client={client} />
+        {/* 部署交互紧贴「关于」：读到的是同一个 Core 的身份，只是这一块带着
+            一次性凭证和确认动作。它自己保持锁定态，不会因为设置页被打开而
+            发出任何部署请求。 */}
+        <CoreUpdatePanel client={client} />
       </section>
     </SurfaceShell>
   )

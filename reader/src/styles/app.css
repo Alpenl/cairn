@@ -3269,6 +3269,45 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .rvx-settings-row p + p { margin-top: 6px; }
 .rvx-settings-control { display: grid; justify-items: end; gap: 7px; }
 
+/* 部署面板：内容是纵向的（凭证输入、候选清单、任务阶段），所以让文本列
+   占满宽度，控件列仍然靠右对齐并允许换到下一行。 */
+.rvx-deploy { align-items: flex-start; flex-wrap: wrap; }
+.rvx-deploy-body { flex: 1 1 380px; min-width: 0; }
+.rvx-deploy-body > p { max-width: none; }
+.rvx-deploy-unlock { display: grid; gap: 6px; max-width: 340px; margin-top: 11px; }
+.rvx-deploy-unlock label { color: var(--text-secondary); font-size: 12px; }
+.rvx-deploy-unlock input {
+  box-sizing: border-box; width: 100%; padding: 7px 9px;
+  border: .5px solid var(--border-strong); border-radius: 5px;
+  background: var(--bg-list); color: var(--text-primary); font: 13px var(--font-mono);
+}
+.rvx-deploy-unlock .rvx-button { justify-self: start; }
+.rvx-deploy-error {
+  margin-top: 9px; padding: 8px 9px; border-radius: 5px;
+  background: var(--err-soft); color: var(--err); font-size: 12px; line-height: 1.55;
+}
+.rvx-deploy-manual, .rvx-deploy-unlocked, .rvx-deploy-job { margin-top: 11px; display: grid; gap: 7px; }
+/* grid 会把按钮拉满整行；部署面板里的按钮都是「一个动作」，不是分栏控件。 */
+.rvx-deploy-manual .rvx-button { justify-self: start; }
+/* 控件列的说明文字不该把正文挤成一条窄缝。 */
+.rvx-deploy .rvx-settings-control small { max-width: 200px; text-align: right; }
+.rvx-deploy-facts { display: grid; gap: 5px; margin: 4px 0 0; }
+.rvx-deploy-facts > div { display: grid; grid-template-columns: minmax(96px, 150px) minmax(0, 1fr); gap: 10px; }
+.rvx-deploy-facts dt { color: var(--text-tertiary); font-size: 11px; }
+.rvx-deploy-facts dd { margin: 0; min-width: 0; color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.rvx-deploy-hash { font: 11px var(--font-mono); overflow-wrap: anywhere; }
+.rvx-deploy .rvx-deploy-job-head { color: var(--text-primary); font-size: 12.5px; }
+.rvx-deploy-phases { margin: 2px 0 0; padding-left: 19px; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.rvx-deploy-phases li.failed { color: var(--err); }
+.rvx-deploy-hold {
+  display: grid; gap: 6px; padding: 10px 11px; border-radius: 6px;
+  border: .5px solid var(--err); background: var(--err-soft);
+}
+.rvx-deploy-hold p { margin: 0; color: var(--err); font-size: 12px; line-height: 1.55; }
+.rvx-deploy-hold ul { margin: 0; padding-left: 19px; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.rvx-deploy-confirm p { margin: 11px 0 0; color: var(--text-secondary); font-size: 12.5px; line-height: 1.6; }
+.rvx-deploy-confirm ol { margin: 7px 0 0; padding-left: 19px; color: var(--text-secondary); font-size: 12.5px; line-height: 1.7; }
+
 @media (max-width: 900px) {
   .rvx-nav { width: 190px; flex-basis: 190px; }
   .rvx-mode-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
