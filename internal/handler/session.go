@@ -67,8 +67,16 @@ func createSession(opts SessionOptions, ttl time.Duration) gin.HandlerFunc {
 			middleware.JSONErrorWithSlug(c, http.StatusInternalServerError, middleware.ErrCodeInternalError, "installation namespace is unavailable")
 			return
 		}
-		expiresAt := time.Now().Add(ttl).Truncate(time.Second)
-		token, err := session.Sign(session.Claims{ExpiresAt: expiresAt}, opts.SigningKey)
+		now := time.Now()
+		expiresAt := now.Add(ttl).Truncate(time.Second)
+		// The absolute deadline is fixed at login and never moves: renewal may
+		// slide ExpiresAt forward many times, but one login is worth at most
+		// this much wall-clock no matter how actively the cookie is used.
+		absoluteExpiresAt := now.Add(session.DefaultAbsoluteTTL).Truncate(time.Second)
+		token, err := session.Sign(session.Claims{
+			ExpiresAt:         expiresAt,
+			AbsoluteExpiresAt: absoluteExpiresAt,
+		}, opts.SigningKey)
 		if err != nil {
 			middleware.JSONErrorWithSlug(c, http.StatusInternalServerError, middleware.ErrCodeInternalError, "failed to create session")
 			return
