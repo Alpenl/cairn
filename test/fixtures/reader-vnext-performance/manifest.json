@@ -92,16 +92,16 @@
         "Aggregate",
         "Hash",
         "Hash Join",
+        "Index Only Scan on reader_notes using idx_reader_notes_updated",
+        "Index Only Scan on reader_thought_tombstones using reader_thought_tombstones_pkey",
+        "Index Only Scan on sites using idx_sites_pinned_updated",
         "Index Scan on feed_items using idx_feed_items_unread",
         "Result",
         "Seq Scan on feed_subscriptions",
         "Seq Scan on links",
         "Seq Scan on reader_inbox",
-        "Seq Scan on reader_notes",
-        "Seq Scan on reader_thought_tombstones",
         "Seq Scan on reader_thoughts",
-        "Seq Scan on reader_todos",
-        "Seq Scan on sites"
+        "Seq Scan on reader_todos"
       ],
       "inbox_first_screen": [
         "Index Scan on reader_inbox using idx_reader_inbox_pending",

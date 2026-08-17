@@ -236,9 +236,16 @@ func mustJSON(value any) string {
 // database ANALYZEd. The caller must hand it an empty (freshly truncated)
 // database; StartPostgres already guarantees that.
 //
-// ANALYZE at the end is load-bearing for the plan-shape assertions: without
-// fresh statistics PostgreSQL plans a 10k-row table from its default estimate
-// of 2550 rows and picks a different join order run to run.
+// VACUUM (ANALYZE) at the end is load-bearing for the plan-shape assertions,
+// and plain ANALYZE is not enough. ANALYZE refreshes column statistics but
+// leaves pg_class.relpages/reltuples for the *indexes* at whatever they were
+// when the index was built — which, for the trigram indexes, is an empty
+// reader_thoughts. The planner then costs a GIN scan as nearly free and picks
+// it; once autovacuum gets around to the table the real index size appears and
+// it switches to a sequential scan. Whichever side of that race the run lands
+// on decides the recorded plan, so the assertion was intermittently red on a
+// tree nobody had touched. VACUUM updates the index relation statistics too,
+// which removes the race instead of hiding it behind a retry.
 func SeedReaderScaleFixture(t testing.TB, pool *pgxpool.Pool) ReaderScaleSpec {
 	t.Helper()
 	spec := ReaderScaleFixtureSpec()
@@ -255,8 +262,8 @@ func SeedReaderScaleFixture(t testing.TB, pool *pgxpool.Pool) ReaderScaleSpec {
 	seedReaderScaleCategories(t, ctx, pool, spec, linkIDs)
 	seedReaderScaleStandaloneTodos(t, ctx, pool, spec)
 
-	if _, err := pool.Exec(ctx, `ANALYZE`); err != nil {
-		t.Fatalf("reader scale fixture: analyze: %v", err)
+	if _, err := pool.Exec(ctx, `VACUUM (ANALYZE)`); err != nil {
+		t.Fatalf("reader scale fixture: vacuum analyze: %v", err)
 	}
 	t.Logf("reader scale fixture: seeded id=%s seed=%s in %s", ReaderScaleFixtureID, ReaderScaleSeed, time.Since(started).Round(time.Millisecond))
 	return spec
