@@ -61,16 +61,16 @@
   "deterministic_locks": {
     "query_counts": {
       "activity": 4,
-      "home": 1966,
+      "home": 4,
       "inbox_first_screen": 2,
       "recommended_feed": 4,
       "thought_search": 1,
-      "todos": 2052
+      "todos": 1
     },
     "response_byte_ceilings": {
       "activity": 12288,
-      "home": 574464,
-      "inbox_first_screen": 11274240,
+      "home": 71680,
+      "inbox_first_screen": 17408,
       "recommended_feed": 40960,
       "thought_search": 12288,
       "todos": 11264
@@ -89,21 +89,23 @@
         "Subquery Scan"
       ],
       "home": [
-        "Append",
-        "Gather Merge",
+        "Aggregate",
         "Hash",
         "Hash Join",
+        "Index Scan on feed_items using idx_feed_items_unread",
+        "Result",
+        "Seq Scan on feed_subscriptions",
+        "Seq Scan on links",
+        "Seq Scan on reader_inbox",
         "Seq Scan on reader_notes",
         "Seq Scan on reader_thought_tombstones",
         "Seq Scan on reader_thoughts",
-        "Sort"
+        "Seq Scan on reader_todos",
+        "Seq Scan on sites"
       ],
       "inbox_first_screen": [
-        "Aggregate",
         "Index Scan on reader_inbox using idx_reader_inbox_pending",
-        "Limit",
-        "Seq Scan on reader_categorizables",
-        "Sort"
+        "Limit"
       ],
       "recommended_feed": [
         "Hash",
@@ -117,18 +119,25 @@
       ],
       "thought_search": [
         "Aggregate",
-        "Hash",
-        "Hash Join",
+        "Append",
+        "Bitmap Heap Scan on reader_thoughts",
+        "Bitmap Index Scan using idx_reader_thoughts_search_trgm",
+        "CTE Scan on cte search_candidates",
+        "Index Scan on reader_thought_tombstones using reader_thought_tombstones_pkey",
+        "Index Scan on reader_thoughts using reader_thoughts_pkey",
         "Limit",
+        "Nested Loop",
         "Seq Scan on reader_thought_ops",
         "Seq Scan on reader_thought_tombstones",
         "Seq Scan on reader_thoughts",
         "Sort",
+        "Unique",
         "WindowAgg"
       ],
       "todos": [
-        "Index Scan on reader_todos using idx_reader_todos_projection",
-        "LockRows"
+        "Limit",
+        "Seq Scan on reader_todos",
+        "Sort"
       ]
     }
   },

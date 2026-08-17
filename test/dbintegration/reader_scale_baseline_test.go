@@ -238,7 +238,7 @@ func readerScalePaths() []readerScalePath {
 	return []readerScalePath{
 		{
 			name:         "home",
-			note:         "GET /api/home: repeatable-read read-write transaction, reconciles every TODO projection with two round trips each",
+			note:         "GET /api/home: one read-only repeatable-read snapshot over the stored projection; it no longer reconciles or writes",
 			planSelector: "FROM reader_thoughts t",
 			run: func(ctx context.Context, deps readerScaleDeps) (any, error) {
 				return deps.svc.HomeAggregate(ctx)
@@ -246,15 +246,15 @@ func readerScalePaths() []readerScalePath {
 		},
 		{
 			name:         "todos",
-			note:         "GET /api/todos: paginates every thought and published note, parses each body, then reconciles the whole projection",
-			planSelector: "origin_ref->>'block_ref'",
+			note:         "GET /api/todos: one keyset page straight off reader_todos; the read no longer parses bodies or reconciles",
+			planSelector: "FROM reader_todos",
 			run: func(ctx context.Context, deps readerScaleDeps) (any, error) {
 				return deps.svc.ListTodos(ctx, "", 30)
 			},
 		},
 		{
 			name:         "inbox_first_screen",
-			note:         "GET /api/inbox: first screen of the active partition, list rows still carry full body and note",
+			note:         "GET /api/inbox: first screen of the active partition; list rows carry a bounded preview, never the body or full note",
 			planSelector: "FROM reader_inbox",
 			run: func(ctx context.Context, deps readerScaleDeps) (any, error) {
 				return deps.svc.ListInbox(ctx, string(model.ReaderInboxPartitionActive), "", 30)
