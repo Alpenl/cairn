@@ -1826,6 +1826,35 @@ mark.hl > strong, mark.hl > code { background: transparent; }
    实际间距约 7px，仍不重叠）。低于门槛直接不显示，绝不压字。 */
 @container (min-width: 1152px) { .reader-toc { display: block; } }
 @container (max-width: 1231px) { .reader-toc.focused { display: none; } }
+/* 订阅详情与阅读详情共用 .reader-toc，但只有阅读把侧栏放在右边：阅读在
+   `@container readerpane (min-width: 1240px)` 把 .reader-scroll 变成五列网格、
+   .reader-rail 落在第 4 列，而 rss 面板被那条规则的 :not(.rss-detail-pane) 排除在外，
+   .reader-scroll 始终是 block，目录只能靠负 margin 浮进左侧留白。这里给它同样口径的
+   网格，让目录改落正文右侧，与阅读一致；显示阈值沿用上面那条，不改变何时出现。 */
+@container (min-width: 1152px) {
+  .rss-detail-pane .reader-scroll {
+    display: grid;
+    grid-template-columns: minmax(0, var(--reader-content-width)) var(--reading-gap-min) 188px;
+    justify-content: center;
+    align-content: start;
+  }
+  /* 目录在 DOM 里排在正文之前并占第 3 列，两者都要显式指定行——否则自动布局不会
+     回头填第 1 行第 1 列，正文会被挤到第 2 行（与 7a1f2aa 同类）。 */
+  .rss-detail-pane .reader-scroll > .rss-reader-inner {
+    grid-column: 1;
+    grid-row: 1;
+    margin-inline: 0;
+    max-width: none;
+  }
+  .rss-detail-pane .reader-scroll > .reader-toc {
+    grid-column: 3;
+    grid-row: 1;
+    width: auto;
+    height: auto;
+    margin: 0;
+    top: 42px;
+  }
+}
 /* 标题被目录点中后会拿焦点（tabIndex=-1）。鼠标点的那次不画焦点框，键盘操作
    仍然保留 :focus-visible 的默认可见焦点。 */
 .reader-flow :where(h1, h2, h3, h4, h5, h6):focus:not(:focus-visible) { outline: none; }
@@ -2793,6 +2822,42 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .rvx-form-grid input, .rvx-form-grid textarea, .rvx-field input, .rvx-field textarea, .rvx-category-row input, .rvx-todo-create input, .rvx-todo-content input { width: 100%; box-sizing: border-box; padding: 8px 9px; border: .5px solid var(--border-strong); border-radius: 5px; outline: 0; background: var(--bg-list); color: var(--text-primary); font: 12.5px/1.45 var(--font-ui); }
 .rvx-form-grid textarea, .rvx-field textarea { resize: vertical; }
 .rvx-form-grid input:focus, .rvx-form-grid textarea:focus, .rvx-field input:focus, .rvx-field textarea:focus, .rvx-category-row input:focus, .rvx-todo-create input:focus { border-color: var(--accent-line); }
+/* Selects sit beside segmented controls, so they carry the same chrome
+   instead of falling through to the browser's native widget. The chevron is
+   a pseudo-element rather than a background image: it inherits currentColor
+   and therefore stays correct in both themes. */
+.rvx-select-field { position: relative; }
+.rvx-select-field::after {
+  content: '';
+  position: absolute;
+  right: 11px;
+  bottom: 12px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.4px solid currentColor;
+  border-bottom: 1.4px solid currentColor;
+  color: var(--text-tertiary);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.rvx-select-field select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 30px;
+  box-sizing: border-box;
+  padding: 0 28px 0 10px;
+  border: .5px solid var(--border);
+  border-radius: 6px;
+  outline: 0;
+  background: var(--bg-chip);
+  color: var(--text-secondary);
+  font: 11.5px var(--font-ui);
+  cursor: pointer;
+}
+.rvx-select-field select:hover { background: var(--bg-hover); color: var(--text-primary); }
+.rvx-select-field select:focus-visible { border-color: var(--accent-line); color: var(--text-primary); }
+.rvx-select-field select:disabled { opacity: .5; cursor: default; }
+.rvx-select-field:has(select:disabled)::after { opacity: .5; }
 .rvx-editor { padding: 16px; border: .5px solid var(--border); border-radius: 7px; background: var(--bg-elevated); }
 .rvx-create-panel { margin-bottom: 18px; }
 .rvx-proposal { margin: 18px 0; padding: 12px; border-left: 2px solid var(--accent-line); background: var(--bg-chip); }
@@ -3067,6 +3132,10 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   overflow-wrap: anywhere;
 }
 .inbox-title-field textarea::placeholder { color: var(--text-faint); }
+.inbox-title-field textarea[data-overflowing='true']:not(:focus) {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
+}
 .inbox-section-title { min-height: 30px; display: flex; align-items: center; gap: 12px; margin-bottom: 13px; color: var(--text-tertiary); }
 .inbox-section-title > span { display: inline-flex; align-items: center; gap: 7px; }
 .inbox-section-title > .rvx-segmented { margin-left: auto; }
@@ -3124,7 +3193,11 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .inbox-conflict { display: flex; align-items: flex-start; gap: 7px; margin: -6px 0 20px; padding: 10px 12px; border-radius: var(--r-sm); border-left: 2px solid var(--accent); background: var(--accent-soft); color: var(--text-secondary); font-size: 11.5px; line-height: 1.5; }
 .inbox-conflict svg { flex: 0 0 auto; color: var(--accent); }
 .inbox-job { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; color: var(--text-faint); font: 10px var(--font-mono); overflow-wrap: anywhere; }
-.inbox-body-preview { min-height: 220px; padding: 2px; color: var(--text-primary); font: 16px/1.95 var(--font-reading); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Rendered Markdown, not a plain-text dump: block spacing comes from
+   .reader-flow, so no pre-wrap here — it would preserve the source's own
+   line breaks and fight the rendered blocks. */
+.inbox-body-preview { min-height: 220px; padding: 2px; color: var(--text-primary); font-family: var(--font-reading); font-size: 16px; line-height: 1.95; overflow-wrap: anywhere; }
+.inbox-body-preview > :first-child { margin-top: 0; }
 .inbox-body-editor { min-height: 240px; padding: 15px; resize: vertical; font: 13px/1.78 var(--font-mono); tab-size: 2; }
 .inbox-suggestions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .inbox-suggestions > span { display: inline-flex; align-items: center; gap: 5px; color: var(--text-tertiary); font-size: 10.5px; white-space: nowrap; }

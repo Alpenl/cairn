@@ -14,7 +14,7 @@ import type { TocHeading } from '../../lib/toc'
 import { useReaderToc } from '../../hooks/useReaderToc'
 import { NO_ANNOTATIONS } from '../../lib/annotations'
 import { Icon, type IconName } from '../Icon'
-import { PlainTextView } from '../PlainTextView'
+import { LazyMarkdownView as MarkdownView } from '../LazyMarkdownView'
 import { ArticleOutline } from '../detail/ArticleOutline'
 import { SurfaceError, SurfaceLoading, SurfaceShell, formatRelativeDate, errorMessage } from './SurfaceShell'
 import { refreshPendingInboxCount } from './PendingInboxCount'
@@ -39,6 +39,9 @@ const INBOX_EDITOR_OUTLINE: TocHeading[] = [
   { id: 'inbox-content', level: 1, text: '正文' },
   { id: 'inbox-organization', level: 1, text: '整理' },
 ]
+
+/** How tall the headline may grow before the overflow scrolls instead. */
+const INBOX_TITLE_MAX_LINES = 3
 
 function ignoreInboxHighlight(): void {}
 
@@ -427,11 +430,25 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
 
   // The title is a textarea so long titles wrap the way the reader renders
   // them; it grows to its content instead of scrolling inside one line.
+  //
+  // Captured titles are not always titles: a social post can arrive with its
+  // whole body in the field, and an uncapped headline then pushes the article
+  // off the screen. Growth stops at INBOX_TITLE_MAX_LINES and the rest
+  // scrolls, so the editor keeps its shape no matter what was captured.
   useLayoutEffect(() => {
     const node = titleRef.current
     if (!node) return
     node.style.height = 'auto'
-    node.style.height = `${node.scrollHeight}px`
+    const lineHeight = Number.parseFloat(getComputedStyle(node).lineHeight)
+    const cap = Number.isFinite(lineHeight) ? lineHeight * INBOX_TITLE_MAX_LINES : 0
+    const height = cap > 0 ? Math.min(node.scrollHeight, cap) : node.scrollHeight
+    const overflowing = node.scrollHeight > height
+    node.style.height = `${height}px`
+    node.style.overflowY = overflowing ? 'auto' : 'hidden'
+    // CJK glyphs overrun a 1.2 line box, so a clean N-line cut still leaves the
+    // tops of the next line showing. The fade marks the cut as deliberate and
+    // lifts while the field has focus so it never covers what is being typed.
+    node.dataset.overflowing = overflowing ? 'true' : 'false'
   }, [title, selected?.id])
 
   useEffect(() => {
@@ -1527,7 +1544,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                         </div>
                       </header>
                       {previewBody ? (
-                        <PlainTextView className="inbox-body-preview reader-flow" text={body || '暂无正文'} blockKey="inbox-body" anns={NO_ANNOTATIONS} onClickHL={ignoreInboxHighlight} />
+                        <MarkdownView className="inbox-body-preview reader-flow" text={body || '暂无正文'} blockKey="inbox-body" anns={NO_ANNOTATIONS} onClickHL={ignoreInboxHighlight} />
                       ) : (
                         <textarea className="inbox-body-editor" aria-label="正文" value={body} disabled={saving} onChange={(event) => updateSelectedDraft({ body: event.target.value })} rows={10} />
                       )}

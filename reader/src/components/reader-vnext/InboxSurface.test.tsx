@@ -179,6 +179,22 @@ describe('InboxSurface', () => {
     expect(screen.getByRole('dialog', { name: '添加条目' })).toBeInTheDocument()
   })
 
+  it('renders the body preview as Markdown rather than its source', async () => {
+    const { client } = makeClient([inbox({ body: '## 小节标题\n\n正文一段。' })])
+
+    renderInbox(client)
+
+    await screen.findByRole('heading', { name: '第一篇' })
+    fireEvent.click(screen.getByRole('button', { name: '预览' }))
+
+    // The preview shares the reader's Markdown renderer, so a heading arrives
+    // as a heading. Before that it was a plain-text dump and the reader saw
+    // the '##' marker itself.
+    const heading = await screen.findByRole('heading', { name: '小节标题' })
+    expect(heading.tagName).toBe('H2')
+    expect(document.querySelector('.inbox-body-preview')).not.toHaveTextContent('## 小节标题')
+  })
+
   it('labels a queue row by host and only flags rows that left the pending flow', async () => {
     const { client } = makeClient([
       inbox({ url: 'https://www.example.com/2026/08/article', source_kind: 'browser_capture' }),

@@ -220,6 +220,24 @@ describe('Reader responsive content width', () => {
     )
   })
 
+  it('puts the subscription outline on the right of the article, in the same grid row', () => {
+    const toc = firstRule('.rss-detail-pane .reader-scroll > .reader-toc')
+    const article = firstRule('.rss-detail-pane .reader-scroll > .rss-reader-inner')
+
+    // Right of the body, matching the reading pane's rail rather than the
+    // left-gutter float the shared .reader-toc defaults to.
+    expect(toc).toMatch(/grid-column:\s*3\s*;/)
+    expect(article).toMatch(/grid-column:\s*1\s*;/)
+    // The outline precedes the article in DOM order, so both need an explicit
+    // row: auto-placement would push the article to row 2 instead of walking
+    // back to column 1 of row 1.
+    expect(toc).toMatch(/grid-row:\s*1\s*;/)
+    expect(article).toMatch(/grid-row:\s*1\s*;/)
+    // The float-specific geometry has to be undone or the outline collapses.
+    expect(toc).toMatch(/height:\s*auto\s*;/)
+    expect(toc).toMatch(/margin:\s*0\s*;/)
+  })
+
   it('keeps subscription management actions visible while only the source list scrolls', () => {
     const sidebar = firstRule('.sidebar.rss-sidebar')
     const folderList = firstRule('.rss-folder-list')
