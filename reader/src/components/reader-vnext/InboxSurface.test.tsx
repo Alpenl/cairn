@@ -198,6 +198,29 @@ describe('InboxSurface', () => {
     expect(screen.getByRole('button', { name: /第二篇/ })).toHaveTextContent('已丢弃')
   })
 
+  it('renders queue rows through the shared preview card with the picker in its leading slot', async () => {
+    const { client } = makeClient([
+      inbox(),
+      inbox({ id: 'inbox-2', title: '第二篇', url: 'https://example.com/two' }),
+    ])
+
+    renderInbox(client)
+
+    // 打开区域是一个真实 button，标题成为它的无障碍名；选中态挂在行上。
+    const open = await screen.findByRole('button', { name: '打开 第一篇' })
+    const row = open.closest('li')
+    expect(row).toHaveClass('reader-preview-card')
+    expect(row).toHaveAttribute('aria-current', 'true')
+    expect(row?.querySelector('.reader-preview-card-leading input[type="checkbox"]')).toBe(
+      screen.getByRole('checkbox', { name: '选择 第一篇' }),
+    )
+    expect(screen.getByRole('button', { name: '打开 第二篇' }).closest('li')).not.toHaveAttribute('aria-current')
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 第二篇' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '打开 第二篇' }).closest('li'))
+      .toHaveClass('is-picked'))
+  })
+
   it('shows loading before an empty Inbox state', async () => {
     let resolveList!: (value: ReturnType<typeof ok>) => void
     const listInbox = vi.fn(() => new Promise((resolve) => { resolveList = resolve }))
@@ -1021,7 +1044,8 @@ describe('InboxSurface', () => {
     expect(screen.getByRole('textbox', { name: '笔记' })).toHaveValue('远端备注')
     expect(screen.getByRole('textbox', { name: '摘要' })).toHaveValue('远端摘要')
     expect(screen.getByRole('textbox', { name: '标签' })).toHaveValue('远端标签')
-    expect(screen.getByRole('button', { name: /远端标题/ }).className).toContain('active')
+    // 选中态由行本身承载：公共卡片把它映射成 aria-current，不再是打开按钮上的 class。
+    expect(screen.getByRole('button', { name: /远端标题/ }).closest('li')).toHaveAttribute('aria-current', 'true')
 
     fireEvent.click(screen.getByRole('button', { name: /第二篇/ }))
     await waitFor(() => expect(patchInbox).toHaveBeenLastCalledWith('inbox-1', 5, {
@@ -1452,7 +1476,7 @@ describe('InboxSurface', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('网络不可达')
     expect(screen.getByRole('textbox', { name: '标题' })).toHaveValue('离线草稿')
-    expect(screen.getByRole('button', { name: /第一篇/ }).className).toContain('active')
+    expect(screen.getByRole('button', { name: /第一篇/ }).closest('li')).toHaveAttribute('aria-current', 'true')
   })
 
   it('saves the current draft before confirming and blocks an empty title', async () => {
@@ -2052,6 +2076,74 @@ describe('InboxSurface', () => {
 
     expect(categoryButton.className).toContain('active')
     expect(screen.queryByText('旧分类请求失败')).not.toBeInTheDocument()
+  })
+
+  describe('新建条目 Dialog', () => {
+    async function openCreateDialog(client: IdentityBoundReaderClient) {
+      const rendered = renderInbox(client)
+      await screen.findByRole('heading', { name: '第一篇' })
+      const opener = screen.getByRole('button', { name: '添加条目' })
+      opener.focus()
+      fireEvent.click(opener)
+      return { ...rendered, opener }
+    }
+
+    it('takes focus to the URL field and hands it back to the opener on close', async () => {
+      const { client } = makeClient([inbox()])
+      const { opener } = await openCreateDialog(client)
+
+      expect(screen.getByRole('dialog', { name: '添加条目' })).toBeInTheDocument()
+      expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '网址' }))
+
+      fireEvent.click(screen.getByRole('button', { name: '取消' }))
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(document.activeElement).toBe(opener)
+    })
+
+    it('closes on Escape and on the backdrop, but not on a press inside the panel', async () => {
+      const { client } = makeClient([inbox()])
+      await openCreateDialog(client)
+
+      fireEvent.mouseDown(screen.getByRole('dialog', { name: '添加条目' }))
+      expect(screen.getByRole('dialog', { name: '添加条目' })).toBeInTheDocument()
+
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: '添加条目' }))
+      const backdrop = document.querySelector('.reader-dialog-backdrop')
+      expect(backdrop).not.toBeNull()
+      fireEvent.mouseDown(backdrop as Element)
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+
+    it('cannot be dismissed while a create request is still in flight', async () => {
+      let resolveCreate!: (value: ReturnType<typeof ok>) => void
+      const createInbox = vi.fn(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveCreate = resolve }))
+      const { client } = makeClient([inbox()], { createInbox })
+      await openCreateDialog(client)
+
+      fireEvent.change(screen.getByRole('textbox', { name: '网址' }), {
+        target: { value: 'https://example.com/new' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: '创建' }))
+      await waitFor(() => expect(createInbox).toHaveBeenCalledTimes(1))
+
+      fireEvent.keyDown(document, { key: 'Escape' })
+      fireEvent.mouseDown(document.querySelector('.reader-dialog-backdrop') as Element)
+
+      expect(screen.getByRole('dialog', { name: '添加条目' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '关闭' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: '取消' })).toBeDisabled()
+
+      await act(async () => {
+        resolveCreate(ok(inbox({ id: 'created', title: '新条目' })))
+      })
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    })
   })
 
   it('ignores a delayed category result after its identity is no longer current', async () => {
