@@ -19,6 +19,7 @@ import {
   type SourceBlockId,
 } from '../lib/article/source-block'
 import type { IdentityLease } from '../lib/identity'
+import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../lib/reader-events'
 import {
   commitAnnotationOperation,
   compactAnnotationOperations,
@@ -669,7 +670,7 @@ export function useArticleAnnotations(
         annotationStoreVersion: committed.value.annotationStoreVersion,
       }
       channelRef.current?.publish(hint)
-      window.dispatchEvent(new Event('webtag:annotations-change'))
+      emitReaderEvent(READER_EVENTS.annotationsChanged)
       scheduleCompaction(lease, linkId, target)
       if (result.status === 'reanchored') reanchoredCount += 1
       else historicalCount += 1
@@ -736,12 +737,18 @@ export function useArticleAnnotations(
     }
     const onLocalAnnotationChange = () => void refresh()
     const onThoughtsSync = () => void refresh()
-    window.addEventListener('webtag:annotations-change', onLocalAnnotationChange)
-    window.addEventListener('webtag:thoughts-sync', onThoughtsSync)
+    const unsubscribeLocalChange = subscribeReaderEvents(
+      [READER_EVENTS.annotationsChanged],
+      onLocalAnnotationChange,
+    )
+    const unsubscribeThoughtsSync = subscribeReaderEvents(
+      [READER_EVENTS.thoughtsSynced],
+      onThoughtsSync,
+    )
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
-      window.removeEventListener('webtag:annotations-change', onLocalAnnotationChange)
-      window.removeEventListener('webtag:thoughts-sync', onThoughtsSync)
+      unsubscribeLocalChange()
+      unsubscribeThoughtsSync()
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [refresh])
@@ -791,7 +798,7 @@ export function useArticleAnnotations(
       annotationStoreVersion: outcome.annotationStoreVersion,
     }
     publicationChannel?.publish(hint)
-    window.dispatchEvent(new Event('webtag:annotations-change'))
+    emitReaderEvent(READER_EVENTS.annotationsChanged)
     scheduleCompaction(lease, linkId, target)
     return outcome
   }, [

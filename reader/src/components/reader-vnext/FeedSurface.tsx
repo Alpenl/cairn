@@ -12,17 +12,19 @@ import type {
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { feedScrollAnchorKey } from '../../lib/feed-scroll-anchor'
 import { useFeedScrollAnchor } from '../../hooks/useFeedScrollAnchor'
-import { Icon } from '../Icon'
+import { useSurfaceRequestGate, type SurfaceRequestToken } from '../../hooks/useSurfaceRequestGate'
+import { isRecord } from '../../lib/records'
+import { READER_EVENTS, emitReaderEvent, subscribeReaderEvents } from '../../lib/reader-events'
 import {
-  SurfaceError,
-  SurfaceLoading,
-  SurfaceShell,
   SURFACE_IDENTITY_ERROR,
-  errorMessage,
   formatRelativeDate,
   identityIsCurrent,
   isIdentityError,
-} from './SurfaceShell'
+  readerErrorMessage,
+} from '../../lib/reader-surface'
+import { Icon } from '../Icon'
+import { ReaderListRow } from '../ui/ReaderListRow'
+import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 
 export interface FeedSurfaceProps {
   readonly client: IdentityBoundReaderClient
@@ -41,6 +43,9 @@ export interface FeedSurfaceProps {
 type FeedMode = 'recommended' | 'chronological'
 type FeedFeedbackAction = 'save' | 'unsave' | 'hide' | 'not_interested'
 type FeedSource = 'inbox' | 'reading' | 'subscription'
+/** 两条互相独立的请求线：Feed 快照与右栏 TODO，各自按代次判断迟到回包。 */
+type FeedRequestChannel = 'feed' | 'todos'
+type FeedRequestToken = SurfaceRequestToken<FeedRequestChannel>
 
 const FEED_SOURCES: readonly { readonly id: FeedSource; readonly label: string }[] = [
   { id: 'inbox', label: '收件箱' },
@@ -49,8 +54,6 @@ const FEED_SOURCES: readonly { readonly id: FeedSource; readonly label: string }
 ]
 
 const BATCH_CONFIRM_KEY = '__feed_batch_confirm__'
-const TODO_CHANGE_EVENT = 'webtag:todos-change'
-const HOME_CHANGE_EVENT = 'webtag:home-change'
 
 interface FeedResumeState {
   readonly snapshotID: string
@@ -82,10 +85,6 @@ export function clearFeedSessionState(client: IdentityBoundReaderClient): void {
   } catch {
     // Feed position state is best-effort and contains no durable user data.
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
 }
 
 function isFeedMode(value: unknown): value is FeedMode {
@@ -281,16 +280,6 @@ function mergeItems(
   return result
 }
 
-function thrownErrorMessage(value: unknown): string {
-  if (isRecord(value) && typeof value.message === 'string') {
-    return errorMessage({
-      message: value.message,
-      status: typeof value.status === 'number' ? value.status : undefined,
-    })
-  }
-  return '请求失败，请稍后重试。'
-}
-
 function supportsItemAction(item: ReaderFeedItemResponse, action: ReaderFeedAction): boolean {
   return Array.isArray(item.actions) && item.actions.includes(action)
 }
@@ -361,10 +350,6 @@ function feedReasonText(item: ReaderFeedItemResponse): string {
   }
 }
 
-function emitSurfaceEvent(name: string): void {
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event(name))
-}
-
 function hasFeedCapability(capabilities: readonly string[], capability: string): boolean {
   return capabilities.includes(capability)
 }
@@ -403,9 +388,6 @@ export function FeedSurface({
   const [renderedKey, setRenderedKey] = useState<string | null>(null)
   const ownScrollRef = useRef<HTMLDivElement>(null)
   const scrollRef = hostScrollRef ?? ownScrollRef
-  const requestID = useRef(0)
-  const todoRequestID = useRef(0)
-  const mountedRef = useRef(false)
   const itemsRef = useRef<ReaderFeedItemResponse[]>([])
   const snapshotRef = useRef<string | undefined>()
   const cursorRef = useRef<string | undefined>()
@@ -422,6 +404,9 @@ export function FeedSurface({
     (feature: ReaderCapabilityFeature) => capabilityLease.isCurrent(feature),
     [capabilityLease],
   )
+  // 闸门只持有身份权威：Feed、TODO 和收件箱动作各要一张不同的能力票，把它们塞进
+  // 同一个 authority 会让任意一张票失效时静默拖垮另一条通道，所以能力检查留在调用点。
+  const gate = useSurfaceRequestGate<FeedRequestChannel>({ owner: [client], authority: identityCurrent })
   const policy = capabilityLease.policy
   const scrollAnchor = useFeedScrollAnchor({
     containerRef: scrollRef,
@@ -431,7 +416,6 @@ export function FeedSurface({
   })
 
   const clearForIdentityLoss = useCallback(() => {
-    if (!mountedRef.current) return
     itemsRef.current = []
     snapshotRef.current = undefined
     cursorRef.current = undefined
@@ -455,15 +439,6 @@ export function FeedSurface({
     clearForIdentityLoss()
     return false
   }, [clearForIdentityLoss, client])
-
-  useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-      requestID.current += 1
-      todoRequestID.current += 1
-    }
-  }, [])
 
   const markBusy = useCallback((key: string, busy: boolean) => {
     setBusyKeys((current) => {
@@ -491,7 +466,7 @@ export function FeedSurface({
   }, [capabilityLease, client, mode, sourceFilter])
 
   const loadTodos = useCallback(async () => {
-    const request = ++todoRequestID.current
+    const token = gate.begin('todos')
     if (!capabilityCurrent('todos')) {
       setTodos([])
       setTodosLoading(false)
@@ -511,47 +486,48 @@ export function FeedSurface({
     }
     try {
       const result = await client.listTodos()
-      if (request !== todoRequestID.current || !capabilityCurrent('todos')) return
+      if (!gate.isSameOwner(token) || !capabilityCurrent('todos')) return
       if (!identityIsCurrent(client)) {
         clearForIdentityLoss()
         return
       }
       if (!result.ok) {
         if (isIdentityError(result.error)) clearForIdentityLoss()
-        else setTodoError(errorMessage(result.error))
+        else setTodoError(readerErrorMessage(result.error))
         setTodos([])
       } else {
         setTodos(result.data.items)
       }
     } catch (cause) {
-      if (request === todoRequestID.current) {
+      if (gate.isSameOwner(token)) {
         if (!identityIsCurrent(client)) clearForIdentityLoss()
-        else setTodoError(thrownErrorMessage(cause))
+        else setTodoError(readerErrorMessage(cause))
         setTodos([])
       }
     } finally {
-      if (request === todoRequestID.current) setTodosLoading(false)
+      if (gate.isSameOwner(token)) setTodosLoading(false)
     }
-  }, [capabilityCurrent, clearForIdentityLoss, client])
+  }, [capabilityCurrent, clearForIdentityLoss, client, gate])
 
   useEffect(() => {
     void loadTodos()
     return () => {
-      todoRequestID.current += 1
+      gate.invalidate('todos')
     }
-  }, [loadTodos])
+  }, [gate, loadTodos])
 
-  const load = useCallback(async ({ append, cursor, snapshotID: requestedSnapshotID, resume }: FeedLoadOptions) => {
-    if (!capabilityCurrent('feed')) return
-    const request = ++requestID.current
+  // 返回本次请求的 token，让调用方可以在自己的 `then` 里问「我发出的那一次还算数吗」。
+  // 闸门没有「下一个代次」这种东西，预测 id 只会在别的请求插队时判断错人。
+  const load = useCallback(async ({ append, cursor, snapshotID: requestedSnapshotID, resume }: FeedLoadOptions): Promise<FeedRequestToken | null> => {
+    if (!capabilityCurrent('feed')) return null
+    const token = gate.begin('feed')
     if (append) setLoadingMore(true)
     else setLoading(true)
     setError(null)
 
-    const requestIsCurrent = () => request === requestID.current
     if (!identityIsCurrent(client)) {
       clearForIdentityLoss()
-      return
+      return token
     }
     try {
       const requestParams = {
@@ -575,15 +551,15 @@ export function FeedSurface({
         result = await client.getReaderFeed({ mode, source: sourceFilter, limit: FEED_PAGE_SIZE })
       }
 
-      if (!requestIsCurrent() || !capabilityCurrent('feed')) return
+      if (!gate.isSameOwner(token) || !capabilityCurrent('feed')) return token
       if (!identityIsCurrent(client)) {
         clearForIdentityLoss()
-        return
+        return token
       }
       if (!result.ok) {
         if (isIdentityError(result.error)) clearForIdentityLoss()
-        else setError(errorMessage(result.error))
-        return
+        else setError(readerErrorMessage(result.error))
+        return token
       }
 
       setFeedCapabilities(result.data.capabilities ?? [])
@@ -610,23 +586,24 @@ export function FeedSurface({
         setRenderedKey(scrollAnchorKey)
       }
     } catch (cause) {
-      if (requestIsCurrent()) {
+      if (gate.isSameOwner(token)) {
         if (!identityIsCurrent(client)) clearForIdentityLoss()
-        else setError(thrownErrorMessage(cause))
+        else setError(readerErrorMessage(cause))
       }
     } finally {
-      if (requestIsCurrent()) {
+      if (gate.isSameOwner(token)) {
         setLoading(false)
         setLoadingMore(false)
       }
     }
-  }, [capabilityCurrent, clearForIdentityLoss, client, commitState, mode, scrollAnchorKey, sourceFilter])
+    return token
+  }, [capabilityCurrent, clearForIdentityLoss, client, commitState, gate, mode, scrollAnchorKey, sourceFilter])
 
   useEffect(() => {
     if (!identityIsCurrent(client)) {
       clearForIdentityLoss()
       return () => {
-        requestID.current += 1
+        gate.invalidate('feed')
       }
     }
     const resume = readResume(client, mode, sourceFilter)
@@ -645,14 +622,14 @@ export function FeedSurface({
     setFeedSources([])
     if (sourceFilter.length === 0) {
       return () => {
-        requestID.current += 1
+        gate.invalidate('feed')
       }
     }
     void load({ append: false, snapshotID: resume?.snapshotID, resume: resume ?? undefined })
     return () => {
-      requestID.current += 1
+      gate.invalidate('feed')
     }
-  }, [clearForIdentityLoss, client, load, mode, sourceFilter])
+  }, [clearForIdentityLoss, client, gate, load, mode, sourceFilter])
 
   const selectMode = useCallback((nextMode: FeedMode) => {
     if (nextMode === mode) return
@@ -702,11 +679,10 @@ export function FeedSurface({
     retry()
   }, [retry, scrollAnchor])
 
-  useEffect(() => {
-    const onTodosChange = () => { void loadTodos() }
-    window.addEventListener(TODO_CHANGE_EVENT, onTodosChange)
-    return () => window.removeEventListener(TODO_CHANGE_EVENT, onTodosChange)
-  }, [loadTodos])
+  useEffect(
+    () => subscribeReaderEvents([READER_EVENTS.todosChanged], () => { void loadTodos() }),
+    [loadTodos],
+  )
 
   const loadMore = useCallback(() => {
     const cursor = cursorRef.current
@@ -733,7 +709,7 @@ export function FeedSurface({
         if (!requireIdentity() || !capabilityCurrent('engagement')) return
         if (!result.ok) {
           if (isIdentityError(result.error)) clearForIdentityLoss()
-          else setError(errorMessage(result.error))
+          else setError(readerErrorMessage(result.error))
           return
         }
         const read = result.data
@@ -746,7 +722,7 @@ export function FeedSurface({
           ? { ...candidate, read, read_later: readLater }
           : candidate)
         commitState(nextItems, snapshotRef.current, cursorRef.current)
-        emitSurfaceEvent(HOME_CHANGE_EVENT)
+        emitReaderEvent(READER_EVENTS.homeChanged)
         return
       }
 
@@ -755,14 +731,14 @@ export function FeedSurface({
         if (!requireIdentity() || !capabilityCurrent('engagement')) return
         if (!result.ok) {
           if (isIdentityError(result.error)) clearForIdentityLoss()
-          else setError(errorMessage(result.error))
+          else setError(readerErrorMessage(result.error))
           return
         }
         const nextItems = itemsRef.current.map((candidate) => candidate.key === item.key
           ? { ...candidate, read: result.data.read, read_later: result.data.read_later }
           : candidate)
         commitState(nextItems, snapshotRef.current, cursorRef.current)
-        emitSurfaceEvent(HOME_CHANGE_EVENT)
+        emitReaderEvent(READER_EVENTS.homeChanged)
         return
       }
 
@@ -770,7 +746,7 @@ export function FeedSurface({
       if (!requireIdentity() || !capabilityCurrent('engagement')) return
       if (!result.ok) {
         if (isIdentityError(result.error)) clearForIdentityLoss()
-        else setError(errorMessage(result.error))
+        else setError(readerErrorMessage(result.error))
         return
       }
       const read = result.data
@@ -783,9 +759,9 @@ export function FeedSurface({
         ? { ...candidate, read, read_later: readLater }
         : candidate)
       commitState(nextItems, snapshotRef.current, cursorRef.current)
-      emitSurfaceEvent(HOME_CHANGE_EVENT)
+      emitReaderEvent(READER_EVENTS.homeChanged)
     } catch (cause) {
-      if (requireIdentity()) setError(thrownErrorMessage(cause))
+      if (requireIdentity()) setError(readerErrorMessage(cause))
     } finally {
       if (identityIsCurrent(client)) markBusy(item.key, false)
       else clearForIdentityLoss()
@@ -806,7 +782,7 @@ export function FeedSurface({
         if (!requireIdentity() || !capabilityCurrent('inbox')) return
         if (!result.ok) {
           if (isIdentityError(result.error)) clearForIdentityLoss()
-          else setError(errorMessage(result.error))
+          else setError(readerErrorMessage(result.error))
           return
         }
         commitState(
@@ -814,7 +790,7 @@ export function FeedSurface({
           snapshotRef.current,
           cursorRef.current,
         )
-        emitSurfaceEvent(HOME_CHANGE_EVENT)
+        emitReaderEvent(READER_EVENTS.homeChanged)
         onOpenLink(result.data.link_id)
         return
       }
@@ -823,7 +799,7 @@ export function FeedSurface({
       if (!requireIdentity() || !capabilityCurrent('inbox')) return
       if (!result.ok) {
         if (isIdentityError(result.error)) clearForIdentityLoss()
-        else setError(errorMessage(result.error))
+        else setError(readerErrorMessage(result.error))
         return
       }
       commitState(
@@ -831,9 +807,9 @@ export function FeedSurface({
         snapshotRef.current,
         cursorRef.current,
       )
-      emitSurfaceEvent(HOME_CHANGE_EVENT)
+      emitReaderEvent(READER_EVENTS.homeChanged)
     } catch (cause) {
-      if (requireIdentity()) setError(thrownErrorMessage(cause))
+      if (requireIdentity()) setError(readerErrorMessage(cause))
     } finally {
       if (identityIsCurrent(client)) markBusy(item.key, false)
       else clearForIdentityLoss()
@@ -843,7 +819,9 @@ export function FeedSurface({
   const confirmPendingBatch = useCallback(async () => {
     if (!capabilityCurrent('inbox') || !hasFeedCapability(feedCapabilities, 'inbox_batch') || busyKeys.has(BATCH_CONFIRM_KEY)) return
     if (!requireIdentity()) return
-    const batchRequest = requestID.current
+    // 搭在当前 Feed 代次上：批处理不发 Feed 请求，只需要知道结束时读者是否还停在
+    // 同一份视图上——中途换了模式或来源筛选，这次刷新就不该再落地。
+    const batchToken = gate.capture('feed')
     let actionError: string | null = null
     markBusy(BATCH_CONFIRM_KEY, true)
     try {
@@ -852,7 +830,7 @@ export function FeedSurface({
         if (!requireIdentity() || !capabilityCurrent('inbox')) return
         if (!result.ok) {
           if (isIdentityError(result.error)) clearForIdentityLoss()
-          else actionError = errorMessage(result.error)
+          else actionError = readerErrorMessage(result.error)
           return
         }
         if (result.data.remaining_count === 0) return
@@ -862,15 +840,16 @@ export function FeedSurface({
         }
       }
     } catch (cause) {
-      if (requireIdentity()) actionError = thrownErrorMessage(cause)
+      if (requireIdentity()) actionError = readerErrorMessage(cause)
     } finally {
       if (identityIsCurrent(client)) {
         markBusy(BATCH_CONFIRM_KEY, false)
-        if (requestID.current === batchRequest) {
+        if (gate.isCurrent(batchToken)) {
           scrollAnchor.forget()
-          const refreshRequest = requestID.current + 1
-          void load({ append: false }).then(() => {
-            if (actionError && identityIsCurrent(client) && requestID.current === refreshRequest) {
+          // 错误文案要盖在这次刷新的结果上，而不是任何后来的请求上，所以问的是
+          // `load` 实际发出的那个 token 还算不算数。
+          void load({ append: false }).then((refreshToken) => {
+            if (actionError && refreshToken && gate.isCurrent(refreshToken)) {
               setError(actionError)
             }
           })
@@ -879,7 +858,7 @@ export function FeedSurface({
         clearForIdentityLoss()
       }
     }
-  }, [busyKeys, capabilityCurrent, clearForIdentityLoss, client, feedCapabilities, load, markBusy, requireIdentity, scrollAnchor])
+  }, [busyKeys, capabilityCurrent, clearForIdentityLoss, client, feedCapabilities, gate, load, markBusy, requireIdentity, scrollAnchor])
 
   const sendFeedback = useCallback(async (
     item: ReaderFeedItemResponse,
@@ -895,7 +874,7 @@ export function FeedSurface({
         ? withSavedFeedAction(candidate, action === 'save')
         : candidate)
     commitState(optimisticItems, snapshotRef.current, cursorRef.current)
-    emitSurfaceEvent(HOME_CHANGE_EVENT)
+    emitReaderEvent(READER_EVENTS.homeChanged)
     try {
       const itemKey = item.action_key?.trim() || item.key
       const result = await client.sendReaderFeedFeedback(itemKey, { action })
@@ -904,8 +883,8 @@ export function FeedSurface({
         if (isIdentityError(result.error)) clearForIdentityLoss()
         else {
           commitState(previousItems, snapshotRef.current, cursorRef.current)
-          emitSurfaceEvent(HOME_CHANGE_EVENT)
-          setError(errorMessage(result.error))
+          emitReaderEvent(READER_EVENTS.homeChanged)
+          setError(readerErrorMessage(result.error))
         }
         return
       }
@@ -915,12 +894,12 @@ export function FeedSurface({
           ? { ...withSavedFeedAction(candidate, result.data.saved), link_id: result.data.association?.link_id ?? candidate.link_id }
           : candidate)
       commitState(nextItems, snapshotRef.current, cursorRef.current)
-      emitSurfaceEvent(HOME_CHANGE_EVENT)
+      emitReaderEvent(READER_EVENTS.homeChanged)
     } catch (cause) {
       if (requireIdentity()) {
         commitState(previousItems, snapshotRef.current, cursorRef.current)
-        emitSurfaceEvent(HOME_CHANGE_EVENT)
-        setError(thrownErrorMessage(cause))
+        emitReaderEvent(READER_EVENTS.homeChanged)
+        setError(readerErrorMessage(cause))
       }
     } finally {
       if (identityIsCurrent(client)) markBusy(item.key, false)
@@ -960,28 +939,38 @@ export function FeedSurface({
     const canReject = supportsItemAction(item, 'not_interested')
     const canOpen = supportsOpen(item)
     const reasonExpanded = expandedReasonKey === item.key
+    const sourceLabel = feedSourceLabel(item, feedSources)
     const sectionLabel = feedSectionLabel(item, feedSections)
     const reasonText = feedReasonText(item)
     return (
-      <li key={feedResourceIdentity(item)} className="rvx-feed-card" data-feed-item-key={item.key} data-resource-key={feedResourceIdentity(item)}>
-        <div className="rvx-feed-card-top"><span className="rvx-source-chip">{feedSourceLabel(item, feedSources)}</span>{sectionLabel && sectionLabel !== feedSourceLabel(item, feedSources) && <span className="rvx-muted">分段：{sectionLabel}</span>}<button className="rvx-reason rvx-link-button" type="button" aria-label={`查看推荐原因：${reasonText}`} aria-expanded={reasonExpanded} onClick={() => setExpandedReasonKey((current) => current === item.key ? null : item.key)}><Icon name="explain" size={13} />{reasonText}</button></div>
-        {reasonExpanded && <p className="rvx-muted" role="note">推荐原因：{reasonText}（规则 {item.reason_code}）</p>}
-        {canOpen ? <button className="rvx-feed-title" type="button" onClick={() => openItem(item)}>{item.title || '未命名内容'}</button> : <strong className="rvx-feed-title">{item.title || '未命名内容'}</strong>}
-        <p>{item.summary || '没有摘要'}</p>
-        <div className="rvx-feed-card-foot">
-          <time dateTime={item.event_at}>{formatRelativeDate(item.event_at)}</time>
-          <div className="rvx-action-row">
-            {canRead && <button type="button" disabled={busy} title={item.read ? '标为未读' : '标为已读'} onClick={() => void patchEngagement(item, { read: !item.read })}><Icon name={item.read ? 'check' : 'dot'} size={15} />{item.read ? '已读' : '未读'}</button>}
-            {canReadLater && <button type="button" disabled={busy} title={item.read_later ? '移出稍后读' : '加入稍后读'} onClick={() => void patchEngagement(item, { read_later: !item.read_later })}><Icon name="clock" size={15} />{item.read_later ? '稍后' : '稍后读'}</button>}
-            {canConfirm && item.inbox_id && <button type="button" disabled={busy} title="确认并保存到阅读库" onClick={() => void resolveInbox(item, 'confirm')}><Icon name="check" size={15} />确认</button>}
-            {canDiscard && item.inbox_id && <button type="button" disabled={busy} title="丢弃该条目" onClick={() => void resolveInbox(item, 'discard')}><Icon name="trash" size={15} />丢弃</button>}
-            {canSave && <button type="button" disabled={busy} title={saveAction === 'save' ? '保存到阅读库' : '取消保存'} onClick={() => void sendFeedback(item, saveAction)}><Icon name="bookmark" size={15} />{saveAction === 'save' ? '保存' : '取消保存'}</button>}
-            {canHide && <button type="button" disabled={busy} title="从当前 Feed 隐藏" onClick={() => void sendFeedback(item, 'hide')}><Icon name="x" size={15} />隐藏</button>}
-            {canReject && <button type="button" disabled={busy} title="不再推荐此内容" onClick={() => void sendFeedback(item, 'not_interested')}><Icon name="close" size={15} />不感兴趣</button>}
-            {canOpen && <button type="button" className="rvx-open-action" disabled={busy} onClick={() => openItem(item)}><Icon name="arrowright" size={15} />{openActionLabel(item)}</button>}
-          </div>
-        </div>
-      </li>
+      <ReaderListRow
+        key={feedResourceIdentity(item)}
+        variant="feed"
+        // 行的公共布局已由 reader-list-row-feed 提供，`.rvx-feed-card*` 的样式规则
+        // 都已删除；这个 class 只剩三个 e2e spec 的定位钩子，等它们改掉再摘。
+        className="rvx-feed-card"
+        dataAttributes={{ 'data-feed-item-key': item.key, 'data-resource-key': feedResourceIdentity(item) }}
+        source={<span className="rvx-source-chip">{sourceLabel}</span>}
+        meta={<>
+          {sectionLabel && sectionLabel !== sourceLabel && <span className="rvx-muted">分段：{sectionLabel}</span>}
+          <button className="rvx-reason rvx-link-button" type="button" aria-label={`查看推荐原因：${reasonText}`} aria-expanded={reasonExpanded} onClick={() => setExpandedReasonKey((current) => current === item.key ? null : item.key)}><Icon name="explain" size={13} />{reasonText}</button>
+        </>}
+        title={item.title || '未命名内容'}
+        onOpen={canOpen ? () => openItem(item) : undefined}
+        summary={item.summary || '没有摘要'}
+        details={reasonExpanded ? <p className="rvx-muted" role="note">推荐原因：{reasonText}（规则 {item.reason_code}）</p> : undefined}
+        footer={<time dateTime={item.event_at}>{formatRelativeDate(item.event_at)}</time>}
+        actions={<div className="rvx-action-row">
+          {canRead && <button type="button" disabled={busy} title={item.read ? '标为未读' : '标为已读'} onClick={() => void patchEngagement(item, { read: !item.read })}><Icon name={item.read ? 'check' : 'dot'} size={15} />{item.read ? '已读' : '未读'}</button>}
+          {canReadLater && <button type="button" disabled={busy} title={item.read_later ? '移出稍后读' : '加入稍后读'} onClick={() => void patchEngagement(item, { read_later: !item.read_later })}><Icon name="clock" size={15} />{item.read_later ? '稍后' : '稍后读'}</button>}
+          {canConfirm && item.inbox_id && <button type="button" disabled={busy} title="确认并保存到阅读库" onClick={() => void resolveInbox(item, 'confirm')}><Icon name="check" size={15} />确认</button>}
+          {canDiscard && item.inbox_id && <button type="button" disabled={busy} title="丢弃该条目" onClick={() => void resolveInbox(item, 'discard')}><Icon name="trash" size={15} />丢弃</button>}
+          {canSave && <button type="button" disabled={busy} title={saveAction === 'save' ? '保存到阅读库' : '取消保存'} onClick={() => void sendFeedback(item, saveAction)}><Icon name="bookmark" size={15} />{saveAction === 'save' ? '保存' : '取消保存'}</button>}
+          {canHide && <button type="button" disabled={busy} title="从当前 Feed 隐藏" onClick={() => void sendFeedback(item, 'hide')}><Icon name="x" size={15} />隐藏</button>}
+          {canReject && <button type="button" disabled={busy} title="不再推荐此内容" onClick={() => void sendFeedback(item, 'not_interested')}><Icon name="close" size={15} />不感兴趣</button>}
+          {canOpen && <button type="button" className="rvx-open-action" disabled={busy} onClick={() => openItem(item)}><Icon name="arrowright" size={15} />{openActionLabel(item)}</button>}
+        </div>}
+      />
     )
   }
 

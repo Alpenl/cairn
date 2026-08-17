@@ -1,6 +1,7 @@
 import type { Annotation } from '../annotations'
 import { isValidLinkId, isValidSourceHash } from '../article/source-block'
 import type { IdentityLease } from '../identity'
+import { asRecord } from '../records'
 import {
   annotationFromAddDraft,
   annotationSignatureFields,
@@ -853,12 +854,6 @@ function writeAnnotationProjection(
 
 type ThoughtClockAllocationFailure = 'invalid-thought-clock' | 'thought-clock-exhausted'
 
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
-}
-
 /**
  * Allocates one or more clocks while the caller's annotation/outbox/projection
  * transaction is still open. Every readwrite transaction touches the shared
@@ -900,25 +895,25 @@ export function allocateThoughtClocks(
       abortTransaction(transaction)
       return
     }
-    const rawState = recordValue(stateRequest.result)
+    const rawState = asRecord(stateRequest.result)
     if (rawState && rawState.namespace !== namespace) {
       abortTransaction(transaction)
       return
     }
     const legacyOpIds = new Set(repairSourceRequest.result.flatMap((value) => {
-      const record = recordValue(value)
+      const record = asRecord(value)
       return record?.namespace === namespace && typeof record.legacyOpId === 'string'
         ? [record.legacyOpId]
         : []
     }))
     const liveOutboxRaw = outboxRequest.result.filter((value) => {
-      const opId = recordValue(value)?.opId
+      const opId = asRecord(value)?.opId
       return typeof opId !== 'string' || !legacyOpIds.has(opId)
     })
     const outbox = liveOutboxRaw.filter((value): value is ThoughtOutboxRecord =>
       isValidThoughtOutboxRecord(value, namespace))
     const repairReadyRaw = repairReadyRequest.result.filter((value) =>
-      recordValue(value)?.namespace === namespace)
+      asRecord(value)?.namespace === namespace)
     const repairReady = repairReadyRaw.filter((value): value is ThoughtOutboxRecord =>
       isValidThoughtOutboxRecord(value, namespace))
     const materialized = materializedRequest.result.filter((value): value is ThoughtMaterializedRecord =>
@@ -932,7 +927,7 @@ export function allocateThoughtClocks(
     const materializedByID = new Map(materialized.map((record) => [record.annotationId, record]))
     const historyOutbox: ThoughtHistoryOutboxRecord[] = []
     for (const value of historyOutboxRequest.result) {
-      const rawRecord = recordValue(value)
+      const rawRecord = asRecord(value)
       const winnerKey = typeof rawRecord?.annotationId === 'string'
         ? materializedByID.get(rawRecord.annotationId)?.winnerKey
         : undefined

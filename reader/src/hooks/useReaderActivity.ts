@@ -8,6 +8,7 @@ import { err, ok, type ApiError, type ApiResult } from '../lib/api/result'
 import type { LinkResponse, ReaderActivityResponse } from '../lib/api/types'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { resourceStore } from '../lib/cache/store'
+import { isRecord } from '../lib/records'
 import { useReaderClient } from './useReaderClient'
 
 const ACTIVITY_CACHE_PREFIX = 'GET /api/reader/activity'
@@ -80,10 +81,6 @@ function isActiveClient(client: IdentityBoundReaderClient | null): boolean {
 
 function isValidActivityTimestamp(value: string): boolean {
   return value.trim() !== '' && Number.isFinite(Date.parse(value))
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function firstValidTimestamp(...values: unknown[]): string {

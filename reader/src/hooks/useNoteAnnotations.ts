@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Annotation, AnnotationInput, AnnotationPatch } from '../lib/annotations'
 import type { IdentityLease } from '../lib/identity'
+import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../lib/reader-events'
 import {
   compactAnnotationOperations,
   commitAnnotationOperation,
@@ -122,12 +123,13 @@ export function useNoteAnnotations(
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') void refresh()
     }
-    window.addEventListener('webtag:annotations-change', onChange)
-    window.addEventListener('webtag:thoughts-sync', onChange)
+    const unsubscribe = subscribeReaderEvents(
+      [READER_EVENTS.annotationsChanged, READER_EVENTS.thoughtsSynced],
+      onChange,
+    )
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
-      window.removeEventListener('webtag:annotations-change', onChange)
-      window.removeEventListener('webtag:thoughts-sync', onChange)
+      unsubscribe()
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [refresh])
@@ -144,7 +146,7 @@ export function useNoteAnnotations(
     const outcome = commandResult(result.value, annotationId)
     if (outcome.status === 'op-id-conflict') return outcome
     await refresh()
-    window.dispatchEvent(new Event('webtag:annotations-change'))
+    emitReaderEvent(READER_EVENTS.annotationsChanged)
     void compactAnnotationOperations(lease, noteID, target)
     return outcome
   }, [generation, lease, noteID, refresh, target])

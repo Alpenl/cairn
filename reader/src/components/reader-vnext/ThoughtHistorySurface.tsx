@@ -40,8 +40,13 @@ import {
   type ThoughtSupersessionRecoveryState,
 } from '../../lib/user-data/thought-supersession'
 import type { ThoughtSupersessionEventRecord } from '../../lib/user-data/thought-types'
+import { useExclusiveAction } from '../../hooks/useExclusiveAction'
+import { useSurfaceRequestGate } from '../../hooks/useSurfaceRequestGate'
+import { asRecord } from '../../lib/records'
+import { READER_EVENTS, emitReaderEvent, subscribeReaderEvents } from '../../lib/reader-events'
+import { formatRelativeDate, identityIsCurrent, readerErrorMessage } from '../../lib/reader-surface'
 import { Icon } from '../Icon'
-import { SurfaceError, SurfaceLoading, SurfaceShell, errorMessage, formatRelativeDate } from './SurfaceShell'
+import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 import { NoteWorkspaceTabs } from './NoteWorkspaceTabs'
 
 export type ThoughtFilter = 'all' | 'highlighted' | 'with-thought' | 'todo'
@@ -69,10 +74,6 @@ function lifecycleReasonText(reason: string | null | undefined): string {
   return label ? `${label}（${normalized}）` : normalized
 }
 
-function thrownErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback
-}
-
 function historyActionFailureMessage(action: 'reattach' | 'delete', errorCode?: string): string {
   if (errorCode === 'superseded') {
     return '历史想法操作已被较新的服务端版本覆盖。冻结候选已保留，请刷新后重试。'
@@ -83,10 +84,6 @@ function historyActionFailureMessage(action: 'reattach' | 'delete', errorCode?: 
   return action === 'reattach'
     ? '想法重挂已保存在本地，将在同步恢复后重试。'
     : '想法删除已保存在本地，将在同步恢复后重试。'
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 }
 
 function hasHighlight(thought: ThoughtReadModelItem): boolean {
@@ -222,6 +219,12 @@ function mergeThoughts(
   return [...merged.values()]
 }
 
+/**
+ * `list` 覆盖列表读取与本地读模型投影（投影搭车于列表代次，不自己顶掉在途
+ * 列表请求）；`focused` 覆盖 deep-link 单条历史想法的补齐读取。
+ */
+type ThoughtRequestChannel = 'list' | 'focused'
+
 export interface ThoughtHistorySurfaceProps {
   readonly client: IdentityBoundReaderClient
   readonly lease: IdentityLease
@@ -255,16 +258,26 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
 	const [saving, setSaving] = useState(false)
-	const [deletingID, setDeletingID] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [recoveringSequence, setRecoveringSequence] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const requestID = useRef(0)
+  // owner 是身份租约：换租约即让所有在途 token 失效，旧命名空间的回包画不到新
+  // 身份上。authority 只管身份是否仍然当前；能力租约的 `isCurrent('history')`
+  // 由各操作用自己捕获的 operationLease 单独判断，语义与迁移前逐字一致。
+  const gate = useSurfaceRequestGate<ThoughtRequestChannel>({
+    owner: [lease],
+    authority: () => identityIsCurrent(client),
+  })
+  const deleting = useExclusiveAction<string>()
+  const { begin: beginDelete, clear: clearDeleting, finish: finishDelete, owns: ownsDelete } = deleting
+  const deletingBusy = deleting.busy
+  const deletingID = deleting.busyKey
   const loadingMoreRef = useRef(false)
-  const deletingIDRef = useRef<string | null>(null)
   const activeViewButtonRef = useRef<HTMLButtonElement | null>(null)
   const deleteButtonRefs = useRef(new Map<string, HTMLButtonElement>())
-  const focusedRequest = useRef<{ readonly client: IdentityBoundReaderClient; readonly thoughtID: string } | null>(null)
+  // 闸门只记得「有没有更新的请求」，不记得请求的是什么。补齐读取还需要一个
+  // 「同一 client + 同一 thoughtID 就不要再发一次」的去重键，由这个 ref 单独持有。
+  const focusedTargetRef = useRef<{ readonly client: IdentityBoundReaderClient; readonly thoughtID: string } | null>(null)
   const focusedThoughtIDRef = useRef(focusedThoughtID)
 
   useEffect(() => {
@@ -274,22 +287,20 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
   // Do not allow a previous identity's list or opaque next cursor to paint
   // while the replacement lease loads its own namespace.
   useLayoutEffect(() => {
-    requestID.current += 1
     setItems([])
     setTodos([])
     setNextCursor(undefined)
     setSelectedThoughtIDs([])
     setError(null)
     setLoading(true)
-    deletingIDRef.current = null
-    setDeletingID(null)
-    focusedRequest.current = null
-  }, [lease])
+    clearDeleting()
+    focusedTargetRef.current = null
+  }, [clearDeleting, lease])
 
   const requestNavigation = useCallback<ReaderNavigationRequest>((route, targets) => {
-    if (deletingIDRef.current !== null) return false
+    if (deletingBusy) return false
     return onNavigate(route, targets)
-  }, [onNavigate])
+  }, [deletingBusy, onNavigate])
 
   const restoreDeleteFocus = useCallback((thoughtID?: string) => {
     // 两个独立的失焦来源，都会把键盘用户丢在 <body> 上：
@@ -324,11 +335,12 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
 
   const refreshLocalProjection = useCallback(async () => {
     if (view !== 'live' || !lease.context?.physicalNamespace || !client.isIdentityCurrent()) return
-    const request = requestID.current
+    // 搭车于当前列表代次：投影是旁路读取，不该顶掉在途的 `load()`。
+    const token = gate.capture('list')
     const selected = await selectThoughtReadModel(lease)
-    if (!selected.ok || request !== requestID.current || !client.isIdentityCurrent()) return
+    if (!selected.ok || !gate.isCurrent(token)) return
     setItems(selected.value)
-  }, [client, lease, view])
+  }, [client, gate, lease, view])
 
   const visibleItems = useMemo(() => {
     const ordered = sortThoughtReadModel(items)
@@ -350,7 +362,7 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
       setLoading(false)
       return
     }
-    const request = ++requestID.current
+    const token = gate.begin('list')
     if (append) {
       loadingMoreRef.current = true
       setLoadingMore(true)
@@ -361,26 +373,26 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
     try {
       if (view === 'superseded') {
         const synced = await syncThoughtSupersessions(lease, client)
-        if (request !== requestID.current || !client.isIdentityCurrent()) return
+        if (!gate.isCurrent(token)) return
         if (synced.status === 'failed') {
           setError(synced.error ?? '被取代版本加载失败，请稍后重试。')
           return
         }
         if (synced.status === 'stale') return
         const events = await listThoughtSupersessionEvents(lease)
-        if (request !== requestID.current || !client.isIdentityCurrent()) return
+        if (!gate.isCurrent(token)) return
         if (!events.ok) {
           setError('无法读取被取代版本。')
           return
         }
         const availability = await readThoughtSupersessionRecoveryAvailability(lease, events.value)
-        if (request !== requestID.current || !client.isIdentityCurrent()) return
+        if (!gate.isCurrent(token)) return
         if (!availability.ok) {
           setError('无法确认被取代版本的当前锚点。')
           return
         }
         const recoveryStates = await readThoughtSupersessionRecoveryStates(lease, events.value)
-        if (request !== requestID.current || !client.isIdentityCurrent()) return
+        if (!gate.isCurrent(token)) return
         if (!recoveryStates.ok) {
           setError('无法确认恢复候选状态。')
           return
@@ -394,9 +406,9 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
       const thoughts = view === 'live'
         ? await client.listThoughts({ after: cursor, limit: 30 })
         : await client.listThoughtHistory({ after: cursor, limit: 30 })
-      if (request !== requestID.current || !client.isIdentityCurrent() || !operationLease.isCurrent('history')) return
+      if (!gate.isCurrent(token) || !operationLease.isCurrent('history')) return
       if (!thoughts.ok) {
-        setError(errorMessage(thoughts.error))
+        setError(readerErrorMessage(thoughts.error))
         return
       }
       let visibleThoughts: readonly ThoughtReadModelItem[] = thoughts.data.items
@@ -405,13 +417,13 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
       // operations survive a reload and then reapply the same overlay.
       if (view === 'live' && lease.context?.physicalNamespace) {
         const cached = await cacheServerThoughtPage(lease, thoughts.data.items)
-        if (request !== requestID.current || !client.isIdentityCurrent()) return
+        if (!gate.isCurrent(token)) return
         if (!cached.ok) {
           setError('无法保存想法本地读模型。')
           return
         }
         const selected = await selectThoughtReadModel(lease)
-        if (request !== requestID.current || !client.isIdentityCurrent()) return
+        if (!gate.isCurrent(token)) return
         if (!selected.ok) {
           setError('无法读取想法本地读模型。')
           return
@@ -420,8 +432,8 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
       }
       if (view === 'live' && operationLease.isCurrent('todos') && typeof client.listTodos === 'function') {
         const todoResult = await client.listTodos()
-        if (request !== requestID.current || !client.isIdentityCurrent() || !operationLease.isCurrent('history')) return
-        if (!todoResult.ok) setError(errorMessage(todoResult.error))
+        if (!gate.isCurrent(token) || !operationLease.isCurrent('history')) return
+        if (!todoResult.ok) setError(readerErrorMessage(todoResult.error))
         else setTodos(todoResult.data.items)
       } else if (!append) {
         setTodos([])
@@ -443,17 +455,18 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
       }
       setNextCursor(thoughts.data.next_cursor)
     } catch (requestError) {
-      if (request === requestID.current && client.isIdentityCurrent()) {
-        setError(thrownErrorMessage(requestError, view === 'live' ? '想法加载失败，请稍后重试。' : '历史想法加载失败，请稍后重试。'))
+      if (gate.isCurrent(token)) {
+        setError(readerErrorMessage(requestError, view === 'live' ? '想法加载失败，请稍后重试。' : '历史想法加载失败，请稍后重试。'))
       }
     } finally {
-      if (request === requestID.current) {
+      // 释放自己占住的 loading 用 isSameOwner：身份刚被撤销时也必须收掉转圈。
+      if (gate.isSameOwner(token)) {
         setLoading(false)
         loadingMoreRef.current = false
         setLoadingMore(false)
       }
     }
-  }, [capabilityLease, client, lease, view])
+  }, [capabilityLease, client, gate, lease, view])
 
   useEffect(() => {
     setItems([])
@@ -465,8 +478,8 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
     void load()
     // A durable offline thought can predate this surface and its event listener.
     void refreshLocalProjection()
-    return () => { requestID.current += 1 }
-  }, [load, refreshLocalProjection])
+    return () => { gate.invalidate('list') }
+  }, [gate, load, refreshLocalProjection])
 
   useEffect(() => {
     if (!capabilityPolicy.todos && filter === 'todo') setFilter('all')
@@ -479,14 +492,10 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
     }
   }, [capabilityPolicy.inbox, capabilityPolicy.notes, capabilityPolicy.todos, filter, targetKind])
 
-  useEffect(() => {
-    window.addEventListener('webtag:annotations-change', refreshLocalProjection)
-    window.addEventListener('webtag:thoughts-sync', refreshLocalProjection)
-    return () => {
-      window.removeEventListener('webtag:annotations-change', refreshLocalProjection)
-      window.removeEventListener('webtag:thoughts-sync', refreshLocalProjection)
-    }
-  }, [refreshLocalProjection])
+  useEffect(() => subscribeReaderEvents(
+    [READER_EVENTS.annotationsChanged, READER_EVENTS.thoughtsSynced],
+    () => { void refreshLocalProjection() },
+  ), [refreshLocalProjection])
 
   useEffect(() => {
     const onPopState = () => {
@@ -507,16 +516,15 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
     const operationLease = capabilityLease
     if (view !== 'history' || !focusedThoughtID || items.some((item) => item.id === focusedThoughtID) ||
       !operationLease.isCurrent('history')) return
-    if (focusedRequest.current?.client === client && focusedRequest.current.thoughtID === focusedThoughtID) return
+    if (focusedTargetRef.current?.client === client && focusedTargetRef.current.thoughtID === focusedThoughtID) return
 
-    const request = { client, thoughtID: focusedThoughtID }
-    focusedRequest.current = request
-    let active = true
+    const target = { client, thoughtID: focusedThoughtID }
+    focusedTargetRef.current = target
+    const token = gate.begin('focused')
     void client.getThought(focusedThoughtID).then((result) => {
-      if (!active || focusedRequest.current !== request || !client.isIdentityCurrent() ||
-        !operationLease.isCurrent('history')) return
+      if (!gate.isCurrent(token) || !operationLease.isCurrent('history')) return
       if (!result.ok) {
-        setError(errorMessage(result.error))
+        setError(readerErrorMessage(result.error))
         return
       }
       if (result.data.id !== focusedThoughtID) return
@@ -526,22 +534,21 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
       }
       setItems((current) => mergeThoughts(current, [result.data]))
     }).catch((requestError: unknown) => {
-      if (active && focusedRequest.current === request && client.isIdentityCurrent() &&
-        operationLease.isCurrent('history')) {
-        setError(thrownErrorMessage(requestError, '历史想法加载失败，请稍后重试。'))
+      if (gate.isCurrent(token) && operationLease.isCurrent('history')) {
+        setError(readerErrorMessage(requestError, '历史想法加载失败，请稍后重试。'))
       }
     })
     return () => {
-      active = false
-      if (focusedRequest.current === request) focusedRequest.current = null
+      gate.invalidate('focused')
+      if (focusedTargetRef.current === target) focusedTargetRef.current = null
     }
-  }, [capabilityLease, client, focusedThoughtID, items, view])
+  }, [capabilityLease, client, focusedThoughtID, gate, items, view])
 
   const changeView = useCallback((nextView: ReaderThoughtView) => {
-    if (nextView === view || deletingIDRef.current !== null) return
+    if (nextView === view || deletingBusy) return
     if (requestNavigation({ kind: 'tool', id: 'history' }, { thoughtView: nextView }) === false) return
     setView(nextView)
-  }, [requestNavigation, view])
+  }, [deletingBusy, requestNavigation, view])
 
   const loadMore = useCallback(() => {
     if (!nextCursor || loadingMoreRef.current || loading || saving || creating) return
@@ -571,7 +578,7 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
       })
       if (!client.isIdentityCurrent() || !operationLease.isCurrent('history') || !operationLease.isCurrent('notes')) return
       if (!result.ok) {
-        setError(errorMessage(result.error))
+        setError(readerErrorMessage(result.error))
         return
       }
       if (result.data.id) {
@@ -579,7 +586,7 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
         navigateToNote(requestNavigation, result.data.id)
       }
     } catch (requestError) {
-      if (client.isIdentityCurrent()) setError(thrownErrorMessage(requestError, '笔记创建失败，请稍后重试。'))
+      if (client.isIdentityCurrent()) setError(readerErrorMessage(requestError, '笔记创建失败，请稍后重试。'))
     } finally {
       setCreating(false)
     }
@@ -620,7 +627,7 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
         setError('无法保存重挂操作，请稍后重试。')
         return
       }
-      window.dispatchEvent(new Event('webtag:thoughts-sync-request'))
+      emitReaderEvent(READER_EVENTS.thoughtsSyncRequested)
       const synced = await getThoughtSyncController(lease, client).sync()
       if (!client.isIdentityCurrent() || !operationLease.isCurrent('history')) return
       if (synced.status === 'failed') {
@@ -636,7 +643,7 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
         setTargetRevision('')
       }
     } catch (requestError) {
-      if (client.isIdentityCurrent()) setError(thrownErrorMessage(requestError, '想法重挂失败，请稍后重试。'))
+      if (client.isIdentityCurrent()) setError(readerErrorMessage(requestError, '想法重挂失败，请稍后重试。'))
     } finally {
       setSaving(false)
     }
@@ -644,11 +651,12 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
 
   const deleteThought = useCallback(async (thought: ThoughtReadModelItem) => {
     const operationLease = capabilityLease
-    if (!operationLease.isCurrent('history') || deletingIDRef.current !== null || saving || creating) return
+    if (!operationLease.isCurrent('history') || saving || creating) return
     const currentIndex = visibleItems.findIndex((item) => item.id === thought.id)
     const nextFocusID = visibleItems[currentIndex + 1]?.id ?? visibleItems[currentIndex - 1]?.id
-    deletingIDRef.current = thought.id
-    setDeletingID(thought.id)
+    // 单飞：拿不到 token 说明已有删除在进行，本次直接放弃。
+    const token = beginDelete(thought.id)
+    if (!token) return
     setError(null)
     let removed = false
     try {
@@ -679,7 +687,7 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
         setError('无法保存删除操作，请稍后重试。')
         return
       }
-      window.dispatchEvent(new Event('webtag:thoughts-sync-request'))
+      emitReaderEvent(READER_EVENTS.thoughtsSyncRequested)
       const synced = await getThoughtSyncController(lease, client).sync()
       if (!client.isIdentityCurrent() || !operationLease.isCurrent('history')) return
       if (synced.status === 'failed') {
@@ -695,16 +703,17 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
       }
     } catch (requestError) {
       if (client.isIdentityCurrent()) {
-        setError(thrownErrorMessage(requestError, '想法删除失败，请稍后重试。'))
+        setError(readerErrorMessage(requestError, '想法删除失败，请稍后重试。'))
       }
     } finally {
-      if (deletingIDRef.current === thought.id) {
-        deletingIDRef.current = null
-        setDeletingID(null)
+      // 只有仍然持有这次删除的调用才收回 busy 并把焦点还给列表；被 clear()
+      // 顶掉的旧 finally 不能抢走新一次删除的焦点落点。
+      if (ownsDelete(token)) {
+        finishDelete(token)
         restoreDeleteFocus(removed ? nextFocusID : thought.id)
       }
     }
-  }, [capabilityLease, client, creating, lease, load, restoreDeleteFocus, saving, view, visibleItems])
+  }, [beginDelete, capabilityLease, client, creating, finishDelete, lease, load, ownsDelete, restoreDeleteFocus, saving, view, visibleItems])
 
   const recover = useCallback(async (event: ThoughtSupersessionEventRecord) => {
     if (recoveringSequence !== null) return
@@ -732,12 +741,12 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
         setError('恢复候选与本地操作冲突，请刷新后重试。')
         return
       }
-      window.dispatchEvent(new Event('webtag:thoughts-sync-request'))
+      emitReaderEvent(READER_EVENTS.thoughtsSyncRequested)
       if (recovery.status === 'committed') {
         await load()
       }
     } catch (recoveryError) {
-      if (client.isIdentityCurrent()) setError(thrownErrorMessage(recoveryError, '恢复版本失败，请稍后重试。'))
+      if (client.isIdentityCurrent()) setError(readerErrorMessage(recoveryError, '恢复版本失败，请稍后重试。'))
     } finally {
       setRecoveringSequence(null)
     }
@@ -756,7 +765,7 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
       subtitle={subtitle}
       activeRoute={{ kind: 'tool', id: 'history' }}
       onNavigate={requestNavigation}
-      onBeforeNavigate={() => deletingIDRef.current === null}
+      onBeforeNavigate={() => !deletingBusy}
       capabilityPolicy={capabilityPolicy}
       actions={(
         <>

@@ -7,6 +7,7 @@
  */
 
 import { isLinkResponse } from '@webtag/api'
+import { isRecord } from '../records'
 import { isValidThoughtIdentifier } from '../user-data/thought-types'
 
 /** The largest archive the browser is allowed to buffer and validate. */
@@ -151,10 +152,6 @@ function archiveTooLarge(): never {
     '归档超过浏览器可验证的 64 MiB 上限',
     ARCHIVE_V2_TOO_LARGE_ERROR_CODE,
   )
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** Uint8Array values may originate from another browser realm. */

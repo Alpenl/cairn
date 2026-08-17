@@ -417,7 +417,7 @@ describe('SubsView', () => {
     expect(screen.getByText('稍后读')).toBeInTheDocument()
     expect(screen.getAllByText('技术').length).toBeGreaterThan(0)
     expect(
-      await screen.findByRole('heading', { level: 3, name: '可靠的订阅实现' }),
+      await screen.findByRole('button', { name: '打开 可靠的订阅实现' }),
     ).toBeInTheDocument()
   })
 
@@ -440,7 +440,7 @@ describe('SubsView', () => {
     const { container } = renderView(client)
 
     expect(
-      await screen.findByRole('heading', { level: 3, name: '可靠的订阅实现' }),
+      await screen.findByRole('button', { name: '打开 可靠的订阅实现' }),
     ).toBeInTheDocument()
     expect(getFeedItem).not.toHaveBeenCalled()
     expect(container.querySelector('.rss-workspace')).not.toHaveClass('rss-mobile-detail')

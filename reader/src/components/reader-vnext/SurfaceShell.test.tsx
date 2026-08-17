@@ -2,7 +2,8 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { enabledReaderCapabilityPolicy } from '../../test/capabilities'
-import { navigateReaderTarget, SurfaceShell } from './SurfaceShell'
+import { navigateReaderTarget } from '../../lib/reader-surface'
+import { SurfaceShell } from './SurfaceShell'
 
 describe('SurfaceShell', () => {
   it('does not replace the URL when the navigation callback rejects a target', () => {

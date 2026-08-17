@@ -1,9 +1,11 @@
 import { useCallback, useMemo, type ReactNode, type RefObject } from 'react'
 import { Icon } from '../Icon'
-import { type ReaderNavigationRequest, type ReaderRoute, type ReaderRouteTargets } from '../../lib/navigation/route'
-import type { ReaderTodoPatchRequest, ReaderTodoResponse } from '../../lib/api/types'
+import { type ReaderRoute } from '../../lib/navigation/route'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
 import { SurfaceNav } from './SurfaceNav'
+
+// 非组件工具全部住在 lib/reader-surface.ts，本文件只留组件——过渡期的
+// re-export 与它带来的 react-refresh 例外都已经删掉。
 
 export interface SurfaceShellProps {
   readonly title: string
@@ -19,24 +21,6 @@ export interface SurfaceShellProps {
   /** Surfaces that persist a scroll position need the shell's scroller itself. */
   readonly scrollRef?: RefObject<HTMLDivElement>
   readonly workspaceClassName?: string
-}
-
-export const SURFACE_IDENTITY_ERROR = 'Reader 身份已失效，请重新连接。'
-
-// Keep the surface boundary tolerant of the small client doubles used by
-// older embedded hosts while still failing closed for a revoked lease.
-// eslint-disable-next-line react-refresh/only-export-components
-export function identityIsCurrent(client: { readonly isIdentityCurrent?: () => boolean }): boolean {
-  try {
-    return typeof client.isIdentityCurrent !== 'function' || client.isIdentityCurrent()
-  } catch {
-    return false
-  }
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function isIdentityError(value: unknown): boolean {
-  return typeof value === 'object' && value !== null && (value as { readonly kind?: unknown }).kind === 'identity-mismatch'
 }
 
 export function SurfaceShell({
@@ -106,27 +90,6 @@ export function SurfaceShell({
   )
 }
 
-/** Build a patch from the user's desired done state, preserving the host CAS boundary. */
-// eslint-disable-next-line react-refresh/only-export-components
-export function todoDesiredStatePatch(todo: ReaderTodoResponse, done: boolean): ReaderTodoPatchRequest | null {
-  if (todo.origin_kind === 'standalone') return { done }
-  if (!Number.isSafeInteger(todo.host_revision) || todo.host_revision < 0) return null
-  return { done, expected_host_revision: todo.host_revision }
-}
-
-// Keep a source target in the URL when a surface delegates navigation to the
-// legacy app shell. The route callback changes the rendered surface; the
-// replace plus popstate carries the exact resource identity to MainView.
-// eslint-disable-next-line react-refresh/only-export-components
-export function navigateReaderTarget(
-  route: ReaderRoute,
-  onNavigate: ReaderNavigationRequest,
-  targets: ReaderRouteTargets = {},
-): void {
-  if (Object.keys(targets).length === 0) onNavigate(route)
-  else onNavigate(route, targets)
-}
-
 export function SurfaceError({ message, onRetry }: { readonly message: string; readonly onRetry?: () => void }) {
   return (
     <div className="rvx-message rvx-message-error" role="alert">
@@ -139,22 +102,4 @@ export function SurfaceError({ message, onRetry }: { readonly message: string; r
 
 export function SurfaceLoading() {
   return <div className="rvx-message" aria-busy="true"><Icon name="loader" size={18} /><span>加载中</span></div>
-}
-
-// Shared by the surface components; keeping these small helpers beside the
-// shell avoids a second utility module for a single Reader surface family.
-// eslint-disable-next-line react-refresh/only-export-components
-export function formatRelativeDate(value: string | null | undefined): string {
-  if (!value) return '暂无时间'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '暂无时间'
-  return new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function errorMessage(error: { readonly message: string; readonly status?: number }): string {
-  if (error.status === 409) return '内容已经被其他窗口更新，请刷新后重试。'
-  if (error.status === 412) return '版本已经变化，请刷新后重试。'
-  if (error.status === 403) return '当前身份没有执行此操作的权限。'
-  return error.message || '请求失败，请稍后重试。'
 }

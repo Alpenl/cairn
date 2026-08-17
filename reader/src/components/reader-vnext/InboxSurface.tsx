@@ -12,11 +12,16 @@ import type {
 import type { ReaderRoute } from '../../lib/navigation/route'
 import type { TocHeading } from '../../lib/toc'
 import { useReaderToc } from '../../hooks/useReaderToc'
+import { useExclusiveAction } from '../../hooks/useExclusiveAction'
+import { useSurfaceRequestGate, type SurfaceRequestToken } from '../../hooks/useSurfaceRequestGate'
 import { NO_ANNOTATIONS } from '../../lib/annotations'
+import { formatRelativeDate, readerErrorMessage } from '../../lib/reader-surface'
 import { Icon, type IconName } from '../Icon'
 import { PlainTextView } from '../PlainTextView'
 import { ArticleOutline } from '../detail/ArticleOutline'
-import { SurfaceError, SurfaceLoading, SurfaceShell, formatRelativeDate, errorMessage } from './SurfaceShell'
+import { ReaderDialog } from '../ui/ReaderDialog'
+import { ReaderPreviewCard } from '../ui/ReaderPreviewCard'
+import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 import { refreshPendingInboxCount } from './PendingInboxCount'
 
 export interface InboxSurfaceProps {
@@ -191,16 +196,38 @@ interface InboxDraft extends InboxDraftFields {
   readonly conflict: boolean
 }
 
-interface InboxActionOwner {
-  readonly client: IdentityBoundReaderClient
-  readonly initialInboxID: string | undefined
-  readonly scopeGeneration: number
-  readonly surfaceOwnerGeneration: number
+/**
+ * 请求通道。分页按分区各占一条：切到「已过期」不该顶掉「活跃」的在途请求。
+ * `mutation` 是所有写操作共用的身份/目标快照通道——写操作之间由
+ * `useExclusiveAction` 单飞互斥，通道本身只回答「这次写还属于当前 owner 吗」。
+ */
+type InboxRequestChannel =
+  | 'page:active'
+  | 'page:expired'
+  | 'aggregate'
+  | 'target'
+  | 'mutation'
+  | `category:${string}`
+
+type InboxRequestToken = SurfaceRequestToken<InboxRequestChannel>
+
+/** 单飞写操作的键；同一时刻只有一个能持有。 */
+type InboxActionKey =
+  | 'create'
+  | 'save'
+  | 'confirm'
+  | 'discard'
+  | 'restore'
+  | 'bulk'
+  | 'confirm-ai'
+  | 'resummarize'
+
+function inboxPageChannel(partition: ReaderInboxPartition): InboxRequestChannel {
+  return partition === 'expired' ? 'page:expired' : 'page:active'
 }
 
-interface InboxTargetLoadOwner extends InboxActionOwner {
-  readonly inboxID: string
-  readonly requestGeneration: number
+function inboxCategoryChannel(inboxID: string, categoryID: string): InboxRequestChannel {
+  return `category:${inboxID}:${categoryID}`
 }
 
 function draftFieldsFromInbox(item: ReaderInboxResponse): InboxDraftFields {
@@ -302,30 +329,34 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   const [newCategory, setNewCategory] = useState('')
   const [membershipsByInbox, setMembershipsByInbox] = useState<Record<string, Set<string>>>({})
   const [loadingTarget, setLoadingTarget] = useState(false)
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<ReaderInboxJobResponse | null>(null)
   const [bulkResult, setBulkResult] = useState<InboxBulkResult | null>(null)
-  const categoryRequestGenerationsRef = useRef(new Map<string, number>())
-  const loadScopeGenerationRef = useRef(0)
-  const loadRequestGenerationRef = useRef<Record<ReaderInboxPartition, number>>({ active: 0, expired: 0 })
-  const aggregateRequestGenerationRef = useRef(0)
+  // 谁在发请求：这块 Surface 的身份 = client + 深链目标。两者任一变化，此前取出
+  // 的所有 token 立即失效，旧命名空间的回包画不到新身份上。
+  const gate = useSurfaceRequestGate<InboxRequestChannel>({
+    owner: [client, initialInboxID],
+    authority: () => client.isIdentityCurrent(),
+  })
+  const inboxAction = useExclusiveAction<InboxActionKey>()
+  const {
+    busy: saving,
+    begin: beginInboxAction,
+    finish: finishInboxAction,
+    clear: clearInboxAction,
+  } = inboxAction
+  // 「已应用聚合代次」的下界：迟到的旧聚合不能覆盖已经画上的新计数。
   const aggregateAppliedGenerationRef = useRef(0)
-  const listItemRequestGenerationRef = useRef(0)
+  // 每个列表行「已应用代次」的下界：CAS 重读之后拒绝更旧的列表行。
   const listItemAppliedGenerationRef = useRef(new Map<string, number>())
   const inboxLifecycleGenerationRef = useRef(0)
   // CAS rereads may run in bulk, so each Inbox item needs an independent token.
   const inboxRefreshGenerationsRef = useRef(new Map<string, number>())
   const inboxOperationGenerationRef = useRef(0)
-  const inboxOwnerClientRef = useRef(client)
-  const inboxOwnerTargetRef = useRef(initialInboxID)
-  const inboxSurfaceOwnerGenerationRef = useRef(0)
-  const inboxMountedRef = useRef(false)
-  const inboxSavingGenerationRef = useRef(0)
-  const inboxTargetLoadGenerationRef = useRef(0)
   const inboxDataClientRef = useRef(client)
   const detailScrollRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLTextAreaElement>(null)
+  const createUrlRef = useRef<HTMLInputElement>(null)
 
   const partitionRef = useRef(partition)
   const page = inboxPages[partition]
@@ -438,69 +469,13 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     inboxOperationGenerationRef.current += 1
   }, [selected?.id])
 
+  // 换 client 或换深链目标就是换 owner：在途写操作的 busy 归零（旧 token 从此
+  // 不再持有，它的 finally 不会误放行新 owner 的 busy），CAS 重读代次重置。
   useLayoutEffect(() => {
-    inboxMountedRef.current = true
-    return () => {
-      inboxMountedRef.current = false
-    }
-  }, [])
-
-  useLayoutEffect(() => {
-    inboxOwnerClientRef.current = client
-    inboxOwnerTargetRef.current = initialInboxID
-    inboxSurfaceOwnerGenerationRef.current += 1
     inboxOperationGenerationRef.current += 1
-    inboxSavingGenerationRef.current += 1
-    categoryRequestGenerationsRef.current.clear()
     inboxRefreshGenerationsRef.current.clear()
-    setSaving(false)
-  }, [client, initialInboxID])
-
-  const captureActionOwner = useCallback((): InboxActionOwner | null => {
-    if (!client.isIdentityCurrent()) return null
-    return {
-      client,
-      initialInboxID,
-      scopeGeneration: loadScopeGenerationRef.current,
-      surfaceOwnerGeneration: inboxSurfaceOwnerGenerationRef.current,
-    }
-  }, [client, initialInboxID])
-
-  const isCurrentActionOwner = useCallback((owner: InboxActionOwner): boolean =>
-    owner.client === inboxOwnerClientRef.current &&
-    owner.initialInboxID === inboxOwnerTargetRef.current &&
-    owner.scopeGeneration === loadScopeGenerationRef.current &&
-    owner.surfaceOwnerGeneration === inboxSurfaceOwnerGenerationRef.current &&
-    owner.client.isIdentityCurrent(), [])
-
-  // This deliberately excludes identity-currentness. It is only for releasing
-  // state owned by the same mounted surface after an identity-revoked result;
-  // response writes still require isCurrentActionOwner above.
-  const isSameMountedActionOwner = useCallback((owner: InboxActionOwner): boolean =>
-    inboxMountedRef.current &&
-    owner.client === inboxOwnerClientRef.current &&
-    owner.initialInboxID === inboxOwnerTargetRef.current &&
-    owner.scopeGeneration === loadScopeGenerationRef.current &&
-    owner.surfaceOwnerGeneration === inboxSurfaceOwnerGenerationRef.current, [])
-
-  const isCurrentTargetLoadOwner = useCallback((owner: InboxTargetLoadOwner): boolean =>
-    isSameMountedActionOwner(owner) &&
-    owner.requestGeneration === inboxTargetLoadGenerationRef.current, [isSameMountedActionOwner])
-
-  const beginSavingForOwner = useCallback((): number => {
-    const generation = ++inboxSavingGenerationRef.current
-    setSaving(true)
-    return generation
-  }, [])
-
-  const finishSavingForOwner = useCallback((owner: InboxActionOwner, generation: number) => {
-    if (
-      isSameMountedActionOwner(owner) &&
-      inboxSavingGenerationRef.current === generation
-    ) {
-      setSaving(false)
-    }
-  }, [isSameMountedActionOwner])
+    clearInboxAction()
+  }, [clearInboxAction, client, initialInboxID])
 
   const advanceInboxLifecycle = useCallback((inboxIDs: readonly string[] = []) => {
     inboxLifecycleGenerationRef.current += 1
@@ -520,11 +495,12 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     target: ReaderInboxPartition = partitionRef.current,
     append = false,
     cursor?: string,
-    scopeGeneration = loadScopeGenerationRef.current,
   ) => {
-    const requestGeneration = ++loadRequestGenerationRef.current[target]
-    const aggregateRequestGeneration = ++aggregateRequestGenerationRef.current
-    const itemRequestGeneration = ++listItemRequestGenerationRef.current
+    const pageToken = gate.begin(inboxPageChannel(target))
+    // 聚合与列表行用 token 的全局取号做「已应用代次」的总序判断：分区不同的两次
+    // 加载也必须能互相比较先后。
+    const aggregateRequestGeneration = gate.begin('aggregate').sequence
+    const itemRequestGeneration = pageToken.sequence
     const lifecycleGeneration = inboxLifecycleGenerationRef.current
     const refreshGenerations = new Map(inboxRefreshGenerationsRef.current)
     updateInboxPage(target, (current) => ({
@@ -540,9 +516,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         append ? Promise.resolve(null) : client.listCategories(),
       ])
       if (
-        !client.isIdentityCurrent() ||
-        loadScopeGenerationRef.current !== scopeGeneration ||
-        loadRequestGenerationRef.current[target] !== requestGeneration ||
+        !gate.isCurrent(pageToken) ||
         inboxLifecycleGenerationRef.current !== lifecycleGeneration
       ) return
       if (!inboxResult.ok) {
@@ -551,7 +525,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
           loaded: true,
           loading: false,
           loadingMore: false,
-          error: errorMessage(inboxResult.error),
+          error: readerErrorMessage(inboxResult.error),
         }))
       }
       else {
@@ -591,26 +565,21 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
           setSelectedID((current) => requested?.id ?? current ?? mergedItems[0]?.id ?? null)
         }
       }
-      if (categoryResult && !categoryResult.ok) setError(errorMessage(categoryResult.error))
+      if (categoryResult && !categoryResult.ok) setError(readerErrorMessage(categoryResult.error))
       else if (categoryResult?.ok) setCategories(categoryResult.data.items)
     } finally {
-      if (
-        loadScopeGenerationRef.current === scopeGeneration &&
-        loadRequestGenerationRef.current[target] === requestGeneration
-      ) {
+      // 释放自己置上的 loading 不看身份：身份刚被撤销时这段代码仍然必须能把
+      // 加载态收掉，否则界面永远停在加载中。它仍然检查 owner 与代次。
+      if (gate.isSameOwner(pageToken)) {
         updateInboxPage(target, (current) => ({ ...current, loading: false, loadingMore: false }))
       }
     }
-  }, [client, initialInboxID, updateInboxPage, updatePartitionAndEvictOther])
+  }, [client, gate, initialInboxID, updateInboxPage, updatePartitionAndEvictOther])
 
   useLayoutEffect(() => {
     const clientChanged = inboxDataClientRef.current !== client
     inboxDataClientRef.current = client
-    const scopeGeneration = ++loadScopeGenerationRef.current
-    loadRequestGenerationRef.current = { active: 0, expired: 0 }
-    aggregateRequestGenerationRef.current = 0
     aggregateAppliedGenerationRef.current = 0
-    listItemRequestGenerationRef.current = 0
     listItemAppliedGenerationRef.current.clear()
     if (clientChanged) {
       partitionRef.current = 'active'
@@ -637,13 +606,12 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         },
       }))
     }
+    // owner 变化本身已经让旧 token 失效；这里再作废一次，让「同一个 owner 下
+    // effect 被重跑」（StrictMode、卸载）也不会有在途请求活到下一段生命周期。
     return () => {
-      if (loadScopeGenerationRef.current === scopeGeneration) {
-        loadScopeGenerationRef.current += 1
-        loadRequestGenerationRef.current = { active: 0, expired: 0 }
-      }
+      gate.invalidateAll()
     }
-  }, [client, initialInboxID])
+  }, [client, gate, initialInboxID])
 
   useEffect(() => {
     partitionRef.current = partition
@@ -658,21 +626,12 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       setLoadingTarget(false)
       return
     }
-    let active = true
-    const owner: InboxTargetLoadOwner = {
-      client,
-      initialInboxID,
-      scopeGeneration: loadScopeGenerationRef.current,
-      surfaceOwnerGeneration: inboxSurfaceOwnerGenerationRef.current,
-      inboxID: initialInboxID,
-      requestGeneration: ++inboxTargetLoadGenerationRef.current,
-    }
-    const ownsTargetLoad = () => active && isCurrentTargetLoadOwner(owner)
+    const targetToken = gate.begin('target')
     setLoadingTarget(true)
     void client.getInbox(initialInboxID).then((result) => {
-      if (!ownsTargetLoad() || !client.isIdentityCurrent()) return
+      if (!gate.isCurrent(targetToken)) return
       if (!result.ok) {
-        setError(errorMessage(result.error))
+        setError(readerErrorMessage(result.error))
         return
       }
       const target: ReaderInboxPartition = result.data.expired ? 'expired' : 'active'
@@ -686,10 +645,12 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       setPartition(target)
       setSelectedID(result.data.id)
     }).finally(() => {
-      if (ownsTargetLoad()) setLoadingTarget(false)
+      if (gate.isSameOwner(targetToken)) setLoadingTarget(false)
     })
-    return () => { active = false }
-  }, [advanceInboxLifecycle, client, initialInboxID, isCurrentTargetLoadOwner, items, loading, updatePartitionAndEvictOther])
+    // effect 重跑（含走到上面提前返回那一支）先跑这段 cleanup，在途的目标读取
+    // 就此作废——否则条目已经出现在列表里之后，迟到的回包还会把选中项拽回去。
+    return () => { gate.invalidate('target') }
+  }, [advanceInboxLifecycle, client, gate, initialInboxID, items, loading, updatePartitionAndEvictOther])
 
   useEffect(() => {
     const pendingIDs = new Set(pendingItems.map((item) => item.id))
@@ -744,7 +705,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       const result = await client.getInboxJob(jobID)
       if (!active || !client.isIdentityCurrent()) return
       if (!result.ok) {
-        setError(errorMessage(result.error))
+        setError(readerErrorMessage(result.error))
         return
       }
       setJob(result.data)
@@ -761,7 +722,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
           upsertAuthoritativeInbox(refreshed.data)
           setDrafts((current) => mergeDraftsAfterServerRefresh(current, [refreshed.data]))
         }
-        else setError(errorMessage(refreshed.error))
+        else setError(readerErrorMessage(refreshed.error))
         return
       }
       if (result.data.status === 'failed') {
@@ -779,13 +740,13 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
 
   const refreshConflictRevision = useCallback(async (
     item: ReaderInboxResponse,
-    owner: InboxActionOwner,
+    requestToken: InboxRequestToken,
   ): Promise<ReaderInboxResponse | null> => {
-    if (!isCurrentActionOwner(owner)) return null
+    if (!gate.isCurrent(requestToken)) return null
     const requestGeneration = beginInboxRefresh(item.id)
     const refreshed = await client.getInbox(item.id)
     if (
-      !isCurrentActionOwner(owner) ||
+      !gate.isCurrent(requestToken) ||
       inboxRefreshGenerationsRef.current.get(item.id) !== requestGeneration ||
       !refreshed.ok
     ) return null
@@ -800,17 +761,20 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       [item.id]: current[item.id] ?? new Set(refreshed.data.category_ids),
     }))
     return refreshed.data
-  }, [advanceInboxLifecycle, beginInboxRefresh, client, isCurrentActionOwner, upsertAuthoritativeInbox])
+  }, [advanceInboxLifecycle, beginInboxRefresh, client, gate, upsertAuthoritativeInbox])
 
-  const saveMetadata = useCallback(async (owner = captureActionOwner()): Promise<ReaderInboxResponse | null> => {
-    if (!owner) return null
+  const saveMetadata = useCallback(async (
+    requestToken: InboxRequestToken = gate.capture('mutation'),
+  ): Promise<ReaderInboxResponse | null> => {
+    if (!gate.isCurrent(requestToken)) return null
     const operationGeneration = inboxOperationGenerationRef.current
     const isCurrentSave = () =>
-      isCurrentActionOwner(owner) &&
+      gate.isCurrent(requestToken) &&
       inboxOperationGenerationRef.current === operationGeneration
     if (!selected || selected.status === 'confirmed') return selected
     const submittedDraft = selectedDraft ?? draftFromInbox(selected)
-    const savingGeneration = beginSavingForOwner()
+    const actionToken = beginInboxAction('save')
+    if (!actionToken) return null
     setError(null)
     try {
       const result = await client.patchInbox(selected.id, submittedDraft.revision, {
@@ -826,13 +790,13 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
           setDrafts((current) => current[selected.id]
             ? { ...current, [selected.id]: { ...current[selected.id], conflict: true } }
             : current)
-          const refreshed = await refreshConflictRevision(selected, owner)
+          const refreshed = await refreshConflictRevision(selected, requestToken)
           if (!isCurrentSave()) return null
           setError(refreshed
             ? '此条目已在其他位置更新。已保留本地草稿并同步最新版本，请再次保存。'
             : '此条目已在其他位置更新。已保留本地草稿，但暂时无法读取最新版本。')
         } else {
-          setError(errorMessage(result.error))
+          setError(readerErrorMessage(result.error))
         }
         return null
       }
@@ -859,9 +823,9 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       })
       return result.data
     } finally {
-      finishSavingForOwner(owner, savingGeneration)
+      finishInboxAction(actionToken)
     }
-  }, [advanceInboxLifecycle, beginSavingForOwner, body, captureActionOwner, client, finishSavingForOwner, isCurrentActionOwner, note, refreshConflictRevision, selected, selectedDraft, summary, tags, title, upsertAuthoritativeInbox])
+  }, [advanceInboxLifecycle, beginInboxAction, body, client, finishInboxAction, gate, note, refreshConflictRevision, selected, selectedDraft, summary, tags, title, upsertAuthoritativeInbox])
 
   const selectInbox = useCallback(async (id: string) => {
     if (id === selected?.id) return
@@ -872,10 +836,11 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   }, [dirty, saveMetadata, selected?.id])
 
   const createInbox = useCallback(async () => {
-    const owner = captureActionOwner()
-    if (!owner) return
+    const requestToken = gate.capture('mutation')
+    if (!gate.isCurrent(requestToken)) return
     if (!url.trim()) return
-    const savingGeneration = beginSavingForOwner()
+    const actionToken = beginInboxAction('create')
+    if (!actionToken) return
     setError(null)
     try {
       const result = await client.createInbox({
@@ -886,8 +851,8 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         note: createNote,
         tags: parseTags(createTags),
       })
-      if (!isCurrentActionOwner(owner)) return
-      if (!result.ok) setError(errorMessage(result.error))
+      if (!gate.isCurrent(requestToken)) return
+      if (!result.ok) setError(readerErrorMessage(result.error))
       else {
         advanceInboxLifecycle([result.data.id])
         if (result.data.status === 'pending') {
@@ -906,13 +871,13 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         void load(target)
       }
     } finally {
-      finishSavingForOwner(owner, savingGeneration)
+      finishInboxAction(actionToken)
     }
-  }, [adjustInboxCounts, advanceInboxLifecycle, beginSavingForOwner, captureActionOwner, client, createBody, createNote, createTags, createTitle, finishSavingForOwner, isCurrentActionOwner, load, upsertAuthoritativeInbox, url])
+  }, [adjustInboxCounts, advanceInboxLifecycle, beginInboxAction, client, createBody, createNote, createTags, createTitle, finishInboxAction, gate, load, upsertAuthoritativeInbox, url])
 
   const confirm = useCallback(async () => {
-    const owner = captureActionOwner()
-    if (!owner) return
+    const requestToken = gate.capture('mutation')
+    if (!gate.isCurrent(requestToken)) return
     if (!selected || selected.status !== 'pending') return
     if (!title.trim()) {
       setError('缺少标题，无法确认入库。')
@@ -921,11 +886,12 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     const inboxID = selected.id
     const operationGeneration = ++inboxOperationGenerationRef.current
     const isCurrentConfirmation = () =>
-      isCurrentActionOwner(owner) &&
+      gate.isCurrent(requestToken) &&
       inboxOperationGenerationRef.current === operationGeneration
-    const saved = await saveMetadata(owner)
+    const saved = await saveMetadata(requestToken)
     if (!saved || !isCurrentConfirmation()) return
-    const savingGeneration = beginSavingForOwner()
+    const actionToken = beginInboxAction('confirm')
+    if (!actionToken) return
     setError(null)
     try {
       const result = await client.confirmInbox(inboxID, saved.metadata_revision)
@@ -935,13 +901,13 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
           setDrafts((current) => current[inboxID]
             ? { ...current, [inboxID]: { ...current[inboxID], conflict: true } }
             : current)
-          const refreshed = await refreshConflictRevision(saved, owner)
+          const refreshed = await refreshConflictRevision(saved, requestToken)
           if (!isCurrentConfirmation()) return
           setError(refreshed
             ? '此条目已在其他位置更新。已保留本地草稿并同步最新版本，请再次确认。'
             : '此条目已在其他位置更新。已保留本地草稿，但暂时无法读取最新版本。')
         } else {
-          setError(errorMessage(result.error))
+          setError(readerErrorMessage(result.error))
         }
       } else {
         const target: ReaderInboxPartition = saved.expired ? 'expired' : 'active'
@@ -964,20 +930,21 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         void load(target)
       }
     } finally {
-      finishSavingForOwner(owner, savingGeneration)
+      finishInboxAction(actionToken)
     }
-  }, [adjustInboxCounts, advanceInboxLifecycle, beginSavingForOwner, captureActionOwner, client, finishSavingForOwner, isCurrentActionOwner, load, onOpenLink, refreshConflictRevision, saveMetadata, selected, title, updatePartitionAndEvictOther])
+  }, [adjustInboxCounts, advanceInboxLifecycle, beginInboxAction, client, finishInboxAction, gate, load, onOpenLink, refreshConflictRevision, saveMetadata, selected, title, updatePartitionAndEvictOther])
 
   const discard = useCallback(async () => {
-    const owner = captureActionOwner()
-    if (!owner) return
+    const requestToken = gate.capture('mutation')
+    if (!gate.isCurrent(requestToken)) return
     if (!selected || selected.status !== 'pending') return
-    const savingGeneration = beginSavingForOwner()
+    const actionToken = beginInboxAction('discard')
+    if (!actionToken) return
     setError(null)
     try {
       const result = await client.discardInbox(selected.id)
-      if (!isCurrentActionOwner(owner)) return
-      if (!result.ok) setError(errorMessage(result.error))
+      if (!gate.isCurrent(requestToken)) return
+      if (!result.ok) setError(readerErrorMessage(result.error))
       else {
         const ids = new Set([selected.id])
         const target: ReaderInboxPartition = selected.expired ? 'expired' : 'active'
@@ -997,25 +964,28 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         void load(target)
       }
     } finally {
-      finishSavingForOwner(owner, savingGeneration)
+      finishInboxAction(actionToken)
     }
-  }, [adjustInboxCounts, advanceInboxLifecycle, beginSavingForOwner, captureActionOwner, client, finishSavingForOwner, isCurrentActionOwner, load, selected, updatePartitionAndEvictOther])
+  }, [adjustInboxCounts, advanceInboxLifecycle, beginInboxAction, client, finishInboxAction, gate, load, selected, updatePartitionAndEvictOther])
 
   const restore = useCallback(async () => {
-    const owner = captureActionOwner()
-    if (!owner) return
+    const requestToken = gate.capture('mutation')
+    if (!gate.isCurrent(requestToken)) return
     if (!selected || (selected.status !== 'discarded' && !selected.expired)) return
-    const savingGeneration = beginSavingForOwner()
+    const actionToken = beginInboxAction('restore')
+    if (!actionToken) return
     setError(null)
     try {
       const result = await client.restoreInbox(selected.id)
-      if (!isCurrentActionOwner(owner)) return
-      if (!result.ok) setError(errorMessage(result.error))
+      if (!gate.isCurrent(requestToken)) return
+      if (!result.ok) setError(readerErrorMessage(result.error))
       else {
         const ids = new Set([selected.id])
         advanceInboxLifecycle([selected.id])
         adjustInboxCounts(1, selected.status === 'pending' && selected.expired ? -1 : 0)
-        loadRequestGenerationRef.current.expired += 1
+        // 恢复把这一项从「已过期」搬走，页面被清空重来：在途的过期分页作废，
+        // 否则它回来时会把刚被搬走的行再画回去。
+        gate.invalidate('page:expired')
         setInboxPages((current) => ({
           active: {
             ...current.active,
@@ -1047,13 +1017,13 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         void load('active')
       }
     } finally {
-      finishSavingForOwner(owner, savingGeneration)
+      finishInboxAction(actionToken)
     }
-  }, [adjustInboxCounts, advanceInboxLifecycle, beginSavingForOwner, captureActionOwner, client, finishSavingForOwner, isCurrentActionOwner, load, selected])
+  }, [adjustInboxCounts, advanceInboxLifecycle, beginInboxAction, client, finishInboxAction, gate, load, selected])
 
   const runBulk = useCallback(async (action: 'confirm' | 'discard') => {
-    const owner = captureActionOwner()
-    if (!owner) return
+    const requestToken = gate.capture('mutation')
+    if (!gate.isCurrent(requestToken)) return
     if (action === 'confirm' && selectedPendingHasEmptyTitle) {
       setError('缺少标题，无法批量确认。')
       return
@@ -1062,11 +1032,12 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     if (ids.length === 0) return
     let savedSelected: ReaderInboxResponse | null = null
     if (action === 'confirm' && selected && selectedIDs.has(selected.id)) {
-      savedSelected = await saveMetadata(owner)
+      savedSelected = await saveMetadata(requestToken)
       if (!savedSelected) return
     }
-    if (!isCurrentActionOwner(owner)) return
-    const savingGeneration = beginSavingForOwner()
+    if (!gate.isCurrent(requestToken)) return
+    const actionToken = beginInboxAction('bulk')
+    if (!actionToken) return
     setError(null)
     setBulkResult(null)
     try {
@@ -1084,13 +1055,13 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       const result = action === 'confirm'
         ? await client.confirmInboxBulk(request)
         : await client.discardInboxBulk(request)
-      if (!isCurrentActionOwner(owner)) return
+      if (!gate.isCurrent(requestToken)) return
       if (!result.ok) {
         if (action === 'confirm' && result.error.status === 409) {
-          await Promise.all(selectedPendingItems.map((item) => refreshConflictRevision(item, owner)))
-          if (!isCurrentActionOwner(owner)) return
+          await Promise.all(selectedPendingItems.map((item) => refreshConflictRevision(item, requestToken)))
+          if (!gate.isCurrent(requestToken)) return
         }
-        setError(errorMessage(result.error))
+        setError(readerErrorMessage(result.error))
       } else {
         const idSet = new Set(ids)
         advanceInboxLifecycle(ids)
@@ -1116,25 +1087,26 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         void load(partition)
       }
     } finally {
-      finishSavingForOwner(owner, savingGeneration)
+      finishInboxAction(actionToken)
     }
-  }, [adjustInboxCounts, advanceInboxLifecycle, beginSavingForOwner, captureActionOwner, client, drafts, finishSavingForOwner, isCurrentActionOwner, load, partition, refreshConflictRevision, saveMetadata, selected, selectedIDs, selectedPendingHasEmptyTitle, selectedPendingItems, updatePartitionAndEvictOther])
+  }, [adjustInboxCounts, advanceInboxLifecycle, beginInboxAction, client, drafts, finishInboxAction, gate, load, partition, refreshConflictRevision, saveMetadata, selected, selectedIDs, selectedPendingHasEmptyTitle, selectedPendingItems, updatePartitionAndEvictOther])
 
   const confirmAIProposals = useCallback(async () => {
-    const owner = captureActionOwner()
-    if (!owner || saving) return
+    const requestToken = gate.capture('mutation')
+    if (!gate.isCurrent(requestToken)) return
     const target = partition
     const confirmedItems: ReaderInboxConfirmAIProposalsResponse['items'] = []
-    const savingGeneration = beginSavingForOwner()
+    const actionToken = beginInboxAction('confirm-ai')
+    if (!actionToken) return
     let actionError: string | null = null
     setError(null)
     setBulkResult(null)
     try {
       for (;;) {
         const result = await client.confirmAIProposals({ partition: target })
-        if (!isCurrentActionOwner(owner)) return
+        if (!gate.isCurrent(requestToken)) return
         if (!result.ok) {
-          actionError = errorMessage(result.error)
+          actionError = readerErrorMessage(result.error)
           break
         }
         const confirmedIDs = new Set(result.data.items.map((item) => item.inbox_id))
@@ -1169,20 +1141,20 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         }
       }
     } catch (cause) {
-      if (isCurrentActionOwner(owner)) {
+      if (gate.isCurrent(requestToken)) {
         actionError = cause instanceof Error ? cause.message : '批量确认失败，请重试。'
       }
     } finally {
-      if (isCurrentActionOwner(owner)) {
+      if (gate.isCurrent(requestToken)) {
         await load(target)
-        if (isCurrentActionOwner(owner)) {
+        if (gate.isCurrent(requestToken)) {
           refreshPendingInboxCount()
           if (actionError) setError(actionError)
         }
       }
-      finishSavingForOwner(owner, savingGeneration)
+      finishInboxAction(actionToken)
     }
-  }, [adjustInboxCounts, advanceInboxLifecycle, beginSavingForOwner, captureActionOwner, client, finishSavingForOwner, isCurrentActionOwner, load, partition, saving, updatePartitionAndEvictOther])
+  }, [adjustInboxCounts, advanceInboxLifecycle, beginInboxAction, client, finishInboxAction, gate, load, partition, updatePartitionAndEvictOther])
 
   const toggleSelection = useCallback((id: string) => {
     setSelectedIDs((current) => {
@@ -1214,54 +1186,51 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   }, [dirty, partition, saveMetadata, saving])
 
   const resummarize = useCallback(async () => {
-    const owner = captureActionOwner()
-    if (!owner) return
+    const requestToken = gate.capture('mutation')
+    if (!gate.isCurrent(requestToken)) return
     if (!selected || selected.status !== 'pending') return
-    const savingGeneration = beginSavingForOwner()
+    const actionToken = beginInboxAction('resummarize')
+    if (!actionToken) return
     setError(null)
     try {
       const result = await client.resummarizeInbox(selected.id)
-      if (!isCurrentActionOwner(owner)) return
-      if (!result.ok) setError(errorMessage(result.error))
+      if (!gate.isCurrent(requestToken)) return
+      if (!result.ok) setError(readerErrorMessage(result.error))
       else {
         advanceInboxLifecycle([selected.id])
         setJob(result.data)
         setItems((current) => current.map((item) => item.id === selected.id ? { ...item, job_id: result.data.job_id } : item))
       }
     } finally {
-      finishSavingForOwner(owner, savingGeneration)
+      finishInboxAction(actionToken)
     }
-  }, [advanceInboxLifecycle, beginSavingForOwner, captureActionOwner, client, finishSavingForOwner, isCurrentActionOwner, selected, setItems])
+  }, [advanceInboxLifecycle, beginInboxAction, client, finishInboxAction, gate, selected, setItems])
 
   const addCategory = useCallback(async () => {
-    const owner = captureActionOwner()
-    if (!owner) return
+    const requestToken = gate.capture('mutation')
+    if (!gate.isCurrent(requestToken)) return
     if (!newCategory.trim()) return
     const result = await client.createCategory({ name: newCategory.trim() })
-    if (!isCurrentActionOwner(owner)) return
-    if (!result.ok) setError(errorMessage(result.error))
+    if (!gate.isCurrent(requestToken)) return
+    if (!result.ok) setError(readerErrorMessage(result.error))
     else {
       setCategories((current) => [...current, result.data])
       setNewCategory('')
     }
-  }, [captureActionOwner, client, isCurrentActionOwner, newCategory])
+  }, [client, gate, newCategory])
 
   const toggleCategory = useCallback(async (category: ReaderCategoryResponse) => {
-    const owner = captureActionOwner()
-    if (!owner) return
     if (!selected) return
     const inboxID = selected.id
     const present = memberships.has(category.id)
     const initialCategoryIDs = selected.category_ids
-    const requestKey = `${inboxID}:${category.id}`
-    const requestGeneration = (categoryRequestGenerationsRef.current.get(requestKey) ?? 0) + 1
-    categoryRequestGenerationsRef.current.set(requestKey, requestGeneration)
+    // 每个 (条目, 分类) 对各占一条通道：连点同一个 chip 时后发顶掉先发，
+    // 而给另一个条目打标签不该让这一条失效。
+    const requestToken = gate.begin(inboxCategoryChannel(inboxID, category.id))
+    if (!gate.isCurrent(requestToken)) return
     const result = await client.setCategoryMembership(category.id, { host_kind: 'inbox', host_id: inboxID, present: !present })
-    if (
-      !isCurrentActionOwner(owner) ||
-      categoryRequestGenerationsRef.current.get(requestKey) !== requestGeneration
-    ) return
-    if (!result.ok) setError(errorMessage(result.error))
+    if (!gate.isCurrent(requestToken)) return
+    if (!result.ok) setError(readerErrorMessage(result.error))
     else {
       advanceInboxLifecycle([inboxID])
       setMembershipsByInbox((current) => {
@@ -1279,10 +1248,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
           }
         : item))
     }
-    if (categoryRequestGenerationsRef.current.get(requestKey) === requestGeneration) {
-      categoryRequestGenerationsRef.current.delete(requestKey)
-    }
-  }, [advanceInboxLifecycle, captureActionOwner, client, isCurrentActionOwner, memberships, selected, setItems])
+  }, [advanceInboxLifecycle, client, gate, memberships, selected, setItems])
 
   const adoptSuggestedTag = useCallback((tag: string) => {
     updateSelectedDraft({ tags: parseTags([...parseTags(tags), tag].join(', ')).join(', ') })
@@ -1330,30 +1296,26 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         </section>
       )}
       {createOpen && (
-        <div className="inbox-dialog-backdrop">
-          <section className="inbox-dialog" role="dialog" aria-modal="true" aria-labelledby="inbox-create-title">
-            <header>
-              <div>
-                <span className="rvx-eyebrow">新收件</span>
-                <h2 id="inbox-create-title">添加条目</h2>
-              </div>
-              <button className="rvx-icon-button" type="button" aria-label="关闭" title="关闭" disabled={saving} onClick={() => setCreateOpen(false)}>
-                <Icon name="close" size={16} />
-              </button>
-            </header>
-            <div className="rvx-form-grid">
-              <label>网址<input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://..." type="url" autoFocus /></label>
-              <label>标题<input value={createTitle} onChange={(event) => setCreateTitle(event.target.value)} /></label>
-              <label>笔记<textarea value={createNote} onChange={(event) => setCreateNote(event.target.value)} rows={2} /></label>
-              <label>标签<input value={createTags} onChange={(event) => setCreateTags(event.target.value)} placeholder="用逗号或空格分隔" /></label>
-              <label>原始内容<textarea value={createBody} onChange={(event) => setCreateBody(event.target.value)} rows={4} /></label>
-            </div>
-            <footer>
-              <button className="rvx-button secondary" type="button" disabled={saving} onClick={() => setCreateOpen(false)}>取消</button>
-              <button className="rvx-button primary" type="button" disabled={saving || !url.trim()} onClick={() => void createInbox()}><Icon name="plus" size={15} />创建</button>
-            </footer>
-          </section>
-        </div>
+        <ReaderDialog
+          title="添加条目"
+          titleId="inbox-create-title"
+          busy={saving}
+          initialFocusRef={createUrlRef}
+          onClose={() => setCreateOpen(false)}
+        >
+          <span className="rvx-eyebrow">新收件</span>
+          <div className="rvx-form-grid">
+            <label>网址<input ref={createUrlRef} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://..." type="url" /></label>
+            <label>标题<input value={createTitle} onChange={(event) => setCreateTitle(event.target.value)} /></label>
+            <label>笔记<textarea value={createNote} onChange={(event) => setCreateNote(event.target.value)} rows={2} /></label>
+            <label>标签<input value={createTags} onChange={(event) => setCreateTags(event.target.value)} placeholder="用逗号或空格分隔" /></label>
+            <label>原始内容<textarea value={createBody} onChange={(event) => setCreateBody(event.target.value)} rows={4} /></label>
+          </div>
+          <footer>
+            <button className="rvx-button secondary" type="button" disabled={saving} onClick={() => setCreateOpen(false)}>取消</button>
+            <button className="rvx-button primary" type="button" disabled={saving || !url.trim()} onClick={() => void createInbox()}><Icon name="plus" size={15} />创建</button>
+          </footer>
+        </ReaderDialog>
       )}
       <div className="inbox-workbench">
         <aside className="inbox-queue" aria-label="收件箱列表">
@@ -1413,34 +1375,43 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                 {items.map((item) => {
                   const flagged = item.expired || item.status !== 'pending'
                   const rowTags = item.tags.slice(0, 3)
+                  const rowTitle = item.title || item.url
+                  const rowSelected = item.id === selected?.id
+                  const rowPicked = selectedIDs.has(item.id)
                   return (
-                    <li key={item.id} className={(item.id === selected?.id ? 'active' : '') + (selectedIDs.has(item.id) ? ' picked' : '')}>
-                      <label className="inbox-row-check">
-                        <input type="checkbox" aria-label={`选择 ${item.title || item.url}`} checked={selectedIDs.has(item.id)} disabled={saving || item.status !== 'pending'} onChange={() => toggleSelection(item.id)} />
-                      </label>
-                      <button type="button" className={item.id === selected?.id ? 'active' : ''} onClick={() => void selectInbox(item.id)}>
-                        <span className="inbox-row-meta">
-                          <span className="inbox-row-source" title={sourceLabel(item.source_kind)}>
-                            <Icon name={sourceIcon(item.source_kind)} size={12} />
-                            {hostLabel(item.url)}
-                          </span>
-                          <time>{formatRelativeDate(item.updated_at)}</time>
+                    <ReaderPreviewCard
+                      key={item.id}
+                      as="li"
+                      selected={rowSelected}
+                      picked={rowPicked}
+                      leading={(
+                        <label className="inbox-row-check">
+                          <input type="checkbox" aria-label={`选择 ${rowTitle}`} checked={rowPicked} disabled={saving || item.status !== 'pending'} onChange={() => toggleSelection(item.id)} />
+                        </label>
+                      )}
+                      source={(
+                        <span className="inbox-row-source" title={sourceLabel(item.source_kind)}>
+                          <Icon name={sourceIcon(item.source_kind)} size={12} />
+                          {hostLabel(item.url)}
                         </span>
-                        <strong>{item.title || item.url}</strong>
-                        <p>{item.summary || item.note || item.body || '暂无内容'}</p>
-                        {(flagged || rowTags.length > 0) && (
-                          <span className="inbox-row-foot">
-                            {flagged && (
-                              <span className="inbox-row-state">
-                                <span className={'inbox-state-dot ' + item.status} />
-                                {item.expired ? '已过期' : statusLabel(item.status)}
-                              </span>
-                            )}
-                            {rowTags.map((tag) => <span className="mini-tag" key={tag}>#{tag}</span>)}
-                          </span>
-                        )}
-                      </button>
-                    </li>
+                      )}
+                      time={<time>{formatRelativeDate(item.updated_at)}</time>}
+                      title={rowTitle}
+                      summary={item.summary || item.note || item.body || '暂无内容'}
+                      details={(flagged || rowTags.length > 0) ? (
+                        <span className="inbox-row-foot">
+                          {flagged && (
+                            <span className="inbox-row-state">
+                              <span className={'inbox-state-dot ' + item.status} />
+                              {item.expired ? '已过期' : statusLabel(item.status)}
+                            </span>
+                          )}
+                          {rowTags.map((tag) => <span className="mini-tag" key={tag}>#{tag}</span>)}
+                        </span>
+                      ) : undefined}
+                      openLabel={`打开 ${rowTitle}`}
+                      onOpen={() => void selectInbox(item.id)}
+                    />
                   )
                 })}
               </ul>

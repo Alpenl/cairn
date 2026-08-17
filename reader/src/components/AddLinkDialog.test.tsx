@@ -20,17 +20,24 @@ function renderDialog(
   const submitLink = vi.fn(async () => response)
   const onAdded = vi.fn()
   const onToast = vi.fn()
+  const onClose = vi.fn()
   render(
     <AddLinkDialog
       client={{ submitLink, isIdentityCurrent: vi.fn(isCurrent) } as unknown as ReaderClient}
       capabilityLease={enabledReaderCapabilityLease()}
       destination={destination}
-      onClose={vi.fn()}
+      onClose={onClose}
       onAdded={onAdded}
       onToast={onToast}
     />,
   )
-  return { submitLink, onAdded, onToast }
+  return { submitLink, onAdded, onToast, onClose }
+}
+
+function backdrop(): HTMLElement {
+  const element = document.querySelector<HTMLElement>('.reader-dialog-backdrop')
+  if (!element) throw new Error('backdrop 未渲染')
+  return element
 }
 
 describe('AddLinkDialog', () => {
@@ -153,5 +160,52 @@ describe('AddLinkDialog', () => {
 
     expect(onAdded).not.toHaveBeenCalled()
     expect(onToast).not.toHaveBeenCalled()
+  })
+})
+
+describe('AddLinkDialog 外壳', () => {
+  it('渲染带名字的 Dialog，并把初始焦点放在网址输入框而不是关闭按钮', () => {
+    renderDialog()
+
+    expect(screen.getByRole('dialog', { name: '添加链接' })).toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('粘贴 https:// 链接，回车提交'))
+  })
+
+  it('空闲时 Escape、backdrop 和关闭按钮都关闭对话框', () => {
+    const { onClose } = renderDialog()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+
+    fireEvent.mouseDown(backdrop())
+    expect(onClose).toHaveBeenCalledTimes(2)
+
+    fireEvent.mouseDown(screen.getByRole('dialog'))
+    expect(onClose).toHaveBeenCalledTimes(2)
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    expect(onClose).toHaveBeenCalledTimes(3)
+  })
+
+  it('提交中三条关闭路径全部失效', async () => {
+    let resolve!: (value: ApiResult<SubmitResponse>) => void
+    const response = new Promise<ApiResult<SubmitResponse>>((done) => { resolve = done })
+    const { onClose } = renderDialog(response)
+    const input = screen.getByPlaceholderText('粘贴 https:// 链接，回车提交')
+
+    fireEvent.change(input, { target: { value: 'https://example.com/slow' } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+    const close = await screen.findByRole('button', { name: '关闭' })
+    await waitFor(() => expect(close).toBeDisabled())
+
+    fireEvent.click(close)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.mouseDown(backdrop())
+    expect(onClose).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolve(ok({ link_id: 'done', status: 'pending' }))
+      await response
+    })
   })
 })

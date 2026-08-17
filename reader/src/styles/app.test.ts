@@ -97,7 +97,8 @@ describe('Reader responsive content width', () => {
 
   it('uses a responsive reading rail without removing the RSS ReaderToc', () => {
     const pane = firstRule('.reader-pane')
-    const cardTitle = firstRule('.card h3')
+    // 卡片标题现在由共享的 ReaderPreviewCard 渲染，两行截断跟着搬到它的标题上。
+    const cardTitle = firstRule('.reader-preview-card-title')
 
     expect(pane).toMatch(/container:\s*readerpane\s*\/\s*inline-size\s*;/)
     expect(cardTitle).toMatch(/display:\s*-webkit-box\s*;/)

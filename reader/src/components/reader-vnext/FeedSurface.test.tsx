@@ -54,8 +54,9 @@ function feedItem(overrides: Partial<ReaderFeedItemResponse> = {}): ReaderFeedIt
   } as ReaderFeedItemResponse
 }
 
+// 行结构归公共组件后，稳定的定位点是 Feed 自己挂上去的资源标识，不是布局 class。
 function renderedResourceKeys(container: HTMLElement): string[] {
-  return Array.from(container.querySelectorAll<HTMLElement>('.rvx-feed-card'))
+  return Array.from(container.querySelectorAll<HTMLElement>('li[data-resource-key]'))
     .map((item) => item.dataset.resourceKey ?? '')
 }
 
@@ -709,6 +710,31 @@ describe('FeedSurface', () => {
     expect(getReaderFeed.mock.calls[1][0]).toMatchObject({ mode: 'recommended', limit: 30 })
     expect(getReaderFeed.mock.calls[1][0]).not.toHaveProperty('snapshotID')
     expect(getReaderFeed.mock.calls[1][0]).not.toHaveProperty('after')
+  })
+
+  it('rejects a malformed array position record instead of reading fields off it', async () => {
+    const lease = readerIdentity.activeLease
+    if (!lease) throw new Error('test identity lease is required')
+    const namespace = lease.context.physicalNamespace
+    // 数组不是「键值对象」：过去第一层守卫放行它，再靠逐字段读取碰运气兜底。
+    window.sessionStorage.setItem(
+      `webtag:reader:mixed-feed:v1:${encodeURIComponent(namespace)}:recommended:inbox,reading,subscription`,
+      JSON.stringify([{
+        version: 2,
+        snapshot_id: 'array-snapshot',
+        next_cursor: 'array-cursor',
+        source_filter: ['inbox', 'reading', 'subscription'],
+        items: [feedItem({ title: '数组里的旧位置' })],
+      }]),
+    )
+    const fixture = makeClient([feedResponse([feedItem({ title: '全新快照' })], { snapshot_id: 'fresh-snapshot' })])
+
+    renderFeed(fixture.client)
+
+    expect(await screen.findByText('全新快照')).toBeInTheDocument()
+    expect(screen.queryByText('数组里的旧位置')).not.toBeInTheDocument()
+    expect(fixture.getReaderFeed.mock.calls[0][0]).not.toHaveProperty('snapshotID')
+    expect(fixture.getReaderFeed.mock.calls[0][0]).not.toHaveProperty('after')
   })
 
   it('routes subscription save/unsave through feedback and keeps RSS items separate from link engagement', async () => {

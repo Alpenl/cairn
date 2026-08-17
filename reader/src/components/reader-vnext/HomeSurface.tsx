@@ -14,6 +14,18 @@ import {
 } from '../../lib/capabilities'
 import type { ReaderFeedAction, ReaderHomeResponse, ReaderTodoResponse } from '../../lib/api/types'
 import type { IdentityLease } from '../../lib/identity'
+import { useExclusiveAction } from '../../hooks/useExclusiveAction'
+import { useSurfaceRequestGate } from '../../hooks/useSurfaceRequestGate'
+import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
+import { isRecord } from '../../lib/records'
+import {
+  SURFACE_IDENTITY_ERROR,
+  formatRelativeDate,
+  identityIsCurrent,
+  isIdentityError,
+  readerErrorMessage,
+  todoDesiredStatePatch,
+} from '../../lib/reader-surface'
 import {
   cacheServerThoughtPage,
   selectThoughtReadModel,
@@ -26,17 +38,8 @@ import {
   type ReaderRouteTargets,
 } from '../../lib/navigation/route'
 import { Icon } from '../Icon'
-import {
-  SurfaceError,
-  SurfaceLoading,
-  SurfaceShell,
-  SURFACE_IDENTITY_ERROR,
-  errorMessage,
-  formatRelativeDate,
-  identityIsCurrent,
-  isIdentityError,
-  todoDesiredStatePatch,
-} from './SurfaceShell'
+import { ReaderListRow } from '../ui/ReaderListRow'
+import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 
 export interface HomeSurfaceProps {
   readonly client: IdentityBoundReaderClient
@@ -59,8 +62,12 @@ function countFor(counts: Record<string, number>, ...keys: string[]): number | n
   return null
 }
 
-const TODO_CHANGE_EVENT = 'webtag:todos-change'
-const HOME_CHANGE_EVENT = 'webtag:home-change'
+/**
+ * 三条通道。`home` 是聚合读取，`thought-projection` 是本地想法读模型的投影，
+ * `todos` 是 TODO 写回——它刻意与 `home` 分开：原实现里 TODO 写回只判断挂载，
+ * 从不看聚合读取的代次，并进的话一次并发的聚合刷新就会吞掉写回后的回读事件。
+ */
+type HomeRequestChannel = 'home' | 'thought-projection' | 'todos'
 
 type HomeStatusPayload = ReaderHomeResponse & {
   readonly freshness?: unknown
@@ -78,10 +85,6 @@ type HomeStatus = {
 type HomeStatusOptions = {
   readonly loading?: boolean
   readonly refreshFailed?: boolean
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function statusToken(value: unknown): string | null {
@@ -120,14 +123,6 @@ function homeStatus(response: ReaderHomeResponse, options: HomeStatusOptions = {
   if (freshness === 'refreshing' || freshness === 'pending') return { freshness, partial, stale, label: '数据更新中', attention: true }
   if (freshness === null || freshness === 'unknown' || freshness === 'unavailable') return { freshness, partial, stale, label: '数据新鲜度未知', attention: true }
   return { freshness, partial, stale, label: '数据已同步', attention: false }
-}
-
-function thrownErrorMessage(value: unknown): string {
-  if (!isRecord(value)) return '请求失败，请稍后重试。'
-  return errorMessage({
-    message: typeof value.message === 'string' ? value.message : '',
-    status: typeof value.status === 'number' ? value.status : undefined,
-  })
 }
 
 function supportsItemAction(item: ReaderHomeResponse['continue_reading'][number], action: ReaderFeedAction): boolean {
@@ -170,17 +165,25 @@ export function HomeSurface({ client, lease, onNavigate, onOpenLink, capabilityL
   const [error, setError] = useState<string | null>(null)
   const ownScrollRef = useRef<HTMLDivElement>(null)
   const shellScrollRef = scrollRef ?? ownScrollRef
-  const requestID = useRef(0)
-  const thoughtProjectionRequestID = useRef(0)
-  const mountedRef = useRef(false)
-  const todoBusyID = useRef<string | null>(null)
-  const [busyTodoID, setBusyTodoID] = useState<string | null>(null)
+
+  // 身份是 owner：租约一换，此前取出的所有 token 立即作废，旧命名空间的回包
+  // 画不到新身份上。authority 只放身份判断——Home 的两条能力检查用的不是同一
+  // 个 capability（`home` 与 `todos`），塞进同一个 authority 会把它们混成一条。
+  const gate = useSurfaceRequestGate<HomeRequestChannel>({
+    owner: [lease],
+    authority: () => identityIsCurrent(client),
+  })
+  const {
+    busy: todoBusy,
+    begin: beginTodoAction,
+    finish: finishTodoAction,
+    clear: clearTodoAction,
+  } = useExclusiveAction<string>()
 
   // A new identity must not paint the old namespace while its initial request
   // is being negotiated.  The following effect runs before the browser paint.
+  // 请求归属由闸门的 owner 负责作废，这里只负责把已经画出来的旧数据清掉。
   useLayoutEffect(() => {
-    requestID.current += 1
-    thoughtProjectionRequestID.current += 1
     setHome(null)
     setRecentThoughts(null)
     setError(null)
@@ -189,32 +192,26 @@ export function HomeSurface({ client, lease, onNavigate, onOpenLink, capabilityL
 
   const refreshLocalThoughts = useCallback(async () => {
     if (!lease?.context?.physicalNamespace || !identityIsCurrent(client)) return
-    const request = requestID.current
-    const projectionRequest = ++thoughtProjectionRequestID.current
+    // 这是一次搭车读取：它不该顶掉在途的聚合请求，所以取号而不是重新开始。
+    const request = gate.capture('home')
+    const projection = gate.begin('thought-projection')
     const selected = await selectThoughtReadModel(lease)
-    if (
-      !selected.ok ||
-      request !== requestID.current ||
-      projectionRequest !== thoughtProjectionRequestID.current ||
-      !mountedRef.current ||
-      !identityIsCurrent(client)
-    ) return
+    if (!selected.ok || !gate.isCurrent(request) || !gate.isCurrent(projection)) return
     setRecentThoughts(selected.value)
-  }, [client, lease])
+  }, [client, gate, lease])
 
   const clearForIdentityLoss = useCallback(() => {
-    if (!mountedRef.current) return
-    todoBusyID.current = null
-    setBusyTodoID(null)
+    clearTodoAction()
     setHome(null)
     setRecentThoughts(null)
     setError(SURFACE_IDENTITY_ERROR)
     setLoading(false)
-  }, [])
+  }, [clearTodoAction])
 
   const load = useCallback(async () => {
-    if (!mountedRef.current) return
-    const request = ++requestID.current
+    const request = gate.begin('home')
+    // 卸载后仍可能有排队的 `void load()`；取号后立刻自查一次挂载与归属。
+    if (!gate.isSameOwner(request)) return
     if (!capabilityLease.isCurrent('home')) {
       setHome(null)
       setLoading(false)
@@ -229,22 +226,17 @@ export function HomeSurface({ client, lease, onNavigate, onOpenLink, capabilityL
     }
     try {
       const result = await client.getHome()
-      if (request !== requestID.current || !mountedRef.current || !capabilityLease.isCurrent('home')) return
+      if (!gate.isSameOwner(request) || !capabilityLease.isCurrent('home')) return
       if (!identityIsCurrent(client)) {
         clearForIdentityLoss()
         return
       }
       if (result.ok) {
         let localRecentThoughts: readonly ThoughtReadModelItem[] | null = null
-        const projectionRequest = ++thoughtProjectionRequestID.current
+        const projection = gate.begin('thought-projection')
         if (lease?.context?.physicalNamespace) {
           const cached = await cacheServerThoughtPage(lease, result.data.recent_thoughts)
-          if (
-            request !== requestID.current ||
-            projectionRequest !== thoughtProjectionRequestID.current ||
-            !mountedRef.current ||
-            !identityIsCurrent(client)
-          ) return
+          if (!gate.isCurrent(request) || !gate.isCurrent(projection)) return
           if (!cached.ok) {
             // The aggregate API deliberately permits legacy targets that are
             // too weak for the durable sync model. Keep storage fail-closed,
@@ -255,60 +247,54 @@ export function HomeSurface({ client, lease, onNavigate, onOpenLink, capabilityL
             return
           }
           const selected = await selectThoughtReadModel(lease)
-          if (
-            request !== requestID.current ||
-            projectionRequest !== thoughtProjectionRequestID.current ||
-            !mountedRef.current ||
-            !identityIsCurrent(client)
-          ) return
+          if (!gate.isCurrent(request) || !gate.isCurrent(projection)) return
           if (selected.ok) localRecentThoughts = selected.value
         }
         setHome(result.data)
         setRecentThoughts(localRecentThoughts)
       }
       else if (isIdentityError(result.error)) clearForIdentityLoss()
-      else setError(errorMessage(result.error))
+      else setError(readerErrorMessage(result.error))
     } catch (cause) {
-      if (request !== requestID.current || !mountedRef.current || !capabilityLease.isCurrent('home')) return
+      if (!gate.isSameOwner(request) || !capabilityLease.isCurrent('home')) return
       if (!identityIsCurrent(client)) clearForIdentityLoss()
-      else setError(thrownErrorMessage(cause))
+      else setError(readerErrorMessage(cause))
     } finally {
-      if (request === requestID.current && mountedRef.current && identityIsCurrent(client) && capabilityLease.isCurrent('home')) setLoading(false)
+      // 收 loading 用的是完整判断：身份还在、能力还在，才说明这个请求仍然是
+      // 当前界面正在等的那一个。
+      if (gate.isCurrent(request) && capabilityLease.isCurrent('home')) setLoading(false)
     }
-  }, [capabilityLease, clearForIdentityLoss, client, lease])
+  }, [capabilityLease, clearForIdentityLoss, client, gate, lease])
 
   useEffect(() => {
-    mountedRef.current = true
     const onSharedStateChange = () => { void load() }
     const onThoughtChange = () => { void refreshLocalThoughts() }
-    window.addEventListener(TODO_CHANGE_EVENT, onSharedStateChange)
-    window.addEventListener(HOME_CHANGE_EVENT, onSharedStateChange)
-    window.addEventListener('webtag:annotations-change', onThoughtChange)
-    window.addEventListener('webtag:thoughts-sync', onThoughtChange)
+    const unsubscribeShared = subscribeReaderEvents(
+      [READER_EVENTS.todosChanged, READER_EVENTS.homeChanged],
+      onSharedStateChange,
+    )
+    const unsubscribeThoughts = subscribeReaderEvents(
+      [READER_EVENTS.annotationsChanged, READER_EVENTS.thoughtsSynced],
+      onThoughtChange,
+    )
     void load()
     // A durable offline thought can predate this surface and its event listener.
     void refreshLocalThoughts()
     return () => {
-      mountedRef.current = false
-      requestID.current += 1
-      thoughtProjectionRequestID.current += 1
-      todoBusyID.current = null
-      window.removeEventListener(TODO_CHANGE_EVENT, onSharedStateChange)
-      window.removeEventListener(HOME_CHANGE_EVENT, onSharedStateChange)
-      window.removeEventListener('webtag:annotations-change', onThoughtChange)
-      window.removeEventListener('webtag:thoughts-sync', onThoughtChange)
+      unsubscribeShared()
+      unsubscribeThoughts()
     }
   }, [load, refreshLocalThoughts])
 
   const toggleTodo = useCallback(async (todo: ReaderTodoResponse) => {
-    if (!mountedRef.current || !capabilityLease.isCurrent('todos') || todoBusyID.current !== null) return
-    todoBusyID.current = todo.id
-    setBusyTodoID(todo.id)
+    const request = gate.begin('todos')
+    if (!gate.isSameOwner(request) || !capabilityLease.isCurrent('todos')) return
+    const action = beginTodoAction(todo.id)
+    if (!action) return
     const patch = todoDesiredStatePatch(todo, !todo.done)
     if (!patch) {
       setError('来源 TODO 缺少版本信息，未执行完成状态更改。')
-      todoBusyID.current = null
-      setBusyTodoID(null)
+      finishTodoAction(action)
       return
     }
     try {
@@ -317,30 +303,29 @@ export function HomeSurface({ client, lease, onNavigate, onOpenLink, capabilityL
         return
       }
       const result = await client.patchTodo(todo.id, patch)
-      if (!mountedRef.current || !capabilityLease.isCurrent('todos')) return
+      if (!gate.isSameOwner(request) || !capabilityLease.isCurrent('todos')) return
       if (!identityIsCurrent(client)) {
         clearForIdentityLoss()
         return
       }
       if (!result.ok) {
         if (isIdentityError(result.error)) clearForIdentityLoss()
-        else setError(errorMessage(result.error))
+        else setError(readerErrorMessage(result.error))
         return
       }
       // Home is an aggregate, not a second TODO store. Re-read the aggregate so
       // its counts and preview rows advance together with the authoritative item.
-      window.dispatchEvent(new Event(TODO_CHANGE_EVENT))
+      emitReaderEvent(READER_EVENTS.todosChanged)
     } catch (cause) {
-      if (!mountedRef.current) return
+      if (!gate.isSameOwner(request)) return
       if (!identityIsCurrent(client)) clearForIdentityLoss()
-      else setError(thrownErrorMessage(cause))
+      else setError(readerErrorMessage(cause))
     } finally {
-      if (mountedRef.current) {
-        todoBusyID.current = null
-        setBusyTodoID(null)
-      }
+      // 只有仍然持有的 token 才释放：身份撤销时 clearForIdentityLoss 已经把坑
+      // 让出去了，这里不能把后来者的 busy 一并清掉。
+      finishTodoAction(action)
     }
-  }, [capabilityLease, clearForIdentityLoss, client])
+  }, [beginTodoAction, capabilityLease, clearForIdentityLoss, client, finishTodoAction, gate])
 
   const goLibrary = (id: 'pending' | 'reading' | 'sites' | 'subs' | 'notes') =>
     onNavigate({ kind: 'library', id })
@@ -424,18 +409,19 @@ export function HomeSurface({ client, lease, onNavigate, onOpenLink, capabilityL
                   {home.continue_reading.length === 0 ? <p className="rvx-muted">还没有可继续的内容。</p> : (
                     <ul className="rvx-item-list">
                       {home.continue_reading.slice(0, 3).map((item) => (
-                        <li key={item.key} className="rvx-feed-row">
-                          <div className="rvx-row-main">
-                            <strong>{item.title || '未命名内容'}</strong>
-                            <span>{item.summary || item.reason_text}</span>
-                            <small>{item.source} · {formatRelativeDate(item.event_at)}</small>
-                          </div>
-                          {item.link_id && supportsItemAction(item, 'open_workspace') ? (
+                        <ReaderListRow
+                          key={item.key}
+                          variant="compact"
+                          source={item.source}
+                          meta={formatRelativeDate(item.event_at)}
+                          title={item.title || '未命名内容'}
+                          summary={item.summary || item.reason_text}
+                          actions={item.link_id && supportsItemAction(item, 'open_workspace') ? (
                             <button className="rvx-icon-button" type="button" aria-label="打开阅读" title="打开阅读" onClick={() => onOpenLink(item.link_id as string)}><Icon name="arrowright" size={15} /></button>
                           ) : policy.inbox && item.inbox_id && supportsItemAction(item, 'open') ? (
                             <button className="rvx-icon-button" type="button" aria-label="打开收件箱" title="打开收件箱" onClick={() => navigate({ kind: 'library', id: 'pending', inboxId: item.inbox_id as string })}><Icon name="arrowright" size={15} /></button>
                           ) : null}
-                        </li>
+                        />
                       ))}
                     </ul>
                   )}
@@ -448,7 +434,7 @@ export function HomeSurface({ client, lease, onNavigate, onOpenLink, capabilityL
                   </div>
                   {openTodos.length === 0 ? <p className="rvx-muted">没有未完成任务。</p> : (
                     <ul className="rvx-todo-list">
-                      {openTodos.slice(0, 3).map((todo) => <TodoRow key={todo.id} todo={todo} onToggle={toggleTodo} disabled={busyTodoID !== null} />)}
+                      {openTodos.slice(0, 3).map((todo) => <TodoRow key={todo.id} todo={todo} onToggle={toggleTodo} disabled={todoBusy} />)}
                     </ul>
                   )}
                 </section>}

@@ -473,6 +473,38 @@ describe('TodoSurface', () => {
     expect(listTodos).toHaveBeenCalledTimes(1)
   })
 
+  // 共享的 isRecord 拒绝数组。带上同名字段的数组过去能骗过「非 null object」这
+  // 一层守卫，被当成一条真 TODO 画出来；现在它在第一层就被判为坏数据。
+  it('refuses an array-shaped TODO even when it carries the expected fields', async () => {
+    const arrayShaped = Object.assign(['unexpected'], {
+      id: 'array-todo',
+      text: '数组任务',
+      done: false,
+      origin_kind: 'standalone',
+      created_at: '2026-08-10T01:00:00Z',
+      updated_at: '2026-08-10T01:00:00Z',
+    })
+    const listTodos = vi.fn(async () => ok({ items: [arrayShaped] }))
+    const client = { listTodos, isIdentityCurrent: vi.fn(() => true) } as unknown as IdentityBoundReaderClient
+
+    renderTodo(client)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('数据不完整')
+    expect(screen.queryByText('数组任务')).not.toBeInTheDocument()
+  })
+
+  // 错误文案收口到 readerErrorMessage：抛出物只带状态码、没有 message 字符串时，
+  // 也要走宿主协议的 409 / 412 / 403 文案，而不是笼统的「请求失败」。
+  it('translates a thrown host status into the shared conflict copy', async () => {
+    const listTodos = vi.fn(async () => { throw { status: 409 } })
+    const client = { listTodos, isIdentityCurrent: vi.fn(() => true) } as unknown as IdentityBoundReaderClient
+
+    renderTodo(client)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('内容已经被其他窗口更新，请刷新后重试。')
+    expect(screen.queryByText('加载中')).not.toBeInTheDocument()
+  })
+
   it('accepts an old TODO envelope for display but rejects partial mutation success', async () => {
     const legacy = {
       todoId: 'legacy-todo',

@@ -31,7 +31,8 @@ import {
   READING_SIZES,
 } from '../../lib/reading-surface'
 import { listChecklistBlocks } from '../../lib/thought-markdown/checklist'
-import { SurfaceError, SurfaceLoading, SurfaceShell, formatRelativeDate, errorMessage } from './SurfaceShell'
+import { readerErrorMessage, formatRelativeDate } from '../../lib/reader-surface'
+import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 import {
   NoteMarkdownEditor,
   type NoteEditorViewport,
@@ -399,7 +400,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
     })
     if (!client.isIdentityCurrent()) return null
     if (!result.ok) {
-      setError(errorMessage(result.error))
+      setError(readerErrorMessage(result.error))
       return null
     }
     applyNoteResponse(result.data)
@@ -441,7 +442,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
       const result = await client.discardNoteDraft(noteID, expectedDraftRevision)
       if (!client.isIdentityCurrent()) return false
       if (!result.ok) {
-        if (reportError) setError(errorMessage(result.error))
+        if (reportError) setError(readerErrorMessage(result.error))
         return false
       }
       draftContents.current.set(noteID, '')
@@ -464,7 +465,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
     setError(null)
     const result = await client.listNotes({ after: cursor, limit: 30 })
     if (!client.isIdentityCurrent()) return
-    if (!result.ok) setError(errorMessage(result.error))
+    if (!result.ok) setError(readerErrorMessage(result.error))
     else {
       setItems((current) => append ? [...current, ...result.data.items] : result.data.items)
       setTotalCount(result.data.count)
@@ -482,7 +483,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
     setTrashError(null)
     const result = await client.listTrash({ hostKind: 'note', after: cursor, limit: 50 })
     if (!client.isIdentityCurrent()) return
-    if (!result.ok) setTrashError(errorMessage(result.error))
+    if (!result.ok) setTrashError(readerErrorMessage(result.error))
     else {
       setTrashItems((current) => append ? [...current, ...result.data.items] : result.data.items)
       setTrashCount(result.data.count)
@@ -499,7 +500,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
     setTrashDetailLoading(true)
     const result = await client.getNote(item.host_id)
     if (!client.isIdentityCurrent()) return
-    if (!result.ok) setTrashError(errorMessage(result.error))
+    if (!result.ok) setTrashError(readerErrorMessage(result.error))
     else if (!result.data.deleted_at) setTrashError('该笔记已不在回收站。')
     else setTrashDetail(result.data)
     setTrashDetailLoading(false)
@@ -615,13 +616,13 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
       const result = await client.discardNoteDraft(noteID, expectedDraftRevision)
       if (!client.isIdentityCurrent()) return
       if (!result.ok) {
-        setError(errorMessage(result.error))
+        setError(readerErrorMessage(result.error))
         return
       }
       const refreshed = await client.getNote(noteID)
       if (!client.isIdentityCurrent()) return
       if (!refreshed.ok) {
-        setError(errorMessage(refreshed.error))
+        setError(readerErrorMessage(refreshed.error))
         return
       }
       applyNoteResponse(refreshed.data)
@@ -648,7 +649,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
         if (note.published_revision === 0) {
           const result = await client.deleteNote(note.id)
           if (!client.isIdentityCurrent() || !result.ok) {
-            if (client.isIdentityCurrent() && !result.ok) setError(errorMessage(result.error))
+            if (client.isIdentityCurrent() && !result.ok) setError(readerErrorMessage(result.error))
             return { status: 'blocked', code: client.isIdentityCurrent() ? 'note_delete_failed' : 'identity_lost' } as const
           }
           preparedLeaveValues.current.set(note.id, value)
@@ -744,7 +745,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
       })
       if (!client.isIdentityCurrent()) return
       if (!result.ok) {
-        setError(errorMessage(result.error))
+        setError(readerErrorMessage(result.error))
         return
       }
       applyNoteResponse(result.data)
@@ -875,7 +876,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
     try {
       const result = await client.deleteNote(selected.id)
       if (!client.isIdentityCurrent()) return
-      if (!result.ok) setError(errorMessage(result.error))
+      if (!result.ok) setError(readerErrorMessage(result.error))
       else {
         setItems((current) => current.filter((item) => item.id !== selected.id))
         setTotalCount((current) => current === null ? null : Math.max(0, current - 1))
@@ -892,7 +893,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
     try {
       const result = await client.restoreNote(selected.id)
       if (!client.isIdentityCurrent()) return
-      if (!result.ok) setError(errorMessage(result.error))
+      if (!result.ok) setError(readerErrorMessage(result.error))
       else void load()
     } finally {
       endBusy()
@@ -905,7 +906,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
       const result = await client.restoreNote(item.host_id)
       if (!client.isIdentityCurrent()) return
       if (!result.ok) {
-        setTrashError(errorMessage(result.error))
+        setTrashError(readerErrorMessage(result.error))
         return
       }
       setTrashItems((current) => current.filter((candidate) => candidate.host_id !== item.host_id))
@@ -928,7 +929,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
       const result = await client.purgeHost('note', item.host_id, operationID)
       if (!client.isIdentityCurrent()) return
       if (!result.ok) {
-        setTrashError(errorMessage(result.error))
+        setTrashError(readerErrorMessage(result.error))
         return
       }
       setTrashItems((current) => current.filter((candidate) => candidate.host_id !== item.host_id))
@@ -946,7 +947,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
     if (!selected) return
     const result = await client.listNoteHistory(selected.id)
     if (!client.isIdentityCurrent()) return
-    if (!result.ok) setError(errorMessage(result.error))
+    if (!result.ok) setError(readerErrorMessage(result.error))
     else setHistory(result.data)
   }, [client, selected])
 
@@ -974,7 +975,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
 			reanchor_ops: reanchorOps,
 		})
       if (!client.isIdentityCurrent()) return
-      if (!result.ok) setError(errorMessage(result.error))
+      if (!result.ok) setError(readerErrorMessage(result.error))
       else {
         applyNoteResponse(result.data)
         setContent(result.data.published_content)

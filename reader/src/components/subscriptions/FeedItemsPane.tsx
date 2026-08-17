@@ -1,5 +1,6 @@
-import { useCallback, type KeyboardEvent, type UIEvent } from 'react'
+import { useCallback, type UIEvent } from 'react'
 import { Icon } from '../Icon'
+import { ReaderPreviewCard } from '../ui/ReaderPreviewCard'
 import {
   feedError,
   feedItemSourceTitle,
@@ -63,78 +64,72 @@ function FeedItemCard({
   const starred = itemIsStarred(item)
   const later = itemIsReadLater(item)
   const analysis = itemAnalysisStatus(item)
-  const openFromKeyboard = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault()
-      onSelect()
-    }
-  }
+  const publishedAt = item.published_at ?? item.created_at
+  const title = item.title || '无标题文章'
+  const preview = itemPreview(item)
 
+  // 打开行为全部来自 ReaderPreviewCard 里的真实 <button>：点击、Enter、Space 由
+  // 浏览器原生按钮语义提供，所以这里不再手写 keydown；稍后读/收藏按钮是 main
+  // button 的兄弟节点，点它们本来就不会冒泡进打开区域，stopPropagation 也不需要了。
   return (
-    <article
-      className={'card rss-item-card' + (read ? ' read' : '') + (active ? ' active' : '')}
-      tabIndex={0}
-      aria-current={active ? 'true' : undefined}
-      onClick={onSelect}
-      onKeyDown={openFromKeyboard}
-    >
-      <div className="card-top">
-        {!read && <span className="unread-dot" aria-label="未读" />}
-        <span className="src-badge">
+    <ReaderPreviewCard
+      className="card rss-item-card"
+      selected={active}
+      read={read}
+      source={
+        <>
+          {!read && <span className="unread-dot" aria-label="未读" />}
           <Icon name="rss" size={12} />
           {feedItemSourceTitle(item, source)}
+        </>
+      }
+      time={<time dateTime={publishedAt}>{formatFeedDate(publishedAt)}</time>}
+      title={title}
+      summary={preview || undefined}
+      // main button 的 aria-label 会盖掉标题文本，所以把标题写进标签里，
+      // 读屏用户听到的仍是「打开 + 这是哪一篇订阅文章」。
+      openLabel={`打开 ${title}`}
+      onOpen={onSelect}
+      actions={
+        <span className="rss-card-foot">
+          <span className="rss-card-signals">
+            {analysis === 'done' && (
+              <span title="已有 AI 分析">
+                <Icon name="sparkles" size={13} />
+              </span>
+            )}
+            {(analysis === 'pending' || analysis === 'processing') && (
+              <span className="spinning" title="AI 分析中">
+                <Icon name="loader" size={13} />
+              </span>
+            )}
+            {analysis === 'failed' && (
+              <span className="error" title="AI 分析失败">
+                <Icon name="alert" size={13} />
+              </span>
+            )}
+          </span>
+          <button
+            type="button"
+            className={later ? 'on' : ''}
+            onClick={onToggleLater}
+            aria-label={later ? '移出稍后读' : '加入稍后读'}
+            title={later ? '移出稍后读' : '加入稍后读'}
+          >
+            <Icon name="bookmark" size={14} />
+          </button>
+          <button
+            type="button"
+            className={starred ? 'on' : ''}
+            onClick={onToggleStar}
+            aria-label={starred ? '取消收藏' : '收藏'}
+            title={starred ? '取消收藏' : '收藏'}
+          >
+            <Icon name={starred ? 'star_fill' : 'star'} size={14} />
+          </button>
         </span>
-        <span className="card-spacer" />
-        <time className="card-time" dateTime={item.published_at ?? item.created_at}>
-          {formatFeedDate(item.published_at ?? item.created_at)}
-        </time>
-      </div>
-      <h3>{item.title || '无标题文章'}</h3>
-      {itemPreview(item) && <p>{itemPreview(item)}</p>}
-      <div className="rss-card-foot">
-        <div className="rss-card-signals">
-          {analysis === 'done' && (
-            <span title="已有 AI 分析">
-              <Icon name="sparkles" size={13} />
-            </span>
-          )}
-          {(analysis === 'pending' || analysis === 'processing') && (
-            <span className="spinning" title="AI 分析中">
-              <Icon name="loader" size={13} />
-            </span>
-          )}
-          {analysis === 'failed' && (
-            <span className="error" title="AI 分析失败">
-              <Icon name="alert" size={13} />
-            </span>
-          )}
-        </div>
-        <button
-          type="button"
-          className={later ? 'on' : ''}
-          onClick={(event) => {
-            event.stopPropagation()
-            onToggleLater()
-          }}
-          aria-label={later ? '移出稍后读' : '加入稍后读'}
-          title={later ? '移出稍后读' : '加入稍后读'}
-        >
-          <Icon name="bookmark" size={14} />
-        </button>
-        <button
-          type="button"
-          className={starred ? 'on' : ''}
-          onClick={(event) => {
-            event.stopPropagation()
-            onToggleStar()
-          }}
-          aria-label={starred ? '取消收藏' : '收藏'}
-          title={starred ? '取消收藏' : '收藏'}
-        >
-          <Icon name={starred ? 'star_fill' : 'star'} size={14} />
-        </button>
-      </div>
-    </article>
+      }
+    />
   )
 }
 

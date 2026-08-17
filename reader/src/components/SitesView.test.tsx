@@ -648,3 +648,137 @@ describe('SitesView card grid', () => {
     })
   })
 })
+
+// 六个 Dialog 迁到 ReaderDialog 后，外壳只剩 props：关闭规则、busy 封锁和初始焦点
+// 都由外壳执行。这些用例把每个调用方声明的规则钉在这里，防止后续统一成一种。
+describe('SitesView 对话框外壳', () => {
+  function backdropOf(dialog: HTMLElement): HTMLElement {
+    const element = dialog.closest('.reader-dialog-backdrop')
+    if (!(element instanceof HTMLElement)) throw new Error('expected dialog backdrop to exist')
+    return element
+  }
+
+  it('「分类规则」按下 backdrop 关闭，按在对话框内部不关闭', async () => {
+    const fixture = capabilityClient()
+    render(sitesElement(fixture.client, enabledReaderCapabilityLease()))
+    await openCapabilityDetail()
+
+    fireEvent.click(screen.getByRole('button', { name: '分类规则' }))
+    const dialog = await screen.findByRole('dialog', { name: '分类规则' })
+
+    fireEvent.mouseDown(within(dialog).getByText(/规则只影响之后的自动采集/))
+    expect(screen.getByRole('dialog', { name: '分类规则' })).toBeInTheDocument()
+
+    fireEvent.mouseDown(backdropOf(dialog))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '分类规则' })).not.toBeInTheDocument())
+  })
+
+  it('「合并网站」空闲时按下 backdrop 关闭', async () => {
+    const fixture = capabilityClient()
+    render(sitesElement(fixture.client, enabledReaderCapabilityLease()))
+    await openCapabilityDetail()
+
+    fireEvent.click(screen.getByRole('button', { name: '合并网站' }))
+    const dialog = await screen.findByRole('dialog', { name: '合并到 Acme Docs' })
+
+    fireEvent.mouseDown(backdropOf(dialog))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '合并到 Acme Docs' })).not.toBeInTheDocument())
+  })
+
+  it('「拆分网站」空闲时按下 backdrop 关闭，表单仍由 submit 触发预览', async () => {
+    const client = {
+      isIdentityCurrent: vi.fn(() => true),
+      getSites: vi.fn(async () => ok({ items: [site], total: 1, page: 1, limit: 60 })),
+      getSite: vi.fn(async () => ok(splitDetail)),
+    } as unknown as ReaderClient
+    await openSplitDialog(client)
+    const dialog = await screen.findByRole('dialog', { name: '拆分网站' })
+
+    expect(within(dialog).getByRole('button', { name: '预览拆分' })).toHaveAttribute('type', 'submit')
+    expect(within(dialog).getByRole('button', { name: '预览拆分' }).closest('form')).not.toBeNull()
+
+    fireEvent.mouseDown(backdropOf(dialog))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '拆分网站' })).not.toBeInTheDocument())
+  })
+
+  it('「编辑网站资料」聚焦名称输入框，按下 backdrop 与 Escape 都不关闭', async () => {
+    const fixture = capabilityClient()
+    render(sitesElement(fixture.client, enabledReaderCapabilityLease()))
+    await openCapabilityDetail()
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑网站资料' }))
+    const dialog = await screen.findByRole('dialog', { name: '编辑网站资料' })
+    expect(document.activeElement).toBe(within(dialog).getByLabelText('名称'))
+
+    fireEvent.mouseDown(backdropOf(dialog))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: '编辑网站资料' })).toBeInTheDocument()
+  })
+
+  it('「编辑入口」聚焦名称输入框，按下 backdrop 与 Escape 都不关闭', async () => {
+    const fixture = capabilityClient()
+    render(sitesElement(fixture.client, enabledReaderCapabilityLease()))
+    await openCapabilityDetail()
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑入口' }))
+    const dialog = await screen.findByRole('dialog', { name: '编辑入口' })
+    expect(document.activeElement).toBe(within(dialog).getByLabelText('名称'))
+
+    fireEvent.mouseDown(backdropOf(dialog))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: '编辑入口' })).toBeInTheDocument()
+  })
+
+  it('「移到阅读」聚焦取消按钮，Tab 在对话框内循环，Escape 关闭', async () => {
+    const fixture = capabilityClient()
+    render(sitesElement(fixture.client, enabledReaderCapabilityLease()))
+    await openCapabilityDetail()
+
+    fireEvent.click(screen.getByRole('button', { name: '移到阅读' }))
+    const dialog = await screen.findByRole('dialog', { name: '移到阅读' })
+    const close = within(dialog).getByRole('button', { name: '关闭' })
+    const cancel = within(dialog).getByRole('button', { name: '取消' })
+    const confirm = within(dialog).getByRole('button', { name: '确认转换' })
+    expect(document.activeElement).toBe(cancel)
+
+    confirm.focus()
+    fireEvent.keyDown(confirm, { key: 'Tab' })
+    expect(document.activeElement).toBe(close)
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(confirm)
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '移到阅读' })).not.toBeInTheDocument())
+  })
+
+  it('转换进行中，关闭按钮、Escape 和 backdrop 三条路径都关不掉「移到阅读」', async () => {
+    let release: ((value: unknown) => void) | undefined
+    const convertLink = vi.fn(() => new Promise((resolve) => { release = resolve }))
+    const client = {
+      isIdentityCurrent: vi.fn(() => true),
+      getSites: vi.fn(async () => ok({ items: [site], total: 1, page: 1, limit: 30 })),
+      getSite: vi.fn(async () => ok(detail)),
+      getLink: vi.fn(async () => ok({ content_revision: 7 })),
+      convertLink,
+    } as unknown as ReaderClient
+    render(sitesElement(client, enabledReaderCapabilityLease()))
+    await openCapabilityDetail()
+
+    fireEvent.click(screen.getByRole('button', { name: '移到阅读' }))
+    const dialog = await screen.findByRole('dialog', { name: '移到阅读' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认转换' }))
+    await within(dialog).findByRole('button', { name: '转换中' })
+
+    const close = within(dialog).getByRole('button', { name: '关闭' })
+    expect(close).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: '取消' })).toBeDisabled()
+    fireEvent.click(close)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.mouseDown(backdropOf(dialog))
+    expect(screen.getByRole('dialog', { name: '移到阅读' })).toBeInTheDocument()
+
+    release?.(ok({}))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '移到阅读' })).not.toBeInTheDocument())
+    expect(convertLink).toHaveBeenCalledTimes(1)
+  })
+})
