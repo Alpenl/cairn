@@ -17,7 +17,7 @@ const (
 )
 
 type readerFeedSignalContribution struct {
-	code         model.ReaderFeedReasonCode
+	code         model.ReaderFeedScoreSignal
 	enabled      bool
 	contribution int
 	params       model.ReaderFeedReasonParams
@@ -30,17 +30,17 @@ func scoreReaderFeedItem(item model.ReaderFeedItem) (model.ReaderFeedItem, error
 	inbox, reading, subscription := "inbox", "reading", "subscription"
 
 	signals := []readerFeedSignalContribution{
-		{code: model.ReaderFeedReasonPendingConfirmation, enabled: item.Source == inbox, contribution: readerFeedPendingConfirmationWeight, params: model.ReaderFeedReasonParams{Source: &inbox}},
-		{code: model.ReaderFeedReasonSavedLibrary, enabled: item.Source == reading, contribution: readerFeedSavedLibraryWeight, params: model.ReaderFeedReasonParams{Source: &reading}},
-		{code: model.ReaderFeedReasonSubscriptionRecent, enabled: item.Source == subscription, contribution: readerFeedSubscriptionRecentWeight, params: model.ReaderFeedReasonParams{Source: &subscription}},
-		{code: model.ReaderFeedReasonUnread, enabled: true, contribution: boolScore(!item.Read, readerFeedUnreadWeight), params: model.ReaderFeedReasonParams{Read: &read}},
-		{code: model.ReaderFeedReasonReadLater, enabled: true, contribution: boolScore(item.ReadLater, readerFeedReadLaterWeight), params: model.ReaderFeedReasonParams{ReadLater: &readLater}},
-		{code: model.ReaderFeedReasonChronologicalFallback, enabled: true, params: model.ReaderFeedReasonParams{CreatedAt: &createdAt}},
+		{code: model.ReaderFeedSignalPendingConfirmation, enabled: item.Source == inbox, contribution: readerFeedPendingConfirmationWeight, params: model.ReaderFeedReasonParams{Source: &inbox}},
+		{code: model.ReaderFeedSignalSavedLibrary, enabled: item.Source == reading, contribution: readerFeedSavedLibraryWeight, params: model.ReaderFeedReasonParams{Source: &reading}},
+		{code: model.ReaderFeedSignalSubscriptionRecent, enabled: item.Source == subscription, contribution: readerFeedSubscriptionRecentWeight, params: model.ReaderFeedReasonParams{Source: &subscription}},
+		{code: model.ReaderFeedSignalUnread, enabled: true, contribution: boolScore(!item.Read, readerFeedUnreadWeight), params: model.ReaderFeedReasonParams{Read: &read}},
+		{code: model.ReaderFeedSignalReadLater, enabled: true, contribution: boolScore(item.ReadLater, readerFeedReadLaterWeight), params: model.ReaderFeedReasonParams{ReadLater: &readLater}},
+		{code: model.ReaderFeedSignalChronologicalFallback, enabled: true, params: model.ReaderFeedReasonParams{CreatedAt: &createdAt}},
 	}
 
 	item.Score = 0
 	item.ScoreContributions = model.ReaderFeedScoreContributions{}
-	item.EnabledScoreSignals = make([]model.ReaderFeedReasonCode, 0, len(signals))
+	item.EnabledScoreSignals = make([]model.ReaderFeedScoreSignal, 0, len(signals))
 	for _, signal := range signals {
 		setReaderFeedContribution(&item.ScoreContributions, signal.code, boolScore(signal.enabled, signal.contribution))
 		if signal.enabled {
@@ -53,7 +53,7 @@ func scoreReaderFeedItem(item model.ReaderFeedItem) (model.ReaderFeedItem, error
 	if err != nil {
 		return model.ReaderFeedItem{}, err
 	}
-	item.ReasonCode = winner.code
+	item.ReasonCode = winner.code.ReasonCode()
 	item.ReasonParams = winner.params
 	item.ReasonContribution = winner.contribution
 	item.ReasonText, err = readerFeedReasonText(winner.code, winner.params)
@@ -106,19 +106,19 @@ func boolScore(enabled bool, score int) int {
 	return 0
 }
 
-func setReaderFeedContribution(contributions *model.ReaderFeedScoreContributions, code model.ReaderFeedReasonCode, value int) {
-	switch code {
-	case model.ReaderFeedReasonPendingConfirmation:
+func setReaderFeedContribution(contributions *model.ReaderFeedScoreContributions, signal model.ReaderFeedScoreSignal, value int) {
+	switch signal {
+	case model.ReaderFeedSignalPendingConfirmation:
 		contributions.PendingConfirmation = value
-	case model.ReaderFeedReasonSavedLibrary:
+	case model.ReaderFeedSignalSavedLibrary:
 		contributions.SavedLibrary = value
-	case model.ReaderFeedReasonSubscriptionRecent:
+	case model.ReaderFeedSignalSubscriptionRecent:
 		contributions.SubscriptionRecent = value
-	case model.ReaderFeedReasonUnread:
+	case model.ReaderFeedSignalUnread:
 		contributions.Unread = value
-	case model.ReaderFeedReasonReadLater:
+	case model.ReaderFeedSignalReadLater:
 		contributions.ReadLater = value
-	case model.ReaderFeedReasonChronologicalFallback:
+	case model.ReaderFeedSignalChronologicalFallback:
 		contributions.ChronologicalFallback = value
 	}
 }
@@ -128,7 +128,7 @@ func selectReaderFeedReason(signals []readerFeedSignalContribution) (readerFeedS
 	var winner *readerFeedSignalContribution
 	for index := range signals {
 		signal := &signals[index]
-		if signal.code == model.ReaderFeedReasonChronologicalFallback && signal.enabled {
+		if signal.code == model.ReaderFeedSignalChronologicalFallback && signal.enabled {
 			fallback = signal
 		}
 		if !signal.enabled || signal.contribution <= 0 {
@@ -151,60 +151,62 @@ func selectReaderFeedReason(signals []readerFeedSignalContribution) (readerFeedS
 	return *winner, nil
 }
 
-func readerFeedReasonPriority(code model.ReaderFeedReasonCode) int {
-	switch code {
-	case model.ReaderFeedReasonPendingConfirmation:
+func readerFeedReasonPriority(signal model.ReaderFeedScoreSignal) int {
+	switch signal {
+	case model.ReaderFeedSignalPendingConfirmation:
 		return 0
-	case model.ReaderFeedReasonSavedLibrary:
+	case model.ReaderFeedSignalSavedLibrary:
 		return 1
-	case model.ReaderFeedReasonSubscriptionRecent:
+	case model.ReaderFeedSignalSubscriptionRecent:
 		return 2
-	case model.ReaderFeedReasonUnread:
+	case model.ReaderFeedSignalUnread:
 		return 3
-	case model.ReaderFeedReasonReadLater:
+	case model.ReaderFeedSignalReadLater:
 		return 4
-	case model.ReaderFeedReasonChronologicalFallback:
+	case model.ReaderFeedSignalChronologicalFallback:
 		return 5
 	default:
 		return 6
 	}
 }
 
-func readerFeedReasonText(code model.ReaderFeedReasonCode, params model.ReaderFeedReasonParams) (string, error) {
-	if !readerFeedReasonParamsValid(code, params) {
-		return "", fmt.Errorf("%w: reason %q is missing required params", ErrInvalidReaderFeedReason, code)
+// readerFeedReasonText covers the scored reasons only. Reasons outside the
+// ranking pass, such as Home's continue_reading, own their own wording.
+func readerFeedReasonText(signal model.ReaderFeedScoreSignal, params model.ReaderFeedReasonParams) (string, error) {
+	if !readerFeedReasonParamsValid(signal, params) {
+		return "", fmt.Errorf("%w: reason %q is missing required params", ErrInvalidReaderFeedReason, signal)
 	}
-	switch code {
-	case model.ReaderFeedReasonPendingConfirmation:
+	switch signal {
+	case model.ReaderFeedSignalPendingConfirmation:
 		return "收件箱采集", nil
-	case model.ReaderFeedReasonSavedLibrary:
+	case model.ReaderFeedSignalSavedLibrary:
 		return "已保存到资料库", nil
-	case model.ReaderFeedReasonSubscriptionRecent:
+	case model.ReaderFeedSignalSubscriptionRecent:
 		return "订阅更新", nil
-	case model.ReaderFeedReasonUnread:
+	case model.ReaderFeedSignalUnread:
 		return "尚未阅读", nil
-	case model.ReaderFeedReasonReadLater:
+	case model.ReaderFeedSignalReadLater:
 		return "已加入稍后读", nil
-	case model.ReaderFeedReasonChronologicalFallback:
+	case model.ReaderFeedSignalChronologicalFallback:
 		return "按时间排序", nil
 	default:
-		return "", fmt.Errorf("%w: unsupported reason %q", ErrInvalidReaderFeedReason, code)
+		return "", fmt.Errorf("%w: unsupported reason %q", ErrInvalidReaderFeedReason, signal)
 	}
 }
 
-func readerFeedReasonParamsValid(code model.ReaderFeedReasonCode, params model.ReaderFeedReasonParams) bool {
-	switch code {
-	case model.ReaderFeedReasonPendingConfirmation:
+func readerFeedReasonParamsValid(signal model.ReaderFeedScoreSignal, params model.ReaderFeedReasonParams) bool {
+	switch signal {
+	case model.ReaderFeedSignalPendingConfirmation:
 		return params.Source != nil && *params.Source == "inbox"
-	case model.ReaderFeedReasonSavedLibrary:
+	case model.ReaderFeedSignalSavedLibrary:
 		return params.Source != nil && *params.Source == "reading"
-	case model.ReaderFeedReasonSubscriptionRecent:
+	case model.ReaderFeedSignalSubscriptionRecent:
 		return params.Source != nil && *params.Source == "subscription"
-	case model.ReaderFeedReasonUnread:
+	case model.ReaderFeedSignalUnread:
 		return params.Read != nil && !*params.Read
-	case model.ReaderFeedReasonReadLater:
+	case model.ReaderFeedSignalReadLater:
 		return params.ReadLater != nil && *params.ReadLater
-	case model.ReaderFeedReasonChronologicalFallback:
+	case model.ReaderFeedSignalChronologicalFallback:
 		return params.CreatedAt != nil
 	default:
 		return false

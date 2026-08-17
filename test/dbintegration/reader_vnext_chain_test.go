@@ -299,6 +299,18 @@ func TestReaderVNextPostgresCrossSurfaceChain(t *testing.T) {
 	if len(home.ContinueReading) != 1 || home.ContinueReading[0].LinkID == nil || *home.ContinueReading[0].LinkID != linkID {
 		t.Fatalf("Home continue reading = %#v, want Feed link %s", home.ContinueReading, linkID)
 	}
+	// A half-read link is the data condition that puts a non-scoring reason on
+	// Home. It must reach the client as the contract constant with no score
+	// evidence attached, because a client audits the reason against the
+	// contributions column by column.
+	resumed := home.ContinueReading[0]
+	if resumed.ReasonCode != model.ReaderFeedReasonContinueReading {
+		t.Fatalf("Home continue reading reason = %q, want %q", resumed.ReasonCode, model.ReaderFeedReasonContinueReading)
+	}
+	if resumed.Score != 0 || resumed.ReasonContribution != 0 ||
+		resumed.ScoreContributions != (model.ReaderFeedScoreContributions{}) || len(resumed.EnabledScoreSignals) != 0 {
+		t.Fatalf("Home continue reading score evidence = %#v, want an unscored card", resumed)
+	}
 
 	// content history -> restore -> readable current snapshot
 	currentContent, err := links.GetContent(ctx, linkID)

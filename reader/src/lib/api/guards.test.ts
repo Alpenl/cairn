@@ -108,6 +108,70 @@ function makeReaderFeedItem(overrides: Partial<ReaderFeedItemResponse> = {}): Re
   } as ReaderFeedItemResponse
 }
 
+/**
+ * Home 的 continue-reading 条目按服务端真实 wire 构造：它的推荐理由不参与打分，
+ * 所以既没有贡献列、也不在 enabled_score_signals 里，reason_params 为空对象。
+ */
+function makeContinueReadingItem(overrides: Record<string, unknown> = {}) {
+  return {
+    key: 'link:link-1',
+    source: 'reading',
+    item_type: 'reading',
+    resource_key: 'link:link-1',
+    action_key: 'link:link-1',
+    dedupe_key: 'url:https://example.com/article',
+    section_id: 'reading',
+    actions: ['read', 'read_later', 'open'],
+    title: 'Half-read article',
+    summary: 'A saved article',
+    url: 'https://example.com/article',
+    link_id: 'link-1',
+    read: false,
+    read_later: false,
+    saved: false,
+    score: 0,
+    score_contributions: {
+      pending_confirmation: 0,
+      saved_library: 0,
+      subscription_recent: 0,
+      unread: 0,
+      read_later: 0,
+      chronological_fallback: 0,
+    },
+    enabled_score_signals: [],
+    reason_code: 'continue_reading',
+    reason_params: {},
+    reason_contribution: 0,
+    reason_text: '已读 42%，继续阅读',
+    published_at: '2026-08-10T02:00:00Z',
+    event_at: '2026-08-10T02:00:00Z',
+    created_at: '2026-08-10T01:00:00Z',
+    ...overrides,
+  }
+}
+
+/** 一条正常打分的资料库条目，用来守住打分类 reason code 的不变量。 */
+function makeScoredReadingItem(overrides: Record<string, unknown> = {}) {
+  return {
+    ...makeContinueReadingItem(),
+    score: 90,
+    score_contributions: {
+      pending_confirmation: 0,
+      saved_library: 70,
+      subscription_recent: 0,
+      unread: 20,
+      read_later: 0,
+      chronological_fallback: 0,
+    },
+    enabled_score_signals: ['saved_library', 'unread', 'read_later', 'chronological_fallback'],
+    reason_code: 'saved_library',
+    reason_params: { source: 'reading' },
+    reason_contribution: 70,
+    reason_text: '已保存到资料库',
+    ...overrides,
+  }
+}
+
 describe('isErrorResponse', () => {
   it('合法错误体', () => {
     expect(isErrorResponse({ error: { code: 404, message: 'nope' } })).toBe(true)
@@ -452,6 +516,42 @@ describe('Reader Home response guard', () => {
       freshness: 'fresh',
       partial: false,
     })).toBe(false)
+  })
+
+  it('接受服务端真实返回的 continue-reading 条目：不打分的推荐理由', () => {
+    expect(isReaderHomeResponse(makeReaderHome({
+      continue_reading: [makeContinueReadingItem() as unknown as ReaderFeedItemResponse],
+    }))).toBe(true)
+  })
+
+  it('拒绝把 continue_reading 伪装成打分信号的条目', () => {
+    for (const [name, invalid] of [
+      ['claims a contribution', { ...makeContinueReadingItem(), reason_contribution: 70 }],
+      ['joins the enabled signals', { ...makeContinueReadingItem(), enabled_score_signals: ['continue_reading'] }],
+      ['owns a contributions column', {
+        ...makeContinueReadingItem(),
+        score_contributions: { ...makeContinueReadingItem().score_contributions, continue_reading: 0 },
+      }],
+      ['carries scoring params', { ...makeContinueReadingItem(), reason_params: { source: 'reading' } }],
+    ] as [string, Record<string, unknown>][]) {
+      expect(isReaderHomeResponse(makeReaderHome({
+        continue_reading: [invalid as unknown as ReaderFeedItemResponse],
+      })), name).toBe(false)
+    }
+  })
+
+  it('打分类 reason code 仍必须与冻结的 score evidence 一致', () => {
+    const scored = makeScoredReadingItem()
+    for (const [name, invalid] of [
+      // 赢家必须出现在 enabled_score_signals 里。
+      ['winner missing from the enabled signals', { ...scored, enabled_score_signals: ['unread', 'read_later'] }],
+      // 赢家的 reason_contribution 必须等于它那一列的贡献。
+      ['winner contribution disagrees with its column', { ...scored, reason_contribution: 20 }],
+    ] as [string, Record<string, unknown>][]) {
+      expect(isReaderHomeResponse(makeReaderHome({
+        continue_reading: [invalid as unknown as ReaderFeedItemResponse],
+      })), name).toBe(false)
+    }
   })
 })
 

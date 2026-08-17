@@ -10,6 +10,7 @@ import type {
   ReaderFeedItemResponse,
   ReaderFeedReasonCode,
   ReaderFeedResponse,
+  ReaderFeedScoreSignal,
   ReaderFeedSectionResponse,
   ReaderFeedSourceResponse,
   ReaderCapabilitiesResponse,
@@ -167,13 +168,21 @@ const READER_FEED_ITEM_TYPES = {
   subscription: true,
 } satisfies Record<NonNullable<ReaderFeedItemResponse['item_type']>, true>
 
-const READER_FEED_REASON_CODES = {
+// A score signal owns one column of score_contributions; a reason code only
+// explains the card. Every signal is a reason code, never the reverse:
+// continue_reading is a Home reason that the ranking pass never produces.
+const READER_FEED_SCORE_SIGNALS = {
   pending_confirmation: true,
   saved_library: true,
   subscription_recent: true,
   unread: true,
   read_later: true,
   chronological_fallback: true,
+} satisfies Record<ReaderFeedScoreSignal, true>
+
+const READER_FEED_REASON_CODES = {
+  ...READER_FEED_SCORE_SIGNALS,
+  continue_reading: true,
 } satisfies Record<ReaderFeedReasonCode, true>
 
 const READER_FEED_CAPABILITIES = {
@@ -351,17 +360,23 @@ function isReaderFeedReasonCode(value: unknown): value is ReaderFeedReasonCode {
   return isEnumValue(READER_FEED_REASON_CODES, value)
 }
 
-function isReaderFeedScoreContributions(value: unknown): value is Record<ReaderFeedReasonCode, number> {
+function isReaderFeedScoreSignal(value: unknown): value is ReaderFeedScoreSignal {
+  return isEnumValue(READER_FEED_SCORE_SIGNALS, value)
+}
+
+function isReaderFeedScoreContributions(value: unknown): value is Record<ReaderFeedScoreSignal, number> {
   return (
     isRecord(value) &&
-    Object.keys(READER_FEED_REASON_CODES).every((code) => isInteger(value[code])) &&
-    Object.keys(value).every((code) => Object.prototype.hasOwnProperty.call(READER_FEED_REASON_CODES, code))
+    Object.keys(READER_FEED_SCORE_SIGNALS).every((signal) => isInteger(value[signal])) &&
+    Object.keys(value).every((signal) => Object.prototype.hasOwnProperty.call(READER_FEED_SCORE_SIGNALS, signal))
   )
 }
 
 function isReaderFeedReasonParams(code: ReaderFeedReasonCode, value: unknown): boolean {
   if (!isRecord(value)) return false
   switch (code) {
+    case 'continue_reading':
+      return Object.keys(value).length === 0
     case 'pending_confirmation':
       return value.source === 'inbox' && Object.keys(value).length === 1
     case 'saved_library':
@@ -429,7 +444,7 @@ export function isReaderFeedItemResponse(value: unknown): value is ReaderFeedIte
     typeof value.read_later !== 'boolean' ||
 	    !isInteger(value.score) ||
     !isReaderFeedScoreContributions(value.score_contributions) ||
-    !isUniqueReaderFeedArray(value.enabled_score_signals, isReaderFeedReasonCode) ||
+    !isUniqueReaderFeedArray(value.enabled_score_signals, isReaderFeedScoreSignal) ||
     !isReaderFeedReasonCode(value.reason_code) ||
     !isReaderFeedReasonParams(value.reason_code, value.reason_params) ||
 	    !isInteger(value.reason_contribution) ||
@@ -442,10 +457,24 @@ export function isReaderFeedItemResponse(value: unknown): value is ReaderFeedIte
   ) {
     return false
   }
-  if (
-    value.score !== Object.values(value.score_contributions as Record<ReaderFeedReasonCode, number>).reduce((total, contribution) => total + contribution, 0) ||
-    !(value.enabled_score_signals as ReaderFeedReasonCode[]).includes(value.reason_code) ||
-    (value.score_contributions as Record<ReaderFeedReasonCode, number>)[value.reason_code] !== value.reason_contribution
+  const contributions = value.score_contributions as Record<ReaderFeedScoreSignal, number>
+  if (value.score !== Object.values(contributions).reduce((total, contribution) => total + contribution, 0)) {
+    return false
+  }
+  if (isReaderFeedScoreSignal(value.reason_code)) {
+    // A scored card must name a signal that was actually enabled, and must
+    // report exactly the contribution the ranking pass wrote for it.
+    if (
+      !(value.enabled_score_signals as ReaderFeedScoreSignal[]).includes(value.reason_code) ||
+      contributions[value.reason_code] !== value.reason_contribution
+    ) {
+      return false
+    }
+  } else if (
+    // A reason outside the ranking pass owns no contributions column, so it must
+    // claim no contribution either.
+    value.reason_contribution !== 0 ||
+    Object.prototype.hasOwnProperty.call(contributions, value.reason_code)
   ) {
     return false
   }

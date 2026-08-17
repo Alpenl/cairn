@@ -567,15 +567,25 @@ func TestReaderFeedReasonOpenAPIContract(t *testing.T) {
 		t.Fatalf("openapi.json: unmarshal failed: %v", err)
 	}
 
-	var reasonCode struct {
+	var enumSchema struct {
 		Enum []string `json:"enum"`
 	}
-	if err := json.Unmarshal(spec.Components.Schemas["ReaderFeedReasonCode"], &reasonCode); err != nil {
+	// Score signals are the reasons the ranking pass can win with: each one owns
+	// a contributions column. Reason codes are the wider vocabulary; Home's
+	// continue_reading is a reason that never scores.
+	wantSignals := []string{"pending_confirmation", "saved_library", "subscription_recent", "unread", "read_later", "chronological_fallback"}
+	if err := json.Unmarshal(spec.Components.Schemas["ReaderFeedScoreSignal"], &enumSchema); err != nil {
+		t.Fatalf("ReaderFeedScoreSignal: unmarshal failed: %v", err)
+	}
+	if !slices.Equal(enumSchema.Enum, wantSignals) {
+		t.Fatalf("ReaderFeedScoreSignal enum = %#v, want %#v", enumSchema.Enum, wantSignals)
+	}
+	wantCodes := append(slices.Clone(wantSignals), "continue_reading")
+	if err := json.Unmarshal(spec.Components.Schemas["ReaderFeedReasonCode"], &enumSchema); err != nil {
 		t.Fatalf("ReaderFeedReasonCode: unmarshal failed: %v", err)
 	}
-	wantCodes := []string{"pending_confirmation", "saved_library", "subscription_recent", "unread", "read_later", "chronological_fallback"}
-	if !slices.Equal(reasonCode.Enum, wantCodes) {
-		t.Fatalf("ReaderFeedReasonCode enum = %#v, want %#v", reasonCode.Enum, wantCodes)
+	if !slices.Equal(enumSchema.Enum, wantCodes) {
+		t.Fatalf("ReaderFeedReasonCode enum = %#v, want %#v", enumSchema.Enum, wantCodes)
 	}
 
 	for _, name := range []string{
@@ -586,6 +596,7 @@ func TestReaderFeedReasonOpenAPIContract(t *testing.T) {
 		"ReaderFeedReadLaterParams",
 		"ReaderFeedChronologicalFallbackParams",
 		"ReaderFeedScoreContributions",
+		"ReaderFeedScoreSignal",
 		"ReaderFeedReasonTuple",
 		"ReaderRankedFeedItemResponse",
 	} {
@@ -612,7 +623,10 @@ func TestReaderFeedReasonOpenAPIContract(t *testing.T) {
 			Ref        string   `json:"$ref"`
 			Required   []string `json:"required"`
 			Properties map[string]struct {
-				Ref string `json:"$ref"`
+				Ref   string `json:"$ref"`
+				Items struct {
+					Ref string `json:"$ref"`
+				} `json:"items"`
 			} `json:"properties"`
 		} `json:"allOf"`
 	}
@@ -648,10 +662,10 @@ func TestReaderFeedReasonOpenAPIContract(t *testing.T) {
 	}
 
 	tuple := decodeReasonSchema("ReaderFeedReasonTuple")
-	if len(tuple.OneOf) != len(wantCodes) {
-		t.Fatalf("ReaderFeedReasonTuple variants = %d, want %d", len(tuple.OneOf), len(wantCodes))
+	if len(tuple.OneOf) != len(wantSignals) {
+		t.Fatalf("ReaderFeedReasonTuple variants = %d, want %d", len(tuple.OneOf), len(wantSignals))
 	}
-	for index, code := range wantCodes {
+	for index, code := range wantSignals {
 		variant := tuple.OneOf[index]
 		if !slices.Equal(variant.Required, []string{"reason_code", "reason_params", "reason_contribution"}) || variant.Properties["reason_code"].Const != code || variant.Properties["reason_params"].Ref == "" {
 			t.Errorf("ReaderFeedReasonTuple variant %d = %#v, want code %q and discriminated params", index, variant, code)
@@ -659,7 +673,7 @@ func TestReaderFeedReasonOpenAPIContract(t *testing.T) {
 	}
 
 	contributions := decodeReasonSchema("ReaderFeedScoreContributions")
-	if !slices.Equal(contributions.Required, wantCodes) || len(contributions.Properties) != len(wantCodes) || contributions.AdditionalProperties == nil || *contributions.AdditionalProperties {
+	if !slices.Equal(contributions.Required, wantSignals) || len(contributions.Properties) != len(wantSignals) || contributions.AdditionalProperties == nil || *contributions.AdditionalProperties {
 		t.Errorf("ReaderFeedScoreContributions shape = required %#v properties %#v additionalProperties %v", contributions.Required, contributions.Properties, contributions.AdditionalProperties)
 	}
 	ranked := decodeReasonSchema("ReaderRankedFeedItemResponse")
@@ -667,6 +681,15 @@ func TestReaderFeedReasonOpenAPIContract(t *testing.T) {
 		!slices.Equal(ranked.AllOf[1].Required, []string{"score", "score_contributions", "enabled_score_signals"}) ||
 		ranked.AllOf[2].Ref != "#/components/schemas/ReaderFeedReasonTuple" {
 		t.Errorf("ReaderRankedFeedItemResponse allOf = %#v", ranked.AllOf)
+	}
+	// The enabled collection is the scoring evidence, so it must stay bound to
+	// the narrow signal enum even as the reason vocabulary grows.
+	if ref := ranked.AllOf[1].Properties["enabled_score_signals"].Items.Ref; ref != "#/components/schemas/ReaderFeedScoreSignal" {
+		t.Errorf("enabled_score_signals items ref = %q, want the score-signal enum", ref)
+	}
+	item := decodeReasonSchema("ReaderFeedItemResponse")
+	if ref := item.Properties["reason_code"].Ref; ref != "#/components/schemas/ReaderFeedReasonCode" {
+		t.Errorf("ReaderFeedItemResponse.reason_code ref = %q, want the reason-code enum", ref)
 	}
 
 	var feedResponse struct {

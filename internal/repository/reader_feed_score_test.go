@@ -234,13 +234,13 @@ func TestReaderFeedRecommendationGoldenKeepsCandidatesWeightsPrecisionAndOrder(t
 }
 
 func TestSelectReaderFeedReasonUsesFrozenPriorityForEveryTie(t *testing.T) {
-	priority := []model.ReaderFeedReasonCode{
-		model.ReaderFeedReasonPendingConfirmation,
-		model.ReaderFeedReasonSavedLibrary,
-		model.ReaderFeedReasonSubscriptionRecent,
-		model.ReaderFeedReasonUnread,
-		model.ReaderFeedReasonReadLater,
-		model.ReaderFeedReasonChronologicalFallback,
+	priority := []model.ReaderFeedScoreSignal{
+		model.ReaderFeedSignalPendingConfirmation,
+		model.ReaderFeedSignalSavedLibrary,
+		model.ReaderFeedSignalSubscriptionRecent,
+		model.ReaderFeedSignalUnread,
+		model.ReaderFeedSignalReadLater,
+		model.ReaderFeedSignalChronologicalFallback,
 	}
 	for higherIndex, higher := range priority {
 		for lowerIndex := higherIndex + 1; lowerIndex < len(priority); lowerIndex++ {
@@ -261,57 +261,57 @@ func TestSelectReaderFeedReasonUsesFrozenPriorityForEveryTie(t *testing.T) {
 	}
 
 	winner, err := selectReaderFeedReason([]readerFeedSignalContribution{
-		{code: model.ReaderFeedReasonReadLater, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedReasonReadLater)},
-		{code: model.ReaderFeedReasonSubscriptionRecent, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedReasonSubscriptionRecent)},
-		{code: model.ReaderFeedReasonPendingConfirmation, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedReasonPendingConfirmation)},
-		{code: model.ReaderFeedReasonChronologicalFallback, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedReasonChronologicalFallback)},
-		{code: model.ReaderFeedReasonUnread, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedReasonUnread)},
-		{code: model.ReaderFeedReasonSavedLibrary, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedReasonSavedLibrary)},
+		{code: model.ReaderFeedSignalReadLater, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedSignalReadLater)},
+		{code: model.ReaderFeedSignalSubscriptionRecent, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedSignalSubscriptionRecent)},
+		{code: model.ReaderFeedSignalPendingConfirmation, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedSignalPendingConfirmation)},
+		{code: model.ReaderFeedSignalChronologicalFallback, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedSignalChronologicalFallback)},
+		{code: model.ReaderFeedSignalUnread, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedSignalUnread)},
+		{code: model.ReaderFeedSignalSavedLibrary, enabled: true, contribution: 10, params: validReaderFeedReasonParams(model.ReaderFeedSignalSavedLibrary)},
 	})
-	if err != nil || winner.code != model.ReaderFeedReasonPendingConfirmation {
-		t.Fatalf("multi-signal winner = %q, %v; want %q", winner.code, err, model.ReaderFeedReasonPendingConfirmation)
+	if err != nil || winner.code != model.ReaderFeedSignalPendingConfirmation {
+		t.Fatalf("multi-signal winner = %q, %v; want %q", winner.code, err, model.ReaderFeedSignalPendingConfirmation)
 	}
 }
 
 func TestSelectReaderFeedReasonRejectsIneligibleSignalsAndMissingParams(t *testing.T) {
 	winner, err := selectReaderFeedReason([]readerFeedSignalContribution{
-		{code: model.ReaderFeedReasonSavedLibrary, enabled: false, contribution: 100, params: validReaderFeedReasonParams(model.ReaderFeedReasonSavedLibrary)},
-		{code: model.ReaderFeedReasonUnread, enabled: true, contribution: 0, params: validReaderFeedReasonParams(model.ReaderFeedReasonUnread)},
-		{code: model.ReaderFeedReasonReadLater, enabled: true, contribution: -10, params: validReaderFeedReasonParams(model.ReaderFeedReasonReadLater)},
-		{code: model.ReaderFeedReasonChronologicalFallback, enabled: true, contribution: 0, params: validReaderFeedReasonParams(model.ReaderFeedReasonChronologicalFallback)},
+		{code: model.ReaderFeedSignalSavedLibrary, enabled: false, contribution: 100, params: validReaderFeedReasonParams(model.ReaderFeedSignalSavedLibrary)},
+		{code: model.ReaderFeedSignalUnread, enabled: true, contribution: 0, params: validReaderFeedReasonParams(model.ReaderFeedSignalUnread)},
+		{code: model.ReaderFeedSignalReadLater, enabled: true, contribution: -10, params: validReaderFeedReasonParams(model.ReaderFeedSignalReadLater)},
+		{code: model.ReaderFeedSignalChronologicalFallback, enabled: true, contribution: 0, params: validReaderFeedReasonParams(model.ReaderFeedSignalChronologicalFallback)},
 	})
 	if err != nil {
 		t.Fatalf("selectReaderFeedReason() error = %v", err)
 	}
-	if winner.code != model.ReaderFeedReasonChronologicalFallback || winner.contribution != 0 {
+	if winner.code != model.ReaderFeedSignalChronologicalFallback || winner.contribution != 0 {
 		t.Fatalf("winner = %#v, want zero-contribution chronological fallback", winner)
 	}
 
 	_, err = selectReaderFeedReason([]readerFeedSignalContribution{
-		{code: model.ReaderFeedReasonSavedLibrary, enabled: true, contribution: 70},
-		{code: model.ReaderFeedReasonChronologicalFallback, enabled: true, params: validReaderFeedReasonParams(model.ReaderFeedReasonChronologicalFallback)},
+		{code: model.ReaderFeedSignalSavedLibrary, enabled: true, contribution: 70},
+		{code: model.ReaderFeedSignalChronologicalFallback, enabled: true, params: validReaderFeedReasonParams(model.ReaderFeedSignalChronologicalFallback)},
 	})
 	if !errors.Is(err, ErrInvalidReaderFeedReason) {
 		t.Fatalf("missing params error = %v, want ErrInvalidReaderFeedReason", err)
 	}
 }
 
-func validReaderFeedReasonParams(code model.ReaderFeedReasonCode) model.ReaderFeedReasonParams {
+func validReaderFeedReasonParams(signal model.ReaderFeedScoreSignal) model.ReaderFeedReasonParams {
 	inbox, reading, subscription := "inbox", "reading", "subscription"
 	unread, readLater := false, true
 	createdAt := time.Date(2026, 8, 11, 9, 30, 0, 0, time.UTC)
-	switch code {
-	case model.ReaderFeedReasonPendingConfirmation:
+	switch signal {
+	case model.ReaderFeedSignalPendingConfirmation:
 		return model.ReaderFeedReasonParams{Source: &inbox}
-	case model.ReaderFeedReasonSavedLibrary:
+	case model.ReaderFeedSignalSavedLibrary:
 		return model.ReaderFeedReasonParams{Source: &reading}
-	case model.ReaderFeedReasonSubscriptionRecent:
+	case model.ReaderFeedSignalSubscriptionRecent:
 		return model.ReaderFeedReasonParams{Source: &subscription}
-	case model.ReaderFeedReasonUnread:
+	case model.ReaderFeedSignalUnread:
 		return model.ReaderFeedReasonParams{Read: &unread}
-	case model.ReaderFeedReasonReadLater:
+	case model.ReaderFeedSignalReadLater:
 		return model.ReaderFeedReasonParams{ReadLater: &readLater}
-	case model.ReaderFeedReasonChronologicalFallback:
+	case model.ReaderFeedSignalChronologicalFallback:
 		return model.ReaderFeedReasonParams{CreatedAt: &createdAt}
 	default:
 		return model.ReaderFeedReasonParams{}

@@ -7131,8 +7131,16 @@ export interface components {
         };
         /** @enum {string} */
         ReaderFeedAction: "confirm" | "discard" | "read" | "read_later" | "save" | "unsave" | "hide" | "not_interested" | "open" | "open_workspace";
-        /** @enum {string} */
-        ReaderFeedReasonCode: "pending_confirmation" | "saved_library" | "subscription_recent" | "unread" | "read_later" | "chronological_fallback";
+        /**
+         * @description A ranking signal. Every signal owns one column of ReaderFeedScoreContributions, which is why this set is narrower than ReaderFeedReasonCode.
+         * @enum {string}
+         */
+        ReaderFeedScoreSignal: "pending_confirmation" | "saved_library" | "subscription_recent" | "unread" | "read_later" | "chronological_fallback";
+        /**
+         * @description Why a card is on screen. The six ReaderFeedScoreSignal values are the reasons the ranking pass can win with; continue_reading is Home-only, carries no score contribution and never appears in enabled_score_signals.
+         * @enum {string}
+         */
+        ReaderFeedReasonCode: "pending_confirmation" | "saved_library" | "subscription_recent" | "unread" | "read_later" | "chronological_fallback" | "continue_reading";
         ReaderFeedPendingConfirmationParams: {
             /** @constant */
             source: "inbox";
@@ -7227,7 +7235,7 @@ export interface components {
             read_later: boolean;
             /** @description Whether this subscription item has a feed-save association; independent from read_later. */
             saved: boolean;
-            reason_code: string;
+            reason_code: components["schemas"]["ReaderFeedReasonCode"];
             reason_text: string;
             /** Format: date-time */
             published_at?: string | null;
@@ -7242,7 +7250,7 @@ export interface components {
         ReaderRankedFeedItemResponse: components["schemas"]["ReaderFeedItemResponse"] & {
             score: number;
             score_contributions: components["schemas"]["ReaderFeedScoreContributions"];
-            enabled_score_signals: components["schemas"]["ReaderFeedReasonCode"][];
+            enabled_score_signals: components["schemas"]["ReaderFeedScoreSignal"][];
         } & components["schemas"]["ReaderFeedReasonTuple"];
         ReaderFeedResponse: {
             items: components["schemas"]["ReaderRankedFeedItemResponse"][];
@@ -7870,6 +7878,7 @@ export type ReaderEngagementResponse = components['schemas']['ReaderEngagementRe
 export type ReaderFeedSectionResponse = components['schemas']['ReaderFeedSectionResponse'];
 export type ReaderFeedSourceResponse = components['schemas']['ReaderFeedSourceResponse'];
 export type ReaderFeedAction = components['schemas']['ReaderFeedAction'];
+export type ReaderFeedScoreSignal = components['schemas']['ReaderFeedScoreSignal'];
 export type ReaderFeedReasonCode = components['schemas']['ReaderFeedReasonCode'];
 export type ReaderFeedPendingConfirmationParams = components['schemas']['ReaderFeedPendingConfirmationParams'];
 export type ReaderFeedSavedLibraryParams = components['schemas']['ReaderFeedSavedLibraryParams'];

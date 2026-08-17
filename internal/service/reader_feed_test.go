@@ -62,19 +62,19 @@ func TestReaderFeedServicePreservesUnionIdentityAndReason(t *testing.T) {
 			{
 				Key: "link:" + linkID.String(), Source: "reading", URL: "https://example.com/reading", LinkID: &linkID,
 				Score: 100, ScoreContributions: model.ReaderFeedScoreContributions{SavedLibrary: 70, Unread: 20, ReadLater: 10},
-				EnabledScoreSignals: []model.ReaderFeedReasonCode{model.ReaderFeedReasonSavedLibrary, model.ReaderFeedReasonUnread, model.ReaderFeedReasonReadLater, model.ReaderFeedReasonChronologicalFallback},
+				EnabledScoreSignals: []model.ReaderFeedScoreSignal{model.ReaderFeedSignalSavedLibrary, model.ReaderFeedSignalUnread, model.ReaderFeedSignalReadLater, model.ReaderFeedSignalChronologicalFallback},
 				ReasonCode:          model.ReaderFeedReasonSavedLibrary, ReasonParams: model.ReaderFeedReasonParams{Source: &readingSource}, ReasonContribution: 70, ReasonText: "已保存到资料库",
 			},
 			{
 				Key: "inbox:" + inboxID.String(), Source: "inbox", URL: "https://example.com/inbox", InboxID: &inboxID,
 				Score: 120, ScoreContributions: model.ReaderFeedScoreContributions{PendingConfirmation: 100, Unread: 20},
-				EnabledScoreSignals: []model.ReaderFeedReasonCode{model.ReaderFeedReasonPendingConfirmation, model.ReaderFeedReasonUnread, model.ReaderFeedReasonReadLater, model.ReaderFeedReasonChronologicalFallback},
+				EnabledScoreSignals: []model.ReaderFeedScoreSignal{model.ReaderFeedSignalPendingConfirmation, model.ReaderFeedSignalUnread, model.ReaderFeedSignalReadLater, model.ReaderFeedSignalChronologicalFallback},
 				ReasonCode:          model.ReaderFeedReasonPendingConfirmation, ReasonParams: model.ReaderFeedReasonParams{Source: &inboxSource}, ReasonContribution: 100, ReasonText: "收件箱采集",
 			},
 			{
 				Key: "subscription:" + feedItemID.String(), Source: "subscription", URL: "https://example.com/subscription", FeedItemID: &feedItemID,
 				Score: 60, ScoreContributions: model.ReaderFeedScoreContributions{SubscriptionRecent: 40, Unread: 20},
-				EnabledScoreSignals: []model.ReaderFeedReasonCode{model.ReaderFeedReasonSubscriptionRecent, model.ReaderFeedReasonUnread, model.ReaderFeedReasonReadLater, model.ReaderFeedReasonChronologicalFallback},
+				EnabledScoreSignals: []model.ReaderFeedScoreSignal{model.ReaderFeedSignalSubscriptionRecent, model.ReaderFeedSignalUnread, model.ReaderFeedSignalReadLater, model.ReaderFeedSignalChronologicalFallback},
 				ReasonCode:          model.ReaderFeedReasonSubscriptionRecent, ReasonParams: model.ReaderFeedReasonParams{Source: &subscriptionSource}, ReasonContribution: 40, ReasonText: "订阅更新",
 			},
 		},

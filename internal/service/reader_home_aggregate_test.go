@@ -51,7 +51,7 @@ func TestHomeAggregateMapsOneAuthoritativeResultToHomeDTO(t *testing.T) {
 			Summary:     "A saved article",
 			URL:         "https://example.com/article",
 			LinkID:      &linkID,
-			ReasonCode:  "continue_reading",
+			ReasonCode:  model.ReaderFeedReasonContinueReading,
 			ReasonText:  "已读 42%，继续阅读",
 			PublishedAt: &updatedAt,
 			CreatedAt:   updatedAt,
@@ -137,6 +137,76 @@ func TestHomeAggregateMapsOneAuthoritativeResultToHomeDTO(t *testing.T) {
 	}
 	if envelope.Freshness != "fresh" || envelope.Partial || envelope.Stale || len(envelope.Todos) != 1 || envelope.Todos[0].DueAt == nil || envelope.Todos[0].CompletedAt == nil {
 		t.Fatalf("Home wire state/lifecycle = %#v, want explicit fresh and TODO timestamps", envelope)
+	}
+}
+
+// TestHomeAggregateEmitsContinueReadingAsAnUnscoredReason pins the wire shape a
+// Reader client validates. continue_reading explains the card without being a
+// ranking signal, so it must never claim a contribution nor appear inside the
+// fixed-width score evidence — the two places a client checks column by column.
+func TestHomeAggregateEmitsContinueReadingAsAnUnscoredReason(t *testing.T) {
+	linkID := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	updatedAt := time.Date(2026, 8, 10, 9, 30, 0, 0, time.UTC)
+	store := &readerHomeAggregateStoreStub{aggregate: repository.ReaderHomeAggregate{
+		Freshness: repository.ReaderHomeFreshnessFresh,
+		Counts:    map[string]int{"pending": 0, "todos": 0},
+		ContinueReading: []model.ReaderFeedItem{{
+			Key:         "link:" + linkID.String(),
+			Source:      "reading",
+			Title:       "Continue this",
+			Summary:     "A saved article",
+			URL:         "https://example.com/article",
+			LinkID:      &linkID,
+			ReasonCode:  model.ReaderFeedReasonContinueReading,
+			ReasonText:  "已读 42%，继续阅读",
+			PublishedAt: &updatedAt,
+			CreatedAt:   updatedAt,
+		}},
+	}}
+	service := NewReaderVNextService(store, nil)
+	service.now = func() time.Time { return updatedAt }
+
+	got, err := service.HomeAggregate(context.Background())
+	if err != nil {
+		t.Fatalf("HomeAggregate() error = %v", err)
+	}
+	wire, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal Home response: %v", err)
+	}
+	var envelope struct {
+		ContinueReading []struct {
+			ReasonCode          string         `json:"reason_code"`
+			ReasonParams        map[string]any `json:"reason_params"`
+			ReasonContribution  int            `json:"reason_contribution"`
+			Score               int            `json:"score"`
+			ScoreContributions  map[string]int `json:"score_contributions"`
+			EnabledScoreSignals []string       `json:"enabled_score_signals"`
+		} `json:"continue_reading"`
+	}
+	if err := json.Unmarshal(wire, &envelope); err != nil {
+		t.Fatalf("unmarshal Home response: %v", err)
+	}
+	if len(envelope.ContinueReading) != 1 {
+		t.Fatalf("continue_reading = %#v, want one card", envelope.ContinueReading)
+	}
+	card := envelope.ContinueReading[0]
+	if card.ReasonCode != string(model.ReaderFeedReasonContinueReading) {
+		t.Fatalf("reason_code = %q, want %q", card.ReasonCode, model.ReaderFeedReasonContinueReading)
+	}
+	if len(card.ReasonParams) != 0 || card.ReasonContribution != 0 || card.Score != 0 || len(card.EnabledScoreSignals) != 0 {
+		t.Fatalf("unscored card = %#v, want empty params, zero contribution and no enabled signals", card)
+	}
+	if len(card.ScoreContributions) != 6 {
+		t.Fatalf("score_contributions keys = %#v, want the six ranking signals", card.ScoreContributions)
+	}
+	if _, ok := card.ScoreContributions[string(model.ReaderFeedReasonContinueReading)]; ok {
+		t.Fatalf("score_contributions = %#v, want no continue_reading column", card.ScoreContributions)
+	}
+	for signal, contribution := range card.ScoreContributions {
+		if contribution != 0 {
+			t.Fatalf("score_contributions[%q] = %d, want 0 for an unscored card", signal, contribution)
+		}
 	}
 }
 

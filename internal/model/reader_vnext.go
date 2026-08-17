@@ -366,19 +366,48 @@ type ReaderEngagement struct {
 	UpdatedAt  time.Time
 }
 
+// ReaderFeedScoreSignal is a ranking signal. Every signal owns one field of
+// ReaderFeedScoreContributions, so the set is closed by construction: adding a
+// signal without a contribution field would leave the score unauditable.
+type ReaderFeedScoreSignal string
+
+const (
+	ReaderFeedSignalPendingConfirmation   ReaderFeedScoreSignal = "pending_confirmation"
+	ReaderFeedSignalSavedLibrary          ReaderFeedScoreSignal = "saved_library"
+	ReaderFeedSignalSubscriptionRecent    ReaderFeedScoreSignal = "subscription_recent"
+	ReaderFeedSignalUnread                ReaderFeedScoreSignal = "unread"
+	ReaderFeedSignalReadLater             ReaderFeedScoreSignal = "read_later"
+	ReaderFeedSignalChronologicalFallback ReaderFeedScoreSignal = "chronological_fallback"
+)
+
+// ReasonCode is the reason code a winning signal becomes. Every score signal is
+// also a reason code; the reverse does not hold.
+func (signal ReaderFeedScoreSignal) ReasonCode() ReaderFeedReasonCode {
+	return ReaderFeedReasonCode(signal)
+}
+
+// ReaderFeedReasonCode explains why a card is on screen. The scoring pass owns
+// the six codes that are also ReaderFeedScoreSignal values; Home's
+// continue_reading is a reason without a ranking signal behind it, so it carries
+// no score contribution and never appears in EnabledScoreSignals.
 type ReaderFeedReasonCode string
 
 const (
-	ReaderFeedReasonPendingConfirmation   ReaderFeedReasonCode = "pending_confirmation"
-	ReaderFeedReasonSavedLibrary          ReaderFeedReasonCode = "saved_library"
-	ReaderFeedReasonSubscriptionRecent    ReaderFeedReasonCode = "subscription_recent"
-	ReaderFeedReasonUnread                ReaderFeedReasonCode = "unread"
-	ReaderFeedReasonReadLater             ReaderFeedReasonCode = "read_later"
-	ReaderFeedReasonChronologicalFallback ReaderFeedReasonCode = "chronological_fallback"
+	ReaderFeedReasonPendingConfirmation   = ReaderFeedReasonCode(ReaderFeedSignalPendingConfirmation)
+	ReaderFeedReasonSavedLibrary          = ReaderFeedReasonCode(ReaderFeedSignalSavedLibrary)
+	ReaderFeedReasonSubscriptionRecent    = ReaderFeedReasonCode(ReaderFeedSignalSubscriptionRecent)
+	ReaderFeedReasonUnread                = ReaderFeedReasonCode(ReaderFeedSignalUnread)
+	ReaderFeedReasonReadLater             = ReaderFeedReasonCode(ReaderFeedSignalReadLater)
+	ReaderFeedReasonChronologicalFallback = ReaderFeedReasonCode(ReaderFeedSignalChronologicalFallback)
+
+	// ReaderFeedReasonContinueReading is Home-only: it reports resumable reading
+	// progress rather than a ranking decision.
+	ReaderFeedReasonContinueReading ReaderFeedReasonCode = "continue_reading"
 )
 
 // ReaderFeedReasonParams carries only evidence consumed by the scoring pass.
-// Exactly one field is present for each reason code.
+// Exactly one field is present for each score signal; a reason code that is not
+// a signal carries no params at all.
 type ReaderFeedReasonParams struct {
 	Source    *string    `json:"source,omitempty"`
 	Read      *bool      `json:"read,omitempty"`
@@ -420,7 +449,7 @@ type ReaderFeedItem struct {
 	Saved               bool
 	Score               int
 	ScoreContributions  ReaderFeedScoreContributions
-	EnabledScoreSignals []ReaderFeedReasonCode
+	EnabledScoreSignals []ReaderFeedScoreSignal
 	ReasonCode          ReaderFeedReasonCode
 	ReasonParams        ReaderFeedReasonParams
 	ReasonContribution  int

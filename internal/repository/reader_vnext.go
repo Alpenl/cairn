@@ -5143,7 +5143,7 @@ func (r *PGXReaderVNextRepository) ListContinueReading(ctx context.Context, limi
 		item.Key = "link:" + id.String()
 		item.Source = "reading"
 		item.LinkID = &id
-		item.ReasonCode = "continue_reading"
+		item.ReasonCode = model.ReaderFeedReasonContinueReading
 		item.ReasonText = fmt.Sprintf("已读 %.0f%%，继续阅读", progress*100)
 		item.PublishedAt = &lastOpened
 		out = append(out, item)
