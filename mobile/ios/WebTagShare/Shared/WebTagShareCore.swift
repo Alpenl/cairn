@@ -1878,8 +1878,8 @@ final class WebTagAPIClient: NSObject, URLSessionTaskDelegate {
         }
     }
 
-    func decodeBackgroundSubmit(data: Data, response: HTTPURLResponse?, error: Error?, expectedNamespace: String) -> Result<SubmitResponse, ClassifiedFailure> {
-        guard let response else { return .failure(ErrorClassifier.transport(error ?? CoreError.invalidResponse)) }
+    func decodeBackgroundSubmit(data: Data, response: HTTPURLResponse?, error transportError: Error?, expectedNamespace: String) -> Result<SubmitResponse, ClassifiedFailure> {
+        guard let response else { return .failure(ErrorClassifier.transport(transportError ?? CoreError.invalidResponse)) }
         let namespace = response.value(forHTTPHeaderField: "X-WebTag-Data-Namespace")
         guard response.statusCode == 202 else {
             if (200..<300).contains(response.statusCode) {
@@ -1899,8 +1899,10 @@ final class WebTagAPIClient: NSObject, URLSessionTaskDelegate {
         } catch {
             // A truncated acknowledgement leaves the server outcome ambiguous.
             // Preserve the idempotent row whenever transport evidence explains
-            // why the success payload could not be verified.
-            if let error { return .failure(ErrorClassifier.transport(error)) }
+            // why the success payload could not be verified. That evidence is
+            // the session's own error, not the decode failure this `catch`
+            // binds, so the parameter carries a name of its own.
+            if let transportError { return .failure(ErrorClassifier.transport(transportError)) }
             return .failure(ClassifiedFailure(category: .invalidSuccessPayload, status: response.statusCode, errorCode: nil, retryAfter: nil))
         }
     }
@@ -2288,6 +2290,11 @@ final class BackgroundTasksQueueWakeAdapter: DurableQueueWakeAdapting {
 
     init(identifier: String) { self.identifier = identifier }
 
+    /// Only the host application may own the launch handler for an identifier;
+    /// an App Extension that called this would not compile, so the restriction
+    /// is spelled out here rather than left to the one call site in the app.
+    /// Submitting and cancelling requests stays available to both targets.
+    @available(iOSApplicationExtension, unavailable)
     @discardableResult
     func register(handler: @escaping (BGAppRefreshTask) -> Void) -> Bool {
         guard !identifier.isEmpty else { return false }
