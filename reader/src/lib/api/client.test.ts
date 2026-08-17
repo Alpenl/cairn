@@ -480,6 +480,40 @@ describe('ReaderClient Inbox mutations', () => {
 })
 
 describe('ReaderClient host lifecycle', () => {
+  // 删除走的是软删路由，删完条目进回收站、可被 restoreLink 撤销。UI 据此
+  // 不弹确认框而只给一次撤销机会，所以这两个调用必须打在正确的路由上——
+  // 打错成 /purge 就会变成不可逆删除。
+  it('moves a link to the trash and restores it through the soft-delete routes', async () => {
+    const restored = {
+      host_kind: 'link' as const,
+      host_id: '00000000-0000-0000-0000-000000000061',
+      state: 'live' as const,
+      changed: true,
+    }
+    const fetchMock = mockFetch((input) => {
+      if (input.includes('/restore')) return jsonResponse(restored)
+      return new Response(null, {
+        status: 204,
+        headers: { [DATA_NAMESPACE_HEADER]: VALID_DATA_NAMESPACE },
+      })
+    })
+    const client = authenticatedClient()
+
+    await expect(client.deleteLink(restored.host_id)).resolves.toEqual({ ok: true, data: true })
+    await expect(client.restoreLink(restored.host_id)).resolves.toEqual({ ok: true, data: restored })
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `${BASE}/api/links/${restored.host_id}`,
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `${BASE}/api/links/${restored.host_id}/restore`,
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('lists trash, restores links, and purges each host through the frozen routes', async () => {
     const trash = {
       count: 1,

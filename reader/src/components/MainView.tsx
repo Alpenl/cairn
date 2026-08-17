@@ -21,7 +21,7 @@ import {
   type ContentEditState,
   type MetadataEditOutcome,
 } from './DetailPane'
-import { Toast } from './Toast'
+import { Toast, type ToastAction } from './Toast'
 import { CommandPalette, type CommandItem } from './CommandPalette'
 import { BrowsePanel } from './BrowsePanel'
 import { NotePanel } from './NotePanel'
@@ -40,6 +40,7 @@ import { NotesSurface } from './reader-vnext/NotesSurface'
 import { TodoSurface } from './reader-vnext/TodoSurface'
 import { SettingsSurface } from './reader-vnext/SettingsSurface'
 import { ThoughtHistorySurface } from './reader-vnext/ThoughtHistorySurface'
+import { TrashSurface } from './reader-vnext/TrashSurface'
 import { ContentHistorySurface } from './reader-vnext/ContentHistorySurface'
 import { PendingInboxCountProvider, refreshPendingInboxCount } from './reader-vnext/PendingInboxCount'
 import type { LibraryView } from './LibraryModeNav'
@@ -305,7 +306,7 @@ async function sha256Hex(text: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-type MainViewRoute = 'home' | 'feed' | 'pending' | 'reading' | 'sites' | 'subs' | 'notes' | 'todo' | 'settings' | 'history' | 'review'
+type MainViewRoute = 'home' | 'feed' | 'pending' | 'reading' | 'sites' | 'subs' | 'notes' | 'todo' | 'settings' | 'history' | 'trash' | 'review'
 
 function mainViewFromRoute(route: ReaderRoute): MainViewRoute {
   if (route.kind === 'internal' && route.id === 'review') return 'review'
@@ -513,7 +514,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   const [noteEd, setNoteEd] = useState<AnnotationLocator | null>(null)
   const [historicalNote, setHistoricalNote] = useState<HistoricalArticleAnnotation | null>(null)
   const [chatDraft, setChatDraft] = useState<ChatDraft | null>(null)
-  const [toast, setToast] = useState<{ msg: string; icon?: IconName } | null>(null)
+  const [toast, setToast] = useState<{ msg: string; icon?: IconName; action?: ToastAction } | null>(null)
   const [librarySyncing, setLibrarySyncing] = useState(false)
   const [librarySyncFailures, setLibrarySyncFailures] = useState<LibrarySyncResource[]>([])
   // 新版本就绪：给一条可点的提示，不静默强制刷新（那会打断正在读文章的人）。
@@ -712,13 +713,23 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     }
   }, [])
 
-  const flash = useCallback((msg: string, icon?: IconName) => {
-    setToast({ msg, icon })
+  const dismissToast = useCallback(() => {
+    if (toastTimer.current !== null) {
+      window.clearTimeout(toastTimer.current)
+      toastTimer.current = null
+    }
+    setToast(null)
+  }, [])
+
+  // 带动作的提示停留更久：2.6 秒够读完一句话，但不够看到、移动指针并点中一个
+  // 按钮——撤销要是点不着，就等于没有撤销。
+  const flash = useCallback((msg: string, icon?: IconName, action?: ToastAction) => {
+    setToast({ msg, icon, action })
     if (toastTimer.current) window.clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => {
       toastTimer.current = null
       setToast(null)
-    }, 2600)
+    }, action ? 7000 : 2600)
   }, [])
 
   const reportContentEditState = useCallback((next: ContentEditState | null) => {
@@ -2726,6 +2737,46 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     setConvertingLink((current) => current ?? activeRef.current ?? null)
   }, [capabilityLease, confirmDiscardContentEdit])
 
+  // 删除当前文章。后端是软删（进回收站），所以这里不弹确认框，而是给一次
+  // 撤销机会——真正不可逆的是 purge，不是这一步。失败时不动任何本地状态，
+  // 否则列表会显示一条实际还在服务端的记录。
+  const onDeleteLink = useCallback(() => {
+    const target = activeRef.current
+    if (!target) return
+    if (!confirmDiscardContentEdit()) return
+    const { id, title, url } = target
+    void (async () => {
+      const result = await client.deleteLink(id)
+      if (!result.ok) {
+        flash(`删除失败：${result.error.message}`, 'alert')
+        return
+      }
+      invalidateLibrary()
+      invalidateLink(id)
+      setActiveId(null)
+      setActiveDetail(null)
+      setActiveFallback(null)
+      void list.reload()
+      flash(`已删除「${title || url}」`, 'trash', {
+        label: '撤销',
+        onAction: () => {
+          dismissToast()
+          void (async () => {
+            const restored = await client.restoreLink(id)
+            if (!restored.ok) {
+              flash(`撤销失败：${restored.error.message}`, 'alert')
+              return
+            }
+            invalidateLibrary()
+            invalidateLink(id)
+            void list.reload()
+            flash('已恢复', 'check')
+          })()
+        },
+      })
+    })()
+  }, [client, confirmDiscardContentEdit, dismissToast, flash, list])
+
   // 空闲预取上一篇 / 下一篇：用户点「下一篇」时是 0 个网络请求。
   // 预取的是译文列表——详情本身已经能从列表数据直接渲染（PF6 让列表说了真话）。
   const prefetchTargets = useMemo<PrefetchTarget[]>(() => {
@@ -2876,6 +2927,8 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
             ) : (
               <ThoughtHistorySurface client={client} lease={lease} capabilityLease={capabilityLease} onNavigate={navigateRoute} />
             )
+          ) : displayedView === 'trash' ? (
+            <TrashSurface client={client} onNavigate={navigateRoute} capabilityPolicy={capabilityPolicy} onToast={flash} />
           ) : displayedView === 'subs' ? (
               <SubsView
               client={client}
@@ -2988,6 +3041,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
 				focusMode={focusMode}
 				onToggleFocus={onToggleFocus}
 				onConvertToSite={capabilityPolicy.siteWrite ? onConvertToSite : undefined}
+				onDeleteLink={onDeleteLink}
 				previous={previousPager}
 				next={nextPager}
               />
@@ -3098,7 +3152,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           />
         )}
 
-        <Toast msg={toast?.msg ?? null} icon={toast?.icon} />
+        <Toast msg={toast?.msg ?? null} icon={toast?.icon} action={toast?.action} />
         {updateReady && (
           <button
             type="button"

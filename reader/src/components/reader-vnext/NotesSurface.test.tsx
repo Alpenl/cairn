@@ -216,7 +216,9 @@ describe('NotesSurface draft barriers', () => {
     )
 
     await screen.findByRole('textbox', { name: '笔记内容' })
-    expect(screen.queryByRole('button', { name: /回收站/ })).not.toBeInTheDocument()
+    // 只断言「笔记视图」这一组里没有回收站标签。全局导航里另有一个通用回收站
+    // 入口，它与笔记的 trashEnabled 能力无关，不该被这条断言连坐。
+    expect(within(screen.getByRole('tablist', { name: '笔记视图' })).queryByRole('button', { name: /回收站/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '移入回收站' })).not.toBeInTheDocument()
     expect(fixture.client.listTrash).not.toHaveBeenCalled()
     expect(fixture.client.deleteNote).not.toHaveBeenCalled()
@@ -277,7 +279,7 @@ describe('NotesSurface draft barriers', () => {
     getNote.mockResolvedValue(ok(trashed))
     renderNotes(fixture.client)
 
-    fireEvent.click(await screen.findByRole('button', { name: /回收站/ }))
+    fireEvent.click(within(await screen.findByRole('tablist', { name: '笔记视图' })).getByRole('button', { name: /回收站/ }))
     const trashedButton = await screen.findByRole('button', { name: /已删除笔记/ })
     fireEvent.click(trashedButton)
 

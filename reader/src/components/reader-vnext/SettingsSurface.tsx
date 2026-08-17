@@ -89,6 +89,14 @@ export function SettingsSurface({ onNavigate, onOpenConnectionSettings, capabili
           <div><span className="rvx-eyebrow">数据</span><h2>已归档想法</h2><p>原文或笔记被删除后留下的想法，可以在这里查看并重新挂回。</p></div>
           <button className="rvx-button secondary" type="button" onClick={() => void onNavigate({ kind: 'tool', id: 'history' }, { thoughtView: 'history' })}><Icon name="clock" size={15} />查看已归档</button>
         </article>}
+
+        {/* 回收站放在设置里而不是主导航：找回误删是低频维护动作，主导航只留
+            每天都会去的地方。删除时的撤销提示覆盖了绝大多数场景，这里是撤销
+            错过之后的兜底入口。 */}
+        <article className="rvx-settings-row">
+          <div><span className="rvx-eyebrow">数据</span><h2>回收站</h2><p>删除的链接、收件箱条目和笔记都会先留在这里，可以恢复，也可以永久清除。</p></div>
+          <button className="rvx-button secondary" type="button" onClick={() => void onNavigate({ kind: 'tool', id: 'trash' })}><Icon name="trash" size={15} />打开回收站</button>
+        </article>
       </section>
     </SurfaceShell>
   )
