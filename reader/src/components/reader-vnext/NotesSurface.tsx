@@ -1036,7 +1036,7 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
       active="notes"
       onNavigate={onNavigate}
       capabilityPolicy={capabilityLease.policy}
-      workspaceClassName={focusMode ? 'rvx-notes-focus-mode' : undefined}
+      workspaceClassName={'rvx-notes-workspace' + (focusMode ? ' rvx-notes-focus-mode' : '')}
       actions={<><NoteWorkspaceTabs active="notes" onNavigate={onNavigate} capabilityPolicy={capabilityLease.policy} /><div className="rvx-segmented" role="tablist" aria-label="笔记视图"><button type="button" className={view === 'active' ? 'active' : ''} onClick={() => void switchView('active')}>进行中</button>{trashEnabled && <button type="button" className={view === 'trash' ? 'active' : ''} onClick={() => void switchView('trash')}>回收站{trashCount === null ? '' : ` (${trashCount})`}</button>}</div>{view === 'active' && onCreateNote && <button className="rvx-icon-button" type="button" title="新建笔记" aria-label="新建笔记" disabled={saving || creatingNote} onClick={onCreateNote}><Icon name="plus" size={16} /></button>}</>}
     >
       {view === 'trash' ? <>
@@ -1056,13 +1056,17 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
             </aside>
             <section className="rvx-detail-column rvx-note-editor" aria-label="回收站笔记">
               {trashDetailLoading ? <SurfaceLoading /> : trashDetail ? <>
-                <div className="rvx-detail-heading">
-                  <div><span className="rvx-eyebrow">已删除 · 只读</span><h2>{trashDetail.title || '未命名笔记'}</h2><small>发布 v{trashDetail.published_revision} · 删除于 {formatRelativeDate(trashDetail.deleted_at ?? '')}</small></div>
-                  <div className="rvx-action-row">
+                <header className="rvx-note-toolbar">
+                  <div className="rvx-note-identity">
+                    <span className="rvx-status-chip">已删除 · 只读</span>
+                    <h2 title={trashDetail.title || '未命名笔记'}>{trashDetail.title || '未命名笔记'}</h2>
+                    <small>发布 v{trashDetail.published_revision} · 删除于 {formatRelativeDate(trashDetail.deleted_at ?? '')}</small>
+                  </div>
+                  <div className="rvx-note-toolbar-actions">
                     <button className="rvx-button secondary" type="button" disabled={saving} onClick={() => void restoreTrashNote({ host_id: trashDetail.id, host_kind: 'note', title: trashDetail.title, trashed_at: trashDetail.deleted_at ?? '' })}>恢复</button>
                     <button className="rvx-icon-button danger" type="button" disabled={saving} title="永久删除" aria-label={`永久删除 ${trashDetail.title || '未命名笔记'}`} onClick={() => void purgeTrashNote({ host_id: trashDetail.id, host_kind: 'note', title: trashDetail.title, trashed_at: trashDetail.deleted_at ?? '' })}><Icon name="trash" size={16} /></button>
                   </div>
-                </div>
+                </header>
                 <ThoughtMarkdown className="rvx-markdown-preview" source={trashDetail.draft_content ?? trashDetail.published_content} />
               </> : <div className="rvx-empty"><Icon name="edit" size={24} /><h2>选择一篇已删除笔记</h2><p>回收站内容只读。恢复后可在进行中列表继续编辑。</p></div>}
             </section>
@@ -1076,21 +1080,32 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
             <ul className="rvx-compact-list">
               {items.map((item) => {
                 const projection = noteCardProjection(item)
-                return <li key={item.id}><button type="button" className={item.id === selected?.id ? 'active' : ''} onClick={() => { void selectNote(item.id) }}><strong>{item.title || '未命名笔记'}</strong><span className="rvx-muted">{projection.excerpt || '暂无首段'}</span><small>{item.dirty ? '有草稿' : `已发布 v${item.published_revision}`} · {projection.unfinishedTodoCount} 个未完成 TODO · {formatRelativeDate(item.updated_at)}</small></button></li>
+                return <li key={item.id}><button type="button" className={item.id === selected?.id ? 'active' : ''} onClick={() => { void selectNote(item.id) }}>
+                  <strong>{item.title || '未命名笔记'}</strong>
+                  <span className="rvx-muted">{projection.excerpt || '暂无首段'}</span>
+                  <small>
+                    <span className={item.dirty ? 'rvx-note-state draft' : 'rvx-note-state'}>{item.dirty ? '有草稿' : `已发布 v${item.published_revision}`}</span>
+                    {projection.unfinishedTodoCount > 0 && <span className="rvx-note-todo">{projection.unfinishedTodoCount} 个待办</span>}
+                    <time>{formatRelativeDate(item.updated_at)}</time>
+                  </small>
+                </button></li>
               })}
             </ul>
             {nextCursor && <button className="rvx-load-more" type="button" onClick={() => void load(true, nextCursor)}>更多</button>}
           </aside>
           {selected && (
             <section className="rvx-detail-column rvx-note-editor" aria-label="笔记编辑器">
-              <div className="rvx-detail-heading"><div><span className="rvx-eyebrow">{showDraft ? '草稿' : '已发布'}</span><h2>{selected.title || '未命名笔记'}</h2><small>发布 v{selected.published_revision} · 草稿 v{selected.draft_revision}</small></div><div className="rvx-action-row"><button className="rvx-icon-button" type="button" title="历史版本" aria-label="历史版本" onClick={() => void loadHistory()}><Icon name="clock" size={16} /></button>{trashEnabled && (selected.deleted_at ? <button className="rvx-button secondary" type="button" onClick={() => void restore()}>恢复</button> : <button className="rvx-icon-button danger" type="button" title="移入回收站" aria-label="移入回收站" onClick={() => void remove()}><Icon name="trash" size={16} /></button>)}</div></div>
-              {selected.dirty && !showDraft && <div className="rvx-draft-banner" role="status"><span>检测到未发布草稿。</span><button className="rvx-link-button" type="button" onClick={() => { setContent(selected.draft_content ?? ''); setShowDraft(true) }}>恢复草稿</button><button className="rvx-link-button" type="button" onClick={() => { setContent(selected.published_content); setShowDraft(false) }}>只看已发布</button></div>}
-              <div className="rvx-editor-toolbar">
-                <div className="rvx-segmented" role="group" aria-label="笔记视图">
-                  <button type="button" className={!preview ? 'active' : ''} aria-pressed={!preview} onClick={enterEdit}>编辑</button>
-                  <button type="button" className={preview ? 'active' : ''} aria-pressed={preview} onClick={enterPreview}>预览</button>
+              <header className="rvx-note-toolbar">
+                <div className="rvx-note-identity">
+                  <span className="rvx-status-chip">{showDraft ? '草稿' : '已发布'}</span>
+                  <h2 title={selected.title || '未命名笔记'}>{selected.title || '未命名笔记'}</h2>
+                  <small>发布 v{selected.published_revision} · 草稿 v{selected.draft_revision}</small>
                 </div>
                 <div className="rvx-note-toolbar-actions">
+                  <div className="rvx-segmented" role="group" aria-label="笔记编辑视图">
+                    <button type="button" className={!preview ? 'active' : ''} aria-pressed={!preview} onClick={enterEdit}>编辑</button>
+                    <button type="button" className={preview ? 'active' : ''} aria-pressed={preview} onClick={enterPreview}>预览</button>
+                  </div>
                   {preview && (
                     <>
                       <button
@@ -1123,9 +1138,17 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
                   >
                     <Icon name={focusMode ? 'focus_exit' : 'focus'} size={16} />
                   </button>
-                  <span className="rvx-muted" role="status">{saving ? '保存中…' : dirty ? '等待自动保存' : '已同步'}</span>
+                  <button className="rvx-icon-button" type="button" title="历史版本" aria-label="历史版本" onClick={() => void loadHistory()}><Icon name="clock" size={16} /></button>
+                  {trashEnabled && (selected.deleted_at
+                    ? <button className="rvx-button secondary" type="button" onClick={() => void restore()}>恢复</button>
+                    : <button className="rvx-icon-button danger" type="button" title="移入回收站" aria-label="移入回收站" onClick={() => void remove()}><Icon name="trash" size={16} /></button>)}
+                  <span className="rvx-muted rvx-note-sync" role="status">{saving ? '保存中…' : dirty ? '等待自动保存' : '已同步'}</span>
+                  {(selected.dirty || dirty) && <button className="rvx-button secondary" type="button" disabled={saving} onClick={() => void discardDraft()}>丢弃草稿</button>}
+                  <button className="rvx-button secondary" type="button" disabled={saving || !showDraft || !dirty} onClick={() => void saveDraft()}>立即保存</button>
+                  <button className="rvx-button primary" type="button" disabled={saving || !showDraft} onClick={() => void publish()}><Icon name="check" size={15} />发布</button>
                 </div>
-              </div>
+              </header>
+              {selected.dirty && !showDraft && <div className="rvx-draft-banner" role="status"><span>检测到未发布草稿。</span><button className="rvx-link-button" type="button" onClick={() => { setContent(selected.draft_content ?? ''); setShowDraft(true) }}>恢复草稿</button><button className="rvx-link-button" type="button" onClick={() => { setContent(selected.published_content); setShowDraft(false) }}>只看已发布</button></div>}
               {preview ? (
                 <NoteMarkdownPreview
                   text={content}
@@ -1154,7 +1177,6 @@ export function NotesSurface({ client, lease, capabilityLease, onNavigate, initi
                 />
               )}
               {selection && <ActionPopover rect={selection.rect} actions={selectionActions} onAct={onSelectionAction} annotationActionsPending={saving || noteAnnotations.loading} />}
-              <div className="rvx-editor-actions"><button className="rvx-button secondary" type="button" disabled={saving || !showDraft || !dirty} onClick={() => void saveDraft()}>立即保存</button>{(selected.dirty || dirty) && <button className="rvx-button secondary" type="button" disabled={saving} onClick={() => void discardDraft()}>丢弃草稿</button>}<button className="rvx-button primary" type="button" disabled={saving || !showDraft} onClick={() => void publish()}><Icon name="check" size={15} />发布</button></div>
               {history && <div className="rvx-history-panel"><div className="rvx-section-head"><h3>历史版本</h3><button className="rvx-icon-button" type="button" aria-label="关闭历史" title="关闭历史" onClick={() => { setHistory(null); setHistoryPreview(null) }}><Icon name="x" size={15} /></button></div>{history.length === 0 ? <p className="rvx-muted">还没有历史版本。</p> : <ul>{history.map((entry) => <li key={`${entry.id}-${entry.revision}`}><div><strong>v{entry.revision}</strong><small>{formatRelativeDate(entry.created_at)}</small><p>{entry.title}</p></div><div className="rvx-action-row"><button className="rvx-button secondary" type="button" onClick={() => setHistoryPreview(entry)}>预览</button><button className="rvx-button secondary" type="button" onClick={() => void restoreRevision(entry)}>恢复到此版本</button></div></li>)}</ul>}{historyPreview && <section className="rvx-history-preview" role="region" aria-label={`历史版本 v${historyPreview.revision} 预览`}><div className="rvx-section-head"><h3>v{historyPreview.revision}</h3><button className="rvx-icon-button" type="button" aria-label="关闭版本预览" title="关闭版本预览" onClick={() => setHistoryPreview(null)}><Icon name="x" size={15} /></button></div><ThoughtMarkdown className="rvx-markdown-preview" source={historyPreview.content} /></section>}</div>}
             </section>
           )}

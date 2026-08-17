@@ -2674,7 +2674,7 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .wt-primary-nav .library-mode-nav { margin: 0; padding: 0; border-bottom: 0; }
 .rvx-main { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg-reader); }
 .rvx-header { min-height: 70px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px clamp(16px, 3vw, 42px); border-bottom: .5px solid var(--divider); }
-.rvx-title-block, .rvx-header-actions, .rvx-section-head, .rvx-detail-heading, .rvx-feed-card-top, .rvx-feed-card-foot, .rvx-editor-actions, .rvx-editor-toolbar, .rvx-action-row { display: flex; align-items: center; }
+.rvx-title-block, .rvx-header-actions, .rvx-section-head, .rvx-feed-card-top, .rvx-feed-card-foot, .rvx-action-row { display: flex; align-items: center; }
 .rvx-title-block { min-width: 0; gap: 10px; }
 .rvx-title-block h1 { margin: 0; color: var(--text-primary); font-size: 22px; font-weight: 700; }
 .rvx-title-block p { margin: 4px 0 0; color: var(--text-tertiary); font-size: 11.5px; overflow-wrap: anywhere; }
@@ -2788,9 +2788,6 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .rvx-history-reattach select, .rvx-history-reattach input { min-width: 0; box-sizing: border-box; min-height: 30px; padding: 5px 7px; border: .5px solid var(--border-strong); border-radius: 5px; outline: 0; background: var(--bg-list); color: var(--text-primary); font: 11.5px var(--font-ui); }
 .rvx-history-reattach select:focus, .rvx-history-reattach input:focus { border-color: var(--accent-line); }
 .rvx-detail-column { min-width: 0; padding: 22px clamp(16px, 3vw, 32px); overflow: auto; }
-.rvx-detail-heading { align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 20px; }
-.rvx-detail-heading h2 { margin: 6px 0 3px; color: var(--text-primary); font-size: 20px; overflow-wrap: anywhere; }
-.rvx-detail-heading a, .rvx-detail-heading small { color: var(--text-tertiary); font-size: 11px; overflow-wrap: anywhere; }
 .rvx-form-grid { display: grid; gap: 11px; }
 .rvx-form-grid label, .rvx-field, .rvx-todo-create label { display: grid; gap: 5px; color: var(--text-secondary); font-size: 11.5px; }
 .rvx-form-grid input, .rvx-form-grid textarea, .rvx-field input, .rvx-field textarea, .rvx-category-row input, .rvx-todo-create input, .rvx-todo-content input { width: 100%; box-sizing: border-box; padding: 8px 9px; border: .5px solid var(--border-strong); border-radius: 5px; outline: 0; background: var(--bg-list); color: var(--text-primary); font: 12.5px/1.45 var(--font-ui); }
@@ -2798,7 +2795,6 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .rvx-form-grid input:focus, .rvx-form-grid textarea:focus, .rvx-field input:focus, .rvx-field textarea:focus, .rvx-category-row input:focus, .rvx-todo-create input:focus { border-color: var(--accent-line); }
 .rvx-editor { padding: 16px; border: .5px solid var(--border); border-radius: 7px; background: var(--bg-elevated); }
 .rvx-create-panel { margin-bottom: 18px; }
-.rvx-editor-actions { justify-content: flex-end; flex-wrap: wrap; gap: 7px; margin-top: 16px; }
 .rvx-proposal { margin: 18px 0; padding: 12px; border-left: 2px solid var(--accent-line); background: var(--bg-chip); }
 .rvx-proposal p { margin: 6px 0 8px; color: var(--text-secondary); font-size: 12px; line-height: 1.55; }
 .rvx-chip-row, .rvx-category-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
@@ -3187,21 +3183,138 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   .inbox-title-field textarea { font-size: 26px; }
   .inbox-title-field::before { left: -10px; }
 }
+/* Notes workbench. Same full-bleed chrome as Reading and the Inbox: the
+   shell hands its whole scroller to a queue pane and a reader-shaped
+   editor, instead of floating a bordered panel in the middle of the page. */
+.rvx-notes-workspace .rvx-header { min-height: 64px; padding-block: 10px; }
+.rvx-notes-workspace .rvx-title-block h1 { font-family: var(--font-display); font-size: 21px; font-weight: 620; }
+.rvx-notes-workspace .rvx-scroll { position: relative; overflow: hidden; padding: 0; }
+.rvx-notes-workspace .rvx-scroll > * { width: 100%; margin: 0; }
+.rvx-notes-workspace .rvx-empty { min-height: 100%; padding: 24px; box-sizing: border-box; }
 .rvx-note-editor { min-height: 0; display: flex; flex-direction: column; }
-.notes-split.tool-open { grid-template-columns: minmax(210px, 250px) minmax(0, 1fr) minmax(280px, 332px); }
+.notes-split {
+  height: 100%;
+  min-height: 0;
+  grid-template-columns: var(--list-pane-width) minmax(0, 1fr);
+  border: 0;
+  background: var(--bg-reader);
+}
+.notes-split.tool-open { grid-template-columns: var(--list-pane-width) minmax(0, 1fr) minmax(280px, 332px); }
 .notes-split > .chat, .notes-split > .note-panel { width: auto; min-width: 0; }
+.notes-split > .rvx-list-column { min-height: 0; padding: 4px 6px 10px; scrollbar-gutter: stable; }
+.notes-split > .rvx-detail-column { min-height: 0; display: flex; flex-direction: column; padding: 0; overflow: hidden; background: var(--bg-reader); }
 .rvx-notes-focus-mode > .rvx-nav,
 .rvx-notes-focus-mode .notes-split > .rvx-list-column { display: none; }
 .rvx-notes-focus-mode .notes-split { grid-template-columns: minmax(0, 1fr); }
 .rvx-notes-focus-mode .notes-split.tool-open { grid-template-columns: minmax(0, 1fr) minmax(280px, 332px); }
-.rvx-draft-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 13px; padding: 8px 10px; border-radius: 5px; background: var(--accent-soft); color: var(--text-secondary); font-size: 11.5px; }
-.rvx-editor-toolbar { justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-.rvx-note-toolbar-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 3px; }
+
+/* Note rows read like the Reading list: floating cards, two-line title and
+   excerpt, and a quiet meta line. */
+.notes-split .rvx-compact-list li { border-bottom: 0; }
+.notes-split .rvx-compact-list li + li { margin-top: 2px; }
+.notes-split .rvx-compact-list button {
+  position: relative;
+  min-height: 0;
+  padding: 12px 13px;
+  border: .5px solid transparent;
+  border-radius: var(--r-md);
+  transition: background .1s;
+}
+.notes-split .rvx-compact-list button::before {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  border-radius: 3px;
+  background: transparent;
+}
+.notes-split .rvx-compact-list button:hover { background: var(--bg-hover); }
+.notes-split .rvx-compact-list button.active {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  box-shadow: var(--shadow-card);
+}
+.notes-split .rvx-compact-list button.active::before { background: var(--accent); }
+.notes-split .rvx-compact-list strong,
+.notes-split .rvx-compact-list .rvx-muted {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.notes-split .rvx-compact-list strong { font-size: 13.5px; font-weight: 620; line-height: 1.36; letter-spacing: -0.005em; }
+.notes-split .rvx-compact-list .rvx-muted { margin-top: 5px; color: var(--text-tertiary); font-size: 11.5px; line-height: 1.5; }
+.notes-split .rvx-compact-list small {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  overflow: hidden;
+  color: var(--text-faint);
+  font: 10px var(--font-mono);
+}
+.notes-split .rvx-compact-list small > * { flex: 0 0 auto; white-space: nowrap; }
+/* The TODO count is the first thing worth losing when the row runs out of
+   room; the state and the timestamp are not. */
+.notes-split .rvx-compact-list .rvx-note-todo { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.notes-split .rvx-compact-list small > * + *::before { content: '·'; margin-right: 7px; opacity: .55; }
+.rvx-note-state { display: inline-flex; align-items: center; gap: 5px; }
+.rvx-note-state.draft { color: var(--accent); }
+.rvx-note-state.draft::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+
+/* One toolbar owns the note's identity and every action, the way the reader
+   pane does. It replaces a heading band, a view-switch row and a footer of
+   buttons that used to stack above and below the editor. */
+.rvx-note-toolbar {
+  min-height: 49px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px clamp(12px, 2vw, 24px);
+  border-bottom: .5px solid var(--divider);
+  background: color-mix(in srgb, var(--bg-reader) 86%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.rvx-note-identity { min-width: 0; display: flex; align-items: baseline; gap: 9px; }
+.rvx-note-identity h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rvx-note-identity .rvx-status-chip { flex: 0 0 auto; align-self: center; }
+.rvx-note-identity small { flex: 0 0 auto; color: var(--text-faint); font: 10px var(--font-mono); white-space: nowrap; }
+.rvx-note-sync { margin-inline: 5px; font: 10px var(--font-mono); white-space: nowrap; }
+.rvx-draft-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; padding: 9px clamp(12px, 2vw, 24px); border-bottom: .5px solid var(--accent-line); background: var(--accent-soft); color: var(--text-secondary); font-size: 11.5px; }
+.rvx-note-toolbar-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.rvx-note-toolbar-actions .rvx-button { flex: 0 0 auto; }
 .rvx-reading-line-button { min-width: 46px; height: 30px; flex: 0 0 auto; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-tertiary); cursor: pointer; font: 11px var(--font-ui); }
 .rvx-reading-line-button:hover { color: var(--text-primary); background: var(--bg-hover); }
 .rvx-note-editor-input { position: relative; min-height: 430px; display: flex; flex: 1 1 auto; }
 .rvx-note-textarea { width: 100%; min-height: 430px; height: clamp(430px, 58vh, 720px); box-sizing: border-box; resize: vertical; padding: 15px; border: .5px solid var(--border-strong); border-radius: 6px; outline: 0; background: var(--bg-list); color: var(--text-primary); font: 13.5px/1.75 var(--font-mono); letter-spacing: 0; tab-size: 2; }
 .rvx-note-textarea:focus { border-color: var(--accent-line); }
+/* Inside the workbench the editor owns the remaining height and sits on the
+   page, so it drops the box it needed when it floated in a panel. */
+.notes-split .rvx-note-editor-input { min-height: 0; padding: clamp(18px, 3vw, 34px) clamp(16px, 3vw, 40px) clamp(20px, 3vw, 40px); }
+.notes-split .rvx-note-textarea {
+  min-height: 0;
+  height: auto;
+  max-width: 900px;
+  margin-inline: auto;
+  padding: 18px 20px;
+  border-radius: var(--r-md);
+  resize: none;
+}
 .rvx-slash-menu { position: fixed; z-index: 110; overflow-y: auto; box-sizing: border-box; padding: 5px; border: .5px solid var(--border-strong); border-radius: 7px; background: var(--bg-elevated); box-shadow: var(--shadow-pop); }
 .rvx-slash-menu button { width: 100%; min-height: 34px; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 5px 7px; border: 0; border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; font: 12px var(--font-ui); text-align: left; }
 .rvx-slash-menu button:hover, .rvx-slash-menu button.active { background: var(--accent-soft); color: var(--text-primary); }
@@ -3214,6 +3327,25 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .rvx-note-preview-scroll > .reader-toc { width: auto; height: auto; display: block; grid-column: 1; align-self: start; margin: 0; }
 .rvx-note-preview-scroll > .reader-toc .reader-toc-inner { max-height: calc(min(58vh, 720px) - 58px); }
 .rvx-note-preview-document { min-width: 0; grid-column: 2; }
+/* Preview is the reading surface: no card around the prose, the outline on
+   the right the way the reader rail and the Inbox outline sit. */
+.notes-split .rvx-note-preview-scroll {
+  min-height: 0;
+  height: auto;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 760px) minmax(150px, 190px);
+  column-gap: clamp(28px, 4vw, 54px);
+  padding: clamp(30px, 4.5vw, 56px) clamp(22px, 4vw, 46px) 100px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+/* The outline precedes the document in DOM order, so both need an explicit
+   row: auto-placement would otherwise drop the document to row 2 rather than
+   walk back to column 1 of row 1. */
+.notes-split .rvx-note-preview-scroll > .reader-toc { grid-column: 2; grid-row: 1; position: sticky; top: 0; }
+.notes-split .rvx-note-preview-scroll > .reader-toc .reader-toc-inner { max-height: calc(100vh - 190px); }
+.notes-split .rvx-note-preview-document { grid-column: 1; grid-row: 1; }
 .rvx-note-preview-markdown { color: var(--text-primary); font-family: var(--font-reading); font-size: var(--reading-font-size, 16px); line-height: var(--reading-line-height, 1.92); }
 .rvx-note-preview-markdown :where(code, pre, .src-badge) { font-family: var(--font-mono); }
 .rvx-note-preview-markdown > :first-child { margin-top: 0; }
@@ -3327,13 +3459,22 @@ mark.hl > strong, mark.hl > code { background: transparent; }
   .rvx-split { display: block; min-height: 0; }
   .rvx-list-column { max-height: 210px; border-right: 0; border-bottom: .5px solid var(--divider); }
   .rvx-detail-column { padding: 17px 13px; }
-  .rvx-editor-toolbar { align-items: flex-start; flex-wrap: wrap; }
+  .rvx-note-toolbar { flex-wrap: wrap; }
   .rvx-note-toolbar-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   .rvx-note-toolbar-actions > .rvx-muted { margin-left: auto; }
   .rvx-note-editor-input, .rvx-note-textarea, .rvx-note-preview-scroll { min-height: 360px; height: min(58vh, 520px); }
   .rvx-note-textarea { resize: none; padding: 13px; font-size: 13px; }
   .rvx-note-preview-scroll { display: block; padding: 22px 16px 72px; }
   .rvx-note-preview-scroll > .reader-toc { display: none; }
+  /* The workbench stacks here, so the editor goes back to a bounded height:
+     a pane-filling textarea would push the caret — and the slash menu that
+     tracks it — past the bottom of the viewport. */
+  .notes-split { height: auto; }
+  .notes-split > .rvx-detail-column { overflow: visible; }
+  .notes-split > .rvx-list-column { padding: 4px 6px 8px; }
+  .notes-split .rvx-note-editor-input { min-height: 360px; height: min(58vh, 520px); padding: 13px; }
+  .notes-split .rvx-note-textarea { min-height: 0; height: 100%; margin: 0; padding: 13px; }
+  .notes-split .rvx-note-preview-scroll { min-height: 360px; height: min(58vh, 520px); padding: 22px 16px 72px; }
   .notes-split > .chat, .notes-split > .note-panel { width: 100%; min-height: 360px; max-height: min(62vh, 520px); }
   .rvx-notes-focus-mode .rvx-header { padding-inline: 13px; }
   .rvx-todo-create { grid-template-columns: 1fr; align-items: stretch; }

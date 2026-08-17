@@ -412,7 +412,7 @@ describe('NotesSurface draft barriers', () => {
     renderNotes(fixture.client)
 
     expect(await screen.findByText('首段摘录')).toBeInTheDocument()
-    expect(screen.getByText(/1 个未完成 TODO/)).toBeInTheDocument()
+    expect(screen.getByText(/1 个待办/)).toBeInTheDocument()
     expect(screen.getByText(/7 篇/)).toBeInTheDocument()
   })
 
