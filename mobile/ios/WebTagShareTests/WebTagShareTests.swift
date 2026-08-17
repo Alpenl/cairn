@@ -2667,7 +2667,11 @@ final class WebTagShareTests: XCTestCase {
         let namespace = String(repeating: "e", count: 43)
         let session = SessionIdentity(origin: "https://example.org", namespace: namespace, representationContract: "v3")
         let active = try repository.activate(session: session)
-        let start = Date()
+        // A whole second, because the recomputed wake is compared against this
+        // instant after a round trip through the store: seconds since 1970 are
+        // held as a double there, and a fractional now comes back a fraction of
+        // a microsecond off, which passed or failed by luck of the clock.
+        let start = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded())
         let queued = try repository.enqueue(url: "https://example.org/expired-drain", identity: active.queueIdentity, now: start)
         let expiration = LockedExpirationSignal()
         let responseURL = URL(string: "https://example.org/api/links")!
