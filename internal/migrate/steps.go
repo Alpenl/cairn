@@ -3117,13 +3117,34 @@ UPDATE public.feed_read_revision SET revision = 0, updated_at = now() WHERE sing
 
 var steps = []Step{
 	{
-		ID:  TranslationSourceContractMigrationID,
-		SQL: []string{singleInstallSchemaSQL},
+		// Online-update review: INCOMPATIBLE.
+		//
+		// This is not an upgrade step at all — it is the entire application
+		// schema for a new installation, and its CREATE TABLE statements carry
+		// no IF NOT EXISTS. If it is still pending, the database has no Cairn
+		// schema, so there is no previous release serving anything to stay
+		// compatible with: the correct path is the installer, not a
+		// page-triggered update. Classifying it as compatible would let the
+		// deploy UI offer to build a whole installation underneath a running
+		// process.
+		ID:           TranslationSourceContractMigrationID,
+		OnlineUpdate: OnlineIncompatible("installs the complete application schema; a pending fresh-install step means there is no live installation to update — use the installer"),
+		SQL:          []string{singleInstallSchemaSQL},
 	},
 	{
 		// This is the only application index on a River-owned table. It must
 		// follow River's migrations and run outside a transaction.
+		//
+		// Online-update review: COMPATIBLE.
+		//
+		// The step only adds one partial index on river_job. It creates no
+		// column, constraint, trigger or function, so nothing the previous
+		// release reads or writes changes shape, and no statement it issues can
+		// start failing. CONCURRENTLY keeps the build off the write path, so a
+		// live River client is not blocked either. The previous binary simply
+		// never plans against the index.
 		ID:                    translationTerminalHistoryIndexMigrationID,
+		OnlineUpdate:          OnlineCompatible("adds one partial index on river_job and nothing else; the previous release keeps reading and writing the unchanged table"),
 		NonTransactional:      true,
 		RecoverInvalidIndexes: []string{"public.idx_river_job_translation_terminal_history"},
 		SQL: []string{
@@ -3137,7 +3158,18 @@ var steps = []Step{
 	{
 		// Upgrade existing installations to the immutable, self-contained
 		// Thought snapshot contract used by history replay and reattachment.
-		ID: readerThoughtTombstoneSnapshotMigrationID,
+		//
+		// Online-update review: INCOMPATIBLE.
+		//
+		// CREATE OR REPLACE FUNCTION here rewrites the two tombstone triggers,
+		// which means every Link deletion the PREVIOUS release performs after
+		// this step lands writes the NEW snapshot shape (snapshot_version,
+		// original_host_snapshot, original_host_identity, frozen_at). The
+		// previous binary's history replay and reattachment read those rows
+		// back expecting the old shape it wrote them in. The on-write contract
+		// for live data changes underneath code that is still running.
+		ID:           readerThoughtTombstoneSnapshotMigrationID,
+		OnlineUpdate: OnlineIncompatible("replaces the tombstone trigger bodies, so the previous release starts writing a Thought snapshot shape its own history replay and reattachment cannot read back"),
 		SQL: []string{
 			`CREATE OR REPLACE FUNCTION reader_tombstone_deleted_link_thoughts() RETURNS TRIGGER AS $$
 			BEGIN
@@ -3180,7 +3212,26 @@ var steps = []Step{
 	{
 		// Cross-cutting forward repair for pre-upgrade rows. Every statement is
 		// transactional with the ledger insert so a failed repair is retryable.
-		ID: integrityRepairMigrationID,
+		//
+		// Online-update review: INCOMPATIBLE, on three independent counts.
+		//
+		//  1. New CHECK constraints (chk_idempotency_keys_generation,
+		//     chk_merge_proposal_decision_audit, the two
+		//     chk_reader_thoughts_user_deleted_* ones) start rejecting writes
+		//     the previous release is still free to emit — nothing in the old
+		//     binary knows it must set decided_by/decided_at together, or blank
+		//     a Thought's body when it flips deleted.
+		//  2. trg_reader_enforce_user_deleted_thought and the three scrub
+		//     triggers destructively rewrite rows on write: a soft delete
+		//     issued by the previous release now irreversibly clears body,
+		//     target, quote and source, and cascades into ops, supersession
+		//     events and tombstones. Undo/restore paths in the old binary read
+		//     content that no longer exists.
+		//  3. It takes the blocking lock_library_feed_revisions() gate and runs
+		//     table-wide UPDATEs against links, so a live writer contends with
+		//     it for the whole run.
+		ID:           integrityRepairMigrationID,
+		OnlineUpdate: OnlineIncompatible("adds CHECK constraints and destructive scrub triggers that reject and rewrite writes the previous release still issues, and holds the library/feed revision gate across table-wide UPDATEs"),
 		SQL: []string{
 			// 这一步会 UPDATE links 的 classifier_version / updated_at，正是
 			// trg_links_representation_write_gate_upd 监听的列。该触发器用
@@ -3381,7 +3432,18 @@ var steps = []Step{
 		// replica can persist the assessment and fail before its final action even
 		// after integrity2026081401 has already run. The new runtime commits both
 		// phases atomically; this tail repairs split writes created during rollout.
-		ID: historicalRepairMigrationID,
+		//
+		// Online-update review: INCOMPATIBLE.
+		//
+		// This step's own premise is that the old runtime is the thing that
+		// produces the damage it repairs. Running it while that runtime is
+		// still serving means an old replica can recreate the exact split write
+		// the moment the step commits — the repair is not merely useless, the
+		// deploy would record a ledger entry claiming a repair that no longer
+		// holds. It also serialises on lock_library_feed_revisions() and
+		// rewrites links.classifier_version underneath live assessments.
+		ID:           historicalRepairMigrationID,
+		OnlineUpdate: OnlineIncompatible("repairs split writes that the previous release itself produces, so it records a repair the still-running old binary can immediately undo; also holds the library/feed revision gate"),
 		SQL: []string{
 			// 同 integrity2026081401：本步骤同样 UPDATE links 的
 			// classifier_version / updated_at，必须先阻塞式预取 revision gate，
@@ -3422,7 +3484,18 @@ var steps = []Step{
 		// UUID columns remain immutable history rather than nullable live pointers;
 		// already-cascaded rows cannot be reconstructed here and require backup/PITR
 		// or an external audit source.
-		ID: conceptMergeAuditRepairMigrationID,
+		//
+		// Online-update review: INCOMPATIBLE.
+		//
+		// It replaces chk_merge_proposal_decision_audit with a strictly
+		// tighter predicate — decided_by must now also be non-blank after
+		// btrim. A previous release that records a decision with an empty
+		// decider (which the earlier constraint accepted) starts getting its
+		// merge decisions rejected outright. The DROP/ADD CONSTRAINT pair also
+		// takes ACCESS EXCLUSIVE on concept_merge_proposal, blocking the live
+		// merge path for the duration.
+		ID:           conceptMergeAuditRepairMigrationID,
+		OnlineUpdate: OnlineIncompatible("tightens chk_merge_proposal_decision_audit to reject blank deciders, so merge decisions the previous release still writes start failing; the DROP/ADD also takes ACCESS EXCLUSIVE on the live table"),
 		SQL: []string{
 			`UPDATE public.concept_merge_proposal
 			 SET decided_by = NULL, decided_at = NULL
@@ -3449,7 +3522,19 @@ var steps = []Step{
 		// old replicas may leave deleted Links with runnable parse attempts or
 		// Feed-exclusive Links with no remaining association. Keep this repair
 		// in its own ledger entry so every upgraded installation executes it.
-		ID: lifecycleRepairMigrationID,
+		//
+		// Online-update review: INCOMPATIBLE.
+		//
+		// It reaches directly into River's own queue: it locks river_job rows
+		// FOR UPDATE, pg_notify()s cancellations on river_control and flips
+		// job states to 'cancelled'. A previous release with a live River
+		// client is executing those jobs right now, and this step cancels work
+		// underneath it while also failing the matching parse_jobs and
+		// link_translations attempt rows. It additionally holds
+		// lock_library_feed_revisions() and takes FOR UPDATE over every deleted
+		// Link, so the live write path stalls behind it.
+		ID:           lifecycleRepairMigrationID,
+		OnlineUpdate: OnlineIncompatible("cancels River jobs and fails attempt rows underneath a previous release whose River client is still executing them, while holding the library/feed revision gate and row locks over deleted Links"),
 		SQL: []string{
 			`SELECT public.lock_library_feed_revisions()`,
 			`CREATE TABLE IF NOT EXISTS public.feed_lifecycle_repair_audit (
@@ -3573,7 +3658,20 @@ var steps = []Step{
 		// reader_thoughts is already large; that forces NonTransactional, and
 		// RecoverInvalidIndexes cleans up an interrupted build so a replay cannot
 		// record the migration against an indisvalid=false relation.
+		//
+		// Online-update review: COMPATIBLE.
+		//
+		// Two index creations plus one index drop; no column, constraint,
+		// trigger or row is touched, so the previous release's statements
+		// cannot start failing. The drop deserves the explicit argument: the
+		// index being removed, idx_reader_thought_search, is a
+		// to_tsvector('simple', body) GIN index, and thought search in the
+		// previous release is `%query%` ILIKE — a lexeme-free substring
+		// predicate that no planner can satisfy from that index. Dropping it
+		// therefore removes a plan the old binary never had. Everything runs
+		// CONCURRENTLY, so live reads and writes are not blocked either.
 		ID:               readerThoughtSearchTrigramMigrationID,
+		OnlineUpdate:     OnlineCompatible("only builds two trigram indexes and drops a tsvector index that the previous release's `%query%` ILIKE search could never use, all CONCURRENTLY"),
 		NonTransactional: true,
 		RecoverInvalidIndexes: []string{
 			"public.idx_reader_thoughts_search_trgm",
@@ -3591,7 +3689,15 @@ var steps = []Step{
 		},
 	},
 	{
-		ID: ReaderTodoProjectionLedgerMigrationID,
+		// Online-update review: COMPATIBLE.
+		//
+		// Purely additive: one new table that only the TODO projection
+		// backfill in the NEW release reads or writes. The previous release
+		// has no reference to reader_todo_projection_backfills at all, so its
+		// behaviour is unchanged, and CREATE TABLE on a name nothing else uses
+		// takes no lock any live statement waits on.
+		ID:           ReaderTodoProjectionLedgerMigrationID,
+		OnlineUpdate: OnlineCompatible("creates one new backfill ledger table that only the new release references; the previous release is untouched"),
 		SQL: []string{
 			`CREATE TABLE IF NOT EXISTS public.reader_todo_projection_backfills (
 				id text NOT NULL,

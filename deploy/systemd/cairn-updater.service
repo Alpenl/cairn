@@ -1,0 +1,113 @@
+# The root-owned deployment helper.
+#
+# Hardening a root service is defence in depth, not a boundary: this unit can
+# already replace the program webtag.service runs. The actual boundary is that
+# it accepts no input except four fixed routes behind a bearer token and a
+# signed manifest from one compiled-in repository — no URL, no path, no command
+# and no shell argument ever reaches it. The options below narrow what a bug in
+# that surface could reach, and nothing more is claimed for them.
+#
+# Socket activation was considered and rejected. systemd would create the
+# socket before the helper runs, which means requests would queue for a host
+# whose permission model has not been checked yet; cmd/cairn-updater refuses to
+# start when the layout is wrong, and that refusal has to happen before anything
+# can connect. The helper therefore binds its own socket after the self-check
+# and sets root:caddy 0660 on it with the umask narrowed around the bind.
+
+[Unit]
+Description=Cairn deployment helper (cairn-updater)
+Documentation=https://github.com/Alpenl/cairn
+After=network.target
+
+# Deliberately no After=, Requires= or PartOf= relationship with webtag.service.
+# The helper stops the Core mid-update and must keep serving job status while it
+# is down; any ordering edge would make the reporting channel a casualty of the
+# thing it reports on.
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# root:root 0600. Holds DEPLOY_AUTH_TOKEN and the host DATABASE_URL. The
+# installer only ever writes a template here with an empty token; a helper with
+# an empty token refuses to start, so a half-finished install fails closed.
+EnvironmentFile=/etc/cairn-updater.env
+
+ExecStart=/usr/local/bin/cairn-updater serve
+
+Restart=on-failure
+RestartSec=10s
+
+# A stop request drains HTTP and then waits for any running update to reach its
+# own terminal state. The migration budget alone is 60 minutes, so the stop
+# timeout is 65: a reboot that waits an hour is recoverable, a SIGKILL landing
+# between two committed migration steps is a manual restore.
+TimeoutStopSec=3900
+# SIGTERM goes to the main process only. Killing the whole cgroup on stop would
+# take pg_dump or migrate with it, which is exactly the truncation the timeout
+# above exists to prevent.
+KillMode=mixed
+
+# /var/lib/cairn-updater, created 0700 root:root by systemd and automatically
+# writable inside the namespace. Persistent job records live here so status
+# survives both the Core being stopped and this helper restarting.
+StateDirectory=cairn-updater
+StateDirectoryMode=0700
+
+# Dumps and job records land owner-only. Without this the pre-migration dump
+# would be 0644 under the default umask and readable by every account on the
+# host, including the one this whole design fences off.
+UMask=0077
+
+# --- filesystem ------------------------------------------------------------
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# Exactly the three trees a deployment writes: the Core release root, the
+# root-domain Reader root, and /run for the API socket. /etc is not among them,
+# so the helper cannot rewrite its own unit or its own token file.
+ReadWritePaths=/opt/webtag
+ReadWritePaths=/var/www/reader
+ReadWritePaths=/run
+
+# --- privilege -------------------------------------------------------------
+NoNewPrivileges=yes
+# It runs as root and needs to chown the socket to the caddy group and set
+# ownership on unpacked trees; CAP_CHOWN, CAP_FOWNER and CAP_DAC_OVERRIDE stay.
+# CAP_SETUID/CAP_SETGID stay because pg_dump and the target release's migrate
+# are executed as child processes. Everything that could touch the kernel,
+# other namespaces, raw devices or other processes' memory is gone: no
+# CAP_SYS_ADMIN, CAP_SYS_MODULE, CAP_SYS_PTRACE, CAP_NET_ADMIN, CAP_NET_RAW.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_FSETID CAP_KILL CAP_SETGID CAP_SETUID
+RestrictSUIDSGID=yes
+
+# --- kernel and host -------------------------------------------------------
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# --- network ---------------------------------------------------------------
+# AF_UNIX for its own listener and for talking to PID 1 through
+# /run/systemd/private; AF_INET/AF_INET6 to fetch releases and probe /health;
+# AF_NETLINK for interface enumeration.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# --- system calls ----------------------------------------------------------
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# @privileged is NOT denied here, unlike in webtag.service. systemd's
+# @privileged set contains @chown, and this helper's first act after binding is
+# chown(2) on the socket so Caddy can reach it. Denying the set would kill the
+# process at start-up for a hardening line that reads well.
+SystemCallFilter=~@obsolete @cpu-emulation
+
+[Install]
+WantedBy=multi-user.target

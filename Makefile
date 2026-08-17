@@ -1,4 +1,4 @@
-.PHONY: help build build-full reader-build reader-clean run migrate migrate-fresh test test-integration test-dbintegration test-dbintegration-required test-no-skip arch-contract ci-contracts version-test core-legal-check core-release-test vet tools lint actionlint fmt tidy modules-verify vuln race fuzz-smoke bench frontend-verify reader-perf-postgres reader-perf-fixture-manifest reader-perf-browser docker-build db-migrate schema-dump schema-check container-smoke gate verify clean
+.PHONY: help build build-full reader-build reader-clean run migrate migrate-fresh test test-integration test-dbintegration test-dbintegration-required test-no-skip arch-contract ci-contracts version-test core-legal-check core-release-test vet tools lint actionlint fmt tidy modules-verify vuln race fuzz-smoke bench frontend-verify reader-perf-postgres reader-perf-fixture-manifest reader-perf-browser docker-build db-migrate schema-dump schema-check container-smoke deploy-permissions gate verify clean
 
 GO ?= go
 BIN_DIR ?= bin
@@ -93,11 +93,12 @@ core-legal-check: ## 重建并校验 Core 法律材料与冻结生产依赖闭�
 	$(PNPM) install --frozen-lockfile
 	node scripts/core-legal.mjs check
 
-core-release-test: core-legal-check ## 验证法律材料、draft 与 digest promotion 合同
+core-release-test: core-legal-check ## 验证法律材料、签名 manifest、draft 与 digest promotion 合同
 	$(GO) test ./scripts
 	bash scripts/core-legal.test.sh
 	bash scripts/core-release-build.test.sh
 	bash scripts/core-release-verify.test.sh
+	bash scripts/core-release-manifest.test.sh
 	bash scripts/core-release-promote.test.sh
 
 # Live fetcher integration tests — hits real ArXiv / GitHub / DuckDuckGo /
@@ -302,6 +303,14 @@ schema-check: ## 机械检查迁移后的真实 schema 与 tracked snapshot 一�
 container-smoke: ## 启动完整镜像跑端到端容器冒烟
 	VERSION=$(VERSION) COMMIT=$(COMMIT) sh scripts/container_smoke.sh
 
+# deploy-permissions：在容器里用真实 uid/gid 验证 #41 的部署权限模型。
+#
+# 断言全部是真实系统调用，不是对 unit 文件的字符串匹配：「应用账号能不能删除
+# release 树」由那个 uid 亲自去删一次来回答。容器里没有 systemd，所以 unit 只被
+# 安装和读取、不被启动，systemd-analyze security 与启动顺序留给 staging VM。
+deploy-permissions: ## 容器内真实执行 #41 部署权限负测试与 installer 幂等性
+	bash scripts/cairn-install.test.sh
+
 # test-no-skip：任何在门禁上被 skip 的 Go 测试都判红。
 #
 # 一条恒 skip 的测试不是通过的测试。`if !ReaderBuilt() { t.Skip }` 会让未注入
@@ -360,7 +369,7 @@ ci-contracts: ## 离线验证 CI 诊断与 main ruleset 策略工具
 # test-integration 仍是人工诊断项，不属于确定性的 PR 门禁。
 gate: vet lint test test-no-skip arch-contract ci-contracts version-test ## 快速离线门禁：Go 检查 + 版本推导
 
-verify: schema-check gate modules-verify vuln race fuzz-smoke actionlint frontend-verify core-release-test test-dbintegration-required build docker-build db-migrate container-smoke ## 本地 PR 前的全仓聚合门禁
+verify: schema-check gate modules-verify vuln race fuzz-smoke actionlint frontend-verify core-release-test test-dbintegration-required build docker-build db-migrate container-smoke deploy-permissions ## 本地 PR 前的全仓聚合门禁
 
 clean: ## 清理构建产物（bin/ 与根目录残留二进制）
 	rm -rf $(BIN_DIR)

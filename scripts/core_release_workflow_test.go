@@ -271,3 +271,102 @@ func TestTrivyReleaseMatrixCoversEveryChildAndProducesSBOM(t *testing.T) {
 			trivyActions, hasSBOM, hasEvidenceUpload, hasManifestProof)
 	}
 }
+
+// The signed release manifest is the trust root the cairn-updater helper links
+// against (issue #41). Everything about how the Release produces it has to be
+// pinned here, because none of it can be observed offline any other way:
+// where in the job it runs, that it is not optional, and that the secret does
+// not leak into the rest of the workflow.
+func TestCoreReleaseSignsTheManifestBeforeSealingChecksums(t *testing.T) {
+	workflow := loadWorkflow(t, "release-core.yml")
+	jobs := object(t, workflow["jobs"], "jobs")
+	prepare := object(t, jobs["prepare-draft"], "prepare-draft")
+
+	goIndex, _ := findStepByName(t, prepare, "Setup Go for the signed release manifest")
+	signIndex, sign := findStepByName(t, prepare, "Sign the canonical release manifest")
+	sealIndex, seal := findStepByName(t, prepare, "Seal security evidence and checksums")
+	verifyIndex, verify := findStepByName(t, prepare, "Verify the signed release manifest the way the helper will")
+	draftIndex, _ := findStepByName(t, prepare, "Prepare complete draft Release idempotently")
+
+	if goIndex >= signIndex {
+		t.Fatalf("Go toolchain is set up at %d, after the signing step at %d", goIndex, signIndex)
+	}
+	if signIndex >= sealIndex {
+		t.Fatalf("the manifest is signed at %d, after checksums are sealed at %d", signIndex, sealIndex)
+	}
+	if sealIndex >= verifyIndex || verifyIndex >= draftIndex {
+		t.Fatalf("verification order seal=%d verify=%d draft=%d", sealIndex, verifyIndex, draftIndex)
+	}
+
+	// Fail closed: no condition, no tolerated failure. A release that cannot be
+	// signed must not reach the draft stage at all.
+	if _, conditional := sign["if"]; conditional {
+		t.Error("the manifest signing step is conditional: a release could reach draft unsigned")
+	}
+	if _, tolerated := sign["continue-on-error"]; tolerated {
+		t.Error("the manifest signing step tolerates failure")
+	}
+	signEnv := object(t, sign["env"], "signing step env")
+	secret, _ := signEnv["CAIRN_RELEASE_SIGNING_KEY"].(string)
+	if !strings.Contains(secret, "secrets.CAIRN_RELEASE_SIGNING_KEY") {
+		t.Errorf("the signing key does not come from a repository secret: %q", secret)
+	}
+
+	// Verification is the helper's own code path and must need no secret.
+	if verifyEnv, ok := verify["env"].(map[string]any); ok {
+		if _, leaked := verifyEnv["CAIRN_RELEASE_SIGNING_KEY"]; leaked {
+			t.Error("manifest verification is handed the signing secret; it must verify with the public trust root")
+		}
+	}
+
+	sealRun, _ := seal["run"].(string)
+	for _, asset := range []string{"cairn-release-manifest.json", "cairn-release-manifest.json.sig"} {
+		if !strings.Contains(sealRun, asset) {
+			t.Errorf("SHA256SUMS does not cover %s", asset)
+		}
+	}
+}
+
+// The signing secret must exist in exactly one place in the whole workflow.
+// Every extra reference is another chance for it to be echoed, written to a
+// file, or handed to a step that does not need it.
+func TestCoreReleaseSigningSecretIsReferencedExactlyOnce(t *testing.T) {
+	content, err := os.ReadFile("../.github/workflows/release-core.yml")
+	if err != nil {
+		t.Fatalf("read workflow: %v", err)
+	}
+	if count := strings.Count(string(content), "secrets.CAIRN_RELEASE_SIGNING_KEY"); count != 1 {
+		t.Fatalf("the signing secret is referenced %d times, want exactly 1", count)
+	}
+	entries, err := os.ReadDir("../.github/workflows")
+	if err != nil {
+		t.Fatalf("list workflows: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == "release-core.yml" {
+			continue
+		}
+		other, err := os.ReadFile("../.github/workflows/" + entry.Name())
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		if strings.Contains(string(other), "CAIRN_RELEASE_SIGNING_KEY") {
+			t.Errorf("%s references the release signing key", entry.Name())
+		}
+	}
+}
+
+// The signed manifest and its detached signature are part of the strict Release
+// asset set. If they were merely produced but not required, a Release could be
+// published without a trust root and the helper would have nothing to check.
+func TestSignedManifestIsPartOfTheStrictReleaseAssetSet(t *testing.T) {
+	content, err := os.ReadFile("core-release-promote.sh")
+	if err != nil {
+		t.Fatalf("read promote script: %v", err)
+	}
+	for _, asset := range []string{"cairn-release-manifest.json", "cairn-release-manifest.json.sig"} {
+		if !strings.Contains(string(content), asset) {
+			t.Errorf("the strict Release asset set omits %s", asset)
+		}
+	}
+}

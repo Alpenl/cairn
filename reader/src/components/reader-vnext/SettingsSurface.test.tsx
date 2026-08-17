@@ -102,6 +102,18 @@ describe('SettingsSurface 关于 Core 版本', () => {
     expect(screen.getByRole('button', { name: /查看这个版本的 Release/ })).toBeEnabled()
   })
 
+  it('把部署交互接在关于旁边，默认锁定且不发任何部署请求', async () => {
+    // 面板用的是默认的同源部署客户端；锁定态一个请求都不发，所以这里不需要
+    // 桩掉 fetch 也不会有网络动作。
+    renderAbout(healthClient(ok(releaseHealth())))
+
+    expect(await screen.findByText(/版本 1\.4\.0/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '更新 Core' })).toBeInTheDocument()
+    expect(screen.getByLabelText('部署令牌')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /检查更新/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /更新到/ })).not.toBeInTheDocument()
+  })
+
   it('labels an uninjected development build and offers no release lookup', async () => {
     // internal/buildinfo falls back to 0.0.0 / unknown when ldflags were not
     // injected; there is no GitHub release to point at in that case.
