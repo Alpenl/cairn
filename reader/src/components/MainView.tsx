@@ -2913,7 +2913,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
               onCompletedExpandedChange={setTodoCompletedExpanded}
             />
           ) : displayedView === 'settings' ? (
-            <SettingsSurface capabilityPolicy={capabilityPolicy} onNavigate={navigateRoute} onOpenConnectionSettings={openSettings} />
+            <SettingsSurface client={client} capabilityPolicy={capabilityPolicy} onNavigate={navigateRoute} onOpenConnectionSettings={openSettings} />
           ) : displayedView === 'history' ? (
             contentHistoryLinkID ? (
               <ContentHistorySurface

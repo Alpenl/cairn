@@ -24,6 +24,7 @@ import type {
 	ReaderThoughtSearchResponse as WireReaderThoughtSearchResponse,
 	ReaderNoteSearchResponse as WireReaderNoteSearchResponse,
   CapabilitiesResponse as WireCapabilitiesResponse,
+  HealthResponse as WireHealthResponse,
   ReaderCapabilitiesResponse as WireReaderCapabilitiesResponse,
   LinkResponse as WireLinkResponse,
   OpmlImportResponse as WireOPMLImportResponse,
@@ -167,6 +168,7 @@ export type ErrorResponse = WireErrorResponse
 export type OPMLImportResponse = WireOPMLImportResponse
 export type CapabilitiesResponse = WireCapabilitiesResponse
 export type ReaderCapabilitiesResponse = WireReaderCapabilitiesResponse
+export type HealthResponse = WireHealthResponse
 
 export type ReaderThoughtOpRequest = WireReaderThoughtOpRequest
 export type ReaderThoughtOpsRequest = WireReaderThoughtOpsRequest

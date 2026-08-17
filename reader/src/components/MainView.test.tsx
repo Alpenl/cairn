@@ -585,6 +585,13 @@ function makeClient(
     getCapabilities,
     submitLink,
     downloadArchiveV2,
+    // Settings reads the running Core identity off the existing /health probe.
+    getHealth: vi.fn(async () => ok({
+      status: 'ok' as const,
+      version: '1.4.0',
+      commit: '0123456789abcdef0123456789abcdef01234567',
+      build_time: '2026-08-01T10:00:00Z',
+    })),
     getInbox: vi.fn(async (id: string) => ok(makeReaderInbox({ id }))),
     searchLibrary: vi.fn(async () => ok(searchResponse)),
     testConnection: vi.fn(),

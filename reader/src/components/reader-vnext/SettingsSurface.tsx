@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReaderNavigationRequest } from '../../lib/navigation/route'
 import {
   readReaderStartupPreference,
@@ -7,12 +7,23 @@ import {
 } from '../../lib/navigation/route'
 import { Icon } from '../Icon'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
+import type { IdentityBoundReaderClient } from '../../lib/api/client'
+import {
+  coreBuildIdentity,
+  formatBuildTime,
+  isDevelopmentBuild,
+  lookupCoreRelease,
+  shortCommit,
+  type CoreBuildIdentity,
+  type CoreReleaseLookup,
+} from '../../lib/core-version'
 import { SurfaceShell } from './SurfaceShell'
 
 export interface SettingsSurfaceProps {
   readonly onNavigate: ReaderNavigationRequest
   readonly onOpenConnectionSettings: () => void
   readonly capabilityPolicy: ReaderCapabilityPolicy
+  readonly client: IdentityBoundReaderClient
 }
 
 const STARTUP_PREFERENCES: ReadonlyArray<{
@@ -25,7 +36,118 @@ const STARTUP_PREFERENCES: ReadonlyArray<{
   { id: 'reading', label: '直接阅读', description: '跳过今天，直接进入阅读。' },
 ]
 
-export function SettingsSurface({ onNavigate, onOpenConnectionSettings, capabilityPolicy }: SettingsSurfaceProps) {
+type CoreIdentityState =
+  | { readonly kind: 'loading' }
+  | { readonly kind: 'ready'; readonly identity: CoreBuildIdentity }
+  /** 后端不可达：读不到版本，但设置页其余部分必须照常可用。 */
+  | { readonly kind: 'unreachable' }
+
+type ReleaseState =
+  | { readonly kind: 'idle' }
+  | { readonly kind: 'loading' }
+  | { readonly kind: 'done'; readonly lookup: CoreReleaseLookup }
+
+/**
+ * 「关于」区域：显示后端 `/health` 报告的运行中 Core 标识。
+ *
+ * 这是一个纯只读面板。版本、commit、构建时间全部来自后端已有的探针端点；
+ * Release 查询是使用者主动点一下才发生的旁支，且只读 GitHub 上与当前版本
+ * 精确对应的那条 Release。这里既没有升级动作，也没有任何凭证输入——
+ * 无论 GitHub 是否可达，当前版本的展示都不受影响。
+ */
+function AboutCore({ client }: { readonly client: IdentityBoundReaderClient }) {
+  const [identityState, setIdentityState] = useState<CoreIdentityState>({ kind: 'loading' })
+  const [release, setRelease] = useState<ReleaseState>({ kind: 'idle' })
+  const [retryToken, setRetryToken] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    const controller = new AbortController()
+    setIdentityState({ kind: 'loading' })
+    setRelease({ kind: 'idle' })
+    void (async () => {
+      const result = await client.getHealth(controller.signal)
+      if (cancelled) return
+      setIdentityState(result.ok
+        ? { kind: 'ready', identity: coreBuildIdentity(result.data) }
+        : { kind: 'unreachable' })
+    })()
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [client, retryToken])
+
+  const identity = identityState.kind === 'ready' ? identityState.identity : null
+  const development = identity ? isDevelopmentBuild(identity) : false
+  const buildTime = identity ? formatBuildTime(identity.buildTime) : null
+
+  const checkRelease = async (version: string) => {
+    setRelease({ kind: 'loading' })
+    const lookup = await lookupCoreRelease(version)
+    setRelease({ kind: 'done', lookup })
+  }
+
+  return (
+    <article className="rvx-settings-row">
+      <div>
+        <span className="rvx-eyebrow">关于</span>
+        <h2>Core 版本</h2>
+        {identityState.kind === 'loading' && <p>正在读取后端版本…</p>}
+        {identityState.kind === 'unreachable' && (
+          <p>后端不可达，暂时读不到当前版本。恢复连接后可以再试一次。</p>
+        )}
+        {identity && (
+          <>
+            <p>
+              {development ? '开发构建' : `版本 ${identity.version}`}
+              {' · commit '}
+              {shortCommit(identity.commit)}
+            </p>
+            <p className="rvx-muted">{buildTime ? `构建于 ${buildTime}。` : '构建时间未注入。'}</p>
+            {development && (
+              <p className="rvx-muted">这个构建没有注入版本信息，GitHub 上也没有对应的正式 Release。</p>
+            )}
+            {release.kind === 'loading' && <p className="rvx-muted" role="status">正在查询 GitHub…</p>}
+            {release.kind === 'done' && release.lookup.kind === 'found' && (
+              <p className="rvx-muted" role="status">
+                {release.lookup.title ?? release.lookup.tag}
+                {release.lookup.publishedAt ? ` · 发布于 ${release.lookup.publishedAt}` : ''}
+                {' · '}
+                <a href={release.lookup.url} target="_blank" rel="noreferrer noopener">查看更新日志</a>
+              </p>
+            )}
+            {release.kind === 'done' && release.lookup.kind === 'missing' && (
+              <p className="rvx-muted" role="status">GitHub 上没有 {release.lookup.tag} 对应的 Release。</p>
+            )}
+            {release.kind === 'done' && release.lookup.kind === 'unavailable' && (
+              <p className="rvx-muted" role="status">暂时连不上 GitHub，当前版本信息不受影响。</p>
+            )}
+          </>
+        )}
+      </div>
+      <div className="rvx-settings-control">
+        {identityState.kind === 'unreachable' && (
+          <button className="rvx-button secondary" type="button" onClick={() => setRetryToken((token) => token + 1)}>
+            <Icon name="more" size={15} />重新读取
+          </button>
+        )}
+        {identity && !development && (
+          <button
+            className="rvx-button secondary"
+            type="button"
+            disabled={release.kind === 'loading'}
+            onClick={() => { void checkRelease(identity.version) }}
+          >
+            <Icon name="clock" size={15} />查看这个版本的 Release
+          </button>
+        )}
+      </div>
+    </article>
+  )
+}
+
+export function SettingsSurface({ onNavigate, onOpenConnectionSettings, capabilityPolicy, client }: SettingsSurfaceProps) {
   const [startupPreference, setStartupPreference] = useState<ReaderStartupPreference>(() => readReaderStartupPreference())
   const [saved, setSaved] = useState<boolean | null>(null)
 
@@ -97,6 +219,7 @@ export function SettingsSurface({ onNavigate, onOpenConnectionSettings, capabili
           <div><span className="rvx-eyebrow">数据</span><h2>回收站</h2><p>删除的链接、收件箱条目和笔记都会先留在这里，可以恢复，也可以永久清除。</p></div>
           <button className="rvx-button secondary" type="button" onClick={() => void onNavigate({ kind: 'tool', id: 'trash' })}><Icon name="trash" size={15} />打开回收站</button>
         </article>
+        <AboutCore client={client} />
       </section>
     </SurfaceShell>
   )
