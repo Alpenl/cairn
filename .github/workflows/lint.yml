@@ -28,6 +28,12 @@ jobs:
           cache: true
       - name: Validate GitHub Actions workflows
         run: make actionlint
+      # 联网校验：actionlint 与 Makefile 的 pin 检查都只能看到仓库内部的自洽性，
+      # 看不出一个从写下时就贴错版本号的 pin。见 scripts/verify-action-pins.sh。
+      - name: Verify action pin comments against their real tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/verify-action-pins.sh
 
   golangci:
     if: ${{ inputs.profile == 'quick' || inputs.profile == 'full' }}
