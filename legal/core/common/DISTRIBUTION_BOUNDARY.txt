@@ -10,6 +10,3 @@ This directory covers application content added by Cairn:
 It does not claim to enumerate the inherited Alpine base image or apk runtime
 packages. Their package database remains in the image, and release SBOM/Trivy
 evidence inventories that separate base/runtime layer at each child digest.
-
-The full image additionally includes YT_DLP_LICENSE.txt and YT_DLP_SOURCE.txt.
-Those files are intentionally absent from slim and from binary tar archives.

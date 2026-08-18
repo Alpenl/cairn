@@ -13,21 +13,6 @@ on:
         required: false
         type: string
         default: ''
-      full_index_digest:
-        description: Full multi-platform candidate index
-        required: false
-        type: string
-        default: ''
-      full_amd64_digest:
-        description: Full linux/amd64 candidate child
-        required: false
-        type: string
-        default: ''
-      full_arm64_digest:
-        description: Full linux/arm64 candidate child
-        required: false
-        type: string
-        default: ''
       slim_index_digest:
         description: Slim multi-platform candidate index
         required: false
@@ -81,16 +66,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - variant: full
-            arch: amd64
-            platform: linux/amd64
-            index_digest: ${{ inputs.full_index_digest }}
-            child_digest: ${{ inputs.full_amd64_digest }}
-          - variant: full
-            arch: arm64
-            platform: linux/arm64
-            index_digest: ${{ inputs.full_index_digest }}
-            child_digest: ${{ inputs.full_arm64_digest }}
           - variant: slim
             arch: amd64
             platform: linux/amd64
@@ -110,13 +85,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 1
-
-      # runner 是 amd64，而 matrix 里有 linux/arm64 的 child digest。下面的
-      # yt-dlp 版本核验要在被扫镜像里真的执行一次 `yt-dlp --version`，没有
-      # binfmt 注册时 arm64 二进制直接 `exec format error`，与镜像本身是否
-      # 正确无关。release-core 的 candidate job 出于同样的理由装了 QEMU。
-      - name: Set up QEMU for cross-architecture execution
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8  # v4.2.0
 
       - name: Validate immutable scan coordinates
         shell: bash
@@ -212,30 +180,6 @@ jobs:
             "$EVIDENCE/trivy.json" >/dev/null
           jq -e 'any(.components[]?; ((.purl // "") | startswith("pkg:apk/alpine/")))' \
             "$EVIDENCE/sbom.cdx.json" >/dev/null
-
-      - name: Verify full image yt-dlp and reviewed advisories
-        if: ${{ always() && matrix.variant == 'full' }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          expected="$(sed -n 's/^ARG YTDLP_VERSION=//p' Dockerfile)"
-          actual="$(docker run --rm --platform '${{ matrix.platform }}' \
-            --entrypoint /usr/local/bin/yt-dlp "$REFERENCE" --version)"
-          [ "$actual" = "$expected" ] || {
-            echo "::error::yt-dlp version $actual does not match pin $expected"
-            exit 1
-          }
-          gh api --method GET \
-            "advisories?ecosystem=pip&affects=yt-dlp@$expected&type=reviewed&per_page=100" \
-            --jq '[.[] | {ghsa_id, severity, summary}]' > "$EVIDENCE/yt-dlp-advisories.json"
-          jq -e '[.[] | select(.severity == "high" or .severity == "critical")] | length == 0' \
-            "$EVIDENCE/yt-dlp-advisories.json" >/dev/null
-          jq -n \
-            --arg version "$expected" \
-            --arg coverage 'exact executable version plus GitHub reviewed PyPI advisories; Trivy may not identify a standalone upstream static executable' \
-            '{version: $version, coverage: $coverage}' > "$EVIDENCE/yt-dlp-coverage.json"
 
       - name: Upload final image security evidence
         if: ${{ always() }}

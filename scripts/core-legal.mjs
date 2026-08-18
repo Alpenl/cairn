@@ -170,19 +170,10 @@ function renderReaderBundle() {
   return `${output.join('\n')}\n`
 }
 
-function dockerArg(name) {
-  const dockerfile = readFileSync(join(root, 'Dockerfile'), 'utf8')
-  const match = dockerfile.match(new RegExp(`^ARG ${name}=([^\\s]+)$`, 'm'))
-  if (!match) fail(`Dockerfile must pin ${name}`)
-  return match[1]
-}
-
 function generate(output) {
   rmSync(output, { recursive: true, force: true })
   const common = join(output, 'common')
-  const full = join(output, 'full')
   mkdirSync(common, { recursive: true })
-  mkdirSync(full, { recursive: true })
 
   const repositoryLicense = readFileSync(join(root, 'LICENSE'), 'utf8')
   const mitStart = repositoryLicense.indexOf('MIT License\n')
@@ -226,26 +217,6 @@ function generate(output) {
       'It does not claim to enumerate the inherited Alpine base image or apk runtime',
       'packages. Their package database remains in the image, and release SBOM/Trivy',
       'evidence inventories that separate base/runtime layer at each child digest.',
-      '',
-      'The full image additionally includes YT_DLP_LICENSE.txt and YT_DLP_SOURCE.txt.',
-      'Those files are intentionally absent from slim and from binary tar archives.',
-    ].join('\n'),
-  )
-
-  const ytVersion = dockerArg('YTDLP_VERSION')
-  const ytLicense = join(root, 'legal', 'sources', 'yt-dlp', ytVersion, 'LICENSE')
-  if (!existsSync(ytLicense)) fail(`yt-dlp ${ytVersion} legal source is missing: ${ytLicense}`)
-  cpSync(ytLicense, join(full, 'YT_DLP_LICENSE.txt'))
-  write(
-    join(full, 'YT_DLP_SOURCE.txt'),
-    [
-      'yt-dlp static executable source',
-      '',
-      `Version: ${ytVersion}`,
-      `Release: https://github.com/yt-dlp/yt-dlp/releases/tag/${ytVersion}`,
-      'Assets: yt-dlp_musllinux (amd64), yt-dlp_musllinux_aarch64 (arm64)',
-      'License: Unlicense; see YT_DLP_LICENSE.txt',
-      'Integrity: per-architecture SHA-256 values are pinned in Dockerfile.',
     ].join('\n'),
   )
 

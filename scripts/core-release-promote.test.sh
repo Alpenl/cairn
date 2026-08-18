@@ -75,18 +75,13 @@ export REPOSITORY=example/cairn
 export CORE_RELEASE_HIGHEST_TAG=$TAG
 export COMMIT=0123456789abcdef0123456789abcdef01234567
 export BUILD_TIME=2026-08-14T01:02:03Z
-export FULL_INDEX_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export SLIM_INDEX_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-export FULL_AMD64_DIGEST=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-export FULL_ARM64_DIGEST=sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 export SLIM_AMD64_DIGEST=sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 export SLIM_ARM64_DIGEST=sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 old_latest=sha256:1111111111111111111111111111111111111111111111111111111111111111
-old_full=sha256:2222222222222222222222222222222222222222222222222222222222222222
 old_slim=sha256:3333333333333333333333333333333333333333333333333333333333333333
 printf '%s\n' "$old_latest" >"$TMP/state/images/ghcr.io_example_cairn_latest"
-printf '%s\n' "$old_full" >"$TMP/state/images/ghcr.io_example_cairn_full"
 printf '%s\n' "$old_slim" >"$TMP/state/images/ghcr.io_example_cairn_slim"
 
 printf 'amd64 archive\n' >"$TMP/assets/cairn_1.2.3_linux_amd64.tar.gz"
@@ -101,44 +96,30 @@ printf 'release manifest\n' >"$TMP/assets/cairn-release-manifest.json"
 printf 'release signature\n' >"$TMP/assets/cairn-release-manifest.json.sig"
 jq -n \
 	--arg tag "$TAG" --arg commit "$COMMIT" --arg build_time "$BUILD_TIME" --arg image "$IMAGE" \
-	--arg full_index "$FULL_INDEX_DIGEST" --arg full_amd64 "$FULL_AMD64_DIGEST" --arg full_arm64 "$FULL_ARM64_DIGEST" \
 	--arg slim_index "$SLIM_INDEX_DIGEST" --arg slim_amd64 "$SLIM_AMD64_DIGEST" --arg slim_arm64 "$SLIM_ARM64_DIGEST" \
 	'{tag: $tag, commit: $commit, build_time: $build_time, image: $image,
-	  full: {index: $full_index, children: {"linux/amd64": $full_amd64, "linux/arm64": $full_arm64}},
 	  slim: {index: $slim_index, children: {"linux/amd64": $slim_amd64, "linux/arm64": $slim_arm64}}}' \
 	>"$TMP/assets/IMAGE-DIGESTS.json"
 
 mkdir -p "$TMP/security-evidence"
-for variant in full slim; do
-	for arch in amd64 arm64; do
-		platform="linux/$arch"
-		case "$variant/$arch" in
-			full/amd64) index=$FULL_INDEX_DIGEST; child=$FULL_AMD64_DIGEST ;;
-			full/arm64) index=$FULL_INDEX_DIGEST; child=$FULL_ARM64_DIGEST ;;
-			slim/amd64) index=$SLIM_INDEX_DIGEST; child=$SLIM_AMD64_DIGEST ;;
-			slim/arm64) index=$SLIM_INDEX_DIGEST; child=$SLIM_ARM64_DIGEST ;;
-		esac
-		directory="$TMP/security-evidence/core-image-evidence-${variant}-${arch}"
-		mkdir -p "$directory"
-		jq -n --arg commit "$COMMIT" --arg image "$IMAGE" --arg variant "$variant" \
-			--arg platform "$platform" --arg index "$index" --arg child "$child" \
-			'{commit: $commit, image: $image, variant: $variant, platform: $platform, index_digest: $index, child_digest: $child}' \
-			>"$directory/coordinates.json"
-		jq -n --arg arch "$arch" --arg child "$child" \
-			'{manifests: [{platform: {os: "linux", architecture: $arch}, digest: $child}]}' \
-			>"$directory/index-manifest.json"
-		jq -n --arg arch "$arch" '{os: "linux", architecture: $arch}' >"$directory/child-image.json"
-		jq -n '{Results: [{Class: "os-pkgs", Type: "alpine"}]}' >"$directory/trivy.json"
-		jq -n '{components: [{purl: "pkg:apk/alpine/ca-certificates@1"}]}' >"$directory/sbom.cdx.json"
-		if [[ $variant == full ]]; then
-			printf '[]\n' >"$directory/yt-dlp-advisories.json"
-			# 版本取自 Dockerfile 而不是写死：promote 会拿 coverage 里的版本与
-			# ARG YTDLP_VERSION 对账（core-release-promote.sh 的 yt_dlp_version），
-			# 写死会让每次升级 pin 都在这里假失败。
-			jq -n --arg version "$(sed -n 's/^ARG YTDLP_VERSION=//p' "$ROOT/Dockerfile")" \
-				'{version: $version, coverage: "test advisory boundary"}' >"$directory/yt-dlp-coverage.json"
-		fi
-	done
+for arch in amd64 arm64; do
+	platform="linux/$arch"
+	case "$arch" in
+		amd64) index=$SLIM_INDEX_DIGEST; child=$SLIM_AMD64_DIGEST ;;
+		arm64) index=$SLIM_INDEX_DIGEST; child=$SLIM_ARM64_DIGEST ;;
+	esac
+	directory="$TMP/security-evidence/core-image-evidence-slim-${arch}"
+	mkdir -p "$directory"
+	jq -n --arg commit "$COMMIT" --arg image "$IMAGE" --arg variant slim \
+		--arg platform "$platform" --arg index "$index" --arg child "$child" \
+		'{commit: $commit, image: $image, variant: $variant, platform: $platform, index_digest: $index, child_digest: $child}' \
+		>"$directory/coordinates.json"
+	jq -n --arg arch "$arch" --arg child "$child" \
+		'{manifests: [{platform: {os: "linux", architecture: $arch}, digest: $child}]}' \
+		>"$directory/index-manifest.json"
+	jq -n --arg arch "$arch" '{os: "linux", architecture: $arch}' >"$directory/child-image.json"
+	jq -n '{Results: [{Class: "os-pkgs", Type: "alpine"}]}' >"$directory/trivy.json"
+	jq -n '{components: [{purl: "pkg:apk/alpine/ca-certificates@1"}]}' >"$directory/sbom.cdx.json"
 done
 tar -C "$TMP" -czf "$TMP/assets/core-security-evidence-1.2.3.tar.gz" security-evidence
 
@@ -177,8 +158,8 @@ done
 
 CAIRN_RELEASE_FAIL_AT=version-slim "$SCRIPT" promote-versions >/dev/null 2>&1 &&
 	fail 'version-slim injection did not fail'
-[[ $(cat "$TMP/state/images/ghcr.io_example_cairn_1.2.3") == "$FULL_INDEX_DIGEST" ]] ||
-	fail 'full version digest was not promoted before injected slim failure'
+[[ $(cat "$TMP/state/images/ghcr.io_example_cairn_1.2.3") == "$SLIM_INDEX_DIGEST" ]] ||
+	fail 'version digest was not promoted before injected slim alias failure'
 "$SCRIPT" promote-versions
 
 printf '%s\n' sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
@@ -194,26 +175,26 @@ CAIRN_RELEASE_FAIL_AT=release-publish "$SCRIPT" publish-release >/dev/null 2>&1 
 "$SCRIPT" publish-release
 [[ $(cat "$TMP/state/draft") == false ]] || fail 'Release was not published on retry'
 
-printf '%s\n' "$FULL_INDEX_DIGEST" >"$TMP/state/images/ghcr.io_example_cairn_latest"
+printf '%s\n' "$SLIM_INDEX_DIGEST" >"$TMP/state/images/ghcr.io_example_cairn_latest"
 rm "$TMP/assets/CHANNEL-ROLLBACK.json"
 "$SCRIPT" prepare-channel-record "$TMP/assets/CHANNEL-ROLLBACK.json"
 jq -e --arg digest "$old_latest" '.previous.latest == $digest' "$TMP/assets/CHANNEL-ROLLBACK.json" >/dev/null ||
 	fail 'channel retry did not reuse the rollback record sealed before publication'
 printf '%s\n' "$old_latest" >"$TMP/state/images/ghcr.io_example_cairn_latest"
 
-CAIRN_RELEASE_FAIL_AT=channel-full "$SCRIPT" promote-channels >/dev/null 2>&1 &&
+CAIRN_RELEASE_FAIL_AT=channel-slim "$SCRIPT" promote-channels >/dev/null 2>&1 &&
 	fail 'partial channel injection did not fail'
-[[ $(cat "$TMP/state/images/ghcr.io_example_cairn_latest") == "$FULL_INDEX_DIGEST" ]] ||
+[[ $(cat "$TMP/state/images/ghcr.io_example_cairn_latest") == "$SLIM_INDEX_DIGEST" ]] ||
 	fail 'partial update did not reach latest before failure'
-[[ $(cat "$TMP/state/images/ghcr.io_example_cairn_full") == "$old_full" ]] ||
-	fail 'partial failure unexpectedly changed full'
+[[ $(cat "$TMP/state/images/ghcr.io_example_cairn_slim") == "$old_slim" ]] ||
+	fail 'partial failure unexpectedly changed slim'
 "$SCRIPT" promote-channels
-[[ $(cat "$TMP/state/images/ghcr.io_example_cairn_full") == "$FULL_INDEX_DIGEST" ]] ||
-	fail 'retry did not recover full channel'
+[[ $(cat "$TMP/state/images/ghcr.io_example_cairn_latest") == "$SLIM_INDEX_DIGEST" ]] ||
+	fail 'retry did not recover latest channel'
 [[ $(cat "$TMP/state/images/ghcr.io_example_cairn_slim") == "$SLIM_INDEX_DIGEST" ]] ||
 	fail 'retry did not recover slim channel'
 
-for point in candidate-full candidate-slim candidate-verify channel-record draft-assets release-publish channel-slim; do
+for point in candidate-slim candidate-verify channel-record draft-assets release-publish channel-slim; do
 	if CAIRN_RELEASE_FAIL_AT=$point "$SCRIPT" fault "$point" >/dev/null 2>&1; then
 		fail "fault point $point did not fail closed"
 	fi

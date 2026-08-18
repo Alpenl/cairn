@@ -154,7 +154,7 @@ func loadRuntimeConfig() (Config, error) { //nolint:gocyclo // 逐项解析运�
 		TagCacheTTLMS:                      scalars.tagCacheTTLMS,
 		TreeCacheTTLMS:                     scalars.treeCacheTTLMS,
 		GitHubToken:                        envString("GITHUB_TOKEN", ""),
-		YtdlpBinaryPath:                    envString("YTDLP_BINARY_PATH", "yt-dlp"),
+		YtdlpBinaryPath:                    envString("YTDLP_BINARY_PATH", ""),
 		YtdlpTimeoutMS:                     scalars.ytdlpTimeoutMS,
 		GzipEnabled:                        scalars.gzipEnabled,
 		GzipMinLength:                      scalars.gzipMinLength,

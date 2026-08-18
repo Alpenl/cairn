@@ -18,7 +18,6 @@ ACTIONLINT_VERSION ?= v1.7.7
 # 本地缺它 = 本地绿、CI 红：SC2129 与 SC2012 都是这么漏到 CI 才暴露的。
 # 固定版本下载到 bin/tools，让本地与 runner 检查同一套规则。
 SHELLCHECK_VERSION ?= v0.10.0
-YTDLP_BASE_URL ?= https://github.com/yt-dlp/yt-dlp/releases/download
 GOLANGCI_LINT := $(TOOLS_BIN_DIR)/golangci-lint
 GOVULNCHECK := $(TOOLS_BIN_DIR)/govulncheck
 ACTIONLINT := $(TOOLS_BIN_DIR)/actionlint
@@ -258,23 +257,16 @@ reader-perf-browser: ## 跑 Reader 规模 fixture 的浏览器旅程与 API timi
 	READER_PERF_OUTPUT_DIR=$(abspath artifacts/reader-vnext-performance/browser) \
 	$(PNPM) --filter webtag-reader test:browser reader-vnext-performance.spec.ts
 
-docker-build: ## 构建 slim + full 两种容器镜像
+docker-build: ## 构建运行时容器镜像（不含 yt-dlp）
 	docker build \
 		--target=slim \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		--build-arg BUILD_TIME=$(BUILD_TIME) \
-		-t webtag:$(VERSION)-slim \
-		-t webtag:slim .
-	docker build \
-		--target=full \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg COMMIT=$(COMMIT) \
-		--build-arg BUILD_TIME=$(BUILD_TIME) \
-		--build-arg YTDLP_BASE_URL=$(YTDLP_BASE_URL) \
 		-t webtag:$(VERSION) \
+		-t webtag:$(VERSION)-slim \
 		-t webtag:latest \
-		-t webtag:full .
+		-t webtag:slim .
 
 db-migrate: ## 在临时 Postgres 容器里跑迁移冒烟
 	sh scripts/db_migrate_smoke.sh

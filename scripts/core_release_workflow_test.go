@@ -108,15 +108,17 @@ func TestCoreReleasePromotionDependsOnExactDigestGates(t *testing.T) {
 	candidate := object(t, jobs["candidate"], "candidate")
 	outputs := object(t, candidate["outputs"], "candidate outputs")
 	for _, name := range []string{
-		"full_index_digest", "full_amd64_digest", "full_arm64_digest",
 		"slim_index_digest", "slim_amd64_digest", "slim_arm64_digest",
 	} {
 		if outputs[name] == nil {
 			t.Errorf("candidate does not output %s", name)
 		}
 	}
+	if outputs["full_index_digest"] != nil {
+		t.Error("candidate still outputs a full image digest")
+	}
 
-	for _, id := range []string{"full", "slim"} {
+	for _, id := range []string{"slim"} {
 		step := findStep(t, candidate, id)
 		with := object(t, step["with"], id+" with")
 		if _, tagged := with["tags"]; tagged {
@@ -131,13 +133,15 @@ func TestCoreReleasePromotionDependsOnExactDigestGates(t *testing.T) {
 	imageGate := object(t, jobs["trivy-images"], "trivy-images")
 	gateInputs := object(t, imageGate["with"], "trivy-images inputs")
 	for _, name := range []string{
-		"full_index_digest", "full_amd64_digest", "full_arm64_digest",
 		"slim_index_digest", "slim_amd64_digest", "slim_arm64_digest",
 	} {
 		value, _ := gateInputs[name].(string)
 		if !strings.Contains(value, "needs.candidate.outputs."+name) {
 			t.Errorf("image gate %s is not sourced from candidate output: %q", name, value)
 		}
+	}
+	if _, ok := gateInputs["full_index_digest"]; ok {
+		t.Error("image gate still accepts a full image digest")
 	}
 }
 
@@ -162,10 +166,18 @@ func TestCoreCandidateExecutesBothArchiveArchitecturesAndChecksLegalBytes(t *tes
 		"CAIRN_LICENSE.txt", "OPENCC_LICENSE.txt", "OPENCC_SOURCE.txt",
 		"GO_WEBTAG_THIRD_PARTY.txt", "GO_MIGRATE_THIRD_PARTY.txt",
 		"READER_THIRD_PARTY.txt", "DISTRIBUTION_BOUNDARY.txt",
-		"YT_DLP_LICENSE.txt", "YT_DLP_SOURCE.txt",
 	} {
 		if !strings.Contains(run, material) {
 			t.Errorf("final image verification omits %s", material)
+		}
+	}
+	for _, absent := range []string{
+		"test ! -e /usr/local/bin/yt-dlp",
+		"test ! -e /usr/share/licenses/cairn/YT_DLP_LICENSE.txt",
+		"test ! -e /usr/share/licenses/cairn/YT_DLP_SOURCE.txt",
+	} {
+		if !strings.Contains(run, absent) {
+			t.Errorf("final image verification does not forbid %s", absent)
 		}
 	}
 	if !strings.Contains(run, "sha256sum") {
@@ -179,13 +191,15 @@ func TestCoreDraftSealsRollbackAndSecurityEvidenceBeforePromotion(t *testing.T) 
 	prepare := object(t, jobs["prepare-draft"], "prepare-draft")
 	prepareEnv := object(t, prepare["env"], "prepare-draft env")
 	for _, name := range []string{
-		"FULL_INDEX_DIGEST", "FULL_AMD64_DIGEST", "FULL_ARM64_DIGEST",
 		"SLIM_INDEX_DIGEST", "SLIM_AMD64_DIGEST", "SLIM_ARM64_DIGEST",
 	} {
 		value, _ := prepareEnv[name].(string)
 		if !strings.Contains(value, "needs.candidate.outputs.") {
 			t.Errorf("draft coordinate %s is not sourced from candidate output: %q", name, value)
 		}
+	}
+	if _, ok := prepareEnv["FULL_INDEX_DIGEST"]; ok {
+		t.Error("draft still carries a full image digest")
 	}
 
 	rollbackIndex, _ := findStepByName(t, prepare, "Seal pre-promotion channel digests")
@@ -220,8 +234,8 @@ func TestTrivyReleaseMatrixCoversEveryChildAndProducesSBOM(t *testing.T) {
 	strategy := object(t, imageScan["strategy"], "image-scan strategy")
 	matrix := object(t, strategy["matrix"], "image-scan matrix")
 	entries := array(t, matrix["include"], "image-scan includes")
-	if len(entries) != 4 {
-		t.Fatalf("image-scan matrix has %d entries, want 4", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("image-scan matrix has %d entries, want 2", len(entries))
 	}
 
 	seen := map[string]bool{}
@@ -236,10 +250,13 @@ func TestTrivyReleaseMatrixCoversEveryChildAndProducesSBOM(t *testing.T) {
 			t.Errorf("%s child digest does not use its workflow input: %q", key, child)
 		}
 	}
-	for _, key := range []string{"full/amd64", "full/arm64", "slim/amd64", "slim/arm64"} {
+	for _, key := range []string{"slim/amd64", "slim/arm64"} {
 		if !seen[key] {
 			t.Errorf("image-scan matrix omits %s", key)
 		}
+	}
+	if seen["full/amd64"] || seen["full/arm64"] {
+		t.Error("image-scan matrix still covers a full image")
 	}
 
 	trivyActions := 0

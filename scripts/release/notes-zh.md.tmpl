@@ -8,8 +8,7 @@
 
 | 你想做的事 | 用这个 |
 | --- | --- |
-| 部署服务端（推荐，含视频解析） | 容器镜像 `ghcr.io/alpenl/cairn:__VERSION__` |
-| 部署服务端（不需要视频解析，体积更小） | 容器镜像 `ghcr.io/alpenl/cairn:__VERSION__-slim` |
+| 部署服务端 | 容器镜像 `ghcr.io/alpenl/cairn:__VERSION__` |
 | 不用容器，直接跑二进制 | `cairn___VERSION___linux_amd64.tar.gz` 或 `_arm64.tar.gz` |
 | 部署独立的 Reader 站（根域静态站） | `cairn-reader-__VERSION__.tar.gz` |
 | 在 Chrome / Edge / Firefox 里采集网页 | 见 [浏览器扩展的最新发布](https://github.com/Alpenl/cairn/releases?q=extension&expanded=true) |
@@ -37,7 +36,7 @@
 sha256sum --check SHA256SUMS
 ```
 
-容器镜像请按不可变 digest 部署，不要依赖可变的 `latest` / `full` / `slim` 频道标签。各变体与各架构的精确 digest 见 `IMAGE-DIGESTS.json`；`CHANNEL-ROLLBACK.json` 记录了本次发布之前各频道所指向的 digest，可用于回滚。`core-security-evidence-__VERSION__.tar.gz` 内含镜像漏洞扫描报告、SBOM 与依赖公告证据。
+容器镜像请按不可变 digest 部署，不要依赖可变的 `latest` / `slim` 频道标签。各架构的精确 digest 见 `IMAGE-DIGESTS.json`；`CHANNEL-ROLLBACK.json` 记录了本次发布之前各频道所指向的 digest，可用于回滚。`core-security-evidence-__VERSION__.tar.gz` 内含镜像漏洞扫描报告、SBOM 与依赖公告证据。发布镜像不含 yt-dlp。
 
 ## 许可证
 

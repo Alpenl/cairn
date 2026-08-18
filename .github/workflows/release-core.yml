@@ -136,9 +136,6 @@ jobs:
       contents: read
       packages: write
     outputs:
-      full_index_digest: ${{ steps.digests.outputs.full_index_digest }}
-      full_amd64_digest: ${{ steps.digests.outputs.full_amd64_digest }}
-      full_arm64_digest: ${{ steps.digests.outputs.full_arm64_digest }}
       slim_index_digest: ${{ steps.digests.outputs.slim_index_digest }}
       slim_amd64_digest: ${{ steps.digests.outputs.slim_amd64_digest }}
       slim_arm64_digest: ${{ steps.digests.outputs.slim_arm64_digest }}
@@ -210,28 +207,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
 
-      - name: Inject full candidate failure
-        run: bash scripts/core-release-promote.sh fault candidate-full
-
-      - name: Build immutable full candidate
-        id: full
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          target: full
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          build-args: |
-            VERSION=${{ env.VERSION }}
-            COMMIT=${{ env.COMMIT }}
-            BUILD_TIME=${{ env.BUILD_TIME }}
-            RELEASE_BUILD=true
-            SOURCE_STATE=clean
-            SOURCE_DATE_EPOCH=${{ env.BUILD_EPOCH }}
-          provenance: false
-          cache-from: type=gha,scope=cairn-release-full
-          cache-to: type=gha,mode=max,scope=cairn-release-full
-
       - name: Inject slim candidate failure
         run: bash scripts/core-release-promote.sh fault candidate-slim
 
@@ -258,13 +233,10 @@ jobs:
         id: digests
         shell: bash
         env:
-          FULL_INDEX_DIGEST: ${{ steps.full.outputs.digest }}
           SLIM_INDEX_DIGEST: ${{ steps.slim.outputs.digest }}
         run: |
           set -euo pipefail
-          [[ "$FULL_INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$SLIM_INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          full_manifest="$(docker buildx imagetools inspect "$IMAGE@$FULL_INDEX_DIGEST" --format '{{json .Manifest}}')"
           slim_manifest="$(docker buildx imagetools inspect "$IMAGE@$SLIM_INDEX_DIGEST" --format '{{json .Manifest}}')"
 
           child_digest() {
@@ -275,18 +247,13 @@ jobs:
               <<<"$manifest"
           }
 
-          full_amd64="$(child_digest "$full_manifest" amd64)"
-          full_arm64="$(child_digest "$full_manifest" arm64)"
           slim_amd64="$(child_digest "$slim_manifest" amd64)"
           slim_arm64="$(child_digest "$slim_manifest" arm64)"
-          for digest in "$full_amd64" "$full_arm64" "$slim_amd64" "$slim_arm64"; do
+          for digest in "$slim_amd64" "$slim_arm64"; do
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           done
 
           {
-            echo "full_index_digest=$FULL_INDEX_DIGEST"
-            echo "full_amd64_digest=$full_amd64"
-            echo "full_arm64_digest=$full_arm64"
             echo "slim_index_digest=$SLIM_INDEX_DIGEST"
             echo "slim_amd64_digest=$slim_amd64"
             echo "slim_arm64_digest=$slim_arm64"
@@ -298,13 +265,10 @@ jobs:
             --arg tag "$GITHUB_REF_NAME" \
             --arg build_time "$BUILD_TIME" \
             --arg source "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
-            --arg full_index "$FULL_INDEX_DIGEST" \
-            --arg full_amd64 "$full_amd64" \
-            --arg full_arm64 "$full_arm64" \
             --arg slim_index "$SLIM_INDEX_DIGEST" \
             --arg slim_amd64 "$slim_amd64" \
             --arg slim_arm64 "$slim_arm64" \
-            '{tag: $tag, commit: $commit, build_time: $build_time, source: $source, image: $image, full: {index: $full_index, children: {"linux/amd64": $full_amd64, "linux/arm64": $full_arm64}}, slim: {index: $slim_index, children: {"linux/amd64": $slim_amd64, "linux/arm64": $slim_arm64}}}' \
+            '{tag: $tag, commit: $commit, build_time: $build_time, source: $source, image: $image, slim: {index: $slim_index, children: {"linux/amd64": $slim_amd64, "linux/arm64": $slim_arm64}}}' \
             > dist/IMAGE-DIGESTS.json
 
       - name: Inject candidate verification failure
@@ -313,8 +277,6 @@ jobs:
       - name: Verify every final child image
         shell: bash
         env:
-          FULL_AMD64: ${{ steps.digests.outputs.full_amd64_digest }}
-          FULL_ARM64: ${{ steps.digests.outputs.full_arm64_digest }}
           SLIM_AMD64: ${{ steps.digests.outputs.slim_amd64_digest }}
           SLIM_ARM64: ${{ steps.digests.outputs.slim_arm64_digest }}
         run: |
@@ -355,34 +317,12 @@ jobs:
                 exit 1
               }
             done
-            if [ "$variant" = full ]; then
-              docker run --rm --platform "$platform" --entrypoint /bin/sh "$reference" -ec '
-                test -r /usr/share/licenses/cairn/YT_DLP_LICENSE.txt
-                test -r /usr/share/licenses/cairn/YT_DLP_SOURCE.txt
-              '
-              for material in YT_DLP_LICENSE.txt YT_DLP_SOURCE.txt; do
-                expected_sha="$(sha256sum "legal/core/full/$material")"
-                expected_sha="${expected_sha%% *}"
-                actual_sha="$(docker run --rm --platform "$platform" --entrypoint /bin/sh "$reference" \
-                  -ec "sha256sum /usr/share/licenses/cairn/$material")"
-                actual_sha="${actual_sha%% *}"
-                [ "$actual_sha" = "$expected_sha" ] || {
-                  echo "::error::$variant $platform legal material $material differs from source"
-                  exit 1
-                }
-              done
-              actual="$(docker run --rm --platform "$platform" --entrypoint /usr/local/bin/yt-dlp "$reference" --version)"
-              [ "$actual" = "$(sed -n 's/^ARG YTDLP_VERSION=//p' Dockerfile)" ]
-            else
-              docker run --rm --platform "$platform" --entrypoint /bin/sh "$reference" -ec '
-                test ! -e /usr/share/licenses/cairn/YT_DLP_LICENSE.txt
-                test ! -e /usr/share/licenses/cairn/YT_DLP_SOURCE.txt
-                test ! -e /usr/local/bin/yt-dlp
-              '
-            fi
+            docker run --rm --platform "$platform" --entrypoint /bin/sh "$reference" -ec '
+              test ! -e /usr/share/licenses/cairn/YT_DLP_LICENSE.txt
+              test ! -e /usr/share/licenses/cairn/YT_DLP_SOURCE.txt
+              test ! -e /usr/local/bin/yt-dlp
+            '
           done <<EOF
-          full	linux/amd64	$FULL_AMD64
-          full	linux/arm64	$FULL_ARM64
           slim	linux/amd64	$SLIM_AMD64
           slim	linux/arm64	$SLIM_ARM64
           EOF
@@ -404,9 +344,6 @@ jobs:
     with:
       source_scan: false
       image: ${{ needs.validate.outputs.image }}
-      full_index_digest: ${{ needs.candidate.outputs.full_index_digest }}
-      full_amd64_digest: ${{ needs.candidate.outputs.full_amd64_digest }}
-      full_arm64_digest: ${{ needs.candidate.outputs.full_arm64_digest }}
       slim_index_digest: ${{ needs.candidate.outputs.slim_index_digest }}
       slim_amd64_digest: ${{ needs.candidate.outputs.slim_amd64_digest }}
       slim_arm64_digest: ${{ needs.candidate.outputs.slim_arm64_digest }}
@@ -425,9 +362,6 @@ jobs:
       IMAGE: ${{ needs.validate.outputs.image }}
       REPOSITORY: ${{ github.repository }}
       BUILD_TIME: ${{ needs.validate.outputs.build_time }}
-      FULL_INDEX_DIGEST: ${{ needs.candidate.outputs.full_index_digest }}
-      FULL_AMD64_DIGEST: ${{ needs.candidate.outputs.full_amd64_digest }}
-      FULL_ARM64_DIGEST: ${{ needs.candidate.outputs.full_arm64_digest }}
       SLIM_INDEX_DIGEST: ${{ needs.candidate.outputs.slim_index_digest }}
       SLIM_AMD64_DIGEST: ${{ needs.candidate.outputs.slim_amd64_digest }}
       SLIM_ARM64_DIGEST: ${{ needs.candidate.outputs.slim_arm64_digest }}
@@ -521,7 +455,6 @@ jobs:
       TAG: ${{ github.ref_name }}
       VERSION: ${{ needs.validate.outputs.version }}
       IMAGE: ${{ needs.validate.outputs.image }}
-      FULL_INDEX_DIGEST: ${{ needs.candidate.outputs.full_index_digest }}
       SLIM_INDEX_DIGEST: ${{ needs.candidate.outputs.slim_index_digest }}
       CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
     steps:
@@ -572,7 +505,6 @@ jobs:
       VERSION: ${{ needs.validate.outputs.version }}
       IMAGE: ${{ needs.validate.outputs.image }}
       REPOSITORY: ${{ github.repository }}
-      FULL_INDEX_DIGEST: ${{ needs.candidate.outputs.full_index_digest }}
       SLIM_INDEX_DIGEST: ${{ needs.candidate.outputs.slim_index_digest }}
       CAIRN_RELEASE_FAIL_AT: ${{ vars.CORE_RELEASE_FAIL_AT }}
     steps:

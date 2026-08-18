@@ -76,9 +76,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -mod=vendor -trimpath
 	-o /out/migrate ./cmd/migrate
 
 # ---------------------------------------------------------------------------
-# slim — runtime without yt-dlp. Use this when the deployment only needs
-# the core web/API surface (no /downloader video ingest path). Tag suffix
-# `-slim` in the registry. ~35MB lighter than `full`.
+# slim — the published runtime. yt-dlp is not bundled and is not part of
+# Core release images. `docker build .` (no --target) lands here.
 # ---------------------------------------------------------------------------
 FROM alpine:3.24 AS slim
 
@@ -133,52 +132,3 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
 	CMD wget -qO- http://127.0.0.1:8000/health >/dev/null 2>&1 || exit 1
 
 ENTRYPOINT ["/app/webtag"]
-
-# ---------------------------------------------------------------------------
-# full — slim + pinned static yt-dlp. This is the default `docker build .`
-# target so existing pipelines keep getting an image with the video ingest
-# tooling baked in. Bump YTDLP_VERSION/SHA in lockstep: grab the new release's
-# yt-dlp_musllinux asset checksum from upstream (or compute it locally) and
-# update both pins together.
-# ---------------------------------------------------------------------------
-FROM slim AS full
-
-# Switch back to root for the install layer (slim already set USER webtag).
-USER root
-
-ARG YTDLP_VERSION=2026.07.04
-ARG YTDLP_BASE_URL=https://github.com/yt-dlp/yt-dlp/releases/download
-# 按目标架构选 musllinux 资产与配套 SHA（来源：上游 release 的 SHA2-256SUMS，
-# 升级 YTDLP_VERSION 时两个 SHA 一起换）。TARGETARCH 由 BuildKit 注入：
-# amd64 → yt-dlp_musllinux，arm64 → yt-dlp_musllinux_aarch64。
-# 必须是裸 ARG（见 builder stage 同名注释——带默认值会架空注入）。
-ARG TARGETARCH
-ARG YTDLP_SHA256_AMD64=f7439ec2e3ffe69e06ac233f83f0d9687b89105939129bddcbf74e5de0f2b40e
-ARG YTDLP_SHA256_ARM64=9a6a4de88f35dc68c1763945fbb417e092ebd9afc5d66052ac31b68d405a12a7
-RUN case "${TARGETARCH}" in \
-		arm64) YTDLP_ASSET="yt-dlp_musllinux_aarch64"; YTDLP_SHA256="${YTDLP_SHA256_ARM64}" ;; \
-		amd64) YTDLP_ASSET="yt-dlp_musllinux"; YTDLP_SHA256="${YTDLP_SHA256_AMD64}" ;; \
-		*) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-	esac \
-	&& for attempt in 1 2 3; do \
-		# wget -T only bounds individual network operations; a continuously slow \
-		# transfer can otherwise run forever. BusyBox timeout bounds the whole try. \
-		timeout -k 5 120 wget -T 30 -qO /usr/local/bin/yt-dlp "${YTDLP_BASE_URL%/}/${YTDLP_VERSION}/${YTDLP_ASSET}" && break; \
-		rm -f /usr/local/bin/yt-dlp; \
-		[ "${attempt}" -lt 3 ] || exit 1; \
-	done \
-	&& echo "${YTDLP_SHA256}  /usr/local/bin/yt-dlp" | sha256sum -c - \
-	&& chmod +x /usr/local/bin/yt-dlp
-
-COPY --chown=webtag:webtag legal/core/full/ /usr/share/licenses/cairn/
-
-RUN test -r /usr/share/licenses/cairn/YT_DLP_LICENSE.txt \
-	&& test -r /usr/share/licenses/cairn/YT_DLP_SOURCE.txt
-
-USER webtag
-
-# ---------------------------------------------------------------------------
-# Default target for `docker build .` (no --target). Keeping this last and
-# named `full`-equivalent preserves backward compatibility: existing
-# pipelines that don't pass --target still receive the yt-dlp-bundled image.
-# ---------------------------------------------------------------------------

@@ -124,16 +124,15 @@ validate_channel_record() {
 	local record=$1
 	jq -e --arg image "$IMAGE" '
 		.image == $image and
-		(.previous | type == "object" and has("latest") and has("full") and has("slim")) and
-		([.previous.latest, .previous.full, .previous.slim] |
+		(.previous | type == "object" and has("latest") and has("slim")) and
+		([.previous.latest, .previous.slim] |
 		 all(. == null or (type == "string" and test("^sha256:[0-9a-f]{64}$"))))
 	' "$record" >/dev/null || fail "invalid channel rollback record: $record"
 }
 
 validate_digest_manifest() {
 	local manifest=$1
-	for name in FULL_INDEX_DIGEST FULL_AMD64_DIGEST FULL_ARM64_DIGEST \
-		SLIM_INDEX_DIGEST SLIM_AMD64_DIGEST SLIM_ARM64_DIGEST; do
+	for name in SLIM_INDEX_DIGEST SLIM_AMD64_DIGEST SLIM_ARM64_DIGEST; do
 		require_digest "$name" "${!name:-}"
 	done
 	[[ ${COMMIT:-} =~ ^[0-9a-f]{40}$ ]] || fail 'COMMIT must be a full lowercase Git revision'
@@ -142,18 +141,16 @@ validate_digest_manifest() {
 
 	jq -e \
 		--arg tag "$TAG" --arg commit "$COMMIT" --arg build_time "$BUILD_TIME" --arg image "$IMAGE" \
-		--arg full_index "$FULL_INDEX_DIGEST" --arg full_amd64 "$FULL_AMD64_DIGEST" --arg full_arm64 "$FULL_ARM64_DIGEST" \
 		--arg slim_index "$SLIM_INDEX_DIGEST" --arg slim_amd64 "$SLIM_AMD64_DIGEST" --arg slim_arm64 "$SLIM_ARM64_DIGEST" '
 		.tag == $tag and .commit == $commit and .build_time == $build_time and .image == $image and
-		.full.index == $full_index and .full.children["linux/amd64"] == $full_amd64 and
-		.full.children["linux/arm64"] == $full_arm64 and .slim.index == $slim_index and
-		.slim.children["linux/amd64"] == $slim_amd64 and .slim.children["linux/arm64"] == $slim_arm64
+		.slim.index == $slim_index and .slim.children["linux/amd64"] == $slim_amd64 and
+		.slim.children["linux/arm64"] == $slim_arm64 and (has("full") | not)
 	' "$manifest" >/dev/null || fail 'IMAGE-DIGESTS.json does not match the verified candidate coordinates'
 }
 
 validate_security_evidence() {
 	local archive=$1
-	local temporary listing variant arch platform index child directory yt_dlp_version
+	local temporary listing arch platform index child directory
 	temporary=$(mktemp -d)
 	listing="$temporary/members.txt"
 	tar -tzf "$archive" >"$listing"
@@ -162,71 +159,52 @@ validate_security_evidence() {
 		fail 'security evidence archive contains an unsafe member path'
 	fi
 	tar -xzf "$archive" -C "$temporary"
-	for variant in full slim; do
-		for arch in amd64 arm64; do
-			platform="linux/$arch"
-			case "$variant/$arch" in
-				full/amd64) index=$FULL_INDEX_DIGEST; child=$FULL_AMD64_DIGEST ;;
-				full/arm64) index=$FULL_INDEX_DIGEST; child=$FULL_ARM64_DIGEST ;;
-				slim/amd64) index=$SLIM_INDEX_DIGEST; child=$SLIM_AMD64_DIGEST ;;
-				slim/arm64) index=$SLIM_INDEX_DIGEST; child=$SLIM_ARM64_DIGEST ;;
-			esac
-			directory="$temporary/security-evidence/core-image-evidence-${variant}-${arch}"
-			for evidence in coordinates.json index-manifest.json child-image.json trivy.json sbom.cdx.json; do
-				test -s "$directory/$evidence" || {
-					rm -rf "$temporary"
-					fail "security evidence is missing $variant/$arch $evidence"
-				}
-			done
-			jq -e --arg commit "$COMMIT" --arg image "$IMAGE" --arg variant "$variant" \
-				--arg platform "$platform" --arg index "$index" --arg child "$child" '
-				.commit == $commit and .image == $image and .variant == $variant and .platform == $platform and
-				.index_digest == $index and .child_digest == $child
-			' "$directory/coordinates.json" >/dev/null || {
+	for arch in amd64 arm64; do
+		platform="linux/$arch"
+		case "$arch" in
+			amd64) index=$SLIM_INDEX_DIGEST; child=$SLIM_AMD64_DIGEST ;;
+			arm64) index=$SLIM_INDEX_DIGEST; child=$SLIM_ARM64_DIGEST ;;
+		esac
+		directory="$temporary/security-evidence/core-image-evidence-slim-${arch}"
+		for evidence in coordinates.json index-manifest.json child-image.json trivy.json sbom.cdx.json; do
+			test -s "$directory/$evidence" || {
 				rm -rf "$temporary"
-				fail "security coordinates do not match $variant/$arch"
+				fail "security evidence is missing slim/$arch $evidence"
 			}
-			jq -e --arg arch "$arch" --arg child "$child" '
-				[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest] == [$child]
-			' "$directory/index-manifest.json" >/dev/null || {
-				rm -rf "$temporary"
-				fail "security index evidence does not bind $variant/$arch"
-			}
-			jq -e --arg arch "$arch" '.os == "linux" and .architecture == $arch' \
-				"$directory/child-image.json" >/dev/null || {
-				rm -rf "$temporary"
-				fail "security child evidence has the wrong platform for $variant/$arch"
-			}
-			jq -e '[.Results[]? | select(.Class == "os-pkgs" and .Type == "alpine")] | length > 0' \
-				"$directory/trivy.json" >/dev/null || {
-				rm -rf "$temporary"
-				fail "Trivy evidence omits Alpine runtime packages for $variant/$arch"
-			}
-			jq -e 'any(.components[]?; ((.purl // "") | startswith("pkg:apk/alpine/")))' \
-				"$directory/sbom.cdx.json" >/dev/null || {
-				rm -rf "$temporary"
-				fail "SBOM evidence omits Alpine packages for $variant/$arch"
-			}
-			if [[ $variant == full ]]; then
-				for evidence in yt-dlp-advisories.json yt-dlp-coverage.json; do
-					test -s "$directory/$evidence" || {
-						rm -rf "$temporary"
-						fail "security evidence is missing full/$arch $evidence"
-					}
-				done
-				jq -e '[.[] | select(.severity == "high" or .severity == "critical")] | length == 0' \
-					"$directory/yt-dlp-advisories.json" >/dev/null || {
-					rm -rf "$temporary"
-					fail "yt-dlp advisory evidence is blocking for full/$arch"
-				}
-				yt_dlp_version=$(sed -n 's/^ARG YTDLP_VERSION=//p' "$ROOT/Dockerfile")
-				jq -e --arg version "$yt_dlp_version" '.version == $version and (.coverage | type == "string" and length > 0)' \
-					"$directory/yt-dlp-coverage.json" >/dev/null || {
-					rm -rf "$temporary"
-					fail "yt-dlp coverage evidence has the wrong version for full/$arch"
-				}
-			fi
 		done
+		jq -e --arg commit "$COMMIT" --arg image "$IMAGE" \
+			--arg platform "$platform" --arg index "$index" --arg child "$child" '
+			.commit == $commit and .image == $image and .variant == "slim" and .platform == $platform and
+			.index_digest == $index and .child_digest == $child
+		' "$directory/coordinates.json" >/dev/null || {
+			rm -rf "$temporary"
+			fail "security coordinates do not match slim/$arch"
+		}
+		jq -e --arg arch "$arch" --arg child "$child" '
+			[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest] == [$child]
+		' "$directory/index-manifest.json" >/dev/null || {
+			rm -rf "$temporary"
+			fail "security index evidence does not bind slim/$arch"
+		}
+		jq -e --arg arch "$arch" '.os == "linux" and .architecture == $arch' \
+			"$directory/child-image.json" >/dev/null || {
+			rm -rf "$temporary"
+			fail "security child evidence has the wrong platform for slim/$arch"
+		}
+		jq -e '[.Results[]? | select(.Class == "os-pkgs" and .Type == "alpine")] | length > 0' \
+			"$directory/trivy.json" >/dev/null || {
+			rm -rf "$temporary"
+			fail "Trivy evidence omits Alpine runtime packages for slim/$arch"
+		}
+		jq -e 'any(.components[]?; ((.purl // "") | startswith("pkg:apk/alpine/")))' \
+			"$directory/sbom.cdx.json" >/dev/null || {
+			rm -rf "$temporary"
+			fail "SBOM evidence omits Alpine packages for slim/$arch"
+		}
+		if [[ -e $directory/yt-dlp-advisories.json || -e $directory/yt-dlp-coverage.json ]]; then
+			rm -rf "$temporary"
+			fail "security evidence unexpectedly includes yt-dlp files for slim/$arch"
+		fi
 	done
 	rm -rf "$temporary"
 }
@@ -294,10 +272,9 @@ prepare_draft() {
 }
 
 promote_versions() {
-	require_digest FULL_INDEX_DIGEST "${FULL_INDEX_DIGEST:-}"
 	require_digest SLIM_INDEX_DIGEST "${SLIM_INDEX_DIGEST:-}"
-	maybe_fail version-full
-	ensure_ref "$IMAGE:$VERSION" "$FULL_INDEX_DIGEST"
+	maybe_fail version
+	ensure_ref "$IMAGE:$VERSION" "$SLIM_INDEX_DIGEST"
 	maybe_fail version-slim
 	ensure_ref "$IMAGE:$VERSION-slim" "$SLIM_INDEX_DIGEST"
 }
@@ -319,21 +296,19 @@ publish_release() {
 
 capture_channels() {
 	local output=$1
-	local latest full slim
+	local latest slim
 	if [[ -s $output ]]; then
 		validate_channel_record "$output"
 		echo "channel rollback state already exists at $output"
 		return
 	fi
 	latest=$(digest_of_ref "$IMAGE:latest" || true)
-	full=$(digest_of_ref "$IMAGE:full" || true)
 	slim=$(digest_of_ref "$IMAGE:slim" || true)
 	jq -n \
 		--arg image "$IMAGE" \
 		--arg latest "$latest" \
-		--arg full "$full" \
 		--arg slim "$slim" \
-		'{image: $image, previous: {latest: ($latest | if length > 0 then . else null end), full: ($full | if length > 0 then . else null end), slim: ($slim | if length > 0 then . else null end)}}' \
+		'{image: $image, previous: {latest: ($latest | if length > 0 then . else null end), slim: ($slim | if length > 0 then . else null end)}}' \
 		>"$output"
 	validate_channel_record "$output"
 }
@@ -366,14 +341,11 @@ highest_stable_tag() {
 
 promote_channels() {
 	local highest
-	require_digest FULL_INDEX_DIGEST "${FULL_INDEX_DIGEST:-}"
 	require_digest SLIM_INDEX_DIGEST "${SLIM_INDEX_DIGEST:-}"
 	highest=$(highest_stable_tag)
 	[[ $highest == "$TAG" ]] || fail "refusing to move stable channels for $TAG because highest Core tag is $highest"
 	maybe_fail channel-latest
-	move_channel_ref "$IMAGE:latest" "$FULL_INDEX_DIGEST"
-	maybe_fail channel-full
-	move_channel_ref "$IMAGE:full" "$FULL_INDEX_DIGEST"
+	move_channel_ref "$IMAGE:latest" "$SLIM_INDEX_DIGEST"
 	maybe_fail channel-slim
 	move_channel_ref "$IMAGE:slim" "$SLIM_INDEX_DIGEST"
 }
