@@ -727,7 +727,7 @@ func TestBulkConfirmInboxRollsBackWhenOnePendingItemCannotBeConfirmed(t *testing
 		WithArgs(firstURL).
 		WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("(?s)INSERT INTO links.*ON CONFLICT \\(source_key\\) DO NOTHING.*RETURNING id").
-		WithArgs(firstURL, "url", firstURL, "pending body", pgxmock.AnyArg(), pgxmock.AnyArg(), []string{"tag"}).
+		WithArgs(firstURL, "url", firstURL, "pending body", pgxmock.AnyArg(), pgxmock.AnyArg(), []string{"tag"}, (*string)(nil), "plain").
 		WillReturnRows(mock.NewRows([]string{"id"}).AddRow(linkID))
 	mock.ExpectExec("UPDATE links SET feed_managed=false").
 		WithArgs(linkID).
@@ -794,7 +794,9 @@ func TestBulkConfirmInboxRejectsStaleRevisionInsideAtomicTransaction(t *testing.
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	row := readerFeedInboxRowForTest(id, "pending", "https://example.com/stale", now)
-	row[14] = int64(2)
+	// Address the value by column name: a positional index silently points at
+	// a different field the moment a column is added to the projection.
+	row[readerFeedInboxColumnIndexForTest(t, "metadata_revision")] = int64(2)
 	mock.ExpectBegin()
 	expectLibraryFeedRevisionPrelock(mock)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + readerInboxColumns + " FROM reader_inbox WHERE id=$1 AND deleted_at IS NULL FOR UPDATE")).
@@ -815,14 +817,88 @@ func TestBulkConfirmInboxRejectsStaleRevisionInsideAtomicTransaction(t *testing.
 
 func readerFeedInboxColumnsForTest() []string {
 	return []string{
-		"id", "url", "identity_key", "source_kind", "title", "body", "note", "summary", "suggested_tags", "proposal_signals", "proposal_status", "tags", "category_ids",
+		"id", "url", "identity_key", "source_kind", "title", "body", "body_document", "body_format", "note", "summary", "suggested_tags", "proposal_signals", "proposal_status", "tags", "category_ids",
 		"status", "metadata_revision", "job_id", "expires_at", "expired_at", "deleted_at", "created_at", "updated_at",
 	}
 }
 
+func readerFeedInboxColumnIndexForTest(t *testing.T, column string) int {
+	t.Helper()
+	for index, name := range readerFeedInboxColumnsForTest() {
+		if name == column {
+			return index
+		}
+	}
+	t.Fatalf("inbox test projection has no %q column", column)
+	return -1
+}
+
 func readerFeedInboxRowForTest(id uuid.UUID, status, rawURL string, now time.Time) []any {
 	return []any{
-		id, rawURL, nil, "url", "Pending title", "pending body", "", nil, []string{"suggested"}, []byte(`{}`), "pending", []string{"tag"}, []uuid.UUID{},
+		id, rawURL, nil, "url", "Pending title", "pending body", nil, "plain", "", nil, []string{"suggested"}, []byte(`{}`), "pending", []string{"tag"}, []uuid.UUID{},
 		status, int64(1), nil, nil, nil, nil, now.Add(-time.Hour), now,
+	}
+}
+
+// TestConfirmInboxWritesTheCaptureDocumentAsTheLinkDocument pins the write that
+// turned every confirmed browser capture into a wall of text: content and
+// content_document used to receive the same flattened string under a hardcoded
+// content_format='markdown'. They are two projections of one capture — the
+// plain body and the Markdown converted from the captured HTML — and the format
+// must describe what was actually written.
+func TestConfirmInboxWritesTheCaptureDocumentAsTheLinkDocument(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	id := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	rawURL := "https://example.com/captured"
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	document := "# Guide\n\n- One\n- Two"
+	linkID := uuid.New()
+	row := readerFeedInboxRowForTest(id, "pending", rawURL, now)
+	row[readerFeedInboxColumnIndexForTest(t, "body_document")] = document
+	row[readerFeedInboxColumnIndexForTest(t, "body_format")] = "markdown"
+
+	mock.ExpectBegin()
+	expectLibraryFeedRevisionPrelock(mock)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + readerInboxColumns + " FROM reader_inbox WHERE id=$1 AND deleted_at IS NULL FOR UPDATE")).
+		WithArgs(id).
+		WillReturnRows(mock.NewRows(readerFeedInboxColumnsForTest()).AddRow(row...))
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").
+		WithArgs("canonical-link:" + rawURL).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery(regexp.QuoteMeta(findInboxSavedLinkSQL)).
+		WithArgs(rawURL).
+		WillReturnError(pgx.ErrNoRows)
+	mock.ExpectQuery("(?s)INSERT INTO links.*ON CONFLICT \\(source_key\\) DO NOTHING.*RETURNING id").
+		WithArgs(rawURL, "url", rawURL, "pending body", pgxmock.AnyArg(), pgxmock.AnyArg(), []string{"tag"}, &document, "markdown").
+		WillReturnRows(mock.NewRows([]string{"id"}).AddRow(linkID))
+	mock.ExpectExec("UPDATE links SET feed_managed=false").
+		WithArgs(linkID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec("(?s)DELETE FROM reader_categorizables source").
+		WithArgs(id.String(), linkID.String()).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec("(?s)UPDATE reader_categorizables").
+		WithArgs(id.String(), linkID.String()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE reader_inbox SET status='confirmed'")).
+		WithArgs(id).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	repo := NewPGXReaderVNextRepository(mock)
+	got, err := repo.ConfirmInbox(context.Background(), id)
+	if err != nil {
+		t.Fatalf("ConfirmInbox() error = %v", err)
+	}
+	if got != linkID {
+		t.Fatalf("ConfirmInbox() link = %s, want %s", got, linkID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("pgxmock expectations: %v", err)
 	}
 }

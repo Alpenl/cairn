@@ -293,3 +293,63 @@ func TestReaderConfirmTrashRestoreRollsBackOnCategoryFailure(t *testing.T) {
 		t.Fatalf("rolled-back confirmation = status:%s feed_managed:%v content:%q", status, feedManaged, content)
 	}
 }
+
+// TestReaderConfirmInboxCarriesTheCaptureDocumentAndFormat proves against a
+// real table what the wall-of-text bug looked like: the confirm INSERT wrote
+// the flattened body into both content and content_document and hardcoded
+// content_format='markdown', so every confirmed browser capture rendered as one
+// undifferentiated block. The two columns are distinct projections of the
+// capture and the format has to describe what was actually written.
+//
+// Only a real database proves this end of it — the statement's CASE arms and
+// the chk_links_content_format constraint both live in PostgreSQL, and a mock
+// that replays canned arguments cannot execute either.
+func TestReaderConfirmInboxCarriesTheCaptureDocumentAndFormat(t *testing.T) {
+	pool := StartPostgres(t)
+
+	ctx := t.Context()
+	reader := repository.NewPGXReaderVNextRepository(pool)
+	document := "# Guide\n\n- One\n- Two"
+
+	structured := seedReaderVNextInbox(t, pool,
+		"https://reader-vnext.example/confirm-structured", "Structured capture", "Guide One Two", "")
+	if _, err := pool.Exec(ctx,
+		`UPDATE reader_inbox SET body_document=$2,body_format='markdown' WHERE id=$1`, structured, document); err != nil {
+		t.Fatalf("seed the capture document: %v", err)
+	}
+
+	linkID, err := reader.ConfirmInbox(ctx, structured)
+	if err != nil {
+		t.Fatalf("ConfirmInbox for a structured capture: %v", err)
+	}
+	var content, format string
+	var storedDocument *string
+	if err := pool.QueryRow(ctx,
+		`SELECT content, content_document, content_format FROM links WHERE id=$1`, linkID,
+	).Scan(&content, &storedDocument, &format); err != nil {
+		t.Fatalf("read the confirmed link content: %v", err)
+	}
+	if format != "markdown" || storedDocument == nil || *storedDocument != document {
+		t.Fatalf("confirmed content = %q/%#v/%q, want the captured markdown document", content, storedDocument, format)
+	}
+	if content == *storedDocument {
+		t.Fatalf("content and content_document are both %q; they are two projections, not two copies", content)
+	}
+
+	// A capture that never had structure must land as plain. Labelling a
+	// flattened body 'markdown' is precisely what the reader then rendered.
+	flat := seedReaderVNextInbox(t, pool,
+		"https://reader-vnext.example/confirm-flat", "Flat capture", "just one wall of text", "")
+	flatLink, err := reader.ConfirmInbox(ctx, flat)
+	if err != nil {
+		t.Fatalf("ConfirmInbox for a flat capture: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT content, content_document, content_format FROM links WHERE id=$1`, flatLink,
+	).Scan(&content, &storedDocument, &format); err != nil {
+		t.Fatalf("read the confirmed flat link content: %v", err)
+	}
+	if format != "plain" || storedDocument != nil || content != "just one wall of text" {
+		t.Fatalf("confirmed flat content = %q/%#v/%q, want a plain body with no document", content, storedDocument, format)
+	}
+}

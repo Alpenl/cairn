@@ -61,6 +61,7 @@ func TestShippedPlanOnlineUpdateReviewConclusions(t *testing.T) {
 		lifecycleRepairMigrationID:                 OnlineUpdateIncompatible,
 		readerThoughtSearchTrigramMigrationID:      OnlineUpdateCompatible,
 		ReaderTodoProjectionLedgerMigrationID:      OnlineUpdateCompatible,
+		ReaderInboxCaptureDocumentMigrationID:      OnlineUpdateCompatible,
 	}
 	plan := Steps()
 	if len(plan) != len(want) {
@@ -116,6 +117,7 @@ func TestPlanOnlineUpdateAcrossShippedPlanIsRefused(t *testing.T) {
 		translationTerminalHistoryIndexMigrationID,
 		readerThoughtSearchTrigramMigrationID,
 		ReaderTodoProjectionLedgerMigrationID,
+		ReaderInboxCaptureDocumentMigrationID,
 	} {
 		if _, blocked := blocked[unwanted]; blocked {
 			t.Errorf("reviewed-compatible migration %q was reported as a blocker", unwanted)
@@ -158,7 +160,7 @@ func TestPlanOnlineUpdateAlreadyAtTargetIsAllowed(t *testing.T) {
 	for _, step := range Steps() {
 		applied = append(applied, step.ID)
 	}
-	plan, err := PlanOnlineUpdate(applied, ReaderTodoProjectionLedgerMigrationID)
+	plan, err := PlanOnlineUpdate(applied, ReaderInboxCaptureDocumentMigrationID)
 	if err != nil {
 		t.Fatalf("PlanOnlineUpdate() error = %v", err)
 	}

@@ -516,14 +516,24 @@ func scanReaderNote(row readerScanner) (*model.ReaderNote, error) {
 
 func scanReaderInbox(row readerScanner) (*model.ReaderInbox, error) {
 	var out model.ReaderInbox
-	var identityKey, title, summary pgtype.Text
+	var identityKey, title, summary, bodyDocument, bodyFormat pgtype.Text
 	var jobID pgtype.UUID
 	var expiresAt, expiredAt, deletedAt pgtype.Timestamptz
-	if err := row.Scan(&out.ID, &out.URL, &identityKey, &out.SourceKind, &title, &out.Body, &out.Note, &summary, &out.SuggestedTags, &out.ProposalSignals, &out.ProposalStatus, &out.Tags, &out.CategoryIDs, &out.Status, &out.MetadataRevision, &jobID, &expiresAt, &expiredAt, &deletedAt, &out.CreatedAt, &out.UpdatedAt); err != nil {
+	if err := row.Scan(&out.ID, &out.URL, &identityKey, &out.SourceKind, &title, &out.Body, &bodyDocument, &bodyFormat, &out.Note, &summary, &out.SuggestedTags, &out.ProposalSignals, &out.ProposalStatus, &out.Tags, &out.CategoryIDs, &out.Status, &out.MetadataRevision, &jobID, &expiresAt, &expiredAt, &deletedAt, &out.CreatedAt, &out.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if identityKey.Valid {
 		out.IdentityKey = identityKey.String
+	}
+	if bodyDocument.Valid {
+		value := bodyDocument.String
+		out.BodyDocument = &value
+	}
+	// A NULL/empty format reads as plain: rows written before the capture
+	// document existed carry a flattened body and no structure.
+	out.BodyFormat = model.ContentFormatPlain
+	if bodyFormat.Valid && bodyFormat.String != "" {
+		out.BodyFormat = model.ContentFormat(bodyFormat.String)
 	}
 	if title.Valid {
 		value := title.String
@@ -637,8 +647,8 @@ func scanReaderEngagement(row readerScanner) (*model.ReaderEngagement, error) {
 }
 
 const readerNoteColumns = `id, title, published_content, published_revision, draft_content, draft_revision, draft_updated_at, deleted_at, created_at, updated_at`
-const readerInboxColumns = `id, url, identity_key, source_kind, title, body, note, summary, suggested_tags, proposal_signals, proposal_status, tags, COALESCE((SELECT array_agg(category_id ORDER BY category_id) FROM reader_categorizables WHERE host_kind='inbox' AND host_id=reader_inbox.id::text),'{}'::uuid[]) AS category_ids, status, metadata_revision, job_id, expires_at, expired_at, deleted_at, created_at, updated_at`
-const readerInboxColumnsQualified = `inbox.id, inbox.url, inbox.identity_key, inbox.source_kind, inbox.title, inbox.body, inbox.note, inbox.summary, inbox.suggested_tags, inbox.proposal_signals, inbox.proposal_status, inbox.tags, COALESCE((SELECT array_agg(category_id ORDER BY category_id) FROM reader_categorizables WHERE host_kind='inbox' AND host_id=inbox.id::text),'{}'::uuid[]) AS category_ids, inbox.status, inbox.metadata_revision, inbox.job_id, inbox.expires_at, inbox.expired_at, inbox.deleted_at, inbox.created_at, inbox.updated_at`
+const readerInboxColumns = `id, url, identity_key, source_kind, title, body, body_document, body_format, note, summary, suggested_tags, proposal_signals, proposal_status, tags, COALESCE((SELECT array_agg(category_id ORDER BY category_id) FROM reader_categorizables WHERE host_kind='inbox' AND host_id=reader_inbox.id::text),'{}'::uuid[]) AS category_ids, status, metadata_revision, job_id, expires_at, expired_at, deleted_at, created_at, updated_at`
+const readerInboxColumnsQualified = `inbox.id, inbox.url, inbox.identity_key, inbox.source_kind, inbox.title, inbox.body, inbox.body_document, inbox.body_format, inbox.note, inbox.summary, inbox.suggested_tags, inbox.proposal_signals, inbox.proposal_status, inbox.tags, COALESCE((SELECT array_agg(category_id ORDER BY category_id) FROM reader_categorizables WHERE host_kind='inbox' AND host_id=inbox.id::text),'{}'::uuid[]) AS category_ids, inbox.status, inbox.metadata_revision, inbox.job_id, inbox.expires_at, inbox.expired_at, inbox.deleted_at, inbox.created_at, inbox.updated_at`
 const readerInboxJobColumns = `id, inbox_id, expected_metadata_revision, status, attempts, error_message, created_at, updated_at, started_at, finished_at`
 
 // readerInboxListColumns is the queue projection. It never selects body, note,
@@ -3430,9 +3440,11 @@ func (r *PGXReaderVNextRepository) CreateInboxTx(ctx context.Context, tx pgx.Tx,
 
 func (r *PGXReaderVNextRepository) createInboxOn(ctx context.Context, db database.Querier, item model.ReaderInbox) (*model.ReaderInbox, error) {
 	created, err := scanReaderInbox(db.QueryRow(ctx, `
-		INSERT INTO reader_inbox (url,identity_key,source_kind,title,body,note,summary,suggested_tags,proposal_signals,proposal_status,tags)
-		VALUES ($1,NULLIF($2,''),COALESCE(NULLIF($3,''),'url'),$4,$5,$6,$7,COALESCE($8::text[],'{}'::text[]),COALESCE($9::jsonb,'{}'::jsonb),COALESCE(NULLIF($10,''),'pending'),COALESCE($11::text[],'{}'::text[]))
-		RETURNING `+readerInboxColumns, item.URL, item.IdentityKey, item.SourceKind, item.Title, item.Body, item.Note, item.Summary, item.SuggestedTags, item.ProposalSignals, item.ProposalStatus, item.Tags))
+		INSERT INTO reader_inbox (url,identity_key,source_kind,title,body,body_document,body_format,note,summary,suggested_tags,proposal_signals,proposal_status,tags)
+		VALUES ($1,NULLIF($2,''),COALESCE(NULLIF($3,''),'url'),$4,$5,NULLIF($12::text,''),
+			CASE WHEN NULLIF($12::text,'') IS NULL THEN 'plain' ELSE COALESCE(NULLIF($13::text,''),'plain') END,
+			$6,$7,COALESCE($8::text[],'{}'::text[]),COALESCE($9::jsonb,'{}'::jsonb),COALESCE(NULLIF($10,''),'pending'),COALESCE($11::text[],'{}'::text[]))
+		RETURNING `+readerInboxColumns, item.URL, item.IdentityKey, item.SourceKind, item.Title, item.Body, item.Note, item.Summary, item.SuggestedTags, item.ProposalSignals, item.ProposalStatus, item.Tags, item.BodyDocument, string(item.BodyFormat)))
 	if err != nil {
 		return nil, fmt.Errorf("create inbox item: %w", err)
 	}
@@ -3609,7 +3621,10 @@ func (r *PGXReaderVNextRepository) GetInboxByURL(ctx context.Context, identityUR
 func (r *PGXReaderVNextRepository) PatchInbox(ctx context.Context, patch model.ReaderInboxPatch) (*model.ReaderInbox, error) {
 	item, err := scanReaderInbox(r.db.QueryRow(ctx, `
 		UPDATE reader_inbox
-		SET title=COALESCE($1,title),body=COALESCE($2,body),note=COALESCE($3,note),summary=COALESCE($4,summary),tags=COALESCE($5::text[],tags),metadata_revision=metadata_revision+1,updated_at=NOW()
+		SET title=COALESCE($1,title),body=COALESCE($2,body),
+			body_document=CASE WHEN $2::text IS NULL THEN body_document ELSE NULL END,
+			body_format=CASE WHEN $2::text IS NULL THEN body_format ELSE 'plain' END,
+			note=COALESCE($3,note),summary=COALESCE($4,summary),tags=COALESCE($5::text[],tags),metadata_revision=metadata_revision+1,updated_at=NOW()
 		WHERE id=$6 AND status='pending' AND deleted_at IS NULL AND metadata_revision=$7
 		RETURNING `+readerInboxColumns, patch.Title, patch.Body, patch.Note, patch.Summary, patch.Tags, patch.ID, patch.ExpectedRevision))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -3884,15 +3899,25 @@ func finalizeInboxConfirmation(ctx context.Context, db database.Querier, item mo
 // canonical link. AI proposal fields remain attached to the Inbox record and
 // cannot replace library metadata after a late worker completion.
 func mergeInboxDraftIntoLink(ctx context.Context, db database.Querier, item model.ReaderInbox, linkID uuid.UUID) error {
+	// The body carries its structure with it. Replacing content alone would
+	// leave the link's content_document and content_format describing the
+	// previous body, and would move the text out from under a content_revision
+	// the reader caches and anchors annotations against — so the whole content
+	// triple is written together and the revision advances with it.
 	_, err := db.Exec(ctx, `
 		UPDATE links
 		SET input_title=COALESCE(NULLIF($2,''),input_title),
 			title=COALESCE(NULLIF($2,''),title),
 			input_text=CASE WHEN $3 <> '' THEN $3 ELSE input_text END,
 			content=CASE WHEN $3 <> '' THEN $3 ELSE content END,
+			content_document=CASE WHEN $3 <> '' THEN NULLIF($5::text,'') ELSE content_document END,
+			content_format=CASE WHEN $3 <> ''
+				THEN CASE WHEN NULLIF($5::text,'') IS NULL THEN 'plain' ELSE COALESCE(NULLIF($6::text,''),'plain') END
+				ELSE content_format END,
+			content_revision=CASE WHEN $3 <> '' AND $3 IS DISTINCT FROM content THEN content_revision+1 ELSE content_revision END,
 			tags=ARRAY(SELECT DISTINCT tag FROM unnest(COALESCE(tags,'{}'::text[]) || COALESCE($4::text[],'{}'::text[])) AS tag ORDER BY tag),
 			updated_at=NOW()
-		WHERE id=$1`, linkID, item.Title, item.Body, item.Tags)
+		WHERE id=$1`, linkID, item.Title, item.Body, item.Tags, item.BodyDocument, string(item.BodyFormat))
 	if err != nil {
 		return fmt.Errorf("merge inbox draft into link: %w", err)
 	}
@@ -3951,6 +3976,13 @@ func findInboxSavedLink(ctx context.Context, db database.Querier, rawURL string)
 	return &link, nil
 }
 
+// insertInboxSavedLink materializes a confirmed Inbox capture as a Library
+// link. content and content_document are two projections of the same capture,
+// not two copies of one string: body is the plain text, body_document is the
+// Markdown converted from the captured HTML at capture time. A row with no
+// document is plain and must say so — writing the flattened text into
+// content_document under content_format='markdown' is what made confirmed
+// captures render as one undifferentiated wall of text.
 func insertInboxSavedLink(ctx context.Context, db database.Querier, item model.ReaderInbox, identityURL string) (*uuid.UUID, bool, error) {
 	var linkID uuid.UUID
 	err := db.QueryRow(ctx, `
@@ -3958,9 +3990,12 @@ func insertInboxSavedLink(ctx context.Context, db database.Querier, item model.R
 			url,source_kind,source_key,input_title,input_text,title,summary,tags,status,
 			content,content_document,content_format,content_source,content_revision,
 			library_kind,library_kind_source,first_collected_at,created_at,updated_at)
-			VALUES ($1,$2,$3,$5,$4,$5,$6,COALESCE($7::text[],'{}'::text[]),'done',$4,$4,'markdown','user',1,'reading','user',NOW(),NOW(),NOW())
+			VALUES ($1,$2,$3,$5,$4,$5,$6,COALESCE($7::text[],'{}'::text[]),'done',$4,
+				NULLIF($8::text,''),
+				CASE WHEN NULLIF($8::text,'') IS NULL THEN 'plain' ELSE COALESCE(NULLIF($9::text,''),'plain') END,
+				'user',1,'reading','user',NOW(),NOW(),NOW())
 			ON CONFLICT (source_key) DO NOTHING
-			RETURNING id`, item.URL, item.SourceKind, identityURL, item.Body, item.Title, item.Summary, item.Tags).Scan(&linkID)
+			RETURNING id`, item.URL, item.SourceKind, identityURL, item.Body, item.Title, item.Summary, item.Tags, item.BodyDocument, string(item.BodyFormat)).Scan(&linkID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		matched, findErr := findInboxSavedLink(ctx, db, identityURL)
 		if findErr != nil {

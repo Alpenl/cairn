@@ -15,6 +15,12 @@ const (
 	lifecycleRepairMigrationID                 = "lifecycle2026081401"
 	readerThoughtSearchTrigramMigrationID      = "readersearch2026081701"
 
+	// ReaderInboxCaptureDocumentMigrationID gives the Inbox somewhere to keep
+	// the structure a capture arrived with. Without it, confirmation had only
+	// the flattened body to write into links.content_document, and stamped it
+	// 'markdown'.
+	ReaderInboxCaptureDocumentMigrationID = "readerinboxdocument2026081801"
+
 	// ReaderTodoProjectionLedgerMigrationID creates the ledger the one-shot
 	// TODO projection backfill records its completion in. The backfill itself
 	// is Go code — rebuilding a projection means parsing Markdown checklists,
@@ -1270,6 +1276,9 @@ CREATE TABLE public.reader_inbox (
     note text DEFAULT ''::text NOT NULL,
     proposal_signals jsonb DEFAULT '{}'::jsonb NOT NULL,
     proposal_status text DEFAULT 'pending'::text NOT NULL,
+    body_document text,
+    body_format text DEFAULT 'plain'::text NOT NULL,
+    CONSTRAINT reader_inbox_body_format_check CHECK ((body_format = ANY (ARRAY['plain'::text, 'markdown'::text, 'html'::text]))),
     CONSTRAINT reader_inbox_proposal_status_check CHECK ((proposal_status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text]))),
     CONSTRAINT reader_inbox_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'discarded'::text])))
 );
@@ -3707,6 +3716,45 @@ var steps = []Step{
 				CONSTRAINT chk_reader_todo_projection_backfills_id CHECK ((btrim(id) <> ''::text)),
 				CONSTRAINT chk_reader_todo_projection_backfills_count CHECK ((projected_count >= 0))
 			)`,
+		},
+	},
+	{
+		// An Inbox capture arrives with both a flattened text projection and a
+		// sanitized HTML structure, but reader_inbox could only hold one body
+		// column, so the structure was dropped at capture and confirmation had
+		// nothing but flat text to write into links.content_document — under a
+		// hardcoded content_format='markdown'. These two columns are where the
+		// converted Markdown now lives between capture and confirmation.
+		//
+		// Existing rows keep body_document NULL / body_format 'plain', which is
+		// the truth about them: their structure was lost before this step
+		// existed and cannot be reconstructed from the flattened text.
+		//
+		// Online-update review: COMPATIBLE.
+		//
+		// Purely additive. Both columns have defaults or are nullable, so the
+		// previous release's INSERT ... (url,...,tags) statements keep working
+		// untouched, and nothing in that release reads either column. The CHECK
+		// only constrains a column the old binary never writes.
+		ID:           ReaderInboxCaptureDocumentMigrationID,
+		OnlineUpdate: OnlineCompatible("adds one nullable column and one defaulted column to reader_inbox; the previous release neither writes nor reads them"),
+		SQL: []string{
+			`ALTER TABLE public.reader_inbox
+				ADD COLUMN IF NOT EXISTS body_document text,
+				ADD COLUMN IF NOT EXISTS body_format text DEFAULT 'plain'::text NOT NULL`,
+			`DO $$
+			 BEGIN
+				IF NOT EXISTS (
+					SELECT 1 FROM pg_constraint
+					WHERE conname='reader_inbox_body_format_check'
+					  AND conrelid='public.reader_inbox'::regclass
+				) THEN
+					ALTER TABLE public.reader_inbox
+						ADD CONSTRAINT reader_inbox_body_format_check
+						CHECK ((body_format = ANY (ARRAY['plain'::text, 'markdown'::text, 'html'::text])));
+				END IF;
+			 END
+			 $$`,
 		},
 	},
 }

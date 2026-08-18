@@ -2,6 +2,8 @@ package dbintegration
 
 import (
 	"testing"
+
+	"webtag/internal/migrate"
 )
 
 func TestTruncateAllTablesClearsBusinessRowsAndPreservesSingletons(t *testing.T) {
@@ -79,8 +81,11 @@ func TestTruncateAllTablesClearsBusinessRowsAndPreservesSingletons(t *testing.T)
 		t.Fatalf("singleton row counts = installation:%d library:%d global:%d feed:%d, want one each",
 			installationRows, libraryRows, globalRows, feedRows)
 	}
-	if migrationRows != 9 {
-		t.Fatalf("schema migration rows after cleanup = %d, want 9", migrationRows)
+	// Cleanup must preserve the whole applied ledger, so the expectation is the
+	// size of the shipped plan rather than a number that goes stale with the
+	// next migration.
+	if want := len(migrate.Steps()); migrationRows != want {
+		t.Fatalf("schema migration rows after cleanup = %d, want %d", migrationRows, want)
 	}
 	if !todoProjectionLedgerApplied {
 		t.Fatal("reader TODO projection ledger migration was not recorded after cleanup")

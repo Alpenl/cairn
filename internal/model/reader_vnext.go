@@ -239,12 +239,22 @@ type ReaderTrashItem struct {
 }
 
 type ReaderInbox struct {
-	ID               uuid.UUID
-	URL              string
-	IdentityKey      string
-	SourceKind       string
-	Title            *string
-	Body             string
+	ID          uuid.UUID
+	URL         string
+	IdentityKey string
+	SourceKind  string
+	Title       *string
+	Body        string
+	// BodyDocument 是采集时由净化 HTML 转出的 Markdown 结构文档，nil 表示这次
+	// 采集只拿到压平的纯文本。Body 始终是它的纯文本投影：两者同源、同代次，
+	// 确认入库时分别落到 links.content 与 links.content_document。
+	//
+	// 收件箱必须自己存这份文档：确认入库直接写 links 的正文列，不经过
+	// ContentService.Save，链接行上也没有 input_html 可供事后重建。
+	BodyDocument *string
+	// BodyFormat 说明 BodyDocument 的格式，取值与 links.content_format 一致。
+	// 空值按 plain 处理，因此零值 ReaderInbox 仍是一条合法的纯文本记录。
+	BodyFormat       ContentFormat
 	Note             string
 	Summary          *string
 	SuggestedTags    []string

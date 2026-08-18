@@ -122,11 +122,11 @@ func TestFreshSchemaLeavesRiverObjectsToRiverMigrations(t *testing.T) {
 			t.Errorf("application schema duplicates River-owned object %q", forbidden)
 		}
 	}
-	if len(steps) != 9 || steps[1].ID != translationTerminalHistoryIndexMigrationID ||
+	if len(steps) != 10 || steps[1].ID != translationTerminalHistoryIndexMigrationID ||
 		steps[2].ID != readerThoughtTombstoneSnapshotMigrationID || steps[3].ID != integrityRepairMigrationID ||
 		steps[4].ID != historicalRepairMigrationID || steps[5].ID != conceptMergeAuditRepairMigrationID ||
 		steps[6].ID != lifecycleRepairMigrationID || steps[7].ID != readerThoughtSearchTrigramMigrationID ||
-		steps[8].ID != ReaderTodoProjectionLedgerMigrationID {
+		steps[8].ID != ReaderTodoProjectionLedgerMigrationID || steps[9].ID != ReaderInboxCaptureDocumentMigrationID {
 		t.Fatalf("migration plan IDs = %v, want fresh schema and all ordered forward repairs", stepIDs(steps))
 	}
 	if got := strings.Join(steps[1].SQL, "\n"); !strings.Contains(got, "idx_river_job_translation_terminal_history") {

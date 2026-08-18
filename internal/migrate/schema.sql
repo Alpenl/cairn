@@ -1287,6 +1287,9 @@ CREATE TABLE public.reader_inbox (
     note text DEFAULT ''::text NOT NULL,
     proposal_signals jsonb DEFAULT '{}'::jsonb NOT NULL,
     proposal_status text DEFAULT 'pending'::text NOT NULL,
+    body_document text,
+    body_format text DEFAULT 'plain'::text NOT NULL,
+    CONSTRAINT reader_inbox_body_format_check CHECK ((body_format = ANY (ARRAY['plain'::text, 'markdown'::text, 'html'::text]))),
     CONSTRAINT reader_inbox_proposal_status_check CHECK ((proposal_status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text]))),
     CONSTRAINT reader_inbox_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'discarded'::text])))
 );

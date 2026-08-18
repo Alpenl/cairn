@@ -966,14 +966,14 @@ func TestResummarizeInboxSucceedsWhenPendingRevisionMatches(t *testing.T) {
 
 func readerInboxExpiryColumnsForTest() []string {
 	return []string{
-		"id", "url", "identity_key", "source_kind", "title", "body", "note", "summary", "suggested_tags", "proposal_signals", "proposal_status", "tags", "category_ids",
+		"id", "url", "identity_key", "source_kind", "title", "body", "body_document", "body_format", "note", "summary", "suggested_tags", "proposal_signals", "proposal_status", "tags", "category_ids",
 		"status", "metadata_revision", "job_id", "expires_at", "expired_at", "deleted_at", "created_at", "updated_at",
 	}
 }
 
 func readerInboxExpiryRowForTest(id uuid.UUID, expiresAt, expiredAt any, now time.Time) []any {
 	return []any{
-		id, "https://example.com/inbox", nil, "url", nil, "body", "", nil,
+		id, "https://example.com/inbox", nil, "url", nil, "body", nil, "plain", "", nil,
 		[]string{"suggested"}, []byte(`{}`), "pending", []string{"tag"}, []uuid.UUID{}, "pending", int64(1), nil,
 		expiresAt, expiredAt, nil, now.Add(-time.Hour), now,
 	}

@@ -20,7 +20,11 @@ func TestReconcileLedgersAgainstManifestTargets(t *testing.T) {
 	if riverTarget == 0 {
 		t.Fatal("River bundle head is 0; a manifest could not declare a river_ledger_target")
 	}
-	schemaTarget := migrate.ReaderTodoProjectionLedgerMigrationID
+	// Derive the head instead of naming it: this test asserts "a completed
+	// migration reaches the declared target", and the target it means is
+	// whatever the shipped plan ends with — pinning one ID makes the test fail
+	// on the next migration for a reason that has nothing to do with ledgers.
+	schemaTarget := shippedSchemaHead(t)
 
 	t.Run("before any migration both ledgers are absent", func(t *testing.T) {
 		result, err := migrate.ReconcileLedgers(t.Context(), pool, migrate.LedgerTargets{
@@ -154,9 +158,20 @@ func TestMigrateReportEmbedsTheLedgerReconciliation(t *testing.T) {
 	if report.Ledgers.River.Target != migrate.RiverBundleTarget() {
 		t.Fatalf("river target = %d, want the bundle head %d", report.Ledgers.River.Target, migrate.RiverBundleTarget())
 	}
-	if report.Ledgers.Schema.Head != migrate.ReaderTodoProjectionLedgerMigrationID {
-		t.Fatalf("schema head = %q, want %q", report.Ledgers.Schema.Head, migrate.ReaderTodoProjectionLedgerMigrationID)
+	if head := shippedSchemaHead(t); report.Ledgers.Schema.Head != head {
+		t.Fatalf("schema head = %q, want %q", report.Ledgers.Schema.Head, head)
 	}
+}
+
+// shippedSchemaHead is the last step of the shipped migration plan — the
+// version a fully migrated database records in schema_migrations.
+func shippedSchemaHead(t *testing.T) string {
+	t.Helper()
+	plan := migrate.Steps()
+	if len(plan) == 0 {
+		t.Fatal("shipped migration plan is empty")
+	}
+	return plan[len(plan)-1].ID
 }
 
 func assertHasProblem(t *testing.T, result migrate.LedgerReconciliation, ledger, kind string) {

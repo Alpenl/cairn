@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -376,5 +377,82 @@ func TestSubmitDefaultsToLibraryWhenInboxUnavailable(t *testing.T) {
 		Destination: "inbox",
 	}); err == nil {
 		t.Fatal("explicit inbox destination should fail when inbox is unavailable")
+	}
+}
+
+// TestIngestInboxCaptureCarriesTheCapturedStructureIntoTheInbox pins the
+// boundary the reading document used to die at. A browser capture arrives with
+// both a flattened text projection and the sanitized HTML; the Inbox row is the
+// only carrier between capture and confirmation, and confirmation writes the
+// Library link's content columns directly without ever calling
+// ContentService.Save. Whatever structure is dropped here is gone for good.
+func TestIngestInboxCaptureCarriesTheCapturedStructureIntoTheInbox(t *testing.T) {
+	links := &repotest.ObservableLinkStore{}
+	jobs := &repotest.ObservableJobStore{}
+	commands := (&submitFakeSubmitter{links: links, jobs: jobs}).withQueue(&submitFakeQueue{})
+	inbox := &inboxCaptureWriterFake{}
+	_, service := NewLinkServices(links, jobs, commands, &submitFakeLocker{}, SubmitServiceOptions{InboxWriter: inbox})
+
+	_, err := service.Ingest(context.Background(), dto.IngestRequest{
+		Destination: "inbox",
+		Sources: []dto.IngestSource{{
+			Kind: "browser_capture", URL: "https://example.com/captured", Title: "Captured",
+			Text: "Guide First paragraph One Two",
+			HTML: `<article><h1>Guide</h1><p>First paragraph</p><ul><li>One</li><li>Two</li></ul>` +
+				`<script>alert("must not survive")</script></article>`,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+	if len(inbox.created) != 1 {
+		t.Fatalf("inbox creates = %d, want 1", len(inbox.created))
+	}
+	created := inbox.created[0]
+	if created.BodyFormat != model.ContentFormatMarkdown || created.BodyDocument == nil {
+		t.Fatalf("created inbox format/document = %q/%#v, want a markdown document", created.BodyFormat, created.BodyDocument)
+	}
+	for _, want := range []string{"# Guide", "- One", "- Two"} {
+		if !strings.Contains(*created.BodyDocument, want) {
+			t.Errorf("body_document = %q, want %q", *created.BodyDocument, want)
+		}
+	}
+	// The body stays the plain projection of that same document — the two are
+	// two views of one capture, never two copies of one string.
+	if created.Body == *created.BodyDocument || !strings.Contains(created.Body, "First paragraph") {
+		t.Fatalf("body = %q, want the plain projection of the captured document", created.Body)
+	}
+	if strings.Contains(created.Body, "must not survive") || strings.Contains(*created.BodyDocument, "must not survive") {
+		t.Fatalf("created inbox = %+v, must not carry executable capture markup", created)
+	}
+}
+
+// TestIngestInboxCaptureWithoutHTMLStaysHonestlyPlain is the other half of the
+// contract: a capture with no HTML has no structure to promise, so the Inbox
+// row must not claim a document. Confirmation reads the format straight into
+// links.content_format, and a plain body labelled markdown is exactly the lie
+// that rendered captures as one wall of text.
+func TestIngestInboxCaptureWithoutHTMLStaysHonestlyPlain(t *testing.T) {
+	links := &repotest.ObservableLinkStore{}
+	jobs := &repotest.ObservableJobStore{}
+	commands := (&submitFakeSubmitter{links: links, jobs: jobs}).withQueue(&submitFakeQueue{})
+	inbox := &inboxCaptureWriterFake{}
+	_, service := NewLinkServices(links, jobs, commands, &submitFakeLocker{}, SubmitServiceOptions{InboxWriter: inbox})
+
+	_, err := service.Ingest(context.Background(), dto.IngestRequest{
+		Destination: "inbox",
+		Sources: []dto.IngestSource{{
+			Kind: "browser_capture", URL: "https://example.com/captured", Title: "Captured", Text: "just text",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+	if len(inbox.created) != 1 {
+		t.Fatalf("inbox creates = %d, want 1", len(inbox.created))
+	}
+	created := inbox.created[0]
+	if created.Body != "just text" || created.BodyDocument != nil || created.BodyFormat != model.ContentFormatPlain {
+		t.Fatalf("created inbox = %+v, want a plain body with no document", created)
 	}
 }

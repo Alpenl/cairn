@@ -48,7 +48,7 @@ expect() {
 # remains a compatibility alias and must be idempotent on the same database.
 DATABASE_URL="$database_url" make migrate-fresh
 expect "select count(*) from schema_migrations where version = 'f03e51d6911b'" "1"
-expect "select count(*) from schema_migrations" "9"
+expect "select count(*) from schema_migrations" "10"
 expect "select to_regclass('public.idx_link_translations_saved_revision_unique')" "idx_link_translations_saved_revision_unique"
 expect "select to_regclass('public.idx_link_translations_legacy_source_unique')" "idx_link_translations_legacy_source_unique"
 
@@ -74,6 +74,10 @@ expect "select to_regclass('public.feed_lifecycle_repair_audit')" "feed_lifecycl
 # The backfill ledger is what stops a second run from rebuilding every
 # projection, so the forward migration has to actually create it.
 expect "select to_regclass('public.reader_todo_projection_backfills')" "reader_todo_projection_backfills"
+# 收件箱要能把采集到的 Markdown 结构一路带到确认入库，否则 links.content_document
+# 只剩压平的纯文本可写，还会被贴上 content_format='markdown' 的假标签。
+expect "select version from schema_migrations where version = 'readerinboxdocument2026081801'" "readerinboxdocument2026081801"
+expect "select count(*) from information_schema.columns where table_schema='public' and table_name='reader_inbox' and column_name in ('body_document','body_format')" "2"
 # The River index is built with CREATE INDEX CONCURRENTLY. A canceled or
 # failed build leaves a same-name index with indisvalid=false that IF NOT EXISTS
 # would accept, so recording the migration is not evidence the index is usable —

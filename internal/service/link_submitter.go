@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"webtag/internal/contentdoc"
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
@@ -224,12 +226,37 @@ func newInboxCapture(capture LinkCapture, identityKey string) model.ReaderInbox 
 	if item.SourceKind == "" {
 		item.SourceKind = "url"
 	}
-	if capture.InputText != nil {
-		item.Body = *capture.InputText
-	} else if capture.InputHTML != nil {
-		item.Body = *capture.InputHTML
-	}
+	item.Body, item.BodyDocument, item.BodyFormat = inboxCaptureBody(capture)
 	return item
+}
+
+// inboxCaptureBody 把一次采集的正文归一化成收件箱要存的三元组
+// （纯文本投影, Markdown 文档, 格式）。
+//
+// 这里必须转换，而不能只留纯文本：收件箱的 body 是确认入库时唯一的正文来源，
+// 而确认入库直接写 links 的正文列、不走 ContentService.Save，链接行上也不会有
+// input_html。采集时丢掉的结构，之后任何一步都拿不回来——只能重新采集。
+//
+// 采集到的 HTML 优先于扩展一并送来的纯文本：后者是 innerText 压平的结果，
+// 段落、标题、列表、代码块全都塌成同一层文字。contentdoc.FromHTML 会再净化
+// 一次（浏览器侧的脱敏不足以信任），并同时给出干净的纯文本投影，因此转换成功
+// 时两个字段同源。转换失败或转不出正文时退回纯文本，宁可诚实地存一堆文字，
+// 也不要凭空编一个结构出来。
+func inboxCaptureBody(capture LinkCapture) (string, *string, model.ContentFormat) {
+	if capture.InputHTML != nil && strings.TrimSpace(*capture.InputHTML) != "" {
+		document, err := contentdoc.FromHTML(*capture.InputHTML, capture.URL)
+		if err == nil && document.Text != "" {
+			return document.Text, document.Document, document.Format
+		}
+	}
+	if capture.InputText != nil && strings.TrimSpace(*capture.InputText) != "" {
+		plain := contentdoc.Plain(*capture.InputText)
+		return plain.Text, nil, plain.Format
+	}
+	if capture.InputHTML != nil {
+		return *capture.InputHTML, nil, model.ContentFormatPlain
+	}
+	return "", nil, model.ContentFormatPlain
 }
 
 func (s *linkSubmitter) createInboxRecord(ctx context.Context, item model.ReaderInbox) (*model.ReaderInbox, *uuid.UUID, error) {

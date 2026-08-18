@@ -91,7 +91,7 @@ expect() {
 }
 
 expect "SELECT count(*) FROM schema_migrations WHERE version = 'f03e51d6911b'" "1"
-expect "SELECT count(*) FROM schema_migrations" "9"
+expect "SELECT count(*) FROM schema_migrations" "10"
 expect "SELECT version FROM schema_migrations WHERE version = 'reader2026081301'" "reader2026081301"
 expect "SELECT version FROM schema_migrations WHERE version = 'integrity2026081401'" "integrity2026081401"
 expect "SELECT version FROM schema_migrations WHERE version = 'historical2026081401'" "historical2026081401"
@@ -108,6 +108,11 @@ expect "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WH
 expect "SELECT version FROM schema_migrations WHERE version = 'readertodoprojection2026081701'" "readertodoprojection2026081701"
 expect "SELECT to_regclass('public.feed_lifecycle_repair_audit')" "feed_lifecycle_repair_audit"
 expect "SELECT to_regclass('public.reader_todo_projection_backfills')" "reader_todo_projection_backfills"
+expect "SELECT version FROM schema_migrations WHERE version = 'readerinboxdocument2026081801'" "readerinboxdocument2026081801"
+# 收件箱必须能带着采集到的结构走到确认入库那一步，否则 content_document 只能
+# 拿压平的纯文本冒充 markdown。
+expect "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reader_inbox' AND column_name IN ('body_document','body_format')" "2"
+expect "SELECT count(*) FROM pg_constraint WHERE conname='reader_inbox_body_format_check' AND conrelid='public.reader_inbox'::regclass" "1"
 expect "SELECT count(*) FROM reader_todo_projection_backfills" "1"
 expect "SELECT to_regclass('public.idx_link_translations_saved_revision_unique')" "idx_link_translations_saved_revision_unique"
 expect "SELECT to_regclass('public.idx_link_translations_legacy_source_unique')" "idx_link_translations_legacy_source_unique"

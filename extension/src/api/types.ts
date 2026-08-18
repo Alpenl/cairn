@@ -145,9 +145,13 @@ export type ApiErrorResponse = WireErrorResponse
 
 /**
  * 一条采集来源。对应 internal/dto/request.go 的 IngestSource。
- * 扩展采集当前页时 kind 固定为 `browser_capture`，只携带 url/title、
- * 最多 512 KiB UTF-8 的脱敏可读文本、基础 metadata 与可选 note。
- * html/image_urls 保留在通用 wire 类型中，但扩展固定发送空值。
+ * 扩展采集当前页时 kind 固定为 `browser_capture`，携带 url/title、
+ * 最多 512 KiB UTF-8 的脱敏可读文本、同样上限的脱敏正文 HTML 结构快照、
+ * 基础 metadata 与可选 note。
+ *
+ * html 不是可选的锦上添花：正文的标题、段落、列表、代码块只存在于它里面，
+ * text 是 innerText 压平的结果。后端靠 html 转出阅读用的 Markdown，
+ * 不发它就只能存一堆文字。image_urls 仍固定为空。
  */
 export type IngestSource = WireIngestSource
 
