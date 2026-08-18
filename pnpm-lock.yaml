@@ -102,8 +102,8 @@ importers:
         specifier: ^11.4.0
         version: 11.4.0
       globals:
-        specifier: 17.10.0
-        version: 17.10.0
+        specifier: 17.11.0
+        version: 17.11.0
       jsdom:
         specifier: ^29.1.1
         version: 29.1.1
@@ -3367,8 +3367,8 @@ packages:
     resolution: {integrity: sha512-AhO5QUcj8llrbG09iWhPU2B204J1xnPeL8kQmVorSsy+Sjj1sk8gIyh6cUocGmH4L0UuhAJy+hJMRA4mgA4mFQ==}
     engines: {node: '>=8'}
 
-  globals@17.10.0:
-    resolution: {integrity: sha512-V0kztuWST2k8A/VbxAY8+L+7+Rgo3fyA24IHRLrZp7HOzJjV0gHSaZUjK9lpP/IrBSNite2tZ1prhRkinRu1CA==}
+  globals@17.11.0:
+    resolution: {integrity: sha512-Z2I8hM+PbJDXQDq3Icgpzv+mPdwr68iZUU9d5WW4FuXfDUQfkZaZuvjMv42/5crNyw154+9+VWXbYrUgDXbxNw==}
     engines: {node: '>=18'}
 
   globalthis@1.0.4:
@@ -9017,7 +9017,7 @@ snapshots:
     dependencies:
       type-fest: 0.20.2
 
-  globals@17.10.0: {}
+  globals@17.11.0: {}
 
   globalthis@1.0.4:
     dependencies:
