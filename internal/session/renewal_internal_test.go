@@ -7,10 +7,11 @@ import (
 	"time"
 )
 
-// 这组测试锁的是本次修复的行为契约：会话在被使用时会滑动续期，但一次登录的
-// 总寿命有硬上限。缺了前者，用户每 12 小时被踢一次且手里没有凭证可恢复
-// （session 模式刻意不保存 token）；缺了后者，被窃取的 cookie 只要一直被
-// 使用就永不过期。
+// 这组测试锁的是滑动续期的行为契约，与两个期限的**具体数值**无关——断言全部
+// 用常量表达，正是为了让 DefaultTTL / DefaultAbsoluteTTL 可以按部署策略调整
+// 而不必重写这里。缺了滑动续期，用户每过一个 TTL 就被踢一次，且 session 模式
+// 刻意不在浏览器保存 token，手里没有凭证可恢复；上限则决定一张票据最长能被
+// 续到多久（本部署已将其放宽到实质不再约束，撤回改由轮换签名密钥承担）。
 func TestRenewSlidesTheDeadlineWhenItIsRunningOut(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	claims := Claims{
@@ -26,6 +27,40 @@ func TestRenewSlidesTheDeadlineWhenItIsRunningOut(t *testing.T) {
 	}
 	if !renewed.AbsoluteExpiresAt.Equal(claims.AbsoluteExpiresAt) {
 		t.Fatal("renewal must not move the absolute deadline")
+	}
+}
+
+// 「登录一次就不再掉线」是这次放宽期限要买到的东西，而它不是任何单个常量的
+// 属性——它是 DefaultTTL、renewLeadFraction 与 DefaultAbsoluteTTL 三者共同的
+// 结果。把它写成断言，是为了让任何人把其中之一改回保守值时，先坏的是这条
+// 测试，而不是几个月后某个用户的登录态：那种失败发生在离改动最远的地方，
+// 表现成「Reader 又要重填密钥了」，几乎不可能被归因回常量。
+func TestASessionRevisitedWithinTheWindowNeverLapses(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	claims := Claims{
+		ExpiresAt:         start.Add(DefaultTTL),
+		AbsoluteExpiresAt: start.Add(DefaultAbsoluteTTL),
+	}
+
+	// 每两百天回来一次——远长于任何「常用」的定义，却仍在 TTL 之内，这正是
+	// 滑动续期应该覆盖的那种使用节奏。连续十次约合五年半。
+	const visitEvery = 200 * 24 * time.Hour
+	now := start
+	for visit := 1; visit <= 10; visit++ {
+		now = now.Add(visitEvery)
+		if !now.Before(claims.ExpiresAt) {
+			t.Fatalf("visit %d: the session lapsed at %s, before the visit at %s",
+				visit, claims.ExpiresAt, now)
+		}
+		renewed, ok := Renew(claims, now, DefaultTTL)
+		if !ok {
+			t.Fatalf("visit %d: a session %s from expiry must renew", visit, claims.ExpiresAt.Sub(now))
+		}
+		claims = renewed
+	}
+
+	if lived := claims.ExpiresAt.Sub(start); lived < 5*365*24*time.Hour {
+		t.Fatalf("one login carried the session %s, want it still alive after five years", lived)
 	}
 }
 

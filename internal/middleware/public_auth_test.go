@@ -190,10 +190,12 @@ func TestPublicAuthFailsClosedWhenInstallationNamespaceUnavailable(t *testing.T)
 	}
 }
 
-// 这是修复的端到端契约：会话在临近过期时被使用，响应必须带回一张新
-// cookie。少了它，会话每 12 小时准时死一次，而 Reader 在 session 模式下
-// 刻意不保存 installation token，届时手里没有任何凭证可以恢复，用户只能
-// 看到「无法确认当前身份：unauthorized」并手动重填 token。
+// 这是端到端契约：会话在临近过期时被使用，响应必须带回一张新 cookie。少了
+// 它，会话每过一个 TTL 就准时死一次，而 Reader 在 session 模式下刻意不保存
+// installation token，届时手里没有任何凭证可以恢复，用户只能看到
+// 「无法确认当前身份：unauthorized」并手动重填 token。滑动续期正是「登录一次
+// 就不再掉线」赖以成立的机制：TTL 放长只是把窗口拉宽，真正让会话无限延续的
+// 是这里每次使用都把期限推回去。
 func TestPublicAuthRenewsASessionThatIsRunningOut(t *testing.T) {
 	t.Parallel()
 	key := []byte("test-public-auth-renewal-signing-key")

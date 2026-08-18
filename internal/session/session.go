@@ -9,10 +9,14 @@
 //   - ExpiresAt is the sliding deadline. Every authenticated request that finds
 //     it close to running out pushes it back, so someone who keeps using the
 //     Reader is never logged out mid-use.
-//   - AbsoluteExpiresAt is the ceiling that sliding cannot cross. Without it a
-//     stolen cookie stays alive forever, since the thief renews it by using it.
-//     With it, one login is worth at most DefaultAbsoluteTTL no matter how
-//     actively it is exercised.
+//   - AbsoluteExpiresAt is the ceiling that sliding cannot cross. It exists
+//     because a thief renews a stolen cookie merely by using it, so without a
+//     ceiling such a cookie never dies on its own. This deployment has
+//     deliberately widened that ceiling to the point where it no longer binds
+//     in practice — see DefaultAbsoluteTTL — which makes rotating
+//     SESSION_SIGNING_KEY the operative way to revoke sessions rather than a
+//     last resort. The mechanism is kept rather than deleted so the ceiling is
+//     one constant away from being meaningful again.
 //
 // Session mode deliberately does not persist the installation token in the
 // browser (see reader/src/lib/settings.ts), so an expiry the user did not
@@ -36,17 +40,38 @@ const CookieName = "webtag_session"
 const HeaderName = "X-WebTag-Session"
 
 // DefaultTTL is how long one session survives without being used.
-const DefaultTTL = 12 * time.Hour
+//
+// A year, chosen against the browser rather than against the clock: Chrome and
+// Edge cap cookie lifetime at 400 days and silently clamp anything longer, so a
+// larger number here would buy nothing a browser will honour. Paired with
+// renewLeadFraction it means a session that is used even once every six months
+// is renewed and never lapses, which is the "log in once" behaviour this
+// deployment asks for.
+//
+// The cost is stated plainly: an idle session stays usable for a year, and
+// session mode keeps no installation token in the browser, so the only thing
+// standing between a stolen laptop and the knowledge base is the device
+// itself.
+const DefaultTTL = 365 * 24 * time.Hour
 
 // DefaultAbsoluteTTL caps the total life of a single login. Renewal may push
 // ExpiresAt forward repeatedly but never past this.
-const DefaultAbsoluteTTL = 30 * 24 * time.Hour
+//
+// Ten years is not a security boundary and is not pretending to be one; it is
+// this ceiling being deliberately taken out of the way. The prior 30 days made
+// one login expire on a fixed schedule no matter how actively it was used, and
+// on a single-operator installation that traded a real, recurring lockout —
+// with no credential left in the browser to recover from it — against a
+// revocation path that rotating SESSION_SIGNING_KEY already provides
+// immediately and completely. A finite value is kept rather than an unbounded
+// one so a token that outlives all memory of it still dies eventually.
+const DefaultAbsoluteTTL = 10 * 365 * 24 * time.Hour
 
 // renewLeadFraction decides how early a request renews. Renewing on every
 // request would put a Set-Cookie on nearly every response for no benefit;
 // waiting until the last moment would drop anyone whose tab sat idle just
-// over the line. Half the TTL means an active session is refreshed at most
-// once every six hours and always has at least six hours of slack.
+// over the line. Half the TTL means a session is refreshed at most once per
+// half-TTL and always carries at least that much slack.
 const renewLeadFraction = 2
 
 var ErrInvalid = errors.New("session: credential is invalid or expired")
