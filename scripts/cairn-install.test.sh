@@ -155,7 +155,11 @@ seed_release_trees() {
 fill_environment_files() {
 	# A realistic application environment, so the "no deploy token in the
 	# application's environment" test has something to find besides nothing.
-	cat >"$CORE_DIR/.env" <<-EOF
+	# Appended, not written: the installer already put a generated
+	# SESSION_SIGNING_KEY in this file, and clobbering it here would make the
+	# idempotency assertion below pass against a file that no longer resembles
+	# what a real host carries.
+	cat >>"$CORE_DIR/.env" <<-EOF
 		DATABASE_URL=$DB_URL
 		APP_ENV=prod
 	EOF
@@ -218,6 +222,19 @@ test_installer_runs_clean() {
 	)
 	[[ $model == "$expected" ]] || fail 'the installed layout does not match the permission model of issue #41'
 	pass 'every path matches the ownership and mode the issue specifies'
+
+	# The Reader's session cookie is signed with this key. An empty value is not
+	# a disabled feature, it is a key regenerated on every boot: sessions then
+	# die at every restart, and session mode holds no installation token in the
+	# browser to recover with. A fresh host must therefore arrive with a real
+	# key, not with a blank to fill in.
+	local session_key
+	session_key=$(grep -E '^SESSION_SIGNING_KEY=' "$CORE_DIR/.env" | tail -n 1)
+	session_key=${session_key#SESSION_SIGNING_KEY=}
+	[[ -n $session_key ]] || fail 'the installer left SESSION_SIGNING_KEY empty in the core environment file'
+	[[ $(printf '%s' "$session_key" | base64 -d 2>/dev/null | wc -c) -eq 32 ]] ||
+		fail 'the generated SESSION_SIGNING_KEY does not decode to 32 bytes'
+	pass 'the core environment file arrives with a generated 32-byte SESSION_SIGNING_KEY'
 }
 
 test_helper_selfcheck_accepts_the_layout() {
@@ -324,7 +341,13 @@ test_application_cannot_read_the_deploy_token() {
 
 	local rendered
 	rendered=$(as_webtag env -i "${composed[@]}")
-	printf '%s\n' "$rendered" | sed 's/^/       /'
+	# Printed so a failure is diagnosable from the log alone, with secret-shaped
+	# values masked. This container's key is a throwaway, but a suite that
+	# prints one teaches the eye to skim past a key in CI output, and the next
+	# value in that position may not be disposable.
+	printf '%s\n' "$rendered" |
+		sed -E 's/^([A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*=).*/\1<redacted>/' |
+		sed 's/^/       /'
 	grep -q '^DATABASE_URL=' <<<"$rendered" ||
 		fail 'the composed application environment is empty, so finding no token in it would prove nothing'
 	! grep -q 'DEPLOY_AUTH_TOKEN' <<<"$rendered" ||
@@ -495,6 +518,26 @@ test_installer_is_idempotent() {
 	[[ $(stat -c '%U:%G %a' "$STATE_DIR") == 'root:root 700' ]] ||
 		fail 'the installer did not repair the state directory'
 	pass 'drifted ownership and modes are repaired back to the model'
+
+	# A host installed before the key was generated. The installer must report
+	# it and change nothing: an existing .env is the operator's file, and a
+	# re-run that could append to it is a re-run that could edit configuration
+	# it did not write. Reporting is the whole remedy here, so its absence is
+	# the failure worth catching.
+	local legacy_env legacy_hash report
+	legacy_env=$(grep -vE '^SESSION_SIGNING_KEY=' "$CORE_DIR/.env")
+	printf '%s\n' "$legacy_env" >"$CORE_DIR/.env"
+	chown root:webtag "$CORE_DIR/.env"
+	chmod 0640 "$CORE_DIR/.env"
+	legacy_hash=$(sha256sum "$CORE_DIR/.env" | cut -d' ' -f1)
+
+	report=$(install_layout)
+	[[ $(sha256sum "$CORE_DIR/.env" | cut -d' ' -f1) == "$legacy_hash" ]] ||
+		fail 'the installer edited an existing /opt/webtag/.env instead of reporting the missing key'
+	pass 'an existing core environment file is never edited, even to add the key'
+	grep -q 'SESSION_SIGNING_KEY' <<<"$report" ||
+		fail 'a host with no SESSION_SIGNING_KEY was not told to set one'
+	pass 'a host missing SESSION_SIGNING_KEY is reported as a manual step'
 }
 
 layout_snapshot() {
