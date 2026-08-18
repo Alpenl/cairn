@@ -93,6 +93,46 @@ func baseValidishConfig() config.Config {
 	return cfg
 }
 
+// TestWarnEphemeralSessionSigningKey pins the WARN that breaks the silence
+// around an empty SESSION_SIGNING_KEY.
+//
+// Without it the failure mode is invisible at the only moment it is cheap to
+// fix: the key is minted at boot, sessions work fine all day, and the cost
+// lands weeks later as "the Reader keeps asking for the installation token
+// again" after an unrelated restart. The message therefore has to name the
+// consequence and the remedy, not just the flag.
+func TestWarnEphemeralSessionSigningKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ephemeral key warns with the restart consequence", func(t *testing.T) {
+		t.Parallel()
+		cfg := baseValidishConfig()
+		cfg.SessionSigningKeyEphemeral = true
+
+		warns := capturedWarnings(t, cfg, "SESSION_SIGNING_KEY")
+		if len(warns) != 1 {
+			t.Fatalf("SESSION_SIGNING_KEY warns = %d, want 1", len(warns))
+		}
+		msg, _ := warns[0]["msg"].(string)
+		for _, want := range []string{"restart", "Reader session", "installation token"} {
+			if !strings.Contains(msg, want) {
+				t.Fatalf("msg = %q, want it to mention %q", msg, want)
+			}
+		}
+	})
+
+	t.Run("configured key stays quiet", func(t *testing.T) {
+		t.Parallel()
+		cfg := baseValidishConfig()
+		cfg.SessionSigningKey = "operator-controlled-key"
+		cfg.SessionSigningKeyEphemeral = false
+
+		if warns := capturedWarnings(t, cfg, "SESSION_SIGNING_KEY"); len(warns) != 0 {
+			t.Fatalf("SESSION_SIGNING_KEY warns = %d, want 0", len(warns))
+		}
+	})
+}
+
 // TestWarnPublicAPIOpen pins the three branches of the unauthenticated-API WARN.
 //
 // The trigger moved: it used to fire whenever EXTENSION_API_TOKEN was empty,

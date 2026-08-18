@@ -208,6 +208,13 @@ type Config struct {
 	// 无状态会话的唯一手段，也是它的设计代价。
 	SessionSigningKey string
 
+	// SessionSigningKeyEphemeral 记录上面那把密钥是不是进程启动时随机生成的
+	// 应急密钥（即 SESSION_SIGNING_KEY 留空）。留空是个静默陷阱：会话签名密钥
+	// 随进程消失，每次重启（含每次自动更新）都会让所有 Reader 会话当场失效，
+	// 而 session 模式下浏览器里不留安装令牌，用户只能重新填一次 key。启动时
+	// 据此打 WARN，把这条因果关系摆到日志里，而不是留给几周后的困惑。
+	SessionSigningKeyEphemeral bool
+
 	// TranslationJobsRollout coordinates versioned River worker registration
 	// and translation API scheduling during the RF6A rolling cutover.
 	TranslationJobsRollout model.TranslationJobsRolloutStage

@@ -121,7 +121,7 @@ func loadRuntimeConfig() (Config, error) { //nolint:gocyclo // 逐项解析运�
 	if err != nil {
 		return Config{}, err
 	}
-	sessionSigningKey, err := resolveSessionSigningKey(envString("SESSION_SIGNING_KEY", ""))
+	sessionSigningKey, sessionSigningKeyEphemeral, err := resolveSessionSigningKey(envString("SESSION_SIGNING_KEY", ""))
 	if err != nil {
 		return Config{}, err
 	}
@@ -163,6 +163,7 @@ func loadRuntimeConfig() (Config, error) { //nolint:gocyclo // 逐项解析运�
 		ExtensionAPIToken:                  envString("EXTENSION_API_TOKEN", ""),
 		PublicAPIOpen:                      publicAPIOpen,
 		SessionSigningKey:                  sessionSigningKey,
+		SessionSigningKeyEphemeral:         sessionSigningKeyEphemeral,
 		TranslationJobsRollout:             model.TranslationJobsRolloutStage(strings.ToLower(envString("TRANSLATION_JOBS_ROLLOUT", string(model.TranslationJobsRolloutStrictV2)))),
 		TranslationSourceRollout:           TranslationSourceRolloutStage(strings.ToLower(envString("TRANSLATION_SOURCE_ROLLOUT", string(TranslationSourceRolloutStrict)))),
 		TranslationReconcileIntervalMS:     translationReconcileIntervalMS,

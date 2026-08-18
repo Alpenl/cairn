@@ -348,6 +348,16 @@ func warnUnsafeBootDefaults(cfg config.Config, logger *slog.Logger) {
 			)
 		}
 	}
+	if cfg.SessionSigningKeyEphemeral {
+		// 这条 WARN 的收件人是几周后在排查「Reader 又要重填 key 了」的人。
+		// 空 SESSION_SIGNING_KEY 不是关闭会话，而是把签名密钥绑在进程生命周期
+		// 上：重启即换钥，所有在飞 cookie 当场作废，而 session 模式下浏览器里
+		// 不留安装令牌，前端手里没有任何可重放的凭证，只能让用户重新填一次。
+		// 自动更新会重启 Core，所以这等价于「每更新一次踢一次线」。
+		logger.Warn("SESSION_SIGNING_KEY is empty: the Reader session cookie is signed with a key generated for this process, so every restart (including every automated update) invalidates all Reader sessions and users must re-enter the installation token; set it to a persistent value (openssl rand -base64 32) to keep sessions alive across restarts",
+			"flag", "SESSION_SIGNING_KEY",
+		)
+	}
 	if cfg.AppEnv == "prod" && cfg.OTELEndpoint != "" && cfg.OTELInsecure {
 		logger.Warn("OTLP exporter is configured to use plaintext gRPC in production; trace data flows unauthenticated, set the env var to false to require TLS",
 			"flag", "OTEL_EXPORTER_OTLP_INSECURE",

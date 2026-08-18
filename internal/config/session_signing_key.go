@@ -31,9 +31,20 @@ func (p *sessionSigningKeyProvider) keyForProcess() (string, error) {
 
 var processSessionSigningKey = &sessionSigningKeyProvider{source: rand.Reader}
 
-func resolveSessionSigningKey(explicit string) (string, error) {
+// resolveSessionSigningKey returns the key and whether it is the ephemeral
+// per-process fallback. The caller needs that second value: a key nobody
+// configured dies with the process, so every restart — including every
+// automated update — silently invalidates all Reader sessions, and session
+// mode keeps no installation token in the browser to recover with. Silence is
+// what makes that expensive: the operator meets it as "the Reader keeps asking
+// for the key again" weeks later, with nothing in the log pointing here.
+func resolveSessionSigningKey(explicit string) (key string, ephemeral bool, err error) {
 	if explicit != "" {
-		return explicit, nil
+		return explicit, false, nil
 	}
-	return processSessionSigningKey.keyForProcess()
+	generated, err := processSessionSigningKey.keyForProcess()
+	if err != nil {
+		return "", false, err
+	}
+	return generated, true, nil
 }
