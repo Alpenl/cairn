@@ -7,14 +7,14 @@ import "testing"
 // not reached yet is ordering, not inconsistency — but a digest that disagrees
 // is inconsistency at any moment, and must not be waved through with it.
 func TestListedCrossCheckToleratesAnUnsealedListButNotADisagreement(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: newTestRelease installs a test trust root, which is package
+	// state, and installTestTrustRoot says so. Racing it against another test
+	// reading TrustedKeys is exactly what -race caught here.
 	manifest := newTestRelease(t).Manifest
 	readerName := manifest.Reader.Archive
 	coreName := manifest.Core[0].Archive
 
 	t.Run("an entry the list has not reached yet is tolerated", func(t *testing.T) {
-		t.Parallel()
 		partial := map[string]string{coreName: manifest.Core[0].SHA256}
 		if err := CrossCheckListedChecksums(manifest, partial); err != nil {
 			t.Fatalf("lenient cross-check rejected a list that is merely incomplete: %v", err)
@@ -26,7 +26,6 @@ func TestListedCrossCheckToleratesAnUnsealedListButNotADisagreement(t *testing.T
 	})
 
 	t.Run("a listed digest that disagrees is fatal in both forms", func(t *testing.T) {
-		t.Parallel()
 		wrong := map[string]string{
 			coreName:   manifest.Core[0].SHA256,
 			readerName: "00000000000000000000000000000000000000000000000000000000000000ff",
