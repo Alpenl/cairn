@@ -68,8 +68,8 @@ chmod +x "$TMP/bin/docker" "$TMP/bin/gh"
 export DOCKER_BIN="$TMP/bin/docker"
 export GH_BIN="$TMP/bin/gh"
 export FAKE_STATE="$TMP/state"
-export TAG=v1.2.3
-export VERSION=1.2.3
+export TAG=v0.1.15
+export VERSION=0.1.15
 export IMAGE=ghcr.io/example/cairn
 export REPOSITORY=example/cairn
 export CORE_RELEASE_HIGHEST_TAG=$TAG
@@ -84,10 +84,10 @@ old_slim=sha256:3333333333333333333333333333333333333333333333333333333333333333
 printf '%s\n' "$old_latest" >"$TMP/state/images/ghcr.io_example_cairn_latest"
 printf '%s\n' "$old_slim" >"$TMP/state/images/ghcr.io_example_cairn_slim"
 
-printf 'amd64 archive\n' >"$TMP/assets/cairn_1.2.3_linux_amd64.tar.gz"
-printf 'arm64 archive\n' >"$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz"
+printf 'amd64 archive\n' >"$TMP/assets/cairn_0.1.15_linux_amd64.tar.gz"
+printf 'arm64 archive\n' >"$TMP/assets/cairn_0.1.15_linux_arm64.tar.gz"
 # 独立 Reader 站的发布包随 Core 一同发布，asset 集合严格比对，夹具必须提供。
-printf 'reader release\n' >"$TMP/assets/cairn-reader-1.2.3.tar.gz"
+printf 'reader release\n' >"$TMP/assets/cairn-reader-0.1.15.tar.gz"
 # 受控页面更新（#41）的信任根：签名 manifest 与它的 detached 签名同属严格的
 # Release asset 集合，少任何一个都不允许成 draft。promote 只负责「这两个文件
 # 必须随 Release 一起存在、字节稳定、且被 SHA256SUMS 覆盖」；签名本身的语义由
@@ -121,7 +121,7 @@ for arch in amd64 arm64; do
 	jq -n '{Results: [{Class: "os-pkgs", Type: "alpine"}]}' >"$directory/trivy.json"
 	jq -n '{components: [{purl: "pkg:apk/alpine/ca-certificates@1"}]}' >"$directory/sbom.cdx.json"
 done
-tar -C "$TMP" -czf "$TMP/assets/core-security-evidence-1.2.3.tar.gz" security-evidence
+tar -C "$TMP" -czf "$TMP/assets/core-security-evidence-0.1.15.tar.gz" security-evidence
 
 "$SCRIPT" prepare-channel-record "$TMP/assets/CHANNEL-ROLLBACK.json"
 (cd "$TMP/assets" && sha256sum \
@@ -139,11 +139,11 @@ fi
 	cairn_*.tar.gz core-security-evidence-*.tar.gz cairn-reader-*.tar.gz \
 	cairn-release-manifest.json cairn-release-manifest.json.sig \
 	CHANNEL-ROLLBACK.json IMAGE-DIGESTS.json >SHA256SUMS)
-mv "$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz" "$TMP/missing-arm64.tar.gz"
+mv "$TMP/assets/cairn_0.1.15_linux_arm64.tar.gz" "$TMP/missing-arm64.tar.gz"
 if "$SCRIPT" prepare-draft "$TMP/assets" >/dev/null 2>&1; then
 	fail 'draft preparation accepted a missing architecture archive'
 fi
-mv "$TMP/missing-arm64.tar.gz" "$TMP/assets/cairn_1.2.3_linux_arm64.tar.gz"
+mv "$TMP/missing-arm64.tar.gz" "$TMP/assets/cairn_0.1.15_linux_arm64.tar.gz"
 
 # 未签名的 Release 不是「降级到 SHA256SUMS 校验」，而是根本不成立：signed
 # manifest 或它的签名缺席时，draft 直接失败，不留下一个 helper 需要自己判断
@@ -158,16 +158,19 @@ done
 
 CAIRN_RELEASE_FAIL_AT=version-slim "$SCRIPT" promote-versions >/dev/null 2>&1 &&
 	fail 'version-slim injection did not fail'
-[[ $(cat "$TMP/state/images/ghcr.io_example_cairn_1.2.3") == "$SLIM_INDEX_DIGEST" ]] ||
+if TAG=v0.2.0 VERSION=0.2.0 "$SCRIPT" promote-versions >/dev/null 2>&1; then
+	fail 'promotion accepted a Core tag outside the pinned 0.1 release series'
+fi
+[[ $(cat "$TMP/state/images/ghcr.io_example_cairn_0.1.15") == "$SLIM_INDEX_DIGEST" ]] ||
 	fail 'version digest was not promoted before injected slim alias failure'
 "$SCRIPT" promote-versions
 
 printf '%s\n' sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
-	>"$TMP/state/images/ghcr.io_example_cairn_1.2.3-slim"
+	>"$TMP/state/images/ghcr.io_example_cairn_0.1.15-slim"
 if "$SCRIPT" promote-versions >/dev/null 2>&1; then
 	fail 'promotion overwrote an existing version tag with a different digest'
 fi
-printf '%s\n' "$SLIM_INDEX_DIGEST" >"$TMP/state/images/ghcr.io_example_cairn_1.2.3-slim"
+printf '%s\n' "$SLIM_INDEX_DIGEST" >"$TMP/state/images/ghcr.io_example_cairn_0.1.15-slim"
 
 CAIRN_RELEASE_FAIL_AT=release-publish "$SCRIPT" publish-release >/dev/null 2>&1 &&
 	fail 'Release publish injection did not fail'

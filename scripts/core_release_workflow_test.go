@@ -94,6 +94,20 @@ func findStepByName(t *testing.T, job map[string]any, name string) (int, map[str
 	return -1, nil
 }
 
+func TestCoreReleaseValidationPinsTheApprovedSeries(t *testing.T) {
+	workflow := loadWorkflow(t, "release-core.yml")
+	jobs := object(t, workflow["jobs"], "jobs")
+	validate := object(t, jobs["validate"], "validate")
+	_, release := findStepByName(t, validate, "Validate stable Core release")
+	run, _ := release["run"].(string)
+
+	for _, fragment := range []string{"scripts/core-release-series.sh", "release_major_minor"} {
+		if !strings.Contains(run, fragment) {
+			t.Errorf("Core release validation does not enforce %q", fragment)
+		}
+	}
+}
+
 func TestCoreReleasePromotionDependsOnExactDigestGates(t *testing.T) {
 	workflow := loadWorkflow(t, "release-core.yml")
 	jobs := object(t, workflow["jobs"], "jobs")

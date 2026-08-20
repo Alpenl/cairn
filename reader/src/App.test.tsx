@@ -372,7 +372,7 @@ describe('App smoke', () => {
     expect(abortedOnSwitch).toBe(true)
   })
 
-  it('keeps private Reader unmounted when the identity handshake fails', async () => {
+  it('returns to connection setup when a saved session is unauthorized', async () => {
     const fetchSpy = vi.fn(async (url: string) => {
       if (url === 'http://localhost:8080/api/session') {
         return new Response(
@@ -394,9 +394,9 @@ describe('App smoke', () => {
 
     const { container } = render(<App />)
 
-    expect(
-      await screen.findByRole('alert'),
-    ).toHaveTextContent('无法确认当前身份：unauthorized')
+    expect(await screen.findByLabelText('后端地址')).toHaveValue('http://localhost:8080')
+    expect(screen.getByLabelText('安装令牌')).toHaveValue('')
+    expect(screen.queryByText(/无法确认当前身份/)).not.toBeInTheDocument()
     expect(container.querySelector('.sidebar')).not.toBeInTheDocument()
     expect(fetchSpy).toHaveBeenCalledOnce()
     expect(fetchSpy).toHaveBeenCalledWith(

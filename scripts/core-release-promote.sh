@@ -5,6 +5,7 @@ IFS=$'\n\t'
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 DOCKER_BIN=${DOCKER_BIN:-docker}
 GH_BIN=${GH_BIN:-gh}
+CORE_RELEASE_SERIES=$(sh "$ROOT/scripts/core-release-series.sh")
 
 fail() {
 	echo "core release promotion: $*" >&2
@@ -19,8 +20,14 @@ maybe_fail() {
 }
 
 require_common() {
+	local release_major_minor
 	[[ ${TAG:-} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'TAG must be vX.Y.Z'
 	[[ ${VERSION:-} == "${TAG#v}" ]] || fail 'VERSION must match TAG'
+	[[ $CORE_RELEASE_SERIES =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+		fail 'scripts/core-release-series.sh must print a major.minor pair'
+	release_major_minor=${VERSION%.*}
+	[[ $release_major_minor == "$CORE_RELEASE_SERIES" ]] ||
+		fail "Core releases are pinned to v${CORE_RELEASE_SERIES}.x until the user explicitly approves a new minor line"
 	[[ ${IMAGE:-} == */* ]] || fail 'IMAGE must be a registry repository'
 }
 
@@ -336,7 +343,8 @@ highest_stable_tag() {
 		printf '%s\n' "$CORE_RELEASE_HIGHEST_TAG"
 		return
 	fi
-	git tag --list 'v*.*.*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1
+	git tag --list "v${CORE_RELEASE_SERIES}.*" --sort=-version:refname |
+		grep -E "^v${CORE_RELEASE_SERIES//./\\.}\.[0-9]+$" | head -n 1
 }
 
 promote_channels() {

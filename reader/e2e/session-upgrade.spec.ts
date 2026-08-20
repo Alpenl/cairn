@@ -24,6 +24,34 @@ test.afterEach(async ({ request }) => {
   await request.get('/__test__/reset')
 })
 
+test('expired saved session opens reconnect setup instead of a fatal identity error', async ({
+  context,
+  page,
+}) => {
+  await page.goto('/__test__/blank')
+  await control(page, '/__test__/reset')
+  await control(page, '/__test__/legacy-session-upgrade')
+  await context.clearCookies()
+  await page.evaluate(() => {
+    localStorage.setItem(
+      'webtag:reader:conn:v2',
+      JSON.stringify({
+        baseURL: window.location.origin,
+        mode: 'session',
+        installationToken: '',
+      }),
+    )
+  })
+
+  await page.goto('/reader/')
+
+  await expect(page.getByLabel('后端地址')).toHaveValue(new URL(page.url()).origin)
+  await expect(page.getByLabel('安装令牌')).toHaveValue('')
+  await expect(page.getByText('无法确认当前身份：unauthorized')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '取消' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '保存并进入' })).toBeVisible()
+})
+
 test('historical token upgrades to same-identity HttpOnly session and survives refresh', async ({
   context,
   page,

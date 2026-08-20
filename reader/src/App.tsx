@@ -40,6 +40,7 @@ import {
 } from './lib/settings'
 import { negotiateLegacySessionUpgrade } from './lib/legacy-session-upgrade'
 import type { CapabilitiesResponse } from './lib/api/types'
+import type { ApiError } from './lib/api/result'
 
 type Probe =
   | { phase: 'pending' }
@@ -48,7 +49,7 @@ type Probe =
 type IdentityGate =
   | { phase: 'idle' }
   | { phase: 'pending'; connectionKey: string }
-  | { phase: 'error'; connectionKey: string; message: string }
+  | { phase: 'error'; connectionKey: string; error: ApiError }
   | {
       phase: 'legacy'
       connectionKey: string
@@ -161,7 +162,7 @@ export default function App() {
     void temporaryClient.getIdentity(handshakeController.signal).then(async (result) => {
       if (cancelled) return
       if (!result.ok) {
-        setIdentity({ phase: 'error', connectionKey, message: result.error.message })
+        setIdentity({ phase: 'error', connectionKey, error: result.error })
         return
       }
 
@@ -176,7 +177,7 @@ export default function App() {
         )
         if (cancelled) return
         if (upgrade.kind === 'error') {
-          setIdentity({ phase: 'error', connectionKey, message: upgrade.error.message })
+          setIdentity({ phase: 'error', connectionKey, error: upgrade.error })
           return
         }
         if (upgrade.kind === 'session') {
@@ -191,7 +192,10 @@ export default function App() {
             setIdentity({
               phase: 'error',
               connectionKey,
-              message: error instanceof Error ? error.message : String(error),
+              error: {
+                kind: 'other',
+                message: error instanceof Error ? error.message : String(error),
+              },
             })
           }
           return
@@ -209,7 +213,10 @@ export default function App() {
           setIdentity({
             phase: 'error',
             connectionKey,
-            message: error instanceof Error ? error.message : String(error),
+            error: {
+              kind: 'other',
+              message: error instanceof Error ? error.message : String(error),
+            },
           })
         }
         return
@@ -350,7 +357,8 @@ export default function App() {
 
   if (!configured && probe.phase === 'pending') return null
 
-  if (!configured || editing) {
+  const reconnecting = identity.phase === 'error' && identity.error.kind === 'unauthorized'
+  if (!configured || editing || reconnecting) {
     return (
       <ConnectionSetup
         detectedBaseURL={probe.phase === 'done' ? probe.detectedBaseURL : undefined}
@@ -358,7 +366,7 @@ export default function App() {
           await save(c)
           setEditing(false)
         }}
-        onCancel={configured ? () => setEditing(false) : undefined}
+        onCancel={configured && !reconnecting ? () => setEditing(false) : undefined}
       />
     )
   }
@@ -373,7 +381,7 @@ export default function App() {
   if (identity.phase === 'error') {
     return (
       <div role="alert">
-        <p>无法确认当前身份：{identity.message}</p>
+        <p>无法确认当前身份：{identity.error.message}</p>
         <button type="button" onClick={() => setIdentityAttempt((attempt) => attempt + 1)}>
           重试
         </button>

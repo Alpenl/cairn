@@ -56,6 +56,12 @@ jobs:
           }
 
           version="${GITHUB_REF_NAME#v}"
+          release_series="$(sh scripts/core-release-series.sh)"
+          release_major_minor="${version%.*}"
+          [ "$release_major_minor" = "$release_series" ] || {
+            echo "::error::Core releases are pinned to v${release_series}.x until the user explicitly approves a new minor line"
+            exit 1
+          }
           commit="$(git rev-parse HEAD)"
           tag_commit="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
           [ "$commit" = "$tag_commit" ] || {
