@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -146,4 +148,98 @@ func TestTheAllowListIsExactAndCopied(t *testing.T) {
 	if releasetrust.AllowedDownloadHosts()[0] == "attacker.example" {
 		t.Fatal("the allow-list is mutable by its callers")
 	}
+}
+
+func TestLatestTagUsesTheJSONAPIAndStaysInTheCurrentPatchSeries(t *testing.T) {
+	requests := 0
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		if request.URL.Path != "/repos/Alpenl/cairn/releases" {
+			t.Errorf("discovery path = %q, want the release collection", request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if request.Header.Get("Accept") != "application/vnd.github+json" {
+			writer.WriteHeader(http.StatusUnsupportedMediaType)
+			return
+		}
+		if request.Header.Get("X-GitHub-Api-Version") != githubAPIVersion {
+			t.Errorf("GitHub API version = %q, want %q", request.Header.Get("X-GitHub-Api-Version"), githubAPIVersion)
+		}
+		if request.URL.Query().Get("per_page") != strconv.Itoa(releasesPerPage) {
+			t.Errorf("per_page = %q, want %d", request.URL.Query().Get("per_page"), releasesPerPage)
+		}
+
+		page, err := strconv.Atoi(request.URL.Query().Get("page"))
+		if err != nil {
+			t.Errorf("invalid page query: %v", err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		releases := make([]map[string]any, 0, releasesPerPage)
+		switch page {
+		case 1:
+			for index := range releasesPerPage {
+				releases = append(releases, map[string]any{
+					"tag_name":   "android/v0.1." + strconv.Itoa(index),
+					"draft":      false,
+					"prerelease": false,
+				})
+			}
+			releases[0] = map[string]any{"tag_name": "v0.1.16", "draft": false, "prerelease": false}
+			releases[1] = map[string]any{"tag_name": "v0.2.0", "draft": false, "prerelease": false}
+			releases[2] = map[string]any{"tag_name": "v0.1.99", "draft": true, "prerelease": false}
+			releases[3] = map[string]any{"tag_name": "v0.1.98", "draft": false, "prerelease": true}
+		case 2:
+			releases = append(releases,
+				map[string]any{"tag_name": "extension/v0.9.0", "draft": false, "prerelease": false},
+				map[string]any{"tag_name": "v0.1.17", "draft": false, "prerelease": false},
+			)
+		default:
+			t.Errorf("unexpected discovery page %d", page)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(writer).Encode(releases); err != nil {
+			t.Errorf("encode releases: %v", err)
+		}
+	}))
+	defer api.Close()
+
+	base, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatalf("parse test API URL: %v", err)
+	}
+	downloader := NewDownloader(Repository)
+	downloader.client.Transport = &rewriteTransport{host: base.Host}
+
+	tag, err := downloader.LatestTag(context.Background(), "v0.1.15")
+	if err != nil {
+		t.Fatalf("discover latest tag: %v", err)
+	}
+	if tag != "v0.1.17" {
+		t.Fatalf("latest tag = %q, want v0.1.17", tag)
+	}
+	if requests != 2 {
+		t.Fatalf("discovery requests = %d, want 2 pages", requests)
+	}
+}
+
+func TestLatestTagRejectsAnInvalidCurrentReleaseBeforeNetworkAccess(t *testing.T) {
+	downloader := NewDownloader(Repository)
+	downloader.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("an invalid current release must fail before network access")
+		return nil, nil
+	})
+
+	for _, current := range []string{"0.1.15", "v0.1", "v0.1.15-rc1", "v00.1.15", "v0.0.0"} {
+		if _, err := downloader.LatestTag(context.Background(), current); err == nil {
+			t.Fatalf("current release %q was accepted", current)
+		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
 }

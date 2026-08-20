@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -129,23 +130,25 @@ func (server *Server) currentIdentity(ctx context.Context) CoreIdentity {
 
 func (server *Server) handleCheckUpdates(writer http.ResponseWriter, request *http.Request) {
 	force := strings.EqualFold(strings.TrimSpace(request.URL.Query().Get("force")), "true")
+	current := server.currentIdentity(request.Context())
 	if !force {
-		if cached := server.cachedCheck(); cached != nil {
-			cached.Current = server.currentIdentity(request.Context())
+		if cached := server.cachedCheck(current); cached != nil {
 			server.writeJSON(writer, http.StatusOK, *cached)
 			return
 		}
 	}
-	response := server.check(request.Context())
+	response := server.check(request.Context(), current)
 	server.storeCheck(response)
-	response.Current = server.currentIdentity(request.Context())
 	server.writeJSON(writer, http.StatusOK, response)
 }
 
-func (server *Server) cachedCheck() *CheckUpdatesResponse {
+func (server *Server) cachedCheck(current CoreIdentity) *CheckUpdatesResponse {
 	server.cacheMu.Lock()
 	defer server.cacheMu.Unlock()
 	if server.cached == nil || server.now().Sub(server.cachedAt) > checkCacheTTL {
+		return nil
+	}
+	if server.cached.Current != current {
 		return nil
 	}
 	snapshot := *server.cached
@@ -161,22 +164,35 @@ func (server *Server) storeCheck(response CheckUpdatesResponse) {
 	server.cachedAt = server.now()
 }
 
-// check discovers the newest release and verifies its manifest.
+// check discovers the highest patch in the current series and verifies it.
 //
 // Discovery and verification are one step on purpose. Returning a candidate the
 // helper has not verified would put a tag and a commit on the confirmation
 // screen that nothing had vouched for, and the operator's confirmation is
 // supposed to be a confirmation of verified facts.
-func (server *Server) check(ctx context.Context) CheckUpdatesResponse {
-	response := CheckUpdatesResponse{SchemaVersion: APISchemaVersion, CheckedAt: server.now()}
+func (server *Server) check(ctx context.Context, current CoreIdentity) CheckUpdatesResponse {
+	response := CheckUpdatesResponse{
+		SchemaVersion: APISchemaVersion,
+		CheckedAt:     server.now(),
+		Current:       current,
+	}
+	currentRelease, err := currentReleaseFromIdentity(current)
+	if err != nil {
+		response.DiscoveryError = err.Error()
+		response.DisabledReason = server.activeJobDisabledReason()
+		if response.DisabledReason == "" {
+			response.DisabledReason = "the running Core release series could not be confirmed"
+		}
+		return response
+	}
 
 	discoverCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
 	defer cancel()
 
-	tag, err := server.downloader.LatestTag(discoverCtx)
+	tag, err := server.downloader.LatestTag(discoverCtx, currentRelease.tag)
 	if err != nil {
 		response.DiscoveryError = err.Error()
-		response.DisabledReason = "the newest release could not be discovered"
+		response.DisabledReason = "the newest Core patch in the current release series could not be discovered"
 		return response
 	}
 	signed, err := server.downloader.FetchSignedManifest(discoverCtx, tag)
@@ -196,26 +212,75 @@ func (server *Server) check(ctx context.Context) CheckUpdatesResponse {
 	})
 	if err != nil {
 		response.DiscoveryError = err.Error()
-		response.DisabledReason = "the newest release did not verify against the compiled-in trust root"
+		response.DisabledReason = "the newest Core patch did not verify against the compiled-in trust root"
 		return response
 	}
 	candidate := newCandidate(verified, digestHex(signed.ManifestBytes))
 	response.Candidate = &candidate
+	candidateRelease, err := parseReleaseTag(tag)
+	if err != nil {
+		response.DiscoveryError = err.Error()
+		response.DisabledReason = "the verified candidate version could not be compared with the running Core"
+		response.Candidate = nil
+		return response
+	}
+	if candidateRelease.patch < currentRelease.patch {
+		response.DiscoveryError = fmt.Sprintf(
+			"the running Core %s is newer than the highest discoverable release %s in its patch series",
+			currentRelease.tag, candidateRelease.tag,
+		)
+		response.DisabledReason = "the running Core identity could not be reconciled with published releases"
+		response.Candidate = nil
+		return response
+	}
+	if candidateRelease.patch == currentRelease.patch {
+		if verified.Manifest.Commit != current.Commit {
+			response.DisabledReason = "the running Core commit does not match the signed release for its reported version"
+		}
+		return response
+	}
 	response.UpdateAvailable = true
 	response.CanUpdate, response.DisabledReason = server.updatability(verified)
 	return response
+}
+
+func currentReleaseFromIdentity(identity CoreIdentity) (releaseVersion, error) {
+	if !identity.Reachable {
+		if identity.Error != "" {
+			return releaseVersion{}, fmt.Errorf("the running Core is unreachable: %s", identity.Error)
+		}
+		return releaseVersion{}, errors.New("the running Core is unreachable")
+	}
+	version, err := releaseTagFromCoreVersion(identity.Version)
+	if err != nil {
+		return releaseVersion{}, err
+	}
+	if !fullCommitPattern.MatchString(identity.Commit) {
+		return releaseVersion{}, fmt.Errorf("running Core commit %q is not a full lowercase Git commit", identity.Commit)
+	}
+	if _, err := time.Parse(time.RFC3339, identity.BuildTime); err != nil {
+		return releaseVersion{}, fmt.Errorf("running Core build time %q is not RFC3339: %w", identity.BuildTime, err)
+	}
+	return version, nil
 }
 
 func (server *Server) updatability(verified *releasetrust.VerifiedRelease) (bool, string) {
 	if !verified.Manifest.OnlineUpdateCompatible {
 		return false, verified.Manifest.OnlineUpdateReason
 	}
-	if active := server.store.Active(); active != nil && !active.terminal() {
-		return false, "another update is already in progress"
-	} else if active != nil && active.State == JobHold {
-		return false, "a previous update is holding and must be resolved by hand first"
+	if reason := server.activeJobDisabledReason(); reason != "" {
+		return false, reason
 	}
 	return true, ""
+}
+
+func (server *Server) activeJobDisabledReason() string {
+	if active := server.store.Active(); active != nil && !active.terminal() {
+		return "another update is already in progress"
+	} else if active != nil && active.State == JobHold {
+		return "a previous update is holding and must be resolved by hand first"
+	}
+	return ""
 }
 
 func newCandidate(verified *releasetrust.VerifiedRelease, manifestDigest string) Candidate {

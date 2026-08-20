@@ -131,7 +131,7 @@ func TestCheckUpdatesRefusesANonFormalDiscoveryAnswer(t *testing.T) {
 	// A repository that answered with a branch or a prerelease must not turn
 	// into an install candidate.
 	for _, latest := range []string{"main", "v1.2.3-rc1", "latest", "v1.2"} {
-		host.assets.latest = latest
+		host.assets.releases = []releaseListing{{TagName: latest}}
 		response := host.request(http.MethodGet, "/api/deploy/system/check-updates?force=true", "", testDeployToken)
 		var payload CheckUpdatesResponse
 		decodeBody(t, response, &payload)
@@ -141,6 +141,101 @@ func TestCheckUpdatesRefusesANonFormalDiscoveryAnswer(t *testing.T) {
 		if payload.CanUpdate {
 			t.Fatalf("discovery answer %q was updatable", latest)
 		}
+	}
+}
+
+func TestCheckUpdatesFailsClosedBeforeDiscoveryWithoutAFormalCurrentIdentity(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*host)
+	}{
+		{
+			name: "Core unreachable",
+			mutate: func(host *host) {
+				host.writeControl("service.state", "inactive")
+			},
+		},
+		{
+			name: "placeholder version",
+			mutate: func(host *host) {
+				host.writeControl("health.version", "0.0.0")
+			},
+		},
+		{
+			name: "non-release version",
+			mutate: func(host *host) {
+				host.writeControl("health.version", "dev")
+			},
+		},
+		{
+			name: "non-release commit",
+			mutate: func(host *host) {
+				host.writeControl("health.commit", "unknown")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			host := newHost(t)
+			test.mutate(host)
+			before := len(host.assets.requests)
+
+			response := host.request(http.MethodGet, "/api/deploy/system/check-updates?force=true", "", testDeployToken)
+			var payload CheckUpdatesResponse
+			decodeBody(t, response, &payload)
+
+			if payload.Candidate != nil || payload.CanUpdate || payload.UpdateAvailable {
+				t.Fatalf("an unconfirmed current identity produced an update: %+v", payload)
+			}
+			if payload.DiscoveryError == "" || payload.DisabledReason == "" {
+				t.Fatalf("an unconfirmed current identity must explain the refusal: %+v", payload)
+			}
+			if len(host.assets.requests) != before {
+				t.Fatal("GitHub must not be queried before the current release series is confirmed")
+			}
+		})
+	}
+}
+
+func TestCheckUpdatesDoesNotOfferTheAlreadyInstalledRelease(t *testing.T) {
+	host := newHost(t)
+	host.writeControl("health.version", fixtureVersion)
+	host.writeControl("health.commit", fixtureCommit)
+
+	response := host.request(http.MethodGet, "/api/deploy/system/check-updates?force=true", "", testDeployToken)
+	var payload CheckUpdatesResponse
+	decodeBody(t, response, &payload)
+
+	if payload.Candidate == nil || payload.Candidate.Tag != fixtureTag {
+		t.Fatalf("the signed current release should remain visible, got %+v", payload)
+	}
+	if payload.UpdateAvailable || payload.CanUpdate {
+		t.Fatalf("the installed release was offered as an update: %+v", payload)
+	}
+	if payload.DisabledReason != "" || payload.DiscoveryError != "" {
+		t.Fatalf("being current is not an error: %+v", payload)
+	}
+}
+
+func TestCheckUpdatesCacheIsBoundToTheCurrentCoreIdentity(t *testing.T) {
+	host := newHost(t)
+	first := host.request(http.MethodGet, "/api/deploy/system/check-updates", "", testDeployToken)
+	var payload CheckUpdatesResponse
+	decodeBody(t, first, &payload)
+	if payload.Candidate == nil {
+		t.Fatalf("first discovery failed: %+v", payload)
+	}
+	before := len(host.assets.requests)
+
+	host.writeControl("health.version", "1.2.1")
+	second := host.request(http.MethodGet, "/api/deploy/system/check-updates", "", testDeployToken)
+	decodeBody(t, second, &payload)
+	if payload.Cached {
+		t.Fatal("a result selected for a different running Core identity was reused")
+	}
+	if len(host.assets.requests) == before {
+		t.Fatal("changing the running Core identity must trigger fresh discovery")
 	}
 }
 

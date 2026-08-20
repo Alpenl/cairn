@@ -3,7 +3,9 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"regexp"
+	"strconv"
 
 	"webtag/internal/releasetrust"
 )
@@ -17,8 +19,46 @@ import (
 // matched again against the tag inside the signed manifest.
 var formalTagPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
+var fullCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
 // IsFormalTag reports whether target is an exact formal release tag.
 func IsFormalTag(target string) bool { return formalTagPattern.MatchString(target) }
+
+type releaseVersion struct {
+	tag                 string
+	major, minor, patch uint64
+}
+
+func parseReleaseTag(target string) (releaseVersion, error) {
+	groups := formalTagPattern.FindStringSubmatch(target)
+	if groups == nil {
+		return releaseVersion{}, fmt.Errorf("%q is not a formal vX.Y.Z release tag", target)
+	}
+	parts := make([]uint64, 3)
+	for index := range parts {
+		value, err := strconv.ParseUint(groups[index+1], 10, 64)
+		if err != nil {
+			return releaseVersion{}, fmt.Errorf("parse release tag %q: %w", target, err)
+		}
+		parts[index] = value
+	}
+	if parts[0] == 0 && parts[1] == 0 && parts[2] == 0 {
+		return releaseVersion{}, fmt.Errorf("%q is the unversioned build placeholder, not a release", target)
+	}
+	return releaseVersion{tag: target, major: parts[0], minor: parts[1], patch: parts[2]}, nil
+}
+
+func releaseTagFromCoreVersion(version string) (releaseVersion, error) {
+	parsed, err := parseReleaseTag("v" + version)
+	if err != nil {
+		return releaseVersion{}, fmt.Errorf("running Core version %q is not a formal release version: %w", version, err)
+	}
+	return parsed, nil
+}
+
+func (version releaseVersion) sameSeries(other releaseVersion) bool {
+	return version.major == other.major && version.minor == other.minor
+}
 
 // ReleaseTrust is the exact slice of internal/releasetrust the update state
 // machine depends on.

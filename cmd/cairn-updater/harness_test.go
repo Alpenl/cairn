@@ -29,7 +29,10 @@ import (
 // wrong commit — because the failures worth defending against in a deployment
 // helper are exactly the ones a mock cannot express.
 
-const previousCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const (
+	previousVersion = "1.2.2"
+	previousCommit  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+)
 
 type host struct {
 	t          *testing.T
@@ -65,6 +68,7 @@ func newHost(t *testing.T) *host {
 	host.fixture = newReleaseFixture(t, control)
 	host.assets = newAssetServer(t, host.fixture)
 	host.writeControl("service.state", "active")
+	host.writeControl("health.version", previousVersion)
 	host.writeControl("health.commit", previousCommit)
 	host.writeDefaultMigrationReports()
 	host.startHealthServer()
@@ -165,7 +169,8 @@ func (host *host) startHealthServer() {
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(writer, `{"status":"ok","version":%q,"commit":%q,"build_time":%q}`,
-			fixtureVersion, strings.TrimSpace(host.readControl("health.commit")), fixtureBuildTime)
+			strings.TrimSpace(host.readControl("health.version")),
+			strings.TrimSpace(host.readControl("health.commit")), fixtureBuildTime)
 	})
 	mux.HandleFunc("/ready", func(writer http.ResponseWriter, _ *http.Request) {
 		if strings.TrimSpace(host.readControl("service.state")) != "active" || host.readControl("not_ready") != "" {

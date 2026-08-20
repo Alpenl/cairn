@@ -3,20 +3,27 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	"webtag/internal/releasetrust"
 )
 
-// maxMetadataBytes bounds the manifest, the signature, and the discovery
-// response. They are small documents; a multi-gigabyte "manifest" is either a
-// mistake or an attempt to exhaust the helper's memory before any signature has
-// been checked.
-const maxMetadataBytes int64 = 1 << 20
+// The metadata ceilings bound both small signed documents and the larger pages
+// returned by GitHub's release collection. A response without a ceiling could
+// exhaust the helper's memory before any signature has been checked.
+const (
+	maxMetadataBytes    int64 = 1 << 20
+	maxDiscoveryBytes   int64 = 8 << 20
+	releasesPerPage           = 100
+	maxReleasePages           = 100
+	githubAPIVersion          = "2026-03-10"
+	githubJSONMediaType       = "application/vnd.github+json"
+)
 
 // Downloader fetches release assets under the download policy in
 // internal/releasetrust.
@@ -59,6 +66,20 @@ func (downloader *Downloader) Asset(ctx context.Context, tag, assetName string, 
 }
 
 func (downloader *Downloader) get(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
+	return downloader.getWithMediaType(ctx, rawURL, limit, "application/octet-stream", "")
+}
+
+func (downloader *Downloader) getJSON(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
+	return downloader.getWithMediaType(ctx, rawURL, limit, githubJSONMediaType, githubAPIVersion)
+}
+
+func (downloader *Downloader) getWithMediaType(
+	ctx context.Context,
+	rawURL string,
+	limit int64,
+	mediaType string,
+	apiVersion string,
+) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request for %s: %w", rawURL, err)
@@ -68,7 +89,10 @@ func (downloader *Downloader) get(ctx context.Context, rawURL string, limit int6
 	if err := releasetrust.CheckDownloadURL(request.URL); err != nil {
 		return nil, err
 	}
-	request.Header.Set("Accept", "application/octet-stream")
+	request.Header.Set("Accept", mediaType)
+	if apiVersion != "" {
+		request.Header.Set("X-GitHub-Api-Version", apiVersion)
+	}
 	request.Header.Set("User-Agent", "cairn-updater/"+fmt.Sprint(releasetrust.HelperProtocol))
 
 	response, err := downloader.client.Do(request)
@@ -115,35 +139,69 @@ func (downloader *Downloader) FetchSignedManifest(ctx context.Context, tag strin
 	return SignedRelease{ManifestBytes: manifest, SignatureBytes: signature}, nil
 }
 
-// LatestTag asks GitHub which release is newest.
+// LatestTag finds the highest formal Core patch in the current Core series.
 //
-// This is discovery and nothing more. The answer is a suggestion the operator
-// has to confirm as an exact tag; it never becomes an install target on its
-// own. That is why the result is validated against the formal tag pattern here
-// rather than trusted downstream: a repository that answered "main" or
-// "v2.0.0-rc1" gets rejected at the boundary, not somewhere deeper where the
-// value has already been used to build a path.
-func (downloader *Downloader) LatestTag(ctx context.Context) (string, error) {
-	rawURL := "https://" + releasetrust.ReleaseAPIHost + "/repos/" + downloader.repo + "/releases/latest"
-	data, err := downloader.get(ctx, rawURL, maxMetadataBytes)
+// The repository contains releases for several components, and GitHub's
+// repository-level "latest" marker can legitimately point at Android or the
+// extension. Discovery therefore enumerates releases, ignores component tags,
+// drafts and prereleases, and stays in the major/minor series derived from the
+// running Core. A minor or major transition must be performed explicitly.
+func (downloader *Downloader) LatestTag(ctx context.Context, currentTag string) (string, error) {
+	current, err := parseReleaseTag(currentTag)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("select release series: %w", err)
 	}
-	var payload struct {
+
+	type release struct {
 		TagName    string `json:"tag_name"`
 		Draft      bool   `json:"draft"`
 		Prerelease bool   `json:"prerelease"`
 	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", fmt.Errorf("parse release discovery response: %w", err)
+
+	var latest *releaseVersion
+	for page := 1; page <= maxReleasePages; page++ {
+		endpoint := &url.URL{
+			Scheme: "https",
+			Host:   releasetrust.ReleaseAPIHost,
+			Path:   "/repos/" + downloader.repo + "/releases",
+		}
+		query := endpoint.Query()
+		query.Set("per_page", strconv.Itoa(releasesPerPage))
+		query.Set("page", strconv.Itoa(page))
+		endpoint.RawQuery = query.Encode()
+
+		data, err := downloader.getJSON(ctx, endpoint.String(), maxDiscoveryBytes)
+		if err != nil {
+			return "", err
+		}
+		var payload []release
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return "", fmt.Errorf("parse release discovery page %d: %w", page, err)
+		}
+		for _, candidate := range payload {
+			if candidate.Draft || candidate.Prerelease {
+				continue
+			}
+			version, err := parseReleaseTag(candidate.TagName)
+			if err != nil || !version.sameSeries(current) {
+				continue
+			}
+			if latest == nil || version.patch > latest.patch {
+				copy := version
+				latest = &copy
+			}
+		}
+		if len(payload) < releasesPerPage {
+			break
+		}
+		if page == maxReleasePages {
+			return "", fmt.Errorf("release discovery exceeded %d pages", maxReleasePages)
+		}
 	}
-	if payload.Draft || payload.Prerelease {
-		return "", errors.New("the newest release is a draft or prerelease and is not an install target")
+	if latest == nil {
+		return "", fmt.Errorf("no formal Core release was found in the v%d.%d patch series", current.major, current.minor)
 	}
-	if !IsFormalTag(payload.TagName) {
-		return "", fmt.Errorf("release discovery returned %q, which is not a formal vX.Y.Z tag", payload.TagName)
-	}
-	return payload.TagName, nil
+	return latest.tag, nil
 }
 
 // discoveryTimeout bounds the read-only latest-release lookup. It is short: an

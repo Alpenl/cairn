@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -392,20 +393,43 @@ type assetServer struct {
 	server   *httptest.Server
 	assets   map[string][]byte
 	requests []string
-	latest   string
+	releases []releaseListing
 	// failAsset makes one named asset return 500.
 	failAsset string
 }
 
+type releaseListing struct {
+	TagName    string `json:"tag_name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+}
+
 func newAssetServer(t *testing.T, fixture *releaseFixture) *assetServer {
 	t.Helper()
-	assets := &assetServer{assets: map[string][]byte{}, latest: fixture.Manifest.Tag}
+	assets := &assetServer{
+		assets:   map[string][]byte{},
+		releases: []releaseListing{{TagName: fixture.Manifest.Tag}},
+	}
 	assets.publish(fixture)
 	assets.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assets.requests = append(assets.requests, request.URL.Path)
-		if strings.HasSuffix(request.URL.Path, "/releases/latest") {
+		if strings.HasSuffix(request.URL.Path, "/releases") {
+			if request.Header.Get("Accept") != githubJSONMediaType {
+				writer.WriteHeader(http.StatusUnsupportedMediaType)
+				return
+			}
 			writer.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(writer, `{"tag_name":%q,"draft":false,"prerelease":false}`, assets.latest)
+			if request.URL.Query().Get("page") != "1" {
+				_, _ = writer.Write([]byte("[]"))
+				return
+			}
+			if err := json.NewEncoder(writer).Encode(assets.releases); err != nil {
+				t.Errorf("encode release listing: %v", err)
+			}
+			return
+		}
+		if request.Header.Get("Accept") != "application/octet-stream" {
+			writer.WriteHeader(http.StatusUnsupportedMediaType)
 			return
 		}
 		name := request.URL.Path[strings.LastIndexByte(request.URL.Path, '/')+1:]
