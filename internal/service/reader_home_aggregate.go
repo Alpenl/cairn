@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"webtag/internal/dto"
-	"webtag/internal/repository"
+	"webtag/internal/model"
 )
 
 // HomeAggregate is the single service call boundary for the Home surface. The
@@ -14,7 +14,7 @@ import (
 // summary. It deliberately does not reconcile through ListTodos, because that
 // would reopen the multi-read and multi-snapshot behavior this seam replaces.
 func (s *ReaderVNextService) HomeAggregate(ctx context.Context) (dto.ReaderHomeResponse, error) {
-	aggregate, err := s.store.LoadHomeAggregate(ctx)
+	aggregate, err := s.library.LoadHomeAggregate(ctx)
 	if err != nil {
 		return dto.ReaderHomeResponse{}, mapReaderError(err)
 	}
@@ -80,13 +80,13 @@ func homeCount(counts map[string]int, keys ...string) (int, bool) {
 	return 0, false
 }
 
-func homeFreshnessWireState(freshness repository.ReaderHomeFreshness) (string, bool, bool) {
+func homeFreshnessWireState(freshness model.ReaderHomeFreshness) (string, bool, bool) {
 	switch freshness {
-	case repository.ReaderHomeFreshnessFresh:
+	case model.ReaderHomeFreshnessFresh:
 		return dto.ReaderHomeFreshnessFresh, false, false
-	case repository.ReaderHomeFreshnessStale:
+	case model.ReaderHomeFreshnessStale:
 		return dto.ReaderHomeFreshnessStale, false, true
-	case repository.ReaderHomeFreshness(dto.ReaderHomeFreshnessPartial):
+	case model.ReaderHomeFreshnessPartial:
 		return dto.ReaderHomeFreshnessPartial, true, false
 	default:
 		// An absent or future repository state is not evidence of freshness.

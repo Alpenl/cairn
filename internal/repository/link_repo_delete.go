@@ -17,7 +17,7 @@ const lockLinkForDeleteSQL = `SELECT id
 	FOR UPDATE`
 
 const terminalizeDeletedTranslationAttemptsSQL = `UPDATE link_translations
-	SET status='failed',error_msg='link_deleted',current_river_job_id=NULL,updated_at=NOW()
+	SET status='failed',error_msg='link_deleted',updated_at=NOW()
 	WHERE link_id=$1 AND status IN ('pending','processing')`
 
 // DeleteLifecycle serializes soft deletion with requeue/parse state writes in a

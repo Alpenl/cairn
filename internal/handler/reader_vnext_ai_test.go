@@ -16,7 +16,7 @@ import (
 )
 
 type readerAIHandlerStub struct {
-	ReaderService
+	ReaderAggregateRoutes
 	response dto.ReaderAIResponse
 	err      error
 	calls    int
@@ -44,7 +44,7 @@ func TestReaderAIHandlerPreservesMachineReadableErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stub := &readerAIHandlerStub{err: httperr.NewWithCode(tt.status, tt.code, "safe AI error")}
 			router := gin.New()
-			RegisterReaderRoutes(router, stub)
+			RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/api/ai", bytes.NewBufferString(`{"prompt":"question"}`))
@@ -71,7 +71,7 @@ func TestReaderAIHandlerPreservesMachineReadableErrors(t *testing.T) {
 func TestReaderAIHandlerRejectsOversizedPromptBeforeService(t *testing.T) {
 	stub := &readerAIHandlerStub{}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
 	prompt := strings.Repeat("x", 16001)

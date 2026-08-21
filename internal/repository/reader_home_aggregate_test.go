@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
 
+	"webtag/internal/model"
 	"webtag/internal/readertext"
 )
 
@@ -24,12 +25,12 @@ func readerHomeTodoRowForTest(id uuid.UUID, originKind string, done bool, hostRe
 func TestReaderHomeFreshnessHasStableRawStates(t *testing.T) {
 	tests := []struct {
 		name  string
-		state ReaderHomeFreshness
+		state model.ReaderHomeFreshness
 		want  string
 	}{
-		{name: "fresh", state: ReaderHomeFreshnessFresh, want: "fresh"},
-		{name: "partial", state: ReaderHomeFreshnessPartial, want: "partial"},
-		{name: "stale", state: ReaderHomeFreshnessStale, want: "stale"},
+		{name: "fresh", state: model.ReaderHomeFreshnessFresh, want: "fresh"},
+		{name: "partial", state: model.ReaderHomeFreshnessPartial, want: "partial"},
+		{name: "stale", state: model.ReaderHomeFreshnessStale, want: "stale"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -119,8 +120,8 @@ func TestLoadHomeAggregateReadsOneReadOnlySnapshot(t *testing.T) {
 	if aggregate.Counts["pending"] != 2 || aggregate.Counts["todos"] != 1 || aggregate.Counts["unread"] != 8 {
 		t.Fatalf("Counts = %#v", aggregate.Counts)
 	}
-	if aggregate.Freshness != ReaderHomeFreshnessFresh {
-		t.Fatalf("Freshness = %q, want %q", aggregate.Freshness, ReaderHomeFreshnessFresh)
+	if aggregate.Freshness != model.ReaderHomeFreshnessFresh {
+		t.Fatalf("Freshness = %q, want %q", aggregate.Freshness, model.ReaderHomeFreshnessFresh)
 	}
 	if aggregate.Counts["inbox"] != 2 || aggregate.Counts["inbox_expired"] != 3 || aggregate.Counts["links"] != 7 || aggregate.Counts["subscriptions"] != 4 {
 		t.Fatalf("compatibility count aliases = %#v", aggregate.Counts)

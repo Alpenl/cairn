@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -18,9 +17,9 @@ import (
 	"golang.org/x/text/cases"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
 	"webtag/internal/notetitle"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -32,7 +31,12 @@ type ReaderAIBackend interface {
 }
 
 type ReaderVNextService struct {
-	store             repository.ReaderVNextStore
+	thoughts          ReaderThoughtStore
+	notes             ReaderNoteStore
+	inbox             ReaderInboxStore
+	todos             ReaderTodoStore
+	library           ReaderLibraryStore
+	hosts             ReaderHostStore
 	ai                ReaderAIBackend
 	inboxCommands     InboxProposalCommands
 	now               func() time.Time
@@ -44,7 +48,7 @@ type ReaderVNextServiceOptions struct {
 	InboxProposalCommands InboxProposalCommands
 }
 
-func NewReaderVNextService(store repository.ReaderVNextStore, ai ReaderAIBackend, options ...ReaderVNextServiceOptions) *ReaderVNextService {
+func NewReaderVNextService(stores ReaderStores, ai ReaderAIBackend, options ...ReaderVNextServiceOptions) *ReaderVNextService {
 	cursorKey := processReaderCursorKey
 	var configured ReaderVNextServiceOptions
 	if len(options) > 0 {
@@ -54,7 +58,12 @@ func NewReaderVNextService(store repository.ReaderVNextStore, ai ReaderAIBackend
 		cursorKey = []byte(configured.CursorSigningKey)
 	}
 	return &ReaderVNextService{
-		store:             store,
+		thoughts:          stores.Thoughts,
+		notes:             stores.Notes,
+		inbox:             stores.Inbox,
+		todos:             stores.Todos,
+		library:           stores.Library,
+		hosts:             stores.Hosts,
 		ai:                ai,
 		inboxCommands:     configured.InboxProposalCommands,
 		now:               time.Now,
@@ -65,7 +74,7 @@ func NewReaderVNextService(store repository.ReaderVNextStore, ai ReaderAIBackend
 func readerUUID(raw, field string) (uuid.UUID, error) {
 	id, err := uuid.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return uuid.Nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_"+field, field+" must be a UUID")
+		return uuid.Nil, problem.NewWithCode(problem.Invalid, "invalid_"+field, field+" must be a UUID")
 	}
 	return id, nil
 }
@@ -76,52 +85,52 @@ func parseReaderInboxPartition(raw string, defaultActive bool) (model.ReaderInbo
 		return model.ReaderInboxPartitionActive, nil
 	}
 	if !partition.Valid() {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_inbox_partition", "partition must be active or expired")
+		return "", problem.NewWithCode(problem.Invalid, "invalid_inbox_partition", "partition must be active or expired")
 	}
 	return partition, nil
 }
 
-// readerErrorMapping binds a set of repository sentinels to one HTTP shape.
+// readerErrorMapping binds repository sentinels to one public problem.
 // Several sentinels may share an entry when they describe the same client-facing
 // fault.
 type readerErrorMapping struct {
 	targets []error
-	status  int
+	kind    problem.Kind
 	code    string
 	message string
 }
 
 // readerErrorMappings is scanned top to bottom, so the slice order is the
-// contract: an error wrapping more than one sentinel keeps the HTTP shape of the
+// contract: an error wrapping more than one sentinel keeps the classification of the
 // earliest entry it matches. Reordering entries is a behaviour change, not a
 // cosmetic one.
 var readerErrorMappings = []readerErrorMapping{
-	{targets: []error{repository.ErrNotFound}, status: http.StatusNotFound, code: "reader_not_found", message: "reader resource not found"},
-	{targets: []error{repository.ErrReaderThoughtReattachInvalidState}, status: http.StatusConflict, code: "thought_reattach_invalid_state", message: "thought is not a historical tombstone that can be reattached"},
-	{targets: []error{repository.ErrReaderHostNotTrashed}, status: http.StatusConflict, code: "host_not_trashed", message: "reader host must be trashed before permanent purge"},
-	{targets: []error{repository.ErrReaderTodoHostRevisionNotApplicable}, status: http.StatusUnprocessableEntity, code: "todo_host_revision_not_applicable", message: "expected_host_revision is not applicable to standalone TODOs"},
-	{targets: []error{repository.ErrRevisionConflict}, status: http.StatusConflict, code: httperr.CodeRevisionConflict, message: "resource revision is stale"},
-	{targets: []error{repository.ErrInvalidReaderHostKind}, status: http.StatusUnprocessableEntity, code: "invalid_host_kind", message: "host_kind must be link, inbox, or note"},
-	{targets: []error{repository.ErrInvalidReaderCursor}, status: http.StatusUnprocessableEntity, code: httperr.CodeInvalidCursor, message: "invalid cursor"},
-	{targets: []error{repository.ErrInvalidReaderReanchor}, status: http.StatusUnprocessableEntity, code: "invalid_reanchor_ops", message: "invalid reanchor operations"},
-	{targets: []error{repository.ErrReaderNoteContentEmpty}, status: http.StatusUnprocessableEntity, code: "note_content_empty", message: "note content must not be empty"},
-	{targets: []error{repository.ErrReaderNoteDraftDirty}, status: http.StatusConflict, code: "note_draft_dirty", message: "note draft has unpublished changes"},
-	{targets: []error{repository.ErrReaderNoteReanchorIncomplete}, status: http.StatusUnprocessableEntity, code: "note_reanchor_incomplete", message: "reanchor operations must exactly match active note thoughts"},
-	{targets: []error{repository.ErrInvalidReaderFeedItem}, status: http.StatusUnprocessableEntity, code: "invalid_feed_item", message: "invalid feed item"},
-	{targets: []error{repository.ErrReaderTodoProjectionImmutable}, status: http.StatusUnprocessableEntity, code: "todo_projection_immutable", message: "projected TODO text and due date are source-owned"},
-	{targets: []error{repository.ErrReaderTodoHostMissing}, status: http.StatusConflict, code: "todo_host_missing", message: "the TODO source is no longer available"},
-	{targets: []error{repository.ErrReaderTodoAnchorNotFound}, status: http.StatusConflict, code: "todo_anchor_not_found", message: "the TODO source block is no longer available"},
-	{targets: []error{repository.ErrReaderTodoAnchorAmbiguous}, status: http.StatusConflict, code: "todo_anchor_ambiguous", message: "the TODO source block is ambiguous"},
-	{targets: []error{repository.ErrReaderThoughtOpConflict}, status: http.StatusConflict, code: "thought_op_conflict", message: "the operation id was already used with different content"},
-	{targets: []error{repository.ErrReaderThoughtRecoveryConflict}, status: http.StatusConflict, code: "thought_recovery_conflict", message: "the current thought winner changed before recovery"},
-	{targets: []error{repository.ErrReaderThoughtClockExhausted}, status: http.StatusConflict, code: "thought_clock_exhausted", message: "the thought logical clock is exhausted"},
-	{targets: []error{repository.ErrReaderThoughtClockInvalid}, status: http.StatusUnprocessableEntity, code: "invalid_thought_clock", message: "the thought logical clock is invalid"},
-	{targets: []error{repository.ErrReaderThoughtLinkMismatch, repository.ErrInvalidReaderThought}, status: http.StatusUnprocessableEntity, code: "invalid_thought", message: "thought host and payload are inconsistent"},
-	{targets: []error{repository.ErrReaderInboxTitleRequired}, status: http.StatusUnprocessableEntity, code: "inbox_title_required", message: "inbox title must not be blank when confirming"},
-	{targets: []error{repository.ErrReaderInboxStateConflict}, status: http.StatusConflict, code: "inbox_state_conflict", message: "the inbox item is in a state that cannot accept this transition"},
+	{targets: []error{repository.ErrNotFound}, kind: problem.NotFound, code: "reader_not_found", message: "reader resource not found"},
+	{targets: []error{repository.ErrReaderThoughtReattachInvalidState}, kind: problem.Conflict, code: "thought_reattach_invalid_state", message: "thought is not a historical tombstone that can be reattached"},
+	{targets: []error{repository.ErrReaderHostNotTrashed}, kind: problem.Conflict, code: "host_not_trashed", message: "reader host must be trashed before permanent purge"},
+	{targets: []error{repository.ErrReaderTodoHostRevisionNotApplicable}, kind: problem.Invalid, code: "todo_host_revision_not_applicable", message: "expected_host_revision is not applicable to standalone TODOs"},
+	{targets: []error{repository.ErrRevisionConflict}, kind: problem.Conflict, code: problem.CodeRevisionConflict, message: "resource revision is stale"},
+	{targets: []error{repository.ErrInvalidReaderHostKind}, kind: problem.Invalid, code: "invalid_host_kind", message: "host_kind must be link, inbox, or note"},
+	{targets: []error{repository.ErrInvalidReaderCursor}, kind: problem.Invalid, code: problem.CodeInvalidCursor, message: "invalid cursor"},
+	{targets: []error{repository.ErrInvalidReaderReanchor}, kind: problem.Invalid, code: "invalid_reanchor_ops", message: "invalid reanchor operations"},
+	{targets: []error{repository.ErrReaderNoteContentEmpty}, kind: problem.Invalid, code: "note_content_empty", message: "note content must not be empty"},
+	{targets: []error{repository.ErrReaderNoteDraftDirty}, kind: problem.Conflict, code: "note_draft_dirty", message: "note draft has unpublished changes"},
+	{targets: []error{repository.ErrReaderNoteReanchorIncomplete}, kind: problem.Invalid, code: "note_reanchor_incomplete", message: "reanchor operations must exactly match active note thoughts"},
+	{targets: []error{repository.ErrInvalidReaderFeedItem}, kind: problem.Invalid, code: "invalid_feed_item", message: "invalid feed item"},
+	{targets: []error{repository.ErrReaderTodoProjectionImmutable}, kind: problem.Invalid, code: "todo_projection_immutable", message: "projected TODO text and due date are source-owned"},
+	{targets: []error{repository.ErrReaderTodoHostMissing}, kind: problem.Conflict, code: "todo_host_missing", message: "the TODO source is no longer available"},
+	{targets: []error{repository.ErrReaderTodoAnchorNotFound}, kind: problem.Conflict, code: "todo_anchor_not_found", message: "the TODO source block is no longer available"},
+	{targets: []error{repository.ErrReaderTodoAnchorAmbiguous}, kind: problem.Conflict, code: "todo_anchor_ambiguous", message: "the TODO source block is ambiguous"},
+	{targets: []error{repository.ErrReaderThoughtOpConflict}, kind: problem.Conflict, code: "thought_op_conflict", message: "the operation id was already used with different content"},
+	{targets: []error{repository.ErrReaderThoughtRecoveryConflict}, kind: problem.Conflict, code: "thought_recovery_conflict", message: "the current thought winner changed before recovery"},
+	{targets: []error{repository.ErrReaderThoughtClockExhausted}, kind: problem.Conflict, code: "thought_clock_exhausted", message: "the thought logical clock is exhausted"},
+	{targets: []error{repository.ErrReaderThoughtClockInvalid}, kind: problem.Invalid, code: "invalid_thought_clock", message: "the thought logical clock is invalid"},
+	{targets: []error{repository.ErrReaderThoughtLinkMismatch, repository.ErrInvalidReaderThought}, kind: problem.Invalid, code: "invalid_thought", message: "thought host and payload are inconsistent"},
+	{targets: []error{repository.ErrReaderInboxTitleRequired}, kind: problem.Invalid, code: "inbox_title_required", message: "inbox title must not be blank when confirming"},
+	{targets: []error{repository.ErrReaderInboxStateConflict}, kind: problem.Conflict, code: "inbox_state_conflict", message: "the inbox item is in a state that cannot accept this transition"},
 }
 
-// mapReaderError translates repository sentinels into HTTP errors. Anything the
+// mapReaderError translates repository sentinels into public problems. Anything the
 // table does not recognise is returned untouched so callers never lose an
 // unexpected cause.
 func mapReaderError(err error) error {
@@ -131,7 +140,7 @@ func mapReaderError(err error) error {
 	for _, mapping := range readerErrorMappings {
 		for _, target := range mapping.targets {
 			if errors.Is(err, target) {
-				return httperr.NewWithCode(mapping.status, mapping.code, mapping.message)
+				return problem.NewWithCode(mapping.kind, mapping.code, mapping.message)
 			}
 		}
 	}
@@ -140,7 +149,7 @@ func mapReaderError(err error) error {
 
 func (s *ReaderVNextService) PushThoughtOps(ctx context.Context, request dto.ReaderThoughtOpsRequest) ([]dto.ReaderThoughtAckResponse, error) {
 	if len(request.Ops) == 0 || len(request.Ops) > 200 {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_ops", "thought operation batch must contain between 1 and 200 operations")
+		return nil, problem.NewWithCode(problem.Invalid, "invalid_thought_ops", "thought operation batch must contain between 1 and 200 operations")
 	}
 	ops := make([]model.ReaderThoughtOp, 0, len(request.Ops))
 	for _, input := range request.Ops {
@@ -161,7 +170,7 @@ func (s *ReaderVNextService) PushThoughtOps(ctx context.Context, request dto.Rea
 			CreatedAt:         s.now(),
 		})
 	}
-	acks, err := s.store.AppendThoughtOps(ctx, ops)
+	acks, err := s.thoughts.AppendThoughtOps(ctx, ops)
 	if err != nil {
 		return nil, mapReaderError(err)
 	}
@@ -184,7 +193,7 @@ func (s *ReaderVNextService) PushThoughtOps(ctx context.Context, request dto.Rea
 func validateThoughtBoundedField(value string, max int, message string) error {
 	if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) ||
 		!utf8.ValidString(value) || strings.ContainsRune(value, '\x00') || len(value) > max {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_op", message)
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_op", message)
 	}
 	return nil
 }
@@ -215,7 +224,7 @@ func validateThoughtEnvelope(input dto.ReaderThoughtOpRequest) error {
 		return err
 	}
 	if !json.Valid(input.Target) || !json.Valid(input.Payload) {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_payload", "thought target and payload must be JSON")
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought target and payload must be JSON")
 	}
 	return nil
 }
@@ -237,21 +246,21 @@ func validateThoughtEnvelopeFields(fields []thoughtEnvelopeField) error {
 
 func validateThoughtContractVersion(contractVersion int) error {
 	if contractVersion != model.ReaderThoughtContractVersion {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "unsupported_thought_contract", "unsupported thought contract_version")
+		return problem.NewWithCode(problem.Invalid, "unsupported_thought_contract", "unsupported thought contract_version")
 	}
 	return nil
 }
 
 func validateThoughtLogicalClock(logicalClock int64) error {
 	if logicalClock < 1 || logicalClock > model.ReaderThoughtMaxLogicalClock {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_clock", "logical_clock must be a safe positive integer")
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_clock", "logical_clock must be a safe positive integer")
 	}
 	return nil
 }
 
 func validateThoughtOperationKind(operationKind string) error {
 	if operationKind != "add" && operationKind != "update" && operationKind != "delete" {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_op", "unsupported thought operation")
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_op", "unsupported thought operation")
 	}
 	return nil
 }
@@ -272,30 +281,30 @@ type readerThoughtTargetWire struct {
 func readerThoughtTarget(input dto.ReaderThoughtOpRequest) (readerThoughtTargetWire, error) {
 	var target readerThoughtTargetWire
 	if err := json.Unmarshal(input.Target, &target); err != nil {
-		return readerThoughtTargetWire{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "thought target must be an object")
+		return readerThoughtTargetWire{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "thought target must be an object")
 	}
 	if strings.TrimSpace(target.HostID) == "" || target.HostID != input.HostID {
-		return readerThoughtTargetWire{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "thought target host_id must match host_id")
+		return readerThoughtTargetWire{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "thought target host_id must match host_id")
 	}
 	switch target.Kind {
 	case "saved-content":
 		if target.Version.ContentRevision <= 0 {
-			return readerThoughtTargetWire{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "saved-content target requires content_revision")
+			return readerThoughtTargetWire{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "saved-content target requires content_revision")
 		}
 	case "summary":
 		if strings.TrimSpace(target.Version.SourceHash) == "" {
-			return readerThoughtTargetWire{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "summary target requires source_hash")
+			return readerThoughtTargetWire{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "summary target requires source_hash")
 		}
 	case "note":
 		if target.Version.NoteRevision <= 0 {
-			return readerThoughtTargetWire{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "note target requires note_revision")
+			return readerThoughtTargetWire{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "note target requires note_revision")
 		}
 	case "inbox":
 		if target.Version.MetadataRevision <= 0 {
-			return readerThoughtTargetWire{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "inbox target requires metadata_revision")
+			return readerThoughtTargetWire{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "inbox target requires metadata_revision")
 		}
 	default:
-		return readerThoughtTargetWire{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "unsupported thought target kind")
+		return readerThoughtTargetWire{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "unsupported thought target kind")
 	}
 	return target, nil
 }
@@ -306,7 +315,7 @@ func validateThoughtTarget(input dto.ReaderThoughtOpRequest) error {
 }
 
 func invalidThoughtReattachPayload() error {
-	return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_payload", "reattach operation payload is invalid")
+	return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "reattach operation payload is invalid")
 }
 
 func thoughtReattachTargetMatches(input dto.ReaderThoughtOpRequest, target readerThoughtTargetWire, revision int64) bool {
@@ -364,7 +373,7 @@ func readerThoughtReattachOperation(input dto.ReaderThoughtOpRequest) (*model.Re
 		return nil, err
 	}
 	if !thoughtReattachTargetMatches(input, target, command.ExpectedHostRevision) {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "reattach target must match the destination host revision")
+		return nil, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "reattach target must match the destination host revision")
 	}
 	return &command, nil
 }
@@ -384,16 +393,16 @@ func validateThoughtPayload(input dto.ReaderThoughtOpRequest) error {
 		Quote json.RawMessage `json:"quote"`
 	}
 	if err := json.Unmarshal(input.Payload, &payload); err != nil {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_payload", "thought payload must be an object")
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought payload must be an object")
 	}
 	if len(payload.Quote) == 0 {
 		if input.OperationKind == "delete" {
 			return nil
 		}
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_payload", "thought payload requires a JSON quote")
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought payload requires a JSON quote")
 	}
 	if !json.Valid(payload.Quote) {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_payload", "thought payload quote must be valid JSON")
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought payload quote must be valid JSON")
 	}
 	return nil
 }
@@ -427,13 +436,13 @@ func validateThoughtRecovery(input dto.ReaderThoughtOpRequest) error {
 		return nil
 	}
 	if input.RecoveryOf == nil || input.ExpectedCurrentWinnerKey == nil {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_recovery", "recovery_of and expected_current_winner_key must appear together")
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_recovery", "recovery_of and expected_current_winner_key must appear together")
 	}
 	for _, key := range []*dto.ReaderThoughtVersionKeyResponse{input.RecoveryOf, input.ExpectedCurrentWinnerKey} {
 		if key.LogicalClock < 0 || key.LogicalClock > model.ReaderThoughtMaxLogicalClock ||
 			validateThoughtBoundedField(key.DeviceID, 128, "thought recovery device_id is invalid") != nil ||
 			validateThoughtBoundedField(key.OpID, 128, "thought recovery op_id is invalid") != nil {
-			return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_recovery", "thought recovery keys are invalid")
+			return problem.NewWithCode(problem.Invalid, "invalid_thought_recovery", "thought recovery keys are invalid")
 		}
 	}
 	return nil
@@ -444,9 +453,9 @@ func (s *ReaderVNextService) ListThoughts(ctx context.Context, query, after stri
 	// content_text 上的 ILIKE 全表模式匹配，不设上限时一个几 KB 的
 	// %_%_%_… 就能打满一个核。
 	if len([]rune(query)) > maxListQueryLen {
-		return dto.ReaderThoughtsResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeQueryTooLong, "search query too long")
+		return dto.ReaderThoughtsResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeQueryTooLong, "search query too long")
 	}
-	items, next, err := s.store.ListThoughts(ctx, query, after, limit)
+	items, next, err := s.thoughts.ListThoughts(ctx, query, after, limit)
 	if err != nil {
 		return dto.ReaderThoughtsResponse{}, mapReaderError(err)
 	}
@@ -458,7 +467,7 @@ func (s *ReaderVNextService) ListThoughts(ctx context.Context, query, after stri
 }
 
 func (s *ReaderVNextService) ListThoughtHistory(ctx context.Context, after string, limit int) (dto.ReaderThoughtsResponse, error) {
-	items, next, err := s.store.ListThoughtHistory(ctx, after, limit)
+	items, next, err := s.thoughts.ListThoughtHistory(ctx, after, limit)
 	if err != nil {
 		return dto.ReaderThoughtsResponse{}, mapReaderError(err)
 	}
@@ -470,7 +479,7 @@ func (s *ReaderVNextService) ListThoughtHistory(ctx context.Context, after strin
 }
 
 func (s *ReaderVNextService) SyncThoughts(ctx context.Context, after string, limit int) (dto.ReaderThoughtsResponse, error) {
-	items, next, err := s.store.ListThoughtsSince(ctx, after, limit)
+	items, next, err := s.thoughts.ListThoughtsSince(ctx, after, limit)
 	if err != nil {
 		return dto.ReaderThoughtsResponse{}, mapReaderError(err)
 	}
@@ -482,7 +491,7 @@ func (s *ReaderVNextService) SyncThoughts(ctx context.Context, after string, lim
 }
 
 func (s *ReaderVNextService) ListThoughtConflicts(ctx context.Context, after string, limit int) (dto.ReaderThoughtConflictsResponse, error) {
-	items, next, err := s.store.ListThoughtConflicts(ctx, after, limit)
+	items, next, err := s.thoughts.ListThoughtConflicts(ctx, after, limit)
 	if err != nil {
 		return dto.ReaderThoughtConflictsResponse{}, mapReaderError(err)
 	}
@@ -523,7 +532,7 @@ func thoughtConflictOperationResponse(item model.ReaderThoughtConflictOperation)
 }
 
 func (s *ReaderVNextService) GetThought(ctx context.Context, rawID string) (dto.ReaderThoughtResponse, error) {
-	item, err := s.store.GetThought(ctx, rawID)
+	item, err := s.thoughts.GetThought(ctx, rawID)
 	if err != nil {
 		return dto.ReaderThoughtResponse{}, mapReaderError(err)
 	}
@@ -564,7 +573,7 @@ func (s *ReaderVNextService) CreateNote(ctx context.Context, request dto.ReaderN
 	if request.Content != "" {
 		note.DraftContent = &request.Content
 	}
-	created, err := s.store.CreateNote(ctx, note)
+	created, err := s.notes.CreateNote(ctx, note)
 	if err != nil {
 		return dto.ReaderNoteResponse{}, mapReaderError(err)
 	}
@@ -572,7 +581,7 @@ func (s *ReaderVNextService) CreateNote(ctx context.Context, request dto.ReaderN
 }
 
 func (s *ReaderVNextService) ListNotes(ctx context.Context, after string, limit int) (dto.ReaderNotesResponse, error) {
-	items, count, next, err := s.store.ListNotes(ctx, after, limit)
+	items, count, next, err := s.notes.ListNotes(ctx, after, limit)
 	if err != nil {
 		return dto.ReaderNotesResponse{}, mapReaderError(err)
 	}
@@ -588,7 +597,7 @@ func (s *ReaderVNextService) GetNote(ctx context.Context, rawID string) (dto.Rea
 	if err != nil {
 		return dto.ReaderNoteResponse{}, err
 	}
-	note, err := s.store.GetNote(ctx, id)
+	note, err := s.notes.GetNote(ctx, id)
 	if err != nil {
 		return dto.ReaderNoteResponse{}, mapReaderError(err)
 	}
@@ -605,7 +614,7 @@ func (s *ReaderVNextService) SaveNoteDraft(ctx context.Context, rawID string, re
 	if err != nil {
 		return dto.ReaderNoteResponse{}, err
 	}
-	note, err := s.store.SaveNoteDraft(ctx, model.ReaderNoteDraftCommand{NoteID: id, Content: request.Content, ExpectedDraftRevision: request.ExpectedDraftRevision})
+	note, err := s.notes.SaveNoteDraft(ctx, model.ReaderNoteDraftCommand{NoteID: id, Content: request.Content, ExpectedDraftRevision: request.ExpectedDraftRevision})
 	if err != nil {
 		return dto.ReaderNoteResponse{}, mapReaderError(err)
 	}
@@ -618,9 +627,9 @@ func (s *ReaderVNextService) DiscardNoteDraft(ctx context.Context, rawID string,
 		return err
 	}
 	if expectedRevision < 1 {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_draft_revision", "draft revision must be positive")
+		return problem.NewWithCode(problem.Invalid, "invalid_draft_revision", "draft revision must be positive")
 	}
-	return mapReaderError(s.store.DiscardNoteDraft(ctx, model.ReaderNoteDiscardDraftCommand{NoteID: id, ExpectedDraftRevision: expectedRevision}))
+	return mapReaderError(s.notes.DiscardNoteDraft(ctx, model.ReaderNoteDiscardDraftCommand{NoteID: id, ExpectedDraftRevision: expectedRevision}))
 }
 
 func (s *ReaderVNextService) PublishNote(ctx context.Context, rawID string, request dto.ReaderNotePublishRequest) (dto.ReaderNoteResponse, error) {
@@ -629,12 +638,12 @@ func (s *ReaderVNextService) PublishNote(ctx context.Context, rawID string, requ
 		return dto.ReaderNoteResponse{}, err
 	}
 	if request.ExpectedDraftRevision == nil || request.ExpectedPublishedRevision == nil {
-		return dto.ReaderNoteResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "note_revision_required", "draft and published revisions are required")
+		return dto.ReaderNoteResponse{}, problem.NewWithCode(problem.Invalid, "note_revision_required", "draft and published revisions are required")
 	}
 	if err := validateReaderReanchorOps(request.ReanchorOps); err != nil {
 		return dto.ReaderNoteResponse{}, err
 	}
-	note, err := s.store.PublishNote(ctx, model.ReaderNotePublishCommand{NoteID: id, ExpectedDraftRevision: *request.ExpectedDraftRevision, ExpectedPublishedRevision: *request.ExpectedPublishedRevision, ReanchorOps: request.ReanchorOps})
+	note, err := s.notes.PublishNote(ctx, model.ReaderNotePublishCommand{NoteID: id, ExpectedDraftRevision: *request.ExpectedDraftRevision, ExpectedPublishedRevision: *request.ExpectedPublishedRevision, ReanchorOps: request.ReanchorOps})
 	if err != nil {
 		return dto.ReaderNoteResponse{}, mapReaderError(err)
 	}
@@ -643,15 +652,15 @@ func (s *ReaderVNextService) PublishNote(ctx context.Context, rawID string, requ
 
 func validateReaderReanchorOps(ops []json.RawMessage) error {
 	if len(ops) > 500 {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_reanchor_ops", "too many reanchor operations")
+		return problem.NewWithCode(problem.Invalid, "invalid_reanchor_ops", "too many reanchor operations")
 	}
 	for _, raw := range ops {
 		if len(raw) == 0 || len(raw) > 128*1024 || !json.Valid(raw) {
-			return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_reanchor_ops", "reanchor operation must be valid bounded JSON")
+			return problem.NewWithCode(problem.Invalid, "invalid_reanchor_ops", "reanchor operation must be valid bounded JSON")
 		}
 		var object map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &object); err != nil || object == nil {
-			return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_reanchor_ops", "reanchor operation must be a JSON object")
+			return problem.NewWithCode(problem.Invalid, "invalid_reanchor_ops", "reanchor operation must be a JSON object")
 		}
 	}
 	return nil
@@ -662,7 +671,7 @@ func (s *ReaderVNextService) DeleteNote(ctx context.Context, rawID string) (dto.
 	if err != nil {
 		return dto.ReaderHostLifecycleResponse{}, err
 	}
-	result, err := s.store.SoftDeleteHost(ctx, model.ReaderHostNote, id)
+	result, err := s.hosts.SoftDeleteHost(ctx, model.ReaderHostNote, id)
 	if err != nil {
 		return dto.ReaderHostLifecycleResponse{}, mapReaderError(err)
 	}
@@ -674,7 +683,7 @@ func (s *ReaderVNextService) RestoreNote(ctx context.Context, rawID string) (dto
 	if err != nil {
 		return dto.ReaderHostLifecycleResponse{}, err
 	}
-	result, err := s.store.RestoreHost(ctx, model.ReaderHostNote, id)
+	result, err := s.hosts.RestoreHost(ctx, model.ReaderHostNote, id)
 	if err != nil {
 		return dto.ReaderHostLifecycleResponse{}, mapReaderError(err)
 	}
@@ -686,7 +695,7 @@ func (s *ReaderVNextService) ListNoteHistory(ctx context.Context, rawID string, 
 	if err != nil {
 		return nil, err
 	}
-	items, err := s.store.ListNoteHistory(ctx, id, limit)
+	items, err := s.notes.ListNoteHistory(ctx, id, limit)
 	if err != nil {
 		return nil, mapReaderError(err)
 	}
@@ -703,12 +712,12 @@ func (s *ReaderVNextService) RestoreNoteRevision(ctx context.Context, rawID stri
 		return dto.ReaderNoteResponse{}, err
 	}
 	if request.ExpectedDraftRevision == nil || request.ExpectedPublishedRevision == nil {
-		return dto.ReaderNoteResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "note_revision_required", "draft and published revisions are required")
+		return dto.ReaderNoteResponse{}, problem.NewWithCode(problem.Invalid, "note_revision_required", "draft and published revisions are required")
 	}
 	if err := validateReaderReanchorOps(request.ReanchorOps); err != nil {
 		return dto.ReaderNoteResponse{}, err
 	}
-	note, err := s.store.RestoreNoteRevision(ctx, model.ReaderNoteRestoreCommand{NoteID: id, Revision: revision, ExpectedDraftRevision: *request.ExpectedDraftRevision, ExpectedPublishedRevision: *request.ExpectedPublishedRevision, ReanchorOps: request.ReanchorOps})
+	note, err := s.notes.RestoreNoteRevision(ctx, model.ReaderNoteRestoreCommand{NoteID: id, Revision: revision, ExpectedDraftRevision: *request.ExpectedDraftRevision, ExpectedPublishedRevision: *request.ExpectedPublishedRevision, ReanchorOps: request.ReanchorOps})
 	if err != nil {
 		return dto.ReaderNoteResponse{}, mapReaderError(err)
 	}
@@ -749,7 +758,7 @@ func (s *ReaderVNextService) ListInbox(ctx context.Context, rawPartition, after 
 	if err != nil {
 		return dto.ReaderInboxResponsePage{}, err
 	}
-	items, activeCount, expiredCount, next, err := s.store.ListInbox(ctx, partition, after, limit)
+	items, activeCount, expiredCount, next, err := s.inbox.ListInbox(ctx, partition, after, limit)
 	if err != nil {
 		return dto.ReaderInboxResponsePage{}, mapReaderError(err)
 	}
@@ -792,7 +801,7 @@ func (s *ReaderVNextService) GetInbox(ctx context.Context, rawID string) (dto.Re
 	if err != nil {
 		return dto.ReaderInboxResponse{}, err
 	}
-	item, err := s.store.GetInbox(ctx, id)
+	item, err := s.inbox.GetInbox(ctx, id)
 	if err != nil {
 		return dto.ReaderInboxResponse{}, mapReaderError(err)
 	}
@@ -808,7 +817,7 @@ func (s *ReaderVNextService) PatchInbox(ctx context.Context, rawID string, reque
 	if err != nil {
 		return dto.ReaderInboxResponse{}, err
 	}
-	item, err := s.store.PatchInbox(ctx, model.ReaderInboxPatch{ID: id, Title: request.Title, Body: request.Body, Note: request.Note, Summary: request.Summary, Tags: request.Tags, ExpectedRevision: expected})
+	item, err := s.inbox.PatchInbox(ctx, model.ReaderInboxPatch{ID: id, Title: request.Title, Body: request.Body, Note: request.Note, Summary: request.Summary, Tags: request.Tags, ExpectedRevision: expected})
 	if err != nil {
 		return dto.ReaderInboxResponse{}, mapReaderError(err)
 	}
@@ -820,12 +829,12 @@ func (s *ReaderVNextService) ConfirmInbox(ctx context.Context, rawID string, exp
 	if err != nil {
 		return nil, err
 	}
-	item, err := s.store.GetInbox(ctx, id)
+	item, err := s.inbox.GetInbox(ctx, id)
 	if err != nil {
 		return nil, mapReaderError(err)
 	}
 	if item.Title == nil || strings.TrimSpace(*item.Title) == "" {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "inbox_title_required", "inbox title must not be blank when confirming")
+		return nil, problem.NewWithCode(problem.Invalid, "inbox_title_required", "inbox title must not be blank when confirming")
 	}
 	if expectedRevision >= 0 && item.MetadataRevision != expectedRevision {
 		return nil, mapReaderError(repository.ErrRevisionConflict)
@@ -834,7 +843,7 @@ func (s *ReaderVNextService) ConfirmInbox(ctx context.Context, rawID string, exp
 	if expectedRevision >= 0 {
 		expected = &expectedRevision
 	}
-	linkID, err := s.store.ConfirmInbox(ctx, id, expected)
+	linkID, err := s.inbox.ConfirmInbox(ctx, id, expected)
 	if err != nil {
 		return nil, mapReaderError(err)
 	}
@@ -846,7 +855,7 @@ func (s *ReaderVNextService) DiscardInbox(ctx context.Context, rawID string) err
 	if err != nil {
 		return err
 	}
-	return mapReaderError(s.store.DiscardInbox(ctx, id))
+	return mapReaderError(s.inbox.DiscardInbox(ctx, id))
 }
 
 // RestoreInbox is an Inbox-specific lifecycle command because an expired live
@@ -857,7 +866,7 @@ func (s *ReaderVNextService) RestoreInbox(ctx context.Context, rawID string) err
 	if err != nil {
 		return err
 	}
-	return mapReaderError(s.store.RestoreInbox(ctx, id))
+	return mapReaderError(s.inbox.RestoreInbox(ctx, id))
 }
 
 // ConfirmAIProposals confirms the next stable server-selected set of completed
@@ -868,7 +877,7 @@ func (s *ReaderVNextService) ConfirmAIProposals(ctx context.Context, rawPartitio
 	if err != nil {
 		return dto.ReaderInboxConfirmAIProposalsResponse{}, err
 	}
-	confirmation, err := s.store.ConfirmAIProposals(ctx, partition)
+	confirmation, err := s.inbox.ConfirmAIProposals(ctx, partition)
 	if err != nil {
 		return dto.ReaderInboxConfirmAIProposalsResponse{}, mapReaderError(err)
 	}
@@ -900,7 +909,7 @@ func (s *ReaderVNextService) RestoreHost(ctx context.Context, rawKind, rawID str
 	if err != nil {
 		return dto.ReaderHostLifecycleResponse{}, err
 	}
-	result, err := s.store.RestoreHost(ctx, kind, id)
+	result, err := s.hosts.RestoreHost(ctx, kind, id)
 	if err != nil {
 		return dto.ReaderHostLifecycleResponse{}, mapReaderError(err)
 	}
@@ -920,7 +929,7 @@ func (s *ReaderVNextService) PurgeHost(ctx context.Context, rawKind, rawID strin
 	if err != nil {
 		return err
 	}
-	return mapReaderError(s.store.PurgeHost(ctx, kind, id, operationID))
+	return mapReaderError(s.hosts.PurgeHost(ctx, kind, id, operationID))
 }
 
 func (s *ReaderVNextService) ListTrash(ctx context.Context, rawKind, after string, limit int) (dto.ReaderTrashResponse, error) {
@@ -932,7 +941,7 @@ func (s *ReaderVNextService) ListTrash(ctx context.Context, rawKind, after strin
 		}
 		kind = &parsed
 	}
-	items, count, next, err := s.store.ListTrash(ctx, kind, after, limit)
+	items, count, next, err := s.hosts.ListTrash(ctx, kind, after, limit)
 	if err != nil {
 		return dto.ReaderTrashResponse{}, mapReaderError(err)
 	}
@@ -961,7 +970,7 @@ func readerHostLifecycleResponse(result model.ReaderHostLifecycleResult) dto.Rea
 
 func parseReaderInboxBulkIDs(rawIDs []string) ([]uuid.UUID, error) {
 	if len(rawIDs) == 0 || len(rawIDs) > 100 {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_inbox_batch", "inbox batch must contain between 1 and 100 ids")
+		return nil, problem.NewWithCode(problem.Invalid, "invalid_inbox_batch", "inbox batch must contain between 1 and 100 ids")
 	}
 	ids := make([]uuid.UUID, 0, len(rawIDs))
 	seen := make(map[uuid.UUID]struct{}, len(rawIDs))
@@ -977,7 +986,7 @@ func parseReaderInboxBulkIDs(rawIDs []string) ([]uuid.UUID, error) {
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_inbox_batch", "inbox batch must contain at least one unique id")
+		return nil, problem.NewWithCode(problem.Invalid, "invalid_inbox_batch", "inbox batch must contain at least one unique id")
 	}
 	return ids, nil
 }
@@ -994,12 +1003,12 @@ func (s *ReaderVNextService) ConfirmInboxBulk(ctx context.Context, rawIDs []stri
 	for rawID, revision := range rawExpectedRevisions {
 		id, parseErr := readerUUID(rawID, "expected_revision inbox_id")
 		if parseErr != nil || revision < 0 {
-			return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_inbox_batch_revision", "expected revisions must use requested inbox ids and non-negative revisions")
+			return nil, problem.NewWithCode(problem.Invalid, "invalid_inbox_batch_revision", "expected revisions must use requested inbox ids and non-negative revisions")
 		}
 		expectedRevisions[id] = revision
 	}
 	if len(expectedRevisions) > 0 && len(expectedRevisions) != len(ids) {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_inbox_batch_revision", "expected revisions must cover every requested inbox id")
+		return nil, problem.NewWithCode(problem.Invalid, "invalid_inbox_batch_revision", "expected revisions must cover every requested inbox id")
 	}
 	confirmations := make([]model.ReaderInboxBulkConfirmation, 0, len(ids))
 	for _, id := range ids {
@@ -1007,14 +1016,14 @@ func (s *ReaderVNextService) ConfirmInboxBulk(ctx context.Context, rawIDs []stri
 		if len(expectedRevisions) > 0 {
 			revision, ok := expectedRevisions[id]
 			if !ok {
-				return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_inbox_batch_revision", "expected revisions must cover every requested inbox id")
+				return nil, problem.NewWithCode(problem.Invalid, "invalid_inbox_batch_revision", "expected revisions must cover every requested inbox id")
 			}
 			revisionCopy := revision
 			expectedRevision = &revisionCopy
 		}
 		confirmations = append(confirmations, model.ReaderInboxBulkConfirmation{ID: id, ExpectedRevision: expectedRevision})
 	}
-	items, err := s.store.BulkConfirmInbox(ctx, confirmations)
+	items, err := s.inbox.BulkConfirmInbox(ctx, confirmations)
 	if err != nil {
 		return nil, mapReaderError(err)
 	}
@@ -1029,7 +1038,7 @@ func (s *ReaderVNextService) DiscardInboxBulk(ctx context.Context, rawIDs []stri
 	if err != nil {
 		return nil, err
 	}
-	items, err := s.store.BulkDiscardInbox(ctx, ids)
+	items, err := s.inbox.BulkDiscardInbox(ctx, ids)
 	if err != nil {
 		return nil, mapReaderError(err)
 	}
@@ -1039,9 +1048,9 @@ func (s *ReaderVNextService) DiscardInboxBulk(ctx context.Context, rawIDs []stri
 func (s *ReaderVNextService) CreateTodo(ctx context.Context, request dto.ReaderTodoCreateRequest) (dto.ReaderTodoResponse, error) {
 	text := strings.TrimSpace(request.Text)
 	if text == "" {
-		return dto.ReaderTodoResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "todo_text_required", "todo text is required")
+		return dto.ReaderTodoResponse{}, problem.NewWithCode(problem.Invalid, "todo_text_required", "todo text is required")
 	}
-	todo, err := s.store.CreateTodo(ctx, model.ReaderTodo{Text: text, DueAt: request.DueAt, OriginKind: "standalone"})
+	todo, err := s.todos.CreateTodo(ctx, model.ReaderTodo{Text: text, DueAt: request.DueAt, OriginKind: "standalone"})
 	if err != nil {
 		return dto.ReaderTodoResponse{}, mapReaderError(err)
 	}
@@ -1054,7 +1063,7 @@ func (s *ReaderVNextService) CreateTodo(ctx context.Context, request dto.ReaderT
 // Thought and Note commands now maintain the projection as they commit, so the
 // stored rows are already the answer.
 func (s *ReaderVNextService) ListTodos(ctx context.Context, after string, limit int) (dto.ReaderTodosResponse, error) {
-	page, err := s.store.ListTodos(ctx, after, limit)
+	page, err := s.todos.ListTodos(ctx, after, limit)
 	if err != nil {
 		return dto.ReaderTodosResponse{}, mapReaderError(err)
 	}
@@ -1108,7 +1117,7 @@ func (s *ReaderVNextService) PatchTodo(ctx context.Context, rawID string, reques
 	if err != nil {
 		return dto.ReaderTodoResponse{}, err
 	}
-	item, err := s.store.PatchTodo(ctx, model.ReaderTodoPatch{
+	item, err := s.todos.PatchTodo(ctx, model.ReaderTodoPatch{
 		ID:                      id,
 		Text:                    request.Text,
 		DueAt:                   request.DueAt,
@@ -1128,7 +1137,7 @@ func (s *ReaderVNextService) DeleteTodo(ctx context.Context, rawID string) error
 	if err != nil {
 		return err
 	}
-	return mapReaderError(s.store.DeleteTodo(ctx, id))
+	return mapReaderError(s.todos.DeleteTodo(ctx, id))
 }
 
 func (s *ReaderVNextService) GetEngagement(ctx context.Context, rawID string) (dto.ReaderEngagementResponse, error) {
@@ -1136,7 +1145,7 @@ func (s *ReaderVNextService) GetEngagement(ctx context.Context, rawID string) (d
 	if err != nil {
 		return dto.ReaderEngagementResponse{}, err
 	}
-	item, err := s.store.GetEngagement(ctx, id)
+	item, err := s.library.GetEngagement(ctx, id)
 	if err != nil {
 		return dto.ReaderEngagementResponse{}, mapReaderError(err)
 	}
@@ -1149,12 +1158,12 @@ func (s *ReaderVNextService) PatchEngagement(ctx context.Context, rawID string, 
 		return dto.ReaderEngagementResponse{}, err
 	}
 	if request.Read == nil && request.Progress == nil && request.ReadLater == nil {
-		return dto.ReaderEngagementResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "engagement_patch_empty", "at least one engagement field is required")
+		return dto.ReaderEngagementResponse{}, problem.NewWithCode(problem.Invalid, "engagement_patch_empty", "at least one engagement field is required")
 	}
 	if request.Progress != nil && (math.IsNaN(float64(*request.Progress)) || math.IsInf(float64(*request.Progress), 0) || *request.Progress < 0 || *request.Progress > 1) {
-		return dto.ReaderEngagementResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_progress", "progress must be between 0 and 1")
+		return dto.ReaderEngagementResponse{}, problem.NewWithCode(problem.Invalid, "invalid_progress", "progress must be between 0 and 1")
 	}
-	item, err := s.store.PatchEngagement(ctx, model.ReaderEngagementPatch{LinkID: id, Read: request.Read, Progress: request.Progress, ReadLater: request.ReadLater})
+	item, err := s.library.PatchEngagement(ctx, model.ReaderEngagementPatch{LinkID: id, Read: request.Read, Progress: request.Progress, ReadLater: request.ReadLater})
 	if err != nil {
 		return dto.ReaderEngagementResponse{}, mapReaderError(err)
 	}
@@ -1176,11 +1185,11 @@ func readerFeedActionIdentityForKey(itemKey string) (readerFeedActionIdentity, e
 	itemKey = strings.TrimSpace(itemKey)
 	kind, rawID, ok := strings.Cut(itemKey, ":")
 	if !ok || strings.TrimSpace(rawID) == "" {
-		return readerFeedActionIdentity{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "feed item key must use a canonical source prefix and UUID")
+		return readerFeedActionIdentity{}, problem.NewWithCode(problem.Invalid, "invalid_feed_item", "feed item key must use a canonical source prefix and UUID")
 	}
 	id, err := uuid.Parse(rawID)
 	if err != nil || itemKey != kind+":"+id.String() {
-		return readerFeedActionIdentity{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "feed item key must use a canonical source prefix and UUID")
+		return readerFeedActionIdentity{}, problem.NewWithCode(problem.Invalid, "invalid_feed_item", "feed item key must use a canonical source prefix and UUID")
 	}
 	var source string
 	switch kind {
@@ -1191,7 +1200,7 @@ func readerFeedActionIdentityForKey(itemKey string) (readerFeedActionIdentity, e
 	case "subscription":
 		source = "subscription"
 	default:
-		return readerFeedActionIdentity{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "feed item key must use a canonical source prefix and UUID")
+		return readerFeedActionIdentity{}, problem.NewWithCode(problem.Invalid, "invalid_feed_item", "feed item key must use a canonical source prefix and UUID")
 	}
 	return readerFeedActionIdentity{key: itemKey, kind: kind, source: source, id: id}, nil
 }
@@ -1235,12 +1244,12 @@ func (s *ReaderVNextService) FeedWithSources(ctx context.Context, mode, after st
 	if err != nil {
 		return dto.ReaderFeedResponse{}, err
 	}
-	page, err := s.store.ListFeedWithSources(ctx, mode, after, normalizedSources, limit)
+	page, err := s.library.ListFeedWithSources(ctx, mode, after, normalizedSources, limit)
 	if err != nil {
 		return dto.ReaderFeedResponse{}, mapReaderError(err)
 	}
 	if page == nil {
-		return dto.ReaderFeedResponse{}, httperr.NewWithCode(http.StatusInternalServerError, "reader_feed_unavailable", "reader feed returned no page")
+		return dto.ReaderFeedResponse{}, problem.NewWithCode(problem.Internal, "reader_feed_unavailable", "reader feed returned no page")
 	}
 	responseMode := strings.TrimSpace(page.Mode)
 	if responseMode == "" {
@@ -1250,7 +1259,7 @@ func (s *ReaderVNextService) FeedWithSources(ctx context.Context, mode, after st
 		}
 	}
 	if responseMode != "recommended" && responseMode != "chronological" {
-		return dto.ReaderFeedResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_mode", "unsupported feed mode")
+		return dto.ReaderFeedResponse{}, problem.NewWithCode(problem.Invalid, "invalid_feed_mode", "unsupported feed mode")
 	}
 	out := dto.ReaderFeedResponse{
 		Items:      make([]dto.ReaderFeedItemResponse, 0, len(page.Items)),
@@ -1265,7 +1274,7 @@ func (s *ReaderVNextService) FeedWithSources(ctx context.Context, mode, after st
 
 func validateReaderFeedRequestMode(mode string) error {
 	if mode != "" && mode != "recommended" && mode != "chronological" {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_mode", "unsupported feed mode")
+		return problem.NewWithCode(problem.Invalid, "invalid_feed_mode", "unsupported feed mode")
 	}
 	return nil
 }
@@ -1288,7 +1297,7 @@ func normalizeReaderFeedSources(raw []string) ([]string, error) {
 				source = "inbox"
 			case "reading", "inbox", "subscription":
 			default:
-				return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_source", "unsupported feed source")
+				return nil, problem.NewWithCode(problem.Invalid, "invalid_feed_source", "unsupported feed source")
 			}
 			seen[source] = struct{}{}
 		}
@@ -1310,12 +1319,12 @@ func (s *ReaderVNextService) FeedbackFeed(ctx context.Context, itemKey, action s
 		return dto.ReaderFeedFeedbackResponse{}, err
 	}
 	if action != "hide" && action != "save" && action != "unsave" {
-		return dto.ReaderFeedFeedbackResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_action", "unsupported feed action")
+		return dto.ReaderFeedFeedbackResponse{}, problem.NewWithCode(problem.Invalid, "invalid_feed_action", "unsupported feed action")
 	}
 	if identity.source != "subscription" && (action == "save" || action == "unsave") {
-		return dto.ReaderFeedFeedbackResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "only subscription items can be saved")
+		return dto.ReaderFeedFeedbackResponse{}, problem.NewWithCode(problem.Invalid, "invalid_feed_item", "only subscription items can be saved")
 	}
-	feedback, err := s.store.FeedbackFeed(ctx, identity.key, action)
+	feedback, err := s.library.FeedbackFeed(ctx, identity.key, action)
 	if err = mapReaderError(err); err != nil {
 		return dto.ReaderFeedFeedbackResponse{}, err
 	}
@@ -1340,7 +1349,7 @@ func (s *ReaderVNextService) RelatedTags(ctx context.Context, rawLinkID string, 
 		}
 		linkID = &id
 	}
-	items, err := s.store.RelatedTags(ctx, linkID, limit)
+	items, err := s.library.RelatedTags(ctx, linkID, limit)
 	if err != nil {
 		return dto.ReaderRelatedTagsResponse{}, mapReaderError(err)
 	}
@@ -1359,7 +1368,7 @@ func (s *ReaderVNextService) Activity(ctx context.Context, rawKind, rawAfter str
 	if limit <= 0 || limit > 100 {
 		limit = 100
 	}
-	page, err := s.store.ListActivity(ctx, model.ReaderActivityQuery{Kind: kind, After: after, Limit: limit})
+	page, err := s.library.ListActivity(ctx, model.ReaderActivityQuery{Kind: kind, After: after, Limit: limit})
 	if err != nil {
 		return dto.ReaderActivityResponse{}, mapReaderError(err)
 	}
@@ -1392,20 +1401,20 @@ func (s *ReaderVNextService) PatchLinkMetadata(ctx context.Context, rawID string
 		return dto.ReaderLinkMetadataResponse{}, err
 	}
 	if !request.Complete() {
-		return dto.ReaderLinkMetadataResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeMetadataFieldsRequired, "title, summary, and tags are required")
+		return dto.ReaderLinkMetadataResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeMetadataFieldsRequired, "title, summary, and tags are required")
 	}
 	if err := validateLinkMetadataRequest(&request); err != nil {
 		return dto.ReaderLinkMetadataResponse{}, err
 	}
-	update, err := s.store.UpdateLinkMetadata(ctx, model.ReaderLinkMetadataPatch{LinkID: id, Title: request.Title, Summary: request.Summary, Tags: request.Tags, ExpectedRevision: expected})
+	update, err := s.library.UpdateLinkMetadata(ctx, model.ReaderLinkMetadataPatch{LinkID: id, Title: request.Title, Summary: request.Summary, Tags: request.Tags, ExpectedRevision: expected})
 	if err != nil {
 		if errors.Is(err, repository.ErrRevisionConflict) {
-			return dto.ReaderLinkMetadataResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeMetadataRevisionConflict, "link metadata revision is stale")
+			return dto.ReaderLinkMetadataResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeMetadataRevisionConflict, "link metadata revision is stale")
 		}
 		return dto.ReaderLinkMetadataResponse{}, mapReaderError(err)
 	}
 	if update.MetadataRevision < 1 || update.MetadataRevision > model.LinkMetadataMaxRevision {
-		return dto.ReaderLinkMetadataResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeMetadataRevisionConflict, "link metadata revision is outside the JavaScript-safe range")
+		return dto.ReaderLinkMetadataResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeMetadataRevisionConflict, "link metadata revision is outside the JavaScript-safe range")
 	}
 	return dto.ReaderLinkMetadataResponse{LinkID: id.String(), MetadataRevision: update.MetadataRevision}, nil
 }
@@ -1419,16 +1428,16 @@ const (
 
 func validateLinkMetadataRequest(request *dto.ReaderLinkMetadataRequest) error {
 	if request.Title != nil && utf8.RuneCountInString(*request.Title) > maxLinkMetadataTitleRunes {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidLinkMetadata, "title exceeds 512 characters")
+		return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "title exceeds 512 characters")
 	}
 	if request.Summary != nil && utf8.RuneCountInString(*request.Summary) > maxLinkMetadataSummaryRunes {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidLinkMetadata, "summary exceeds 4096 characters")
+		return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "summary exceeds 4096 characters")
 	}
 	if request.Tags == nil {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidLinkMetadata, "tags must be an array")
+		return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "tags must be an array")
 	}
 	if len(request.Tags) > maxLinkMetadataTags {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidLinkMetadata, "tags may contain at most 50 items")
+		return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "tags may contain at most 50 items")
 	}
 
 	folder := cases.Fold()
@@ -1437,10 +1446,10 @@ func validateLinkMetadataRequest(request *dto.ReaderLinkMetadataRequest) error {
 	for _, raw := range request.Tags {
 		tag := strings.TrimSpace(raw)
 		if tag == "" {
-			return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidLinkMetadata, "tags must not contain empty values")
+			return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "tags must not contain empty values")
 		}
 		if utf8.RuneCountInString(tag) > maxLinkMetadataTagRunes {
-			return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidLinkMetadata, "tags may not exceed 64 characters")
+			return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "tags may not exceed 64 characters")
 		}
 		key := folder.String(tag)
 		if _, exists := seen[key]; exists {
@@ -1458,18 +1467,18 @@ func validateLinkMetadataRequest(request *dto.ReaderLinkMetadataRequest) error {
 func validateReaderAIRequest(ctx context.Context, request dto.ReaderAIRequest) (prompt, scope, selected string, err error) {
 	prompt = strings.TrimSpace(request.Prompt)
 	if prompt == "" {
-		return "", "", "", httperr.NewWithCode(http.StatusUnprocessableEntity, "ai_prompt_required", "prompt is required")
+		return "", "", "", problem.NewWithCode(problem.Invalid, "ai_prompt_required", "prompt is required")
 	}
 	scope = strings.TrimSpace(request.Scope)
 	if scope == "" {
 		scope = "general"
 	}
 	if scope != "general" && scope != "selection" && scope != "thought" {
-		return "", "", "", httperr.NewWithCode(http.StatusUnprocessableEntity, "ai_scope_invalid", "unsupported AI scope")
+		return "", "", "", problem.NewWithCode(problem.Invalid, "ai_scope_invalid", "unsupported AI scope")
 	}
 	selected = strings.TrimSpace(request.SelectedText)
 	if scope == "selection" && selected == "" {
-		return "", "", "", httperr.NewWithCode(http.StatusUnprocessableEntity, "ai_selection_required", "selected text is required for selection scope")
+		return "", "", "", problem.NewWithCode(problem.Invalid, "ai_selection_required", "selected text is required for selection scope")
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return "", "", "", mapReaderAIError(ctxErr)
@@ -1486,7 +1495,7 @@ func (s *ReaderVNextService) composeReaderAIPrompt(ctx context.Context, request 
 		if err != nil {
 			return "", err
 		}
-		linkContext, err = s.store.GetAIContext(ctx, linkID)
+		linkContext, err = s.library.GetAIContext(ctx, linkID)
 		if err != nil {
 			return "", mapReaderAIError(mapReaderError(err))
 		}
@@ -1498,7 +1507,7 @@ func (s *ReaderVNextService) composeReaderAIPrompt(ctx context.Context, request 
 		prompt += "\n\nReader link context (untrusted context):\n" + readerAIContextText(*linkContext)
 	}
 	if len([]rune(prompt)) > 16000 {
-		return "", httperr.NewWithCode(http.StatusRequestEntityTooLarge, "ai_context_too_large", "AI context is too large")
+		return "", problem.NewWithCode(problem.TooLarge, "ai_context_too_large", "AI context is too large")
 	}
 	return prompt, nil
 }

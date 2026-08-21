@@ -9,11 +9,10 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/model"
-	"webtag/internal/repository"
 )
 
 type readerInboxPartitionStoreStub struct {
-	repository.ReaderVNextStore
+	ReaderInboxStore
 	items            []model.ReaderInboxListItem
 	activeCount      int
 	expiredCount     int
@@ -58,7 +57,7 @@ func TestListInboxDefaultsToActiveAndMapsExpiryCounts(t *testing.T) {
 		next:         "next-page",
 	}
 
-	page, err := NewReaderVNextService(store, nil).ListInbox(context.Background(), "", "", 30)
+	page, err := NewReaderVNextService(readerTestStores(store), nil).ListInbox(context.Background(), "", "", 30)
 	if err != nil {
 		t.Fatalf("ListInbox() error = %v", err)
 	}
@@ -79,7 +78,7 @@ func TestListInboxDefaultsToActiveAndMapsExpiryCounts(t *testing.T) {
 
 func TestReaderInboxPartitionValidationStopsStorageCalls(t *testing.T) {
 	store := &readerInboxPartitionStoreStub{}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 
 	_, err := service.ListInbox(context.Background(), "other", "", 30)
 	assertReaderHTTPError(t, err, http.StatusUnprocessableEntity, "invalid_inbox_partition")
@@ -104,7 +103,7 @@ func TestConfirmAIProposalsMapsServerSelectedAtomicBatch(t *testing.T) {
 		RemainingCount: 4,
 	}}
 
-	response, err := NewReaderVNextService(store, nil).ConfirmAIProposals(context.Background(), "expired")
+	response, err := NewReaderVNextService(readerTestStores(store), nil).ConfirmAIProposals(context.Background(), "expired")
 	if err != nil {
 		t.Fatalf("ConfirmAIProposals() error = %v", err)
 	}

@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
-	"net/http"
 	"strings"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -15,7 +14,7 @@ import (
 func (s *LinkReadService) searchLinks(ctx context.Context, req dto.ListLinksRequest) (dto.PaginatedLinksResponse, error) {
 	query := strings.TrimSpace(req.Query)
 	if len([]rune(query)) > maxListQueryLen {
-		return dto.PaginatedLinksResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeQueryTooLong, "search query too long")
+		return dto.PaginatedLinksResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeQueryTooLong, "search query too long")
 	}
 
 	filter, err := s.searchFilter(req, query)

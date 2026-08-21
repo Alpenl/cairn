@@ -61,7 +61,7 @@ func TestReaderPatchMetadataRequiresCanonicalQuotedRevision(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &readerMetadataHandlerStub{}
 			router := gin.New()
-			RegisterReaderRoutes(router, stub)
+			RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPatch, "/api/links/"+linkID+"/metadata", nil)
@@ -89,7 +89,7 @@ func TestReaderPatchMetadataForwardsCompleteNullReplacementAndReturnsRevisionETa
 	linkID := uuid.NewString()
 	stub := &readerMetadataHandlerStub{response: dto.ReaderLinkMetadataResponse{LinkID: linkID, MetadataRevision: 8}}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPatch, "/api/links/"+linkID+"/metadata", strings.NewReader(`{"title":null,"summary":null,"tags":[]}`))
@@ -123,7 +123,7 @@ func TestReaderPatchMetadataAcceptsJavaScriptSafeMaximumRevision(t *testing.T) {
 	linkID := uuid.NewString()
 	stub := &readerMetadataHandlerStub{response: dto.ReaderLinkMetadataResponse{LinkID: linkID, MetadataRevision: model.LinkMetadataMaxRevision}}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPatch, "/api/links/"+linkID+"/metadata", strings.NewReader(`{"title":null,"summary":null,"tags":[]}`))
@@ -178,7 +178,7 @@ func TestReaderPatchMetadataMapsCompleteTupleAndConflictErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &readerMetadataHandlerStub{err: tc.err}
 			router := gin.New()
-			RegisterReaderRoutes(router, stub)
+			RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPatch, "/api/links/"+linkID+"/metadata", strings.NewReader(tc.body))

@@ -398,7 +398,6 @@ CREATE TABLE public.link_translations (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     attempt_generation bigint DEFAULT 0 NOT NULL,
-    current_river_job_id bigint,
     source_content_revision bigint,
     CONSTRAINT chk_link_translations_attempt_generation CHECK ((attempt_generation >= 0)),
     CONSTRAINT chk_link_translations_format CHECK ((source_format = ANY (ARRAY['plain'::text, 'markdown'::text]))),

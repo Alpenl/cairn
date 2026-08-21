@@ -19,14 +19,27 @@ import (
 )
 
 type translationQueueStub struct {
-	jobID   int64
-	err     error
-	command *model.TranslationScheduleCommand
+	jobID int64
+	err   error
+	seed  *model.TranslationAttemptSeed
 }
 
-func (q *translationQueueStub) EnqueueTranslationTx(_ context.Context, _ pgx.Tx, command model.TranslationScheduleCommand) (int64, error) {
-	copy := command
-	q.command = &copy
+func requireTranslationHTTPProblem(t *testing.T, err error) (httperr.StatusCarrier, httperr.ErrorCoder) {
+	t.Helper()
+	carrier, ok := httperr.As(err)
+	if !ok {
+		t.Fatalf("error = %v, want public HTTP problem", err)
+	}
+	coder, ok := carrier.(httperr.ErrorCoder)
+	if !ok {
+		t.Fatalf("error = %v, want coded HTTP problem", err)
+	}
+	return carrier, coder
+}
+
+func (q *translationQueueStub) EnqueueTranslationTx(_ context.Context, _ pgx.Tx, seed model.TranslationAttemptSeed) (int64, error) {
+	copy := seed
+	q.seed = &copy
 	if q.err != nil {
 		return 0, q.err
 	}
@@ -78,18 +91,16 @@ func durableTranslationRow(
 	id, linkID uuid.UUID,
 	revision *int64,
 	generation int64,
-	jobID *int64,
 ) *pgxmock.Rows {
 	now := time.Now().UTC()
 	return pgxmock.NewRows([]string{
 		"id", "link_id", "scope", "block_key", "start_offset", "end_offset",
 		"source_text", "translated_text", "source_format", "target_language", "source_hash",
-		"source_content_revision", "status", "model", "error_msg", "attempt_generation",
-		"current_river_job_id", "created_at", "updated_at",
+		"source_content_revision", "status", "model", "error_msg", "attempt_generation", "created_at", "updated_at",
 	}).AddRow(
 		id, linkID, "selection", "content", 0, 5, "hello", nil, "plain", "zh-CN",
 		"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
-		revision, "pending", nil, nil, generation, jobID, now, now,
+		revision, "pending", nil, nil, generation, now, now,
 	)
 }
 
@@ -97,18 +108,16 @@ func durableSummaryTranslationRow(
 	id, linkID uuid.UUID,
 	sourceHash string,
 	generation int64,
-	jobID *int64,
 ) *pgxmock.Rows {
 	now := time.Now().UTC()
 	return pgxmock.NewRows([]string{
 		"id", "link_id", "scope", "block_key", "start_offset", "end_offset",
 		"source_text", "translated_text", "source_format", "target_language", "source_hash",
-		"source_content_revision", "status", "model", "error_msg", "attempt_generation",
-		"current_river_job_id", "created_at", "updated_at",
+		"source_content_revision", "status", "model", "error_msg", "attempt_generation", "created_at", "updated_at",
 	}).AddRow(
 		id, linkID, "selection", "summary", 0, 5, "hello", nil, "plain", "zh-CN",
 		sourceHash,
-		nil, "pending", nil, nil, generation, jobID, now, now,
+		nil, "pending", nil, nil, generation, now, now,
 	)
 }
 
@@ -138,14 +147,12 @@ func TestTranslationSchedulerRejectsStaleRevisionBeforeAnyProductOrJobWrite(t *t
 		StartOffset: 0, EndOffset: 5, SourceText: "hello",
 		ExpectedContentRevision: &expected,
 	}, time.Hour)
-	var status httperr.StatusCarrier
-	var code httperr.ErrorCoder
-	if !errors.As(err, &status) || status.HTTPStatus() != 409 ||
-		!errors.As(err, &code) || code.HTTPErrorCode() != httperr.CodeContentRevisionConflict {
+	status, code := requireTranslationHTTPProblem(t, err)
+	if status.HTTPStatus() != 409 || code.HTTPErrorCode() != httperr.CodeContentRevisionConflict {
 		t.Fatalf("Schedule() error = %v, want 409/%s", err, httperr.CodeContentRevisionConflict)
 	}
-	if queue.command != nil {
-		t.Fatalf("stale request enqueued command %+v", *queue.command)
+	if queue.seed != nil {
+		t.Fatalf("stale request enqueued seed %+v", *queue.seed)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -241,14 +248,12 @@ func TestTranslationSchedulerPrioritizesStaleSavedRevisionAndReturnsCanonicalBlo
 			if item != nil {
 				t.Fatalf("Schedule() item = %+v, want nil", item)
 			}
-			var status httperr.StatusCarrier
-			var coder httperr.ErrorCoder
-			if !errors.As(err, &status) || status.HTTPStatus() != http.StatusConflict ||
-				!errors.As(err, &coder) || coder.HTTPErrorCode() != httperr.CodeContentRevisionConflict {
+			status, coder := requireTranslationHTTPProblem(t, err)
+			if status.HTTPStatus() != http.StatusConflict || coder.HTTPErrorCode() != httperr.CodeContentRevisionConflict {
 				t.Fatalf("Schedule() error = %v, want 409/%s", err, httperr.CodeContentRevisionConflict)
 			}
-			var identityProvider httperr.CurrentIdentityProvider
-			if !errors.As(err, &identityProvider) {
+			identityProvider, ok := status.(httperr.CurrentIdentityProvider)
+			if !ok {
 				t.Fatalf("Schedule() error = %v, want current identity", err)
 			}
 			identity, ok := identityProvider.HTTPCurrentIdentity()
@@ -257,8 +262,8 @@ func TestTranslationSchedulerPrioritizesStaleSavedRevisionAndReturnsCanonicalBlo
 				t.Fatalf("current identity = %+v/%v, want revision %d/block %s",
 					identity, ok, tc.source.ContentRevision, tc.wantBlockKey)
 			}
-			if queue.command != nil {
-				t.Fatalf("stale request enqueued command %+v", *queue.command)
+			if queue.seed != nil {
+				t.Fatalf("stale request enqueued seed %+v", *queue.seed)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("unmet expectations: %v", err)
@@ -293,12 +298,12 @@ func TestTranslationSchedulerCountsCanonicalSourceBlockConflict(t *testing.T) {
 		StartOffset: 0, EndOffset: 5, SourceText: "HELLO",
 		ExpectedContentRevision: &revision,
 	}, time.Hour)
-	var code httperr.ErrorCoder
-	if !errors.As(err, &code) || code.HTTPErrorCode() != httperr.CodeSourceBlockConflict {
+	_, code := requireTranslationHTTPProblem(t, err)
+	if code.HTTPErrorCode() != httperr.CodeSourceBlockConflict {
 		t.Fatalf("Schedule() error = %v, want %s", err, httperr.CodeSourceBlockConflict)
 	}
-	if queue.command != nil {
-		t.Fatalf("mismatched source enqueued command %+v", *queue.command)
+	if queue.seed != nil {
+		t.Fatalf("mismatched source enqueued seed %+v", *queue.seed)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -330,8 +335,8 @@ func TestTranslationSchedulerDoesNotMisclassifyUnrelatedValidationFailure(t *tes
 		StartOffset: 0, EndOffset: 1, SourceText: "h",
 		ExpectedContentRevision: &revision,
 	}, time.Hour)
-	var code httperr.ErrorCoder
-	if !errors.As(err, &code) || code.HTTPErrorCode() != httperr.CodeTranslationInvalidRequest {
+	_, code := requireTranslationHTTPProblem(t, err)
+	if code.HTTPErrorCode() != httperr.CodeTranslationInvalidRequest {
 		t.Fatalf("Schedule() error = %v, want %s", err, httperr.CodeTranslationInvalidRequest)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -354,7 +359,7 @@ func TestTranslationSchedulerDoesNotCountReusableProductAsNewSchedule(t *testing
 	expectLockedPlainSource(mock, linkID, revision, "hello world", "summary")
 	mock.ExpectQuery(regexp.QuoteMeta("source_content_revision = $6 AND target_language = $7 FOR UPDATE")).
 		WithArgs(linkID, model.TranslationScopeSelection, "content", 0, 5, revision, model.TranslationTargetChinese).
-		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1, ptr(int64(41))))
+		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1))
 	mock.ExpectCommit()
 
 	queue := &translationQueueStub{jobID: 42}
@@ -371,8 +376,8 @@ func TestTranslationSchedulerDoesNotCountReusableProductAsNewSchedule(t *testing
 	if err != nil || got == nil || got.ID != translationID {
 		t.Fatalf("Schedule() = %+v, %v, want reusable product", got, err)
 	}
-	if queue.command != nil {
-		t.Fatalf("reusable product enqueued command %+v", *queue.command)
+	if queue.seed != nil {
+		t.Fatalf("reusable product enqueued seed %+v", *queue.seed)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -402,10 +407,7 @@ func TestTranslationSchedulerCommitsProductAndRiverJobAsOneOperation(t *testing.
 			"hello", model.TranslationFormatPlain, model.TranslationTargetChinese,
 			"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", &revision,
 		).
-		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1, nil))
-	mock.ExpectQuery(regexp.QuoteMeta("UPDATE link_translations")).
-		WithArgs(jobID, translationID, int64(1)).
-		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1, ptr(jobID)))
+		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1))
 	mock.ExpectCommit()
 
 	queue := &translationQueueStub{jobID: jobID}
@@ -420,15 +422,14 @@ func TestTranslationSchedulerCommitsProductAndRiverJobAsOneOperation(t *testing.
 		StartOffset: 0, EndOffset: 5, SourceText: "hello",
 		ExpectedContentRevision: &revision,
 	}, time.Hour)
-	if err != nil || got == nil || got.CurrentRiverJobID == nil || *got.CurrentRiverJobID != jobID {
+	if err != nil || got == nil || got.ID != translationID || got.AttemptGeneration != 1 {
 		t.Fatalf("Schedule() = %+v, %v", got, err)
 	}
-	if queue.command == nil || queue.command.Seed.TranslationID != translationID ||
-		queue.command.Seed.AttemptGeneration != 1 ||
-		queue.command.Seed.SourceHash != "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" ||
-		queue.command.Seed.SourceContentRevision == nil ||
-		*queue.command.Seed.SourceContentRevision != revision || queue.command.Previous != nil {
-		t.Fatalf("queue command = %+v", queue.command)
+	if queue.seed == nil || queue.seed.TranslationID != translationID ||
+		queue.seed.AttemptGeneration != 1 ||
+		queue.seed.SourceHash != "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" ||
+		queue.seed.SourceContentRevision == nil || *queue.seed.SourceContentRevision != revision {
+		t.Fatalf("queue seed = %+v", queue.seed)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -462,10 +463,7 @@ func TestTranslationSchedulerCountsVerifiedSummaryHashSchedule(t *testing.T) {
 			"hello", model.TranslationFormatPlain, model.TranslationTargetChinese,
 			summaryIdentity, (*int64)(nil),
 		).
-		WillReturnRows(durableSummaryTranslationRow(translationID, linkID, summaryIdentity, 1, nil))
-	mock.ExpectQuery(regexp.QuoteMeta("UPDATE link_translations")).
-		WithArgs(jobID, translationID, int64(1)).
-		WillReturnRows(durableSummaryTranslationRow(translationID, linkID, summaryIdentity, 1, ptr(jobID)))
+		WillReturnRows(durableSummaryTranslationRow(translationID, linkID, summaryIdentity, 1))
 	mock.ExpectCommit()
 
 	scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
@@ -509,7 +507,7 @@ func TestTranslationSchedulerRollsBackProductWhenRiverInsertFails(t *testing.T) 
 			"hello", model.TranslationFormatPlain, model.TranslationTargetChinese,
 			"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", &revision,
 		).
-		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1, nil))
+		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1))
 	mock.ExpectRollback()
 
 	queueErr := errors.New("river insert failed")
@@ -692,9 +690,8 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 			t.Parallel()
 			got, err := authoritativeTranslationParams(&tc.source, linkID, tc.req)
 			if tc.wantCode != "" {
-				var status httperr.StatusCarrier
-				var code httperr.ErrorCoder
-				if !errors.As(err, &status) || !errors.As(err, &code) || code.HTTPErrorCode() != tc.wantCode {
+				status, code := requireTranslationHTTPProblem(t, err)
+				if code.HTTPErrorCode() != tc.wantCode {
 					t.Fatalf("error = %v, want code %s", err, tc.wantCode)
 				}
 				if tc.wantCode == httperr.CodeTranslationInvalidRequest && status.HTTPStatus() != http.StatusUnprocessableEntity {
@@ -757,12 +754,12 @@ func TestAuthoritativeTranslationConflictsReturnCompleteCurrentIdentity(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := authoritativeTranslationParams(&source, linkID, tc.request)
-			var coder httperr.ErrorCoder
-			if !errors.As(err, &coder) || coder.HTTPErrorCode() != tc.wantCode {
+			status, coder := requireTranslationHTTPProblem(t, err)
+			if coder.HTTPErrorCode() != tc.wantCode {
 				t.Fatalf("error = %v, want %s", err, tc.wantCode)
 			}
-			var provider httperr.CurrentIdentityProvider
-			if !errors.As(err, &provider) {
+			provider, ok := status.(httperr.CurrentIdentityProvider)
+			if !ok {
 				t.Fatalf("error = %v, want current identity", err)
 			}
 			identity, ok := provider.HTTPCurrentIdentity()

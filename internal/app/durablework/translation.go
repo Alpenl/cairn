@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -19,8 +18,8 @@ import (
 
 	"webtag/internal/contentdoc"
 	"webtag/internal/database"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -29,7 +28,7 @@ const maxSelectionTranslationUTF16Units = 16_384
 // TranslationQueue is the infrastructure-only River port. pgx stays here and
 // never appears on the linktranslation service-facing scheduler interface.
 type TranslationQueue interface {
-	EnqueueTranslationTx(context.Context, pgx.Tx, model.TranslationScheduleCommand) (int64, error)
+	EnqueueTranslationTx(context.Context, pgx.Tx, model.TranslationAttemptSeed) (int64, error)
 }
 
 type TranslationSchedulerOptions struct {
@@ -78,14 +77,12 @@ func (s *TranslationScheduler) Schedule(
 			return err
 		}
 		if source == nil {
-			return httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+			return problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 		}
 		params, err := authoritativeTranslationParams(source, linkID, req)
 		if err != nil {
 			return err
 		}
-		params.StallAfter = stallAfter
-
 		existing, err := s.products.FindTranslationIdentityTx(ctx, tx, params)
 		if err != nil {
 			return err
@@ -95,7 +92,6 @@ func (s *TranslationScheduler) Schedule(
 			return nil
 		}
 
-		var previous *model.TranslationAttempt
 		if existing == nil {
 			result, scheduled, err = s.products.InsertPendingTranslationTx(ctx, tx, params)
 			if err != nil {
@@ -117,7 +113,6 @@ func (s *TranslationScheduler) Schedule(
 		}
 
 		if !scheduled {
-			previous = supersededTranslationAttempt(existing)
 			result, err = s.products.AdvancePendingTranslationTx(ctx, tx, existing.ID)
 			if err != nil {
 				return err
@@ -131,18 +126,14 @@ func (s *TranslationScheduler) Schedule(
 			SourceHash:            result.SourceHash,
 			SourceContentRevision: result.SourceContentRevision,
 		}
-		riverJobID, err := s.queue.EnqueueTranslationTx(ctx, tx, model.TranslationScheduleCommand{
-			Seed:     seed,
-			Previous: previous,
-		})
+		riverJobID, err := s.queue.EnqueueTranslationTx(ctx, tx, seed)
 		if err != nil {
 			return err
 		}
 		if riverJobID <= 0 {
 			return fmt.Errorf("schedule translation: invalid River job ID %d", riverJobID)
 		}
-		result, err = s.products.BindCurrentTranslationAttemptTx(ctx, tx, seed, riverJobID)
-		return err
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("schedule translation: %w", err)
@@ -163,16 +154,16 @@ func authoritativeTranslationParams(
 		return repository.UpsertTranslationParams{}, err
 	}
 	if source.LibraryKind != nil && *source.LibraryKind == model.LibraryKindSite {
-		return repository.UpsertTranslationParams{}, httperr.NewWithCode(
-			http.StatusConflict,
-			httperr.CodeSiteOriginalContentForbidden,
+		return repository.UpsertTranslationParams{}, problem.NewWithCode(
+			problem.Conflict,
+			problem.CodeSiteOriginalContentForbidden,
 			"website entries cannot be translated",
 		)
 	}
 	if source.Status != model.LinkStatusDone {
-		return repository.UpsertTranslationParams{}, httperr.NewWithCode(
-			http.StatusConflict,
-			httperr.CodeLinkNotReady,
+		return repository.UpsertTranslationParams{}, problem.NewWithCode(
+			problem.Conflict,
+			problem.CodeLinkNotReady,
 			"link not parsed yet",
 		)
 	}
@@ -190,9 +181,9 @@ func authoritativeTranslationParams(
 		}
 		text, format, blockKey, ok := fullSavedTranslationSource(source)
 		if !ok {
-			return repository.UpsertTranslationParams{}, httperr.NewWithCode(
-				http.StatusConflict,
-				httperr.CodeTranslationContentUnavailable,
+			return repository.UpsertTranslationParams{}, problem.NewWithCode(
+				problem.Conflict,
+				problem.CodeTranslationContentUnavailable,
 				"save original before translating the full article",
 			)
 		}
@@ -280,11 +271,11 @@ func verifiedSavedRevision(
 	}
 	if *expected != source.ContentRevision {
 		revision := source.ContentRevision
-		return nil, httperr.NewWithCodeAndCurrentIdentity(
-			http.StatusConflict,
-			httperr.CodeContentRevisionConflict,
+		return nil, problem.NewWithCodeAndCurrentIdentity(
+			problem.Conflict,
+			problem.CodeContentRevisionConflict,
 			"saved content changed; refresh and confirm the translation again",
-			httperr.ConflictIdentity{ContentRevision: &revision, BlockKey: canonicalSavedBlockKey(source)},
+			problem.ConflictIdentity{ContentRevision: &revision, BlockKey: canonicalSavedBlockKey(source)},
 		)
 	}
 	revision := source.ContentRevision
@@ -377,22 +368,8 @@ func reusableTranslation(item *model.LinkTranslation, force bool, now time.Time,
 	return item.Status == model.TranslationStatusDone && !force
 }
 
-func supersededTranslationAttempt(item *model.LinkTranslation) *model.TranslationAttempt {
-	if item == nil || item.CurrentRiverJobID == nil || *item.CurrentRiverJobID <= 0 ||
-		(item.Status != model.TranslationStatusPending && item.Status != model.TranslationStatusProcessing) {
-		return nil
-	}
-	return &model.TranslationAttempt{
-		TranslationID:         item.ID,
-		AttemptGeneration:     item.AttemptGeneration,
-		RiverJobID:            *item.CurrentRiverJobID,
-		SourceHash:            item.SourceHash,
-		SourceContentRevision: item.SourceContentRevision,
-	}
-}
-
 func invalidTranslationRequest(message string) error {
-	return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeTranslationInvalidRequest, message)
+	return problem.NewWithCode(problem.Invalid, problem.CodeTranslationInvalidRequest, message)
 }
 
 func sourceBlockConflictError(
@@ -400,7 +377,7 @@ func sourceBlockConflictError(
 	blockKey string,
 	currentHash *string,
 ) error {
-	identity := httperr.ConflictIdentity{BlockKey: blockKey}
+	identity := problem.ConflictIdentity{BlockKey: blockKey}
 	if blockKey == "content" || blockKey == "content-document" {
 		revision := source.ContentRevision
 		identity.ContentRevision = &revision
@@ -408,9 +385,9 @@ func sourceBlockConflictError(
 	} else {
 		identity.SourceHash = currentHash
 	}
-	return httperr.NewWithCodeAndCurrentIdentity(
-		http.StatusConflict,
-		httperr.CodeSourceBlockConflict,
+	return problem.NewWithCodeAndCurrentIdentity(
+		problem.Conflict,
+		problem.CodeSourceBlockConflict,
 		"translation source block changed; refresh and confirm the selection again",
 		identity,
 	)

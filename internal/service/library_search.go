@@ -3,12 +3,11 @@ package service
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strings"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -59,12 +58,12 @@ func (s *LibrarySearchService) Search(ctx context.Context, raw string, readingLi
 	query := strings.TrimSpace(raw)
 	if query == "" {
 		if strings.TrimSpace(thoughtAfter) != "" {
-			return dto.GroupedSearchResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCursor, "invalid thought cursor")
+			return dto.GroupedSearchResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCursor, "invalid thought cursor")
 		}
 		return dto.GroupedSearchResponse{Reading: dto.LibrarySearchGroup{Items: []dto.LinkResponse{}}, Sites: dto.SiteSearchGroup{Items: []dto.SiteSearchResultResponse{}}}, nil
 	}
 	if len([]rune(query)) > maxListQueryLen {
-		return dto.GroupedSearchResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeQueryTooLong, "search query is too long")
+		return dto.GroupedSearchResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeQueryTooLong, "search query is too long")
 	}
 	if readingLimit < 1 {
 		readingLimit = defaultLibrarySearchLimit
@@ -86,7 +85,7 @@ func (s *LibrarySearchService) Search(ctx context.Context, raw string, readingLi
 	}
 	repositoryThoughtAfter, err := s.decodeThoughtSearchCursor(ctx, query, thoughtAfter)
 	if err != nil {
-		return dto.GroupedSearchResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCursor, "invalid thought cursor")
+		return dto.GroupedSearchResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCursor, "invalid thought cursor")
 	}
 	kind := model.LibraryKindReading
 	filter := repository.ListLinksFilter{Query: &query, LibraryKind: &kind, Limit: readingLimit}
@@ -114,7 +113,7 @@ func (s *LibrarySearchService) Search(ctx context.Context, raw string, readingLi
 	thoughts, thoughtTotal, thoughtNextCursor, err := s.reader.SearchThoughts(ctx, query, repositoryThoughtAfter, thoughtLimit)
 	if err != nil {
 		if errors.Is(err, repository.ErrInvalidReaderCursor) {
-			return dto.GroupedSearchResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCursor, "invalid thought cursor")
+			return dto.GroupedSearchResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCursor, "invalid thought cursor")
 		}
 		return dto.GroupedSearchResponse{}, err
 	}

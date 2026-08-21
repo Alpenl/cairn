@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -11,7 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -50,7 +49,7 @@ func (s *SiteReadService) List(ctx context.Context, view, tags, rawRecentCutoff 
 		view = "all"
 	}
 	if view != "all" && view != "pinned" && view != "recent" {
-		return dto.PaginatedSitesResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidSiteView, "unsupported site view")
+		return dto.PaginatedSitesResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidSiteView, "unsupported site view")
 	}
 	cutoff, err := s.recentCutoff(view, rawRecentCutoff, page)
 	if err != nil {
@@ -72,13 +71,13 @@ func (s *SiteReadService) recentCutoff(view, raw string, page int) (*time.Time, 
 	raw = strings.TrimSpace(raw)
 	if view != "recent" {
 		if raw != "" {
-			return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidRecentCutoff, "recent_cutoff requires the recent view")
+			return nil, problem.NewWithCode(problem.Invalid, problem.CodeInvalidRecentCutoff, "recent_cutoff requires the recent view")
 		}
 		return nil, nil
 	}
 	if page == 1 {
 		if raw != "" {
-			return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidRecentCutoff, "recent_cutoff must be omitted for page 1")
+			return nil, problem.NewWithCode(problem.Invalid, problem.CodeInvalidRecentCutoff, "recent_cutoff must be omitted for page 1")
 		}
 		now := time.Now
 		if s != nil && s.now != nil {
@@ -88,11 +87,11 @@ func (s *SiteReadService) recentCutoff(view, raw string, page int) (*time.Time, 
 		return &cutoff, nil
 	}
 	if raw == "" {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidRecentCutoff, "recent_cutoff is required after page 1")
+		return nil, problem.NewWithCode(problem.Invalid, problem.CodeInvalidRecentCutoff, "recent_cutoff is required after page 1")
 	}
 	cutoff, err := time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidRecentCutoff, "recent_cutoff must be an RFC3339 instant")
+		return nil, problem.NewWithCode(problem.Invalid, problem.CodeInvalidRecentCutoff, "recent_cutoff must be an RFC3339 instant")
 	}
 	cutoff = cutoff.UTC()
 	return &cutoff, nil
@@ -100,14 +99,14 @@ func (s *SiteReadService) recentCutoff(view, raw string, page int) (*time.Time, 
 func (s *SiteReadService) Get(ctx context.Context, rawID string) (dto.SiteDetailResponse, error) {
 	id, err := uuid.Parse(rawID)
 	if err != nil {
-		return dto.SiteDetailResponse{}, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidSiteID, "invalid site id")
+		return dto.SiteDetailResponse{}, problem.NewWithCode(problem.Malformed, problem.CodeInvalidSiteID, "invalid site id")
 	}
 	detail, err := s.sites.GetSite(ctx, id)
 	if err != nil {
 		return dto.SiteDetailResponse{}, err
 	}
 	if detail == nil {
-		return dto.SiteDetailResponse{}, httperr.NewWithCode(http.StatusNotFound, httperr.CodeSiteNotFound, "site not found")
+		return dto.SiteDetailResponse{}, problem.NewWithCode(problem.NotFound, problem.CodeSiteNotFound, "site not found")
 	}
 	out := dto.SiteDetailResponse{
 		SiteListItemResponse: siteListDTO(detail.SiteListItem),

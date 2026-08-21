@@ -10,8 +10,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"webtag/internal/database"
 )
 
 type serverRuntimeOrderContextKey struct{}
@@ -83,16 +81,17 @@ func TestServerStopsHTTPAdmissionBeforeRuntimeBackgrounds(t *testing.T) {
 		startCtx:    make(chan context.Context, 1),
 		stopEntered: make(chan struct{}),
 	}
-	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
-		backgrounds: []namedRuntimeBackground{{name: "order probe", background: background}},
-	})
+	resources := newRuntimeResources(
+		[]namedRuntimeBackground{{name: "order probe", background: background}},
+		nil,
+	)
 	closeEntered := make(chan struct{})
 	var closeOnce sync.Once
 	runtime := &Runtime{
-		start: lifecycle.Start,
+		start: resources.Start,
 		close: func(ctx context.Context) error {
 			closeOnce.Do(func() { close(closeEntered) })
-			return lifecycle.Close(ctx)
+			return resources.Close(ctx)
 		},
 	}
 
@@ -355,9 +354,6 @@ func TestServerRetainsRuntimeWhenHTTPDrainDeadlineExpires(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Server.Run() error = %v, want context deadline exceeded", err)
-	}
-	if !errors.Is(err, database.ErrShutdownDeadline) {
-		t.Fatalf("Server.Run() error = %v, want database.ErrShutdownDeadline", err)
 	}
 	select {
 	case <-closeEntered:

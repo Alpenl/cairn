@@ -40,7 +40,7 @@ type Dependencies struct {
 	// Feeds is optional for isolated handler tests; production always wires it.
 	Feeds FeedService
 	// Reader is optional only for isolated handler tests; production always wires it.
-	Reader ReaderService
+	Reader ReaderRoutes
 }
 
 // LinkWriteService is the per-link write surface. Production wiring binds it
@@ -143,7 +143,7 @@ func RegisterRoutes(router gin.IRouter, deps Dependencies) { //nolint:gocyclo //
 	mustHaveServices(deps)
 
 	prefix := apiRoutePrefix
-	router.GET(prefix+"/capabilities", capabilities(deps.Reader != nil, deps.ReaderCapabilities))
+	router.GET(prefix+"/capabilities", capabilities(deps.Reader.Enabled(), deps.ReaderCapabilities))
 	router.POST(prefix+"/ingest", ingestSubmission(deps.Ingest))
 
 	links := router.Group(prefix + "/links")

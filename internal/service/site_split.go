@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/siteidentity"
 )
@@ -179,7 +179,7 @@ func (s *SiteSplitService) selectedSplitEntries(ctx context.Context, rawSiteID s
 		return nil, nil, err
 	}
 	if site == nil {
-		return nil, nil, httperr.NewWithCode(404, httperr.CodeSiteNotFound, "source site not found")
+		return nil, nil, problem.NewWithCode(problem.NotFound, problem.CodeSiteNotFound, "source site not found")
 	}
 	if site.Revision != revision {
 		return nil, nil, siteMergeConflict("site was changed")
@@ -246,5 +246,5 @@ func containsSplitEntry(entries []model.SiteEntry, id uuid.UUID) bool {
 	return false
 }
 func invalidSiteSplit(message string) error {
-	return httperr.NewWithCode(422, "site_entry_selection_required", message)
+	return problem.NewWithCode(problem.Invalid, "site_entry_selection_required", message)
 }

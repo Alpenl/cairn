@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 )
 
 func validThoughtWireInput(operationKind string) dto.ReaderThoughtOpRequest {
@@ -348,9 +348,9 @@ func TestValidateThoughtWireRequiresCompleteValidRecoveryMetadata(t *testing.T) 
 	if err := validateThoughtWire(input); err == nil {
 		t.Fatal("recovery without expected current winner should be rejected")
 	} else {
-		var status *httperr.Error
-		if !errors.As(err, &status) || status.HTTPStatus() != http.StatusUnprocessableEntity ||
-			status.HTTPErrorCode() != "invalid_thought_recovery" {
+		var status *problem.Error
+		if !errors.As(err, &status) || problemHTTPStatus(status) != http.StatusUnprocessableEntity ||
+			status.Code() != "invalid_thought_recovery" {
 			t.Fatalf("incomplete recovery error = %v, want 422 invalid_thought_recovery", err)
 		}
 	}
@@ -393,7 +393,7 @@ func TestValidateThoughtWireRejectsNonCanonicalIdentifiers(t *testing.T) {
 func TestReaderServiceRejectsInvalidDesiredStateCommandsBeforeStore(t *testing.T) {
 	t.Parallel()
 
-	service := NewReaderVNextService(nil, nil)
+	service := NewReaderVNextService(ReaderStores{}, nil)
 	if _, err := service.PushThoughtOps(context.Background(), dto.ReaderThoughtOpsRequest{}); err == nil {
 		t.Fatal("PushThoughtOps() error = nil for empty batch")
 	}

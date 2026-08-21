@@ -12,8 +12,8 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/repository/repotest"
 )
@@ -713,15 +713,15 @@ func TestIngestServiceRejectsInvalidRequests(t *testing.T) {
 			t.Parallel()
 
 			_, err := service.Ingest(context.Background(), tt.req)
-			var statusErr *httperr.Error
+			var statusErr *problem.Error
 			if !errors.As(err, &statusErr) {
 				t.Fatalf("Ingest() error = %v, want StatusError", err)
 			}
-			if statusErr.HTTPStatus() != http.StatusUnprocessableEntity {
-				t.Fatalf("status = %d, want %d", statusErr.HTTPStatus(), http.StatusUnprocessableEntity)
+			if problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d", problemHTTPStatus(statusErr), http.StatusUnprocessableEntity)
 			}
-			if statusErr.HTTPMessage() != tt.want {
-				t.Fatalf("message = %q, want %q", statusErr.HTTPMessage(), tt.want)
+			if statusErr.Message() != tt.want {
+				t.Fatalf("message = %q, want %q", statusErr.Message(), tt.want)
 			}
 		})
 	}
@@ -774,15 +774,15 @@ func TestIngestServiceRejectsBrowserCaptureMetadataBounds(t *testing.T) {
 					Metadata: tt.meta,
 				}},
 			})
-			var statusErr *httperr.Error
+			var statusErr *problem.Error
 			if !errors.As(err, &statusErr) {
 				t.Fatalf("Ingest() error = %v, want StatusError", err)
 			}
-			if statusErr.HTTPStatus() != http.StatusUnprocessableEntity {
-				t.Fatalf("status = %d, want %d", statusErr.HTTPStatus(), http.StatusUnprocessableEntity)
+			if problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d", problemHTTPStatus(statusErr), http.StatusUnprocessableEntity)
 			}
-			if statusErr.HTTPMessage() != tt.want {
-				t.Fatalf("message = %q, want %q", statusErr.HTTPMessage(), tt.want)
+			if statusErr.Message() != tt.want {
+				t.Fatalf("message = %q, want %q", statusErr.Message(), tt.want)
 			}
 		})
 	}

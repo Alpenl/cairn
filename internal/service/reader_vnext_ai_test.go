@@ -12,11 +12,10 @@ import (
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
-	"webtag/internal/repository"
 )
 
 type aiContextCountingStore struct {
-	repository.ReaderVNextStore
+	ReaderLibraryStore
 	contextReads int
 	lastContext  context.Context
 	contextValue *model.ReaderAIContext
@@ -37,7 +36,7 @@ func (s *aiContextCountingStore) GetAIContext(ctx context.Context, _ uuid.UUID) 
 
 func TestCompleteAIWhenDisabledDoesNotReadLinkContext(t *testing.T) {
 	store := &aiContextCountingStore{}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 
 	response, err := service.CompleteAI(context.Background(), dto.ReaderAIRequest{
 		Prompt: "summarize this",
@@ -79,7 +78,7 @@ func (s *readerAIStub) Complete(ctx context.Context, prompt, scope string) (stri
 
 func TestCompleteAICallsProviderAndReturnsAnswer(t *testing.T) {
 	ai := &readerAIStub{answer: "answer", model: "reader-model"}
-	svc := NewReaderVNextService(&aiContextCountingStore{}, ai)
+	svc := NewReaderVNextService(readerTestStores(&aiContextCountingStore{}), ai)
 
 	response, err := svc.CompleteAI(context.Background(), dto.ReaderAIRequest{Prompt: "question"})
 	if err != nil {
@@ -95,7 +94,7 @@ func TestCompleteAICallsProviderAndReturnsAnswer(t *testing.T) {
 
 func TestCompleteAIReturnsProviderFailure(t *testing.T) {
 	ai := &readerAIStub{err: errors.New("provider unavailable")}
-	svc := NewReaderVNextService(&aiContextCountingStore{}, ai)
+	svc := NewReaderVNextService(readerTestStores(&aiContextCountingStore{}), ai)
 
 	if _, err := svc.CompleteAI(context.Background(), dto.ReaderAIRequest{Prompt: "question"}); err == nil {
 		t.Fatal("CompleteAI() error = nil, want provider error")
@@ -114,7 +113,7 @@ func TestCompleteAIValidatesScopeBeforeReadingContextOrCallingProvider(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			store := &aiContextCountingStore{}
 			ai := &readerAIStub{answer: "should not run"}
-			svc := NewReaderVNextService(store, ai)
+			svc := NewReaderVNextService(readerTestStores(store), ai)
 
 			_, err := svc.CompleteAI(context.Background(), test.request)
 			if err == nil {
@@ -149,13 +148,13 @@ func assertReaderAIHTTPError(t *testing.T, err error, status int, code string) {
 
 func TestCompleteAIProviderCancellationMapsError(t *testing.T) {
 	ai := &readerAIStub{err: context.Canceled}
-	svc := NewReaderVNextService(&aiContextCountingStore{}, ai)
+	svc := NewReaderVNextService(readerTestStores(&aiContextCountingStore{}), ai)
 
 	_, err := svc.CompleteAI(context.Background(), dto.ReaderAIRequest{Prompt: "question"})
 	if err == nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("CompleteAI() error = %v, want wrapped context.Canceled", err)
 	}
-	assertReaderAIHTTPError(t, err, readerAIClientClosedRequest, "ai_request_canceled")
+	assertReaderAIHTTPError(t, err, 499, "ai_request_canceled")
 	if ai.lastContext == nil {
 		t.Fatal("provider did not receive a request context")
 	}
@@ -163,7 +162,7 @@ func TestCompleteAIProviderCancellationMapsError(t *testing.T) {
 
 func TestCompleteAITimeoutMapsError(t *testing.T) {
 	ai := &readerAIStub{err: context.DeadlineExceeded}
-	svc := NewReaderVNextService(&aiContextCountingStore{}, ai)
+	svc := NewReaderVNextService(readerTestStores(&aiContextCountingStore{}), ai)
 
 	_, err := svc.CompleteAI(context.Background(), dto.ReaderAIRequest{Prompt: "question"})
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
@@ -180,18 +179,18 @@ func TestCompleteAICallerCancellationAfterProviderReturnsCancellation(t *testing
 			cancel()
 		},
 	}
-	svc := NewReaderVNextService(&aiContextCountingStore{}, ai)
+	svc := NewReaderVNextService(readerTestStores(&aiContextCountingStore{}), ai)
 
 	_, err := svc.CompleteAI(ctx, dto.ReaderAIRequest{Prompt: "question"})
 	if err == nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("CompleteAI() error = %v, want context.Canceled after provider", err)
 	}
-	assertReaderAIHTTPError(t, err, readerAIClientClosedRequest, "ai_request_canceled")
+	assertReaderAIHTTPError(t, err, 499, "ai_request_canceled")
 }
 
 func TestCompleteAIWhitespaceResponseIsNotSuccess(t *testing.T) {
 	ai := &readerAIStub{answer: " \n\t "}
-	svc := NewReaderVNextService(&aiContextCountingStore{}, ai)
+	svc := NewReaderVNextService(readerTestStores(&aiContextCountingStore{}), ai)
 
 	response, err := svc.CompleteAI(context.Background(), dto.ReaderAIRequest{Prompt: "question"})
 	if err == nil {
@@ -207,7 +206,7 @@ func TestCompleteAIPropagatesContextToStoreAndProvider(t *testing.T) {
 	linkID := uuid.New()
 	ai := &readerAIStub{answer: "library answer", model: "reader-model"}
 	store := &aiContextCountingStore{contextValue: &model.ReaderAIContext{LinkID: linkID, Content: "library content"}}
-	svc := NewReaderVNextService(store, ai)
+	svc := NewReaderVNextService(readerTestStores(store), ai)
 
 	ctx := context.Background()
 	response, err := svc.CompleteAI(ctx, dto.ReaderAIRequest{
@@ -234,7 +233,7 @@ func TestCompleteAIErrorDoesNotExposePromptOrProviderPayload(t *testing.T) {
 	promptSecret := "prompt-secret-should-not-leak"
 	providerSecret := "provider-response-secret-should-not-leak"
 	ai := &readerAIStub{err: errors.New("upstream rejected: " + providerSecret)}
-	svc := NewReaderVNextService(&aiContextCountingStore{}, ai)
+	svc := NewReaderVNextService(readerTestStores(&aiContextCountingStore{}), ai)
 
 	_, err := svc.CompleteAI(context.Background(), dto.ReaderAIRequest{Prompt: promptSecret})
 	if err == nil {

@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
-	"net/http"
 	"time"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 )
 
 // Refresh 重新触发一次解析：已 pending/processing 的链接直接复用在飞任务，
@@ -55,7 +54,7 @@ func (s *SubmitService) Refresh(ctx context.Context, linkID string) (dto.SubmitR
 				// 带 slug：客户端用 cooldown_active 给出针对性的重新解析提示，
 				// 不必从通用 429 文案推断业务状态。
 				// （"x 秒后可重试"而非"请稍后重试"）。
-				return httperr.NewWithCodeAndRetryAfter(http.StatusTooManyRequests, httperr.CodeCooldownActive, "refresh cooldown active", retry)
+				return problem.NewWithCodeAndRetryAfter(problem.RateLimited, problem.CodeCooldownActive, "refresh cooldown active", retry)
 			}
 		}
 

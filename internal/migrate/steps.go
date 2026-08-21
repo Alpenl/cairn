@@ -168,6 +168,8 @@ $$`,
 			     updated_at=CURRENT_TIMESTAMP
 			 WHERE status IN ('pending','processing')
 			   AND attempt_generation=0`,
+			`ALTER TABLE public.link_translations
+			 DROP COLUMN IF EXISTS current_river_job_id`,
 			`DROP INDEX IF EXISTS public.idx_link_translations_missing_reconcile`,
 			`DROP INDEX IF EXISTS public.idx_river_job_translation_terminal_history`,
 			`DELETE FROM public.reader_feed_feedback WHERE action IN ('save','unsave')`,

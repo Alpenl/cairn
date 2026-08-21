@@ -17,7 +17,7 @@ import (
 )
 
 type noteDraftHandlerStub struct {
-	ReaderService
+	ReaderNoteRoutes
 	errors map[string]error
 	note   dto.ReaderNoteResponse
 }
@@ -41,7 +41,7 @@ func TestReaderSaveNoteDraftHTTPContractAcrossAliases(t *testing.T) {
 		note: dto.ReaderNoteResponse{ID: successID, Title: "Draft", PublishedRevision: 1, DraftRevision: 2, CreatedAt: now, UpdatedAt: now},
 	}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	for _, test := range []struct {
 		name       string

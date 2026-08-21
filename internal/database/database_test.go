@@ -5,22 +5,11 @@ import (
 	"errors"
 	"net"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// TestPoolInterfaceSatisfied verifies at compile time that *pgxpool.Pool
-// satisfies the Pool interface declared in this package. A missing method
-// (e.g. after a pgx major-version bump) causes a compile error here
-// rather than a silent runtime panic at the call site.
-func TestPoolInterfaceSatisfied(t *testing.T) {
-	// Compile-time assertion: if *pgxpool.Pool ever stops satisfying Pool
-	// this line will not compile.
-	var _ Pool = (*pgxpool.Pool)(nil)
-}
 
 // TestQuerierInterfaceSatisfied verifies that *pgxpool.Pool also satisfies
 // the narrower Querier interface (Exec / Query / QueryRow).
@@ -73,56 +62,21 @@ func TestOpen_InvalidURL(t *testing.T) {
 	}
 }
 
-func TestNewPoolConfigInstallsRuntimePoolShutdown(t *testing.T) {
+func TestOpenConfiguredPoolHonorsPingTimeout(t *testing.T) {
 	t.Parallel()
 
-	shutdown := NewPoolShutdown()
-	cfg, err := newPoolConfig("postgres://test:test@127.0.0.1:1/test", Options{PoolShutdown: shutdown})
-	if err != nil {
-		t.Fatalf("newPoolConfig() error = %v", err)
-	}
-	if cfg.BeforeClose == nil {
-		t.Fatal("newPoolConfig() did not install PoolShutdown BeforeClose hook")
-	}
-}
-
-func TestOpenConfiguredPoolCancelsInitialConstructionBeforePingFailureClose(t *testing.T) {
-	t.Parallel()
-
-	initialStarted := make(chan struct{})
-	initialCanceled := make(chan struct{})
-	var startOnce sync.Once
-	var canceledOnce sync.Once
 	cfg, err := pgxpool.ParseConfig("postgres://test:test@127.0.0.1:1/test")
 	if err != nil {
 		t.Fatalf("ParseConfig() error = %v", err)
 	}
-	cfg.MaxConns = 2
-	cfg.MinConns = 1
 	cfg.ConnConfig.ConnectTimeout = 750 * time.Millisecond
 	cfg.ConnConfig.DialFunc = func(ctx context.Context, _, _ string) (net.Conn, error) {
-		deadline, hasDeadline := ctx.Deadline()
-		if hasDeadline && time.Until(deadline) < 250*time.Millisecond {
-			select {
-			case <-initialStarted:
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			<-ctx.Done()
-			return nil, ctx.Err()
-		}
-		startOnce.Do(func() { close(initialStarted) })
 		<-ctx.Done()
-		canceledOnce.Do(func() { close(initialCanceled) })
 		return nil, ctx.Err()
-	}
-	shutdown := NewPoolShutdown()
-	if err := installPoolShutdown(cfg, shutdown); err != nil {
-		t.Fatalf("installPoolShutdown() error = %v", err)
 	}
 
 	startedAt := time.Now()
-	pool, err := openConfiguredPool(t.Context(), cfg, Options{PoolShutdown: shutdown}, 50*time.Millisecond)
+	pool, err := openConfiguredPool(t.Context(), cfg, 50*time.Millisecond)
 	if pool != nil {
 		t.Fatalf("openConfiguredPool() pool = %p, want nil", pool)
 	}
@@ -131,11 +85,6 @@ func TestOpenConfiguredPoolCancelsInitialConstructionBeforePingFailureClose(t *t
 	}
 	if elapsed := time.Since(startedAt); elapsed > 500*time.Millisecond {
 		t.Fatalf("openConfiguredPool() elapsed = %v, want bounded ping failure cleanup", elapsed)
-	}
-	select {
-	case <-initialCanceled:
-	default:
-		t.Fatal("initial MinConns construction was not canceled before pool close returned")
 	}
 }
 

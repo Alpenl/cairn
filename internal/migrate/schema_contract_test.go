@@ -99,6 +99,7 @@ func TestFreshSchemaExcludesRetiredAndExternallyOwnedObjects(t *testing.T) {
 		"create table public.feed_read_revision",
 		"idx_link_translations_missing_reconcile",
 		"idx_river_job_translation_terminal_history",
+		"current_river_job_id",
 		"idx_reader_thought_search ",
 		"to_tsvector('simple'::regconfig, body)",
 		"proposal_signals",

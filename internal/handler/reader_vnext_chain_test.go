@@ -213,7 +213,7 @@ func TestRegisterReaderRoutesCrossSurfaceChain(t *testing.T) {
 	stub := newReaderVNextChainHandler()
 	stub.feedResponse = stub.feed
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 	inboxID := stub.inbox.ID
 	noteID := stub.note.ID
 	linkID := *stub.thought.LinkID

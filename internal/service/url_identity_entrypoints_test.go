@@ -11,6 +11,7 @@ import (
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/repository/repotest"
 	"webtag/internal/urlidentity"
@@ -85,7 +86,7 @@ func collectionEntryPoints() []urlEntryPoint {
 			name: "reader inbox ingest",
 			identity: func(t *testing.T, raw string) (string, error) {
 				store := &inboxIdentityStore{}
-				service := NewReaderVNextService(store, nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
+				service := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
 				_, err := service.CreateInbox(context.Background(), dto.ReaderInboxCreateRequest{URL: raw})
 				if err != nil {
 					if store.created {
@@ -102,7 +103,7 @@ func collectionEntryPoints() []urlEntryPoint {
 // inboxIdentityStore records exactly what CreateInbox tried to persist, so a
 // rejected URL can be proven to have written nothing at all.
 type inboxIdentityStore struct {
-	repository.ReaderVNextStore
+	ReaderInboxStore
 	created     bool
 	url         string
 	identityKey string
@@ -195,17 +196,17 @@ func TestCollectionEntryPointsRejectTheSameURLsWithTheSameCode(t *testing.T) {
 				if err == nil {
 					t.Fatalf("%s identity(%q) = %q, want a 422 rejection", entry.name, tc.url, got)
 				}
-				var statusErr *httperr.Error
+				var statusErr *problem.Error
 				if !errors.As(err, &statusErr) {
-					t.Fatalf("%s identity(%q) error = %v, want *httperr.Error", entry.name, tc.url, err)
+					t.Fatalf("%s identity(%q) error = %v, want *problem.Error", entry.name, tc.url, err)
 				}
-				if statusErr.HTTPStatus() != 422 {
-					t.Fatalf("%s identity(%q) status = %d, want 422", entry.name, tc.url, statusErr.HTTPStatus())
+				if problemHTTPStatus(statusErr) != 422 {
+					t.Fatalf("%s identity(%q) status = %d, want 422", entry.name, tc.url, problemHTTPStatus(statusErr))
 				}
-				if statusErr.HTTPErrorCode() != tc.code {
+				if statusErr.Code() != tc.code {
 					t.Fatalf(
 						"%s identity(%q) code = %q, want %q",
-						entry.name, tc.url, statusErr.HTTPErrorCode(), tc.code,
+						entry.name, tc.url, statusErr.Code(), tc.code,
 					)
 				}
 			})
@@ -229,8 +230,8 @@ func TestEmptyURLIsRejectedWhereTheURLIsTheIdentity(t *testing.T) {
 			if err == nil {
 				t.Fatalf("%s identity(blank) = %q, want a 422 rejection", entry.name, got)
 			}
-			var statusErr *httperr.Error
-			if !errors.As(err, &statusErr) || statusErr.HTTPErrorCode() != httperr.CodeURLRequired {
+			var statusErr *problem.Error
+			if !errors.As(err, &statusErr) || statusErr.Code() != httperr.CodeURLRequired {
 				t.Fatalf("%s identity(blank) error = %v, want %q", entry.name, err, httperr.CodeURLRequired)
 			}
 		})
@@ -266,8 +267,8 @@ func TestSSRFRejectionSurvivesNormalization(t *testing.T) {
 	} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := validateURL(raw)
-			var statusErr *httperr.Error
-			if !errors.As(err, &statusErr) || statusErr.HTTPErrorCode() != httperr.CodeUnsafeURLTarget {
+			var statusErr *problem.Error
+			if !errors.As(err, &statusErr) || statusErr.Code() != httperr.CodeUnsafeURLTarget {
 				t.Fatalf("validateURL(%q) error = %v, want %q", raw, err, httperr.CodeUnsafeURLTarget)
 			}
 		})
@@ -342,7 +343,7 @@ func TestRSSCapturePreservesDisplayURLAndUsesCanonicalIdentity(t *testing.T) {
 func TestReaderInboxPreservesDisplayURLAndStoresCanonicalIdentity(t *testing.T) {
 	submitted := "  HTTPS://WWW.Contract.Example.com//docs/guide/?b=2&a=1&utm_source=news#frag  "
 	store := &inboxIdentityStore{}
-	reader := NewReaderVNextService(store, nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
+	reader := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
 	if _, err := reader.CreateInbox(context.Background(), dto.ReaderInboxCreateRequest{URL: submitted}); err != nil {
 		t.Fatalf("CreateInbox() error = %v", err)
 	}

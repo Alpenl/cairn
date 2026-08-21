@@ -145,7 +145,7 @@ func TestReaderInboxOwnershipAndConfirmationContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInbox blank: %v", err)
 	}
-	reader := service.NewReaderVNextService(repo, nil)
+	reader := service.NewReaderVNextService(postgresReaderStores(repo), nil)
 	if _, err := reader.ConfirmInbox(ctx, blank.ID.String(), blank.MetadataRevision); err == nil {
 		t.Fatal("ConfirmInbox blank title succeeded")
 	}

@@ -13,7 +13,7 @@ import (
 )
 
 type inboxProposalStoreStub struct {
-	repository.ReaderVNextStore
+	ReaderInboxStore
 	inbox            model.ReaderInbox
 	claimErr         error
 	completeErr      error
@@ -114,7 +114,7 @@ func TestResummarizeInboxReturnsInboxPollingResource(t *testing.T) {
 	commands := &inboxProposalCommandsStub{result: InboxProposalResult{Inbox: &model.ReaderInbox{
 		ID: inboxID, URL: "https://example.com", MetadataRevision: 4, Status: "pending", ProposalStatus: "pending",
 	}}}
-	service := NewReaderVNextService(store, nil, ReaderVNextServiceOptions{InboxProposalCommands: commands})
+	service := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{InboxProposalCommands: commands})
 
 	response, err := service.ResummarizeInbox(context.Background(), inboxID.String())
 	if err != nil {

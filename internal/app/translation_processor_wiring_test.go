@@ -43,7 +43,7 @@ func TestBuildTranslationProcessorWiresProductionLogger(t *testing.T) {
 		SourceHash: sourceHash,
 	}
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE link_translations")).
-		WithArgs("翻译服务暂时不可用，请重试", translationID, int64(91), int64(3), sourceHash, (*int64)(nil)).
+		WithArgs("翻译服务暂时不可用，请重试", translationID, int64(3), sourceHash, (*int64)(nil)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	if err := processor.RecordFailure(t.Context(), attempt, context.Canceled); err != nil {

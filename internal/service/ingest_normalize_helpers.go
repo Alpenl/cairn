@@ -3,12 +3,11 @@ package service
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"net/http"
 	"sort"
 	"strings"
 
-	"webtag/internal/httperr"
 	"webtag/internal/jsonx"
+	"webtag/internal/problem"
 )
 
 const captureSourceFingerprintMetadataKey = "capture_source_fingerprint"
@@ -95,17 +94,17 @@ func validateImageLocator(raw string) (string, error) {
 	if raw == "" {
 		// 空字符串与"非 http(s)/data URL"共用同一个 slug：客户端拿到稳定 token
 		// 即可分支处理，不需要二次解析 message。
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestImageSourceRequired, "image source requires a remote http/https URL or data URL")
+		return "", problem.NewWithCode(problem.Invalid, problem.CodeIngestImageSourceRequired, "image source requires a remote http/https URL or data URL")
 	}
 	if strings.HasPrefix(strings.ToLower(raw), "data:image/") {
 		if len(raw) > maxImageDataURLBytes {
-			return "", httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestImageDataURLTooLarge, "image data url exceeds size limit")
+			return "", problem.NewWithCode(problem.Invalid, problem.CodeIngestImageDataURLTooLarge, "image data url exceeds size limit")
 		}
 		return raw, nil
 	}
 	validatedURL, err := validateURL(raw)
 	if err != nil {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestImageSourceRequired, "image source requires a remote http/https URL or data URL")
+		return "", problem.NewWithCode(problem.Invalid, problem.CodeIngestImageSourceRequired, "image source requires a remote http/https URL or data URL")
 	}
 	return validatedURL, nil
 }
@@ -130,16 +129,16 @@ const (
 // the limit but never echo the offending key/value back to the caller.
 func validateIngestMetadata(meta map[string]any, fieldName string) error {
 	if len(meta) > maxIngestMetadataKeys {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestMetadataKeyCountExceeded,
+		return problem.NewWithCode(problem.Invalid, problem.CodeIngestMetadataKeyCountExceeded,
 			fieldName+" exceeds key count limit")
 	}
 	for key, value := range meta {
 		if len(key) > maxIngestMetadataKeyLength {
-			return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestMetadataKeyLengthExceeded,
+			return problem.NewWithCode(problem.Invalid, problem.CodeIngestMetadataKeyLengthExceeded,
 				fieldName+" key length exceeds limit")
 		}
 		if s, ok := value.(string); ok && len(s) > maxIngestMetadataValueLength {
-			return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestMetadataValueLengthExceeded,
+			return problem.NewWithCode(problem.Invalid, problem.CodeIngestMetadataValueLengthExceeded,
 				fieldName+" string value length exceeds limit")
 		}
 	}

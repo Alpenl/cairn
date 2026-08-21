@@ -441,7 +441,7 @@ func TestReaderScaleFixtureContract(t *testing.T) {
 	tracer := &readerScaleTracer{}
 	tracedPool := newReaderScaleTracedPool(t, tracer)
 	repo := repository.NewPGXReaderVNextRepository(tracedPool)
-	deps := readerScaleDeps{repo: repo, svc: service.NewReaderVNextService(repo, nil)}
+	deps := readerScaleDeps{repo: repo, svc: service.NewReaderVNextService(postgresReaderStores(repo), nil)}
 	ctx := t.Context()
 
 	queryCounts := map[string]int{}
@@ -683,7 +683,7 @@ func TestReaderScaleHotPathMeasurements(t *testing.T) {
 	tracer := &readerScaleTracer{}
 	tracedPool := newReaderScaleTracedPool(t, tracer)
 	repo := repository.NewPGXReaderVNextRepository(tracedPool)
-	deps := readerScaleDeps{repo: repo, svc: service.NewReaderVNextService(repo, nil)}
+	deps := readerScaleDeps{repo: repo, svc: service.NewReaderVNextService(postgresReaderStores(repo), nil)}
 	ctx := t.Context()
 
 	var version, sharedBuffers, blockSize string

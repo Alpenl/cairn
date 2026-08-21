@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
-	"net/http"
 	"strings"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -82,7 +81,7 @@ func (s *LinkReadService) List(ctx context.Context, req dto.ListLinksRequest) (d
 		// invalid_cursor slug 同时覆盖"游标与 page 冲突"和"游标 token 无法解码"
 		// 两条 422 路径——客户端按 error_code 分支就能命中"换成另一种分页方式"
 		// 的统一处理逻辑。
-		return dto.PaginatedLinksResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCursor, "cursor pagination cannot be combined with a page parameter")
+		return dto.PaginatedLinksResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCursor, "cursor pagination cannot be combined with a page parameter")
 	}
 
 	filter := repository.ListLinksFilter{
@@ -104,7 +103,7 @@ func (s *LinkReadService) List(ctx context.Context, req dto.ListLinksRequest) (d
 		if strings.TrimSpace(req.After) != "" {
 			cursor, err := s.decodeListCursor(req.After)
 			if err != nil {
-				return dto.PaginatedLinksResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCursor, "invalid after cursor")
+				return dto.PaginatedLinksResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCursor, "invalid after cursor")
 			}
 			filter.After = cursor
 		}

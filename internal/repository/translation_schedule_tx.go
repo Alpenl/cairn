@@ -24,15 +24,15 @@ const (
 	insertPendingTranslationTxSQL = `INSERT INTO link_translations (
 		link_id, scope, block_key, start_offset, end_offset,
 		source_text, source_format, target_language, source_hash,
-		source_content_revision, status, attempt_generation, current_river_job_id
-	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 1, NULL)
+		source_content_revision, status, attempt_generation
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 1)
 	ON CONFLICT DO NOTHING
 	RETURNING ` + translationColumns
 
 	advancePendingTranslationTxSQL = `UPDATE link_translations SET
 		status = 'pending', translated_text = NULL, model = NULL,
 		error_msg = NULL, attempt_generation = attempt_generation + 1,
-		current_river_job_id = NULL, updated_at = NOW()
+		updated_at = NOW()
 		WHERE id = $1
 		RETURNING ` + translationColumns
 )
@@ -164,15 +164,4 @@ func (r *PGXTranslationRepository) AdvancePendingTranslationTx(
 		return nil, fmt.Errorf("advance pending translation: %w", err)
 	}
 	return item, nil
-}
-
-// BindCurrentTranslationAttemptTx completes the immutable RF6A attempt
-// identity after the River row has been inserted in the same transaction.
-func (r *PGXTranslationRepository) BindCurrentTranslationAttemptTx(
-	ctx context.Context,
-	tx database.Querier,
-	seed model.TranslationAttemptSeed,
-	riverJobID int64,
-) (*model.LinkTranslation, error) {
-	return bindCurrentTranslationAttempt(ctx, tx, seed, riverJobID)
 }

@@ -169,7 +169,6 @@ func TestTranslationProcessorPersistsResult(t *testing.T) {
 		SourceFormat:      model.TranslationFormatMarkdown,
 		Status:            model.TranslationStatusPending,
 		AttemptGeneration: 1,
-		CurrentRiverJobID: &riverJobID,
 	}}
 	engine := &fakeTranslator{result: translator.Result{
 		Text: "# 标题\n\n正文", Model: "grok-4.3-fast",

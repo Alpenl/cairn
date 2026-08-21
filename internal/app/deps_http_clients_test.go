@@ -113,8 +113,8 @@ func TestRuntimeHTTPClientOwnerClosesTransportsEvenAfterDeadline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := owner.Stop(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Stop() error = %v, want context.Canceled", err)
+	if err := owner.Stop(ctx); err != nil {
+		t.Fatalf("Stop() error = %v", err)
 	}
 	if !closed {
 		t.Fatal("Stop() skipped transport cleanup after its context ended")

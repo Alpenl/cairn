@@ -17,30 +17,6 @@ const (
 	readerHomeRecentThoughtsLimit  = 5
 )
 
-type ReaderHomeFreshness string
-
-const (
-	ReaderHomeFreshnessFresh   ReaderHomeFreshness = "fresh"
-	ReaderHomeFreshnessPartial ReaderHomeFreshness = "partial"
-	ReaderHomeFreshnessStale   ReaderHomeFreshness = "stale"
-)
-
-// ReaderHomeAggregate is the persistence result for one authoritative Home
-// read. All fields are produced inside the same repeatable-read transaction;
-// a caller must treat the result as a whole rather than assembling it with
-// the individual list methods below the Reader service. Partial results are
-// never returned: any failed section aborts the transaction and returns an
-// error instead. Partial and stale are still stable raw freshness states for
-// an upper layer that adds an explicitly defined degraded or cached source;
-// this repository has no such source and therefore only emits fresh.
-type ReaderHomeAggregate struct {
-	Freshness       ReaderHomeFreshness
-	Counts          map[string]int
-	ContinueReading []model.ReaderFeedItem
-	RecentThoughts  []model.ReaderThought
-	Todos           []model.ReaderTodo
-}
-
 type readerHomeSnapshotBeginner interface {
 	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
 }
@@ -88,51 +64,51 @@ ORDER BY updated_at DESC,id DESC LIMIT $1`
 // plain GET take row locks and write; two concurrent reads then had to lose a
 // serialization race and retry. The projection is now maintained by whichever
 // transaction changes a Thought or Note, so Home only has to read it.
-func (r *PGXReaderVNextRepository) LoadHomeAggregate(ctx context.Context) (ReaderHomeAggregate, error) {
+func (r *PGXReaderVNextRepository) LoadHomeAggregate(ctx context.Context) (model.ReaderHomeAggregate, error) {
 	beginner, ok := r.db.(readerHomeSnapshotBeginner)
 	if !ok {
-		return ReaderHomeAggregate{}, fmt.Errorf("load home aggregate: snapshot transaction unavailable")
+		return model.ReaderHomeAggregate{}, fmt.Errorf("load home aggregate: snapshot transaction unavailable")
 	}
 	return r.loadHomeAggregateSnapshot(ctx, beginner)
 }
 
-func (r *PGXReaderVNextRepository) loadHomeAggregateSnapshot(ctx context.Context, beginner readerHomeSnapshotBeginner) (ReaderHomeAggregate, error) {
+func (r *PGXReaderVNextRepository) loadHomeAggregateSnapshot(ctx context.Context, beginner readerHomeSnapshotBeginner) (model.ReaderHomeAggregate, error) {
 	tx, err := beginner.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return ReaderHomeAggregate{}, fmt.Errorf("begin home aggregate snapshot: %w", err)
+		return model.ReaderHomeAggregate{}, fmt.Errorf("begin home aggregate snapshot: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	aggregate, err := r.loadHomeAggregateOn(ctx, tx)
 	if err != nil {
-		return ReaderHomeAggregate{}, fmt.Errorf("load home aggregate: %w", err)
+		return model.ReaderHomeAggregate{}, fmt.Errorf("load home aggregate: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return ReaderHomeAggregate{}, fmt.Errorf("commit home aggregate snapshot: %w", err)
+		return model.ReaderHomeAggregate{}, fmt.Errorf("commit home aggregate snapshot: %w", err)
 	}
 	return aggregate, nil
 }
 
-func (r *PGXReaderVNextRepository) loadHomeAggregateOn(ctx context.Context, db database.Querier) (ReaderHomeAggregate, error) {
+func (r *PGXReaderVNextRepository) loadHomeAggregateOn(ctx context.Context, db database.Querier) (model.ReaderHomeAggregate, error) {
 	todos, err := listHomeTodosOn(ctx, db)
 	if err != nil {
-		return ReaderHomeAggregate{}, err
+		return model.ReaderHomeAggregate{}, err
 	}
 	counts, err := homeCountsOn(ctx, db)
 	if err != nil {
-		return ReaderHomeAggregate{}, err
+		return model.ReaderHomeAggregate{}, err
 	}
 	continueReading, err := listHomeContinueReadingOn(ctx, db, readerHomeContinueReadingLimit)
 	if err != nil {
-		return ReaderHomeAggregate{}, err
+		return model.ReaderHomeAggregate{}, err
 	}
 	recentThoughts, err := listHomeRecentThoughtsOn(ctx, db, readerHomeRecentThoughtsLimit)
 	if err != nil {
-		return ReaderHomeAggregate{}, err
+		return model.ReaderHomeAggregate{}, err
 	}
 
-	return ReaderHomeAggregate{
-		Freshness:       ReaderHomeFreshnessFresh,
+	return model.ReaderHomeAggregate{
+		Freshness:       model.ReaderHomeFreshnessFresh,
 		Counts:          counts,
 		ContinueReading: continueReading,
 		RecentThoughts:  recentThoughts,

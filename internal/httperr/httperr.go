@@ -1,41 +1,12 @@
-// Package httperr is the leaf-package home of the HTTP-status-carrying
-// error contract shared between the service / pipeline
-// layers and the HTTP presentation layer. Living below every business
-// package keeps the contract import-cycle-free: handlers call
-// httperr.As to map any wrapped error back to a status code, and any
-// service or sub-service can construct httperr.New without taking a
-// dependency on its peers.
-//
-// The previous incarnation kept this contract inside internal/service
-// (StatusError / HTTPStatusCarrier / AsHTTPStatus) and the
-// sub-packages had to clone it byte-for-byte
-// to avoid an import cycle. Lifting it to a dedicated leaf package
-// removes the duplicate; both packages now import httperr directly.
-//
-// Error type taxonomy across the codebase (handlers walk Unwrap chains
-// looking for the first match):
-//
-//   - httperr.Error: HTTP status carrier (this package). Surfaces
-//     HTTPStatus()/HTTPMessage() to the presentation layer verbatim.
-//   - service.PipelineRunError: wraps fetch/analyze failures already
-//     persisted to the Link row (errors.Is matches
-//     errsafe.ErrAlreadyPersisted) so the worker loop skips a second
-//     write.
-//   - analyzer.analyzerCallError: transport-level analyzer errors with
-//     a retryable bit and an optional upstream Retry-After hint.
-//   - errsafe sentinels (ErrTimeout, ErrUnreachable, etc.): classification
-//     markers used by ClassifyError / SafeMessage to render client-safe
-//     copy.
-//   - repository.ErrNotFound: repository-level row-missing marker that
-//     read services translate into a 404 httperr.Error.
-//
-// handler.writeError calls httperr.As to walk the unwrap chain and
-// surface the first carrier; missing carrier => generic 500 plus log.
+// Package httperr adapts transport-neutral application problems to HTTP.
+// Handlers may also construct Error for failures created at the HTTP boundary.
 package httperr
 
 import (
 	"errors"
-	"reflect"
+	"net/http"
+
+	"webtag/internal/problem"
 )
 
 // 错误 slug 常量：service 层构造 httperr.NewWithCode 时使用，避免字符串
@@ -48,58 +19,58 @@ import (
 // link_not_found），必须保持一致——避免前端按 slug 分支时产生歧义。
 const (
 	// CodeLinkNotFound —— /api/links/:id 系列：链接不存在。404 路径。
-	CodeLinkNotFound = "link_not_found"
+	CodeLinkNotFound = problem.CodeLinkNotFound
 	// CodeInvalidLinkID —— linkID UUID 解析失败。400 路径。
-	CodeInvalidLinkID        = "invalid_link_id"
-	CodeInvalidSiteID        = "invalid_site_id"
-	CodeInvalidSiteView      = "invalid_site_view"
-	CodeInvalidRecentCutoff  = "invalid_site_recent_cutoff"
-	CodeSiteNotFound         = "site_not_found"
-	CodeSiteRevisionConflict = "site_revision_conflict"
-	CodeSiteRevisionRequired = "site_revision_required"
-	CodeSiteUpdateEmpty      = "site_update_empty"
-	CodeInvalidSiteUpdate    = "invalid_site_update"
-	CodeInvalidSiteEntryID   = "invalid_site_entry_id"
-	CodeSiteEntryNotFound    = "site_entry_not_found"
-	CodeSiteEntryUpdateEmpty = "site_entry_update_empty"
-	CodeSiteDeleteConfirm    = "site_delete_confirmation_required"
+	CodeInvalidLinkID        = problem.CodeInvalidLinkID
+	CodeInvalidSiteID        = problem.CodeInvalidSiteID
+	CodeInvalidSiteView      = problem.CodeInvalidSiteView
+	CodeInvalidRecentCutoff  = problem.CodeInvalidRecentCutoff
+	CodeSiteNotFound         = problem.CodeSiteNotFound
+	CodeSiteRevisionConflict = problem.CodeSiteRevisionConflict
+	CodeSiteRevisionRequired = problem.CodeSiteRevisionRequired
+	CodeSiteUpdateEmpty      = problem.CodeSiteUpdateEmpty
+	CodeInvalidSiteUpdate    = problem.CodeInvalidSiteUpdate
+	CodeInvalidSiteEntryID   = problem.CodeInvalidSiteEntryID
+	CodeSiteEntryNotFound    = problem.CodeSiteEntryNotFound
+	CodeSiteEntryUpdateEmpty = problem.CodeSiteEntryUpdateEmpty
+	CodeSiteDeleteConfirm    = problem.CodeSiteDeleteConfirm
 	// CodeCooldownActive —— refresh 触发 per-link 冷却窗口。429 路径。
-	CodeCooldownActive = "cooldown_active"
+	CodeCooldownActive = problem.CodeCooldownActive
 	// CodeLinkNotReady —— 对未解析完成（非 done）的 link 做「保存原文」。409 路径。
-	CodeLinkNotReady = "link_not_ready"
+	CodeLinkNotReady = problem.CodeLinkNotReady
 	// CodeLinkContentUnavailable —— 已完成的非 URL ingest 没有可提升的文本原文。
 	// 409 路径；此类来源不能通过远程重抓补齐。
-	CodeLinkContentUnavailable = "link_content_unavailable"
+	CodeLinkContentUnavailable = problem.CodeLinkContentUnavailable
 	// CodeTranslationInvalidRequest means a selected-text anchor or scope is
 	// malformed. The initial translation surface only supports zh-CN output.
-	CodeTranslationInvalidRequest = "translation_invalid_request"
+	CodeTranslationInvalidRequest = problem.CodeTranslationInvalidRequest
 	// CodeTranslationContentUnavailable means full translation was requested
 	// before the original article had been saved.
-	CodeTranslationContentUnavailable = "translation_content_unavailable"
+	CodeTranslationContentUnavailable = problem.CodeTranslationContentUnavailable
 	// CodeContentRevisionConflict means the saved-content generation observed
 	// by a translation client is no longer current. 409 path.
-	CodeContentRevisionConflict = "content_revision_conflict"
+	CodeContentRevisionConflict = problem.CodeContentRevisionConflict
 	// CodeMetadataRevisionConflict identifies a stale Link metadata CAS
 	// command. It is intentionally distinct from generic revision conflicts so
 	// Reader can retain a metadata draft and load the current server tuple.
-	CodeMetadataRevisionConflict = "metadata_revision_conflict"
+	CodeMetadataRevisionConflict = problem.CodeMetadataRevisionConflict
 	// CodeMetadataFieldsRequired rejects a partial Link metadata replacement.
 	// title, summary, and tags must be present even when title/summary are null.
-	CodeMetadataFieldsRequired = "metadata_fields_required"
+	CodeMetadataFieldsRequired = problem.CodeMetadataFieldsRequired
 	// CodeInvalidLinkMetadata rejects a complete tuple whose field values do
 	// not satisfy the bounded Link metadata contract.
-	CodeInvalidLinkMetadata = "invalid_link_metadata"
+	CodeInvalidLinkMetadata = problem.CodeInvalidLinkMetadata
 	// CodeSourceBlockConflict means a summary source hash is no longer current.
 	// 409 path.
-	CodeSourceBlockConflict = "source_block_conflict"
+	CodeSourceBlockConflict = problem.CodeSourceBlockConflict
 	// CodeInvalidCursor —— ?after= 游标 token 解析失败或与 ?page= 冲突。422 路径。
-	CodeInvalidCursor = "invalid_cursor"
+	CodeInvalidCursor = problem.CodeInvalidCursor
 	// CodeInvalidArchiveSections rejects a non-canonical v2 archive selector
 	// before the handler begins the streaming response. 422 path.
-	CodeInvalidArchiveSections = "invalid_archive_sections"
+	CodeInvalidArchiveSections = problem.CodeInvalidArchiveSections
 	// CodeInvalidCreatedRange rejects one-sided, malformed, equal, or reversed
 	// created_at ranges on GET /api/links. Omitting both bounds remains valid.
-	CodeInvalidCreatedRange = "invalid_created_range"
+	CodeInvalidCreatedRange = problem.CodeInvalidCreatedRange
 
 	// 以下为 Wave 9 MED 迁移补的 422 slug 集合：把 submit / ingest
 	// 三条 URL 校验路径上的 httperr.New(...) 改为 NewWithCode(...) 后，
@@ -107,104 +78,92 @@ const (
 	// 的错误语义变成稳定代码，不再依赖 message 字面量做正则匹配。
 
 	// CodeURLRequired —— validateURL 入参为空字符串。422 路径。
-	CodeURLRequired = "url_required"
+	CodeURLRequired = problem.CodeURLRequired
 	// CodeInvalidURL —— validateURL 解析失败或 host 为空。422 路径。
-	CodeInvalidURL = "invalid_url"
+	CodeInvalidURL = problem.CodeInvalidURL
 	// CodeURLTooLong —— link URL 超过 2048 字符。
-	CodeURLTooLong = "url_too_long"
+	CodeURLTooLong = problem.CodeURLTooLong
 	// CodeDescriptionTooLong —— link description 超过 4096 字符。
-	CodeDescriptionTooLong = "description_too_long"
+	CodeDescriptionTooLong = problem.CodeDescriptionTooLong
 	// CodeUnsupportedURLScheme —— validateURL 收到非 http/https scheme。422 路径。
-	CodeUnsupportedURLScheme = "unsupported_url_scheme"
+	CodeUnsupportedURLScheme = problem.CodeUnsupportedURLScheme
 	// CodeUnsafeURLTarget —— validateURL 命中 SSRF 黑名单。422 路径。
-	CodeUnsafeURLTarget = "unsafe_url_target"
+	CodeUnsafeURLTarget = problem.CodeUnsafeURLTarget
 
 	// CodeIngestSourceRequired —— /api/ingest 缺 sources。422 路径。
-	CodeIngestSourceRequired = "ingest_source_required"
+	CodeIngestSourceRequired = problem.CodeIngestSourceRequired
 	// CodeIngestSourceKindRequired —— /api/ingest source.kind 为空。422 路径。
-	CodeIngestSourceKindRequired = "ingest_source_kind_required"
+	CodeIngestSourceKindRequired = problem.CodeIngestSourceKindRequired
 	// CodeUnsupportedIngestSourceKind —— /api/ingest source.kind 不在 url/text/image/browser_capture 之列。422 路径。
-	CodeUnsupportedIngestSourceKind = "unsupported_ingest_source_kind"
+	CodeUnsupportedIngestSourceKind = problem.CodeUnsupportedIngestSourceKind
 
 	// 以下为后续 wave 继续补的 slug，覆盖 ingest normalize、read filters、
 	// 各组路径，把所有 service 层关心错误分类
 	// 的 422 / 4xx 调用点从 default_<status> 兜底改造成稳定 slug。
 
 	// CodeIngestTextRequired —— /api/ingest text 源 trim 后为空。422 路径。
-	CodeIngestTextRequired = "ingest_text_required"
+	CodeIngestTextRequired = problem.CodeIngestTextRequired
 	// CodeIngestImageSourceRequired —— /api/ingest image 源 URL 为空或非
 	// http(s)/data URL。422 路径。
-	CodeIngestImageSourceRequired = "ingest_image_source_required"
+	CodeIngestImageSourceRequired = problem.CodeIngestImageSourceRequired
 	// CodeIngestImageDataURLTooLarge —— /api/ingest image 源 data:URL 体积
 	// 超过 maxImageDataURLBytes。422 路径。
-	CodeIngestImageDataURLTooLarge = "ingest_image_data_url_too_large"
+	CodeIngestImageDataURLTooLarge = problem.CodeIngestImageDataURLTooLarge
 	// CodeIngestBrowserCaptureEmpty —— /api/ingest browser_capture 源所有
 	// 字段都是空值。422 路径。
-	CodeIngestBrowserCaptureEmpty = "ingest_browser_capture_empty"
+	CodeIngestBrowserCaptureEmpty = problem.CodeIngestBrowserCaptureEmpty
 	// CodeIngestMetadataKeyCountExceeded —— metadata key 数超过上限。422 路径。
-	CodeIngestMetadataKeyCountExceeded = "ingest_metadata_key_count_exceeded"
+	CodeIngestMetadataKeyCountExceeded = problem.CodeIngestMetadataKeyCountExceeded
 	// CodeIngestMetadataKeyLengthExceeded —— metadata 单个 key 长度超限。422 路径。
-	CodeIngestMetadataKeyLengthExceeded = "ingest_metadata_key_length_exceeded"
+	CodeIngestMetadataKeyLengthExceeded = problem.CodeIngestMetadataKeyLengthExceeded
 	// CodeIngestMetadataValueLengthExceeded —— metadata 字符串值长度超限。422 路径。
-	CodeIngestMetadataValueLengthExceeded = "ingest_metadata_value_length_exceeded"
+	CodeIngestMetadataValueLengthExceeded = problem.CodeIngestMetadataValueLengthExceeded
 
 	// CodeTagFiltersExceedLimit —— ?tags= 解析后超出 maxListTagFilters。422 路径。
-	CodeTagFiltersExceedLimit = "tag_filters_exceed_limit"
+	CodeTagFiltersExceedLimit = problem.CodeTagFiltersExceedLimit
 	// CodeTagFilterTooLong —— 单个 tag 过滤值超过 maxListTagFilterLen。422 路径。
-	CodeTagFilterTooLong = "tag_filter_too_long"
+	CodeTagFilterTooLong = problem.CodeTagFilterTooLong
 	// CodeUnsupportedContentTypeFilter —— ?content_type= 不在白名单内。422 路径。
-	CodeUnsupportedContentTypeFilter = "unsupported_content_type_filter"
+	CodeUnsupportedContentTypeFilter = problem.CodeUnsupportedContentTypeFilter
 	// CodeUnsupportedLowConfidenceFilter —— ?low_confidence= 不是 true/false。422 路径。
-	CodeUnsupportedLowConfidenceFilter = "unsupported_low_confidence_filter"
+	CodeUnsupportedLowConfidenceFilter = problem.CodeUnsupportedLowConfidenceFilter
 	// CodeDomainFilterTooLong —— ?domain= 长度超过 maxListDomainLen。422 路径。
-	CodeDomainFilterTooLong = "domain_filter_too_long"
+	CodeDomainFilterTooLong = problem.CodeDomainFilterTooLong
 	// CodeQueryTooLong —— ?q= 搜索 query 长度超过 maxListQueryLen。422 路径。
-	CodeQueryTooLong = "query_too_long"
+	CodeQueryTooLong = problem.CodeQueryTooLong
 	// CodeUnsupportedStatusFilter —— ?status= 含 pending/processing/failed/done
 	// 之外的非法状态值。400 路径：浏览器扩展按此 slug 区分"客户端传错状态"
 	// 与其它过滤错误。
-	CodeUnsupportedStatusFilter = "unsupported_status_filter"
+	CodeUnsupportedStatusFilter = problem.CodeUnsupportedStatusFilter
 
 	// CodeInvalidRequestedLibraryKind rejects values other than auto, reading,
 	// and site at the capture boundary.
-	CodeInvalidRequestedLibraryKind = "invalid_requested_library_kind"
+	CodeInvalidRequestedLibraryKind = problem.CodeInvalidRequestedLibraryKind
 	// CodeLibraryKindNotFinal rejects a partition-dependent operation before
 	// automatic classification has produced a final destination.
-	CodeLibraryKindNotFinal = "library_kind_not_final"
+	CodeLibraryKindNotFinal = problem.CodeLibraryKindNotFinal
 	// CodeConversionTargetUnchanged rejects a conversion to the link's
 	// already-final collection. It is a conflict rather than malformed input.
-	CodeConversionTargetUnchanged       = "conversion_target_unchanged"
-	CodeDestructiveConfirmationRequired = "destructive_confirmation_required"
-	CodeRevisionConflict                = "revision_conflict"
+	CodeConversionTargetUnchanged       = problem.CodeConversionTargetUnchanged
+	CodeDestructiveConfirmationRequired = problem.CodeDestructiveConfirmationRequired
+	CodeRevisionConflict                = problem.CodeRevisionConflict
 	// CodeSiteOriginalContentForbidden prevents original-body storage for a
 	// website entry; site profile text belongs to sites.intro instead.
-	CodeSiteOriginalContentForbidden = "site_original_content_forbidden"
+	CodeSiteOriginalContentForbidden = problem.CodeSiteOriginalContentForbidden
 	// CodeContentEmpty means the edited body is empty after canonicalization.
-	CodeContentEmpty = "content_empty"
+	CodeContentEmpty = problem.CodeContentEmpty
 	// CodeContentTooLarge means the decoded UTF-8 body exceeds the saved-content limit.
-	CodeContentTooLarge = "content_too_large"
+	CodeContentTooLarge = problem.CodeContentTooLarge
 )
 
-// StatusCarrier is the public contract that adapters at the HTTP layer
-// match against. Any error in the unwrap chain that satisfies it
-// surfaces its HTTPStatus() / HTTPMessage() to the client. The interface
-// is intentionally minimal so wrapper types (e.g. pipeline run errors)
-// can re-expose their inner status without inheriting Error semantics.
+// StatusCarrier is the normalized result consumed by handlers.
 type StatusCarrier interface {
 	error
 	HTTPStatus() int
 	HTTPMessage() string
 }
 
-// ErrorCoder 是 StatusCarrier 之外的可选扩展：实现该方法的 carrier 会把
-// 自己的稳定 slug 透传到 ErrorDetail.error_code 字段（而非走 default_<status>
-// 兜底）。把它独立成接口而不是塞进 StatusCarrier，是为了让既有的 wrapper
-// 类型（PipelineRunError 等）不必被迫提供一个空 slug——presentation 层在
-// type-assert 失败时自然回退。
-//
-// HTTPErrorCode 返回空字符串等同于"没有 slug"，writeError 仍会回退到
-// default_<status>。这给迁移留出渐进空间：service 层逐步给关键路径补
-// slug，没补到的路径行为完全不变。
+// ErrorCoder exposes the stable client error code when one is available.
 type ErrorCoder interface {
 	HTTPErrorCode() string
 }
@@ -219,9 +178,7 @@ type ConflictIdentity struct {
 	SourceHash      *string
 }
 
-// CurrentIdentityProvider is optional error metadata consumed by HTTP
-// adapters. Keeping it separate from StatusCarrier preserves compatibility
-// for every existing carrier implementation.
+// CurrentIdentityProvider exposes optional conflict metadata.
 type CurrentIdentityProvider interface {
 	HTTPCurrentIdentity() (ConflictIdentity, bool)
 }
@@ -371,35 +328,72 @@ func (e *Error) HTTPMessage() string {
 	return e.message
 }
 
-// As walks err (and every wrapped cause) looking for the first value that
-// satisfies StatusCarrier. Handlers should call this before falling back
-// to a generic 500 so that wrappers like *PipelineRunError do not erase
-// the original 4xx semantics carried by an inner *Error.
-//
-// Defends against the typed-nil interface trap: errors.As reports a match
-// for a wrapped pointer-typed nil (the interface tuple is non-nil even
-// though the underlying pointer is). The nil-receiver guards on *Error
-// also paper over this, but the As contract is "true iff a usable carrier
-// was found", so we report no match instead of returning a value whose
-// methods all degrade to zero values. The reflect.IsNil check covers any
-// future StatusCarrier implementation, not just *Error.
+// As maps boundary errors and application problems to one HTTP carrier.
 func As(err error) (StatusCarrier, bool) {
 	if err == nil {
 		return nil, false
 	}
-	var carrier StatusCarrier
-	if !errors.As(err, &carrier) {
+	var boundaryError *Error
+	if errors.As(err, &boundaryError) && boundaryError != nil {
+		return boundaryError, true
+	}
+	applicationError, ok := problem.As(err)
+	if !ok {
 		return nil, false
 	}
-	if carrier == nil {
-		return nil, false
+	return problemStatus{applicationError}, true
+}
+
+type problemStatus struct {
+	problem *problem.Error
+}
+
+func (e problemStatus) Error() string       { return e.problem.Error() }
+func (e problemStatus) HTTPMessage() string { return e.problem.Message() }
+func (e problemStatus) HTTPErrorCode() string {
+	return e.problem.Code()
+}
+func (e problemStatus) RetryAfterSeconds() int {
+	return e.problem.RetryAfterSeconds()
+}
+func (e problemStatus) HTTPCurrentIdentity() (ConflictIdentity, bool) {
+	identity, ok := e.problem.CurrentIdentity()
+	if !ok {
+		return ConflictIdentity{}, false
 	}
-	v := reflect.ValueOf(carrier)
-	switch v.Kind() {
-	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
-		if v.IsNil() {
-			return nil, false
-		}
+	return ConflictIdentity{
+		ContentRevision: identity.ContentRevision,
+		BlockKey:        identity.BlockKey,
+		SourceHash:      identity.SourceHash,
+	}, true
+}
+func (e problemStatus) HTTPStatus() int {
+	switch e.problem.Kind() {
+	case problem.Malformed:
+		return http.StatusBadRequest
+	case problem.Invalid:
+		return http.StatusUnprocessableEntity
+	case problem.NotFound:
+		return http.StatusNotFound
+	case problem.Conflict:
+		return http.StatusConflict
+	case problem.Precondition:
+		return http.StatusPreconditionRequired
+	case problem.TooLarge:
+		return http.StatusRequestEntityTooLarge
+	case problem.RateLimited:
+		return http.StatusTooManyRequests
+	case problem.Forbidden:
+		return http.StatusForbidden
+	case problem.Unavailable:
+		return http.StatusServiceUnavailable
+	case problem.Upstream:
+		return http.StatusBadGateway
+	case problem.Timeout:
+		return http.StatusGatewayTimeout
+	case problem.Canceled:
+		return 499
+	default:
+		return http.StatusInternalServerError
 	}
-	return carrier, true
 }

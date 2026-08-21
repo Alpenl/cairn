@@ -265,16 +265,14 @@ func TestRiverQueue_FinalTranslationFailureProjectsStableTerminalState(t *testin
 	if err != nil {
 		t.Fatalf("NewRiverQueue() error = %v", err)
 	}
-	item, scheduled, err := translations.SchedulePending(
-		ctx,
-		translationSelectionParams(linkID, "final translation failure"),
-		queue.EnqueueTranslationTx,
-	)
-	if err != nil || !scheduled || item.CurrentRiverJobID == nil {
-		t.Fatalf("SchedulePending() = %+v, %v, %v", item, scheduled, err)
+	translationID := schedulePendingTranslation(t, pool, queue, ctx, linkID, "final translation failure")
+	var riverJobID int64
+	if err := pool.QueryRow(ctx, `SELECT id FROM river_job
+		WHERE kind=$1 AND args->>'translation_id'=$2`, model.TranslationJobKind, translationID.String()).Scan(&riverJobID); err != nil {
+		t.Fatalf("read translation River job: %v", err)
 	}
 	if _, err := pool.Exec(t.Context(), `UPDATE river_job
-		SET attempt = max_attempts - 1 WHERE id = $1`, *item.CurrentRiverJobID); err != nil {
+		SET attempt = max_attempts - 1 WHERE id = $1`, riverJobID); err != nil {
 		t.Fatalf("prepare final attempt: %v", err)
 	}
 	if err := queue.Start(t.Context()); err != nil {
@@ -288,13 +286,12 @@ func TestRiverQueue_FinalTranslationFailureProjectsStableTerminalState(t *testin
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		projected, readErr := translations.GetByID(ctx, item.ID)
+		projected, readErr := translations.GetByID(ctx, translationID)
 		if readErr != nil {
 			t.Fatalf("GetByID() error = %v", readErr)
 		}
 		if projected != nil && projected.Status == model.TranslationStatusFailed {
-			if projected.CurrentRiverJobID != nil || projected.ErrorMsg == nil ||
-				*projected.ErrorMsg != "翻译服务暂时不可用，请重试" {
+			if projected.ErrorMsg == nil || *projected.ErrorMsg != "翻译服务暂时不可用，请重试" {
 				t.Fatalf("failed translation = %+v", projected)
 			}
 			break

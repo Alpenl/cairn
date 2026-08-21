@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -11,11 +10,10 @@ import (
 
 	"webtag/internal/httperr"
 	"webtag/internal/model"
-	"webtag/internal/repository"
 )
 
 type readerFeedStoreStub struct {
-	repository.ReaderVNextStore
+	ReaderLibraryStore
 	page            *model.ReaderFeedPage
 	mode            string
 	after           string
@@ -63,7 +61,7 @@ func TestReaderFeedServiceMapsLivePage(t *testing.T) {
 		},
 	}}
 
-	response, err := NewReaderVNextService(store, nil).FeedWithSources(
+	response, err := NewReaderVNextService(readerTestStores(store), nil).FeedWithSources(
 		context.Background(),
 		"recommended",
 		"cursor-before",
@@ -105,7 +103,7 @@ func TestReaderFeedServiceRejectsInvalidRequestBeforeStore(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &readerFeedStoreStub{}
-			_, err := NewReaderVNextService(store, nil).FeedWithSources(context.Background(), test.mode, "", test.sources, 30)
+			_, err := NewReaderVNextService(readerTestStores(store), nil).FeedWithSources(context.Background(), test.mode, "", test.sources, 30)
 			if err == nil || store.listCalls != 0 {
 				t.Fatalf("error = %v, list calls = %d", err, store.listCalls)
 			}
@@ -114,9 +112,9 @@ func TestReaderFeedServiceRejectsInvalidRequestBeforeStore(t *testing.T) {
 }
 
 func TestReaderFeedServiceRejectsNilPage(t *testing.T) {
-	_, err := NewReaderVNextService(&readerFeedStoreStub{}, nil).FeedWithSources(context.Background(), "", "", nil, 30)
-	var carrier httperr.StatusCarrier
-	if !errors.As(err, &carrier) || carrier.HTTPStatus() != http.StatusInternalServerError {
+	_, err := NewReaderVNextService(readerTestStores(&readerFeedStoreStub{}), nil).FeedWithSources(context.Background(), "", "", nil, 30)
+	carrier, ok := httperr.As(err)
+	if !ok || carrier.HTTPStatus() != http.StatusInternalServerError {
 		t.Fatalf("error = %v, want 500", err)
 	}
 }
@@ -124,7 +122,7 @@ func TestReaderFeedServiceRejectsNilPage(t *testing.T) {
 func TestReaderFeedServiceUsesCanonicalFeedbackIdentity(t *testing.T) {
 	itemKey := "subscription:" + uuid.NewString()
 	store := &readerFeedStoreStub{}
-	response, err := NewReaderVNextService(store, nil).FeedbackFeed(context.Background(), "  "+itemKey+"  ", "save")
+	response, err := NewReaderVNextService(readerTestStores(store), nil).FeedbackFeed(context.Background(), "  "+itemKey+"  ", "save")
 	if err != nil || response.LinkID == nil {
 		t.Fatalf("FeedbackFeed() error = %v", err)
 	}
@@ -136,7 +134,7 @@ func TestReaderFeedServiceUsesCanonicalFeedbackIdentity(t *testing.T) {
 func TestReaderFeedServiceRejectsNonSubscriptionSave(t *testing.T) {
 	for _, source := range []string{"link", "inbox"} {
 		store := &readerFeedStoreStub{}
-		_, err := NewReaderVNextService(store, nil).FeedbackFeed(context.Background(), source+":"+uuid.NewString(), "save")
+		_, err := NewReaderVNextService(readerTestStores(store), nil).FeedbackFeed(context.Background(), source+":"+uuid.NewString(), "save")
 		if err == nil || store.feedbackCalls != 0 {
 			t.Fatalf("source %s: error = %v, feedback calls = %d", source, err, store.feedbackCalls)
 		}
@@ -145,7 +143,7 @@ func TestReaderFeedServiceRejectsNonSubscriptionSave(t *testing.T) {
 
 func TestReaderFeedServiceRejectsRemovedRecommendationFeedback(t *testing.T) {
 	store := &readerFeedStoreStub{}
-	_, err := NewReaderVNextService(store, nil).FeedbackFeed(
+	_, err := NewReaderVNextService(readerTestStores(store), nil).FeedbackFeed(
 		context.Background(),
 		"subscription:"+uuid.NewString(),
 		"not_interested",

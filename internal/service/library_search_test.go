@@ -13,6 +13,7 @@ import (
 
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/repository/repotest"
 	"webtag/internal/representation"
@@ -244,8 +245,8 @@ func mutateThoughtCursorPayload(t *testing.T, cursor string, mutate func(map[str
 func assertInvalidThoughtCursor(t *testing.T, service *LibrarySearchService, ctx context.Context, query, cursor string) {
 	t.Helper()
 	_, err := service.Search(ctx, query, 10, 10, 20, cursor)
-	var coder interface{ HTTPErrorCode() string }
-	if !errors.As(err, &coder) || coder.HTTPErrorCode() != httperr.CodeInvalidCursor {
+	applicationError, ok := problem.As(err)
+	if !ok || applicationError.Code() != httperr.CodeInvalidCursor {
 		t.Fatalf("Search(cursor=%q) error = %v, want %q", cursor, err, httperr.CodeInvalidCursor)
 	}
 }
@@ -274,8 +275,8 @@ func TestLibrarySearchClampsLimitsAndRejectsLongQuery(t *testing.T) {
 	}
 	tooLong := strings.Repeat("x", maxListQueryLen+1)
 	_, err := svc.Search(context.Background(), tooLong, 1, 1, 20, "")
-	var httpErr *httperr.Error
-	if !errors.As(err, &httpErr) || httpErr.HTTPStatus() != http.StatusUnprocessableEntity || httpErr.HTTPErrorCode() != httperr.CodeQueryTooLong {
+	var httpErr *problem.Error
+	if !errors.As(err, &httpErr) || problemHTTPStatus(httpErr) != http.StatusUnprocessableEntity || httpErr.Code() != httperr.CodeQueryTooLong {
 		t.Fatalf("long query error = %v, want 422 query_too_long", err)
 	}
 	if links.calls != 1 || sites.calls != 1 {

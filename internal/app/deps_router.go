@@ -42,6 +42,17 @@ func buildRuntimeRouter(
 	siteRoutes := services.sites.routes
 	feedRoutes := services.feeds.routes
 	reader := services.reader
+	readerRoutes := handler.ReaderRoutes{}
+	if reader != nil {
+		readerRoutes = handler.ReaderRoutes{
+			Thoughts:  reader,
+			Notes:     reader,
+			Inbox:     reader,
+			Todos:     reader,
+			Aggregate: reader,
+			Hosts:     reader,
+		}
+	}
 	readerCapabilities := runtimeReaderCapabilities(cfg, reader != nil)
 	return NewRouterWithDependencies(handler.Dependencies{
 		ReaderCapabilities: &readerCapabilities,
@@ -61,7 +72,7 @@ func buildRuntimeRouter(
 		ArchiveV2:          siteRoutes.archiveV2,
 		LibrarySearch:      siteRoutes.librarySearch,
 		Feeds:              feedRoutes.feeds,
-		Reader:             reader,
+		Reader:             readerRoutes,
 	}, readiness, layer.logger, routerOpts, extraMiddleware...), nil
 }
 

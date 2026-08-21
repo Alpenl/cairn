@@ -20,7 +20,8 @@ import (
 )
 
 type readerHostLifecycleHTTPStore struct {
-	repository.ReaderVNextStore
+	readerservice.ReaderInboxStore
+	readerservice.ReaderHostStore
 	state string
 }
 
@@ -114,7 +115,8 @@ func TestReaderHostLifecycleHTTPStateAndMachineCodeMatrix(t *testing.T) {
 						router.DELETE("/api/links/:link_id", deleteLink(&readerHostLifecycleLinkHTTPService{err: err}))
 					} else {
 						store := &readerHostLifecycleHTTPStore{state: state}
-						RegisterReaderRoutes(router, readerservice.NewReaderVNextService(store, nil))
+						reader := readerservice.NewReaderVNextService(readerServiceTestStores(store), nil)
+						RegisterReaderRoutes(router, readerTestRoutes(reader))
 					}
 
 					var body *bytes.Reader

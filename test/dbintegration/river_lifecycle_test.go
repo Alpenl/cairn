@@ -117,7 +117,12 @@ func assertLinkLifecycleAndCancelledRiver(t *testing.T, pool *pgxpool.Pool, atte
 func schedulePendingTranslation(t *testing.T, pool *pgxpool.Pool, queue *worker.RiverQueue, ctx context.Context, linkID uuid.UUID, source string) uuid.UUID {
 	t.Helper()
 	repo := repository.NewPGXTranslationRepository(pool)
-	item, scheduled, err := repo.SchedulePending(ctx, repository.UpsertTranslationParams{
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin translation schedule: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	item, inserted, err := repo.InsertPendingTranslationTx(ctx, tx, repository.UpsertTranslationParams{
 		LinkID:         linkID,
 		Scope:          model.TranslationScopeSelection,
 		BlockKey:       "summary",
@@ -127,9 +132,18 @@ func schedulePendingTranslation(t *testing.T, pool *pgxpool.Pool, queue *worker.
 		SourceFormat:   model.TranslationFormatPlain,
 		TargetLanguage: model.TranslationTargetChinese,
 		SourceHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(source))),
-	}, queue.EnqueueTranslationTx)
-	if err != nil || !scheduled || item == nil {
-		t.Fatalf("SchedulePending(): item=%+v scheduled=%v error=%v", item, scheduled, err)
+	})
+	if err != nil || !inserted || item == nil {
+		t.Fatalf("InsertPendingTranslationTx(): item=%+v inserted=%v error=%v", item, inserted, err)
+	}
+	if _, err := queue.EnqueueTranslationTx(ctx, tx, model.TranslationAttemptSeed{
+		TranslationID: item.ID, AttemptGeneration: item.AttemptGeneration,
+		SourceHash: item.SourceHash, SourceContentRevision: item.SourceContentRevision,
+	}); err != nil {
+		t.Fatalf("EnqueueTranslationTx(): %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit translation schedule: %v", err)
 	}
 	return item.ID
 }

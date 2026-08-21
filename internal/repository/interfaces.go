@@ -409,16 +409,10 @@ type LinkSubmitResult struct {
 	Restored bool                // true when an existing Trash row was restored
 }
 
-// TranslationAttemptSeed is the immutable identity available before the River
-// row exists. A scheduler must encode translation/product/generation plus the exact
-// source hash and nullable saved-content revision in its job args, then return
-// the inserted River ID to complete the current-attempt binding.
+// TranslationAttemptSeed is the immutable identity encoded into River job
+// arguments. Product generation and source identity fence every projection;
+// the business row does not mirror the River job ID.
 type TranslationAttemptSeed = model.TranslationAttemptSeed
-
-// TranslationScheduleCommand carries both the new immutable attempt seed and
-// the exact current attempt it supersedes. The queue applies both changes in
-// the repository transaction so an old active River job cannot be orphaned.
-type TranslationScheduleCommand = model.TranslationScheduleCommand
 
 // TranslationStore is the read and terminal-projection seam used by services
 // and workers. Durable scheduling is owned by app/durablework instead.

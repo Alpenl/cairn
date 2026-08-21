@@ -10,6 +10,7 @@ import (
 
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -24,8 +25,8 @@ func TestContentServiceRejectsSiteAndUnclassifiedLinks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &contentKindStore{link: &model.Link{ID: uuid.New(), Status: model.LinkStatusDone, LibraryKind: tt.kind}}
 			_, err := NewContentService(store, nil, nil).Save(context.Background(), store.link.ID.String())
-			var statusErr *httperr.Error
-			if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != 409 || statusErr.HTTPErrorCode() != tt.code {
+			var statusErr *problem.Error
+			if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != 409 || statusErr.Code() != tt.code {
 				t.Fatalf("Save() error = %v, want 409 %s", err, tt.code)
 			}
 			if store.contentWriteCalled {

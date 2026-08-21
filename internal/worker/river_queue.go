@@ -306,23 +306,10 @@ func (q *RiverQueue) EnqueueTranslation(ctx context.Context, seed model.Translat
 	return translationInsertResultID(result, seed.TranslationID)
 }
 
-// EnqueueTranslationTx applies a scheduling command in the caller's
-// transaction. When Previous is present it is cancelled before Seed
-// is inserted, so rollback restores the old job together with product state.
-func (q *RiverQueue) EnqueueTranslationTx(ctx context.Context, tx pgx.Tx, command model.TranslationScheduleCommand) (int64, error) {
-	seed := command.Seed
-	if command.Previous != nil {
-		previous := command.Previous
-		if previous.TranslationID != seed.TranslationID ||
-			previous.AttemptGeneration >= seed.AttemptGeneration || previous.RiverJobID <= 0 {
-			return 0, fmt.Errorf("river enqueue translation %s (tx): invalid superseded attempt", seed.TranslationID)
-		}
-		if _, err := q.client.JobCancelTx(ctx, tx, previous.RiverJobID); err != nil {
-			return 0, fmt.Errorf("river cancel superseded translation %s job %d (tx): %w",
-				seed.TranslationID, previous.RiverJobID, err)
-		}
-	}
-
+// EnqueueTranslationTx inserts a generation-fenced translation job in the
+// caller's product transaction. Older jobs may finish in River, but cannot
+// project after the product generation advances.
+func (q *RiverQueue) EnqueueTranslationTx(ctx context.Context, tx pgx.Tx, seed model.TranslationAttemptSeed) (int64, error) {
 	args, err := translationArgsFromSeed(seed)
 	if err != nil {
 		return 0, err

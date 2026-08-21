@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/model"
-	"webtag/internal/repository"
 )
 
 // readerHomeTestKey is a package-private context key type. An anonymous
@@ -18,14 +17,14 @@ import (
 type readerHomeTestKey struct{}
 
 type readerHomeAggregateStoreStub struct {
-	repository.ReaderVNextStore
-	aggregate repository.ReaderHomeAggregate
+	ReaderLibraryStore
+	aggregate model.ReaderHomeAggregate
 	err       error
 	calls     int
 	ctx       context.Context
 }
 
-func (s *readerHomeAggregateStoreStub) LoadHomeAggregate(ctx context.Context) (repository.ReaderHomeAggregate, error) {
+func (s *readerHomeAggregateStoreStub) LoadHomeAggregate(ctx context.Context) (model.ReaderHomeAggregate, error) {
 	s.calls++
 	s.ctx = ctx
 	return s.aggregate, s.err
@@ -37,8 +36,8 @@ func TestHomeAggregateMapsOneAuthoritativeResultToHomeDTO(t *testing.T) {
 	updatedAt := time.Date(2026, 8, 10, 9, 30, 0, 0, time.UTC)
 	dueAt := updatedAt.Add(24 * time.Hour)
 	completedAt := updatedAt.Add(-30 * time.Minute)
-	store := &readerHomeAggregateStoreStub{aggregate: repository.ReaderHomeAggregate{
-		Freshness: repository.ReaderHomeFreshnessFresh,
+	store := &readerHomeAggregateStoreStub{aggregate: model.ReaderHomeAggregate{
+		Freshness: model.ReaderHomeFreshnessFresh,
 		Counts: map[string]int{
 			"pending": 2,
 			"todos":   3,
@@ -75,7 +74,7 @@ func TestHomeAggregateMapsOneAuthoritativeResultToHomeDTO(t *testing.T) {
 			UpdatedAt:   updatedAt,
 		}},
 	}}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 	service.now = func() time.Time { return updatedAt }
 	ctx := context.WithValue(context.Background(), readerHomeTestKey{}, "home-test")
 
@@ -141,8 +140,8 @@ func TestHomeAggregateMapsOneAuthoritativeResultToHomeDTO(t *testing.T) {
 func TestHomeAggregateEmitsMinimalContinueReadingItem(t *testing.T) {
 	linkID := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 	updatedAt := time.Date(2026, 8, 10, 9, 30, 0, 0, time.UTC)
-	store := &readerHomeAggregateStoreStub{aggregate: repository.ReaderHomeAggregate{
-		Freshness: repository.ReaderHomeFreshnessFresh,
+	store := &readerHomeAggregateStoreStub{aggregate: model.ReaderHomeAggregate{
+		Freshness: model.ReaderHomeFreshnessFresh,
 		Counts:    map[string]int{"pending": 0, "todos": 0},
 		ContinueReading: []model.ReaderFeedItem{{
 			Key:         "link:" + linkID.String(),
@@ -155,7 +154,7 @@ func TestHomeAggregateEmitsMinimalContinueReadingItem(t *testing.T) {
 			CreatedAt:   updatedAt,
 		}},
 	}}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 	service.now = func() time.Time { return updatedAt }
 
 	got, err := service.HomeAggregate(context.Background())
@@ -190,27 +189,27 @@ func TestHomeAggregateEmitsMinimalContinueReadingItem(t *testing.T) {
 func TestHomeAggregateMapsPartialAndStaleWithoutConflatingThem(t *testing.T) {
 	cases := []struct {
 		name          string
-		freshness     repository.ReaderHomeFreshness
+		freshness     model.ReaderHomeFreshness
 		wantFreshness string
 		wantPartial   bool
 		wantStale     bool
 	}{
-		{name: "fresh", freshness: repository.ReaderHomeFreshnessFresh, wantFreshness: "fresh"},
-		{name: "partial", freshness: repository.ReaderHomeFreshness("partial"), wantFreshness: "partial", wantPartial: true},
-		{name: "stale", freshness: repository.ReaderHomeFreshnessStale, wantFreshness: "stale", wantStale: true},
+		{name: "fresh", freshness: model.ReaderHomeFreshnessFresh, wantFreshness: "fresh"},
+		{name: "partial", freshness: model.ReaderHomeFreshnessPartial, wantFreshness: "partial", wantPartial: true},
+		{name: "stale", freshness: model.ReaderHomeFreshnessStale, wantFreshness: "stale", wantStale: true},
 		{name: "zero_legacy", freshness: "", wantFreshness: "partial", wantPartial: true},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			store := &readerHomeAggregateStoreStub{aggregate: repository.ReaderHomeAggregate{
+			store := &readerHomeAggregateStoreStub{aggregate: model.ReaderHomeAggregate{
 				Freshness:       tt.freshness,
 				Counts:          map[string]int{"pending": 1, "todos": 2},
 				ContinueReading: []model.ReaderFeedItem{},
 				RecentThoughts:  []model.ReaderThought{},
 				Todos:           []model.ReaderTodo{},
 			}}
-			service := NewReaderVNextService(store, nil)
+			service := NewReaderVNextService(readerTestStores(store), nil)
 
 			got, err := service.HomeAggregate(context.Background())
 			if err != nil {
@@ -229,8 +228,8 @@ func TestHomeAggregateMapsProjectedTodoAfterHostWriteback(t *testing.T) {
 	dueAt := updatedAt.Add(48 * time.Hour)
 	completedAt := updatedAt.Add(-time.Minute)
 	hostKind, hostID := "thought", "thought-1"
-	store := &readerHomeAggregateStoreStub{aggregate: repository.ReaderHomeAggregate{
-		Freshness: repository.ReaderHomeFreshnessFresh,
+	store := &readerHomeAggregateStoreStub{aggregate: model.ReaderHomeAggregate{
+		Freshness: model.ReaderHomeFreshnessFresh,
 		Counts:    map[string]int{"pending": 0, "todos": 1},
 		Todos: []model.ReaderTodo{{
 			ID:             todoID,
@@ -249,7 +248,7 @@ func TestHomeAggregateMapsProjectedTodoAfterHostWriteback(t *testing.T) {
 		ContinueReading: []model.ReaderFeedItem{},
 		RecentThoughts:  []model.ReaderThought{},
 	}}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 
 	got, err := service.HomeAggregate(context.Background())
 	if err != nil {
@@ -272,13 +271,13 @@ func TestHomeAggregateMapsProjectedTodoAfterHostWriteback(t *testing.T) {
 
 func TestHomeAggregatePreservesKnownLegacyFieldsWithoutInventingMissingSections(t *testing.T) {
 	updatedAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	store := &readerHomeAggregateStoreStub{aggregate: repository.ReaderHomeAggregate{
+	store := &readerHomeAggregateStoreStub{aggregate: model.ReaderHomeAggregate{
 		// Freshness is intentionally zero: this is the shape returned by a
 		// legacy Reader aggregate proxy that predates the freshness contract.
 		Counts:          map[string]int{"pending": 2, "todos": 4},
 		ContinueReading: []model.ReaderFeedItem{},
 	}}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 	service.now = func() time.Time { return updatedAt }
 
 	got, err := service.HomeAggregate(context.Background())
@@ -301,7 +300,7 @@ func TestHomeAggregatePreservesKnownLegacyFieldsWithoutInventingMissingSections(
 
 func TestHomeAggregateDoesNotInventSummaryOrSectionsForUnverifiedResult(t *testing.T) {
 	store := &readerHomeAggregateStoreStub{}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 	service.now = func() time.Time { return time.Date(2026, 8, 10, 9, 30, 0, 0, time.UTC) }
 
 	got, err := service.HomeAggregate(context.Background())
@@ -319,7 +318,7 @@ func TestHomeAggregateDoesNotInventSummaryOrSectionsForUnverifiedResult(t *testi
 func TestHomeAggregateDoesNotReturnPartialDTOOnRepositoryError(t *testing.T) {
 	wantErr := errors.New("home counts unavailable")
 	store := &readerHomeAggregateStoreStub{err: wantErr}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 
 	got, err := service.HomeAggregate(context.Background())
 	if !errors.Is(err, wantErr) {

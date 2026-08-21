@@ -14,6 +14,7 @@ import (
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -159,8 +160,8 @@ func TestSiteReadServiceListValidatesViewAndNormalizesPaging(t *testing.T) {
 		t.Fatalf("filter = %#v", store.listFilter)
 	}
 	_, err = service.List(context.Background(), "unknown", "", "", 1, 10)
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusUnprocessableEntity || statusErr.HTTPErrorCode() != httperr.CodeInvalidSiteView {
+	var statusErr *problem.Error
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity || statusErr.Code() != httperr.CodeInvalidSiteView {
 		t.Fatalf("invalid view error = %v", err)
 	}
 }
@@ -228,12 +229,12 @@ func TestSiteReadServiceGetMapsInvalidAndMissingIDs(t *testing.T) {
 	t.Parallel()
 	service := NewSiteReadService(&siteReadFake{})
 	_, err := service.Get(context.Background(), "not-a-uuid")
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusBadRequest || statusErr.HTTPErrorCode() != httperr.CodeInvalidSiteID {
+	var statusErr *problem.Error
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusBadRequest || statusErr.Code() != httperr.CodeInvalidSiteID {
 		t.Fatalf("invalid id error = %v", err)
 	}
 	_, err = service.Get(context.Background(), uuid.New().String())
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusNotFound || statusErr.HTTPErrorCode() != httperr.CodeSiteNotFound {
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusNotFound || statusErr.Code() != httperr.CodeSiteNotFound {
 		t.Fatalf("missing error = %v", err)
 	}
 }
@@ -303,8 +304,8 @@ func TestSiteManagementServiceUpdateAppliesUserTagDeltaAtomically(t *testing.T) 
 		t.Fatalf("tag params = %#v", writer.tagParams)
 	}
 	_, err = service.Update(context.Background(), id.String(), "1", dto.SiteUpdateRequest{Tags: &dto.SiteTagPatchRequest{Add: []string{"go"}, Remove: []string{"GO"}}})
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusUnprocessableEntity || statusErr.HTTPErrorCode() != httperr.CodeInvalidSiteUpdate {
+	var statusErr *problem.Error
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity || statusErr.Code() != httperr.CodeInvalidSiteUpdate {
 		t.Fatalf("overlapping tag patch error = %v", err)
 	}
 }
@@ -369,13 +370,13 @@ func TestSiteManagementServiceUpdateRejectsBadRevisionAndConflict(t *testing.T) 
 	pinned := true
 	service := NewSiteManagementService(&siteReadFake{}, &siteProfileWriterFake{})
 	_, err := service.Update(context.Background(), id.String(), "", dto.SiteUpdateRequest{Pinned: &pinned})
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusPreconditionRequired || statusErr.HTTPErrorCode() != httperr.CodeSiteRevisionRequired {
+	var statusErr *problem.Error
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusPreconditionRequired || statusErr.Code() != httperr.CodeSiteRevisionRequired {
 		t.Fatalf("revision error = %v", err)
 	}
 	service = NewSiteManagementService(&siteReadFake{}, &siteProfileWriterFake{updated: false})
 	_, err = service.Update(context.Background(), id.String(), "3", dto.SiteUpdateRequest{Pinned: &pinned})
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusConflict || statusErr.HTTPErrorCode() != httperr.CodeSiteRevisionConflict {
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusConflict || statusErr.Code() != httperr.CodeSiteRevisionConflict {
 		t.Fatalf("conflict error = %v", err)
 	}
 }
@@ -417,17 +418,17 @@ func TestSiteManagementServiceEntryErrorsHaveStableContracts(t *testing.T) {
 	siteID, entryID := uuid.New(), uuid.New()
 	service := NewSiteManagementService(&siteReadFake{}, &siteProfileWriterFake{err: repository.ErrSiteEntryNotFound})
 	_, err := service.SetPrimaryEntry(context.Background(), siteID.String(), entryID.String(), "1")
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusNotFound || statusErr.HTTPErrorCode() != httperr.CodeSiteEntryNotFound {
+	var statusErr *problem.Error
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusNotFound || statusErr.Code() != httperr.CodeSiteEntryNotFound {
 		t.Fatalf("entry not found error = %v", err)
 	}
 	service = NewSiteManagementService(&siteReadFake{}, &siteProfileWriterFake{err: repository.ErrRevisionConflict})
 	_, err = service.UpdateEntry(context.Background(), siteID.String(), entryID.String(), "1", dto.SiteEntryUpdateRequest{})
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusUnprocessableEntity || statusErr.HTTPErrorCode() != httperr.CodeSiteEntryUpdateEmpty {
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity || statusErr.Code() != httperr.CodeSiteEntryUpdateEmpty {
 		t.Fatalf("empty entry update error = %v", err)
 	}
 	err = service.Delete(context.Background(), siteID.String(), "1", "0")
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusUnprocessableEntity || statusErr.HTTPErrorCode() != httperr.CodeSiteDeleteConfirm {
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity || statusErr.Code() != httperr.CodeSiteDeleteConfirm {
 		t.Fatalf("delete confirmation error = %v", err)
 	}
 }

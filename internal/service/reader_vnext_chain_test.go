@@ -16,8 +16,12 @@ import (
 )
 
 type readerVNextChainStore struct {
-	repository.ReaderVNextStore
-
+	ReaderThoughtStore
+	ReaderNoteStore
+	ReaderInboxStore
+	ReaderTodoStore
+	ReaderLibraryStore
+	ReaderHostStore
 	inbox             model.ReaderInbox
 	linkID            uuid.UUID
 	thoughts          map[string]model.ReaderThought
@@ -312,9 +316,9 @@ func (s *readerVNextChainStore) PatchEngagement(_ context.Context, patch model.R
 	return &s.engagement, nil
 }
 
-func (s *readerVNextChainStore) LoadHomeAggregate(context.Context) (repository.ReaderHomeAggregate, error) {
-	return repository.ReaderHomeAggregate{
-		Freshness:       repository.ReaderHomeFreshnessFresh,
+func (s *readerVNextChainStore) LoadHomeAggregate(context.Context) (model.ReaderHomeAggregate, error) {
+	return model.ReaderHomeAggregate{
+		Freshness:       model.ReaderHomeFreshnessFresh,
 		Counts:          map[string]int{"pending": boolCount(s.inbox.Status == "pending"), "todos": len(s.todos), "reading": 1, "notes": 1},
 		ContinueReading: s.feed.Items,
 		RecentThoughts:  mapReaderThoughts(s.thoughts),
@@ -354,7 +358,7 @@ func mapReaderThoughts(thoughts map[string]model.ReaderThought) []model.ReaderTh
 
 func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 	store := newReaderVNextChainStore()
-	service := NewReaderVNextService(store, nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
+	service := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
 	service.now = func() time.Time { return store.now }
 	ctx := context.Background()
 
@@ -457,7 +461,7 @@ func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 
 func TestReaderVNextBulkConfirmCarriesEveryExpectedRevision(t *testing.T) {
 	store := newReaderVNextChainStore()
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 	first := store.inbox.ID
 	second := uuid.MustParse("00000000-0000-0000-0000-000000000003")
 
@@ -481,7 +485,7 @@ func TestReaderVNextBulkConfirmCarriesEveryExpectedRevision(t *testing.T) {
 
 func TestReaderVNextBulkConfirmRejectsPartialExpectedRevisions(t *testing.T) {
 	store := newReaderVNextChainStore()
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 	first := store.inbox.ID
 	second := uuid.MustParse("00000000-0000-0000-0000-000000000003")
 

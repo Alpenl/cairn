@@ -161,7 +161,7 @@ func TestIdempotencyReplayCannotBypassPublicAPIAuthentication(t *testing.T) {
 }
 
 type routerTodoIdempotencyProbe struct {
-	handler.ReaderService
+	handler.ReaderTodoRoutes
 	createCalls int
 	patchCalls  int
 	deleteCalls int
@@ -196,7 +196,7 @@ func TestTodoWritesReplayThroughProductionIdempotencyChain(t *testing.T) {
 
 	probe := &routerTodoIdempotencyProbe{}
 	deps := smokeDeps()
-	deps.Reader = probe
+	deps.Reader = handler.ReaderRoutes{Todos: probe}
 	router := NewRouterWithDependencies(deps, nil, nil, RouterOptions{
 		ExtensionAPIToken:    "extension-secret",
 		InstallationIdentity: sessionSecurityVersions{},

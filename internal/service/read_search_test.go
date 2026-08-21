@@ -11,6 +11,7 @@ import (
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/repository/repotest"
 )
@@ -94,8 +95,8 @@ func TestOverlongQueryReturns422(t *testing.T) {
 		long[i] = 'a'
 	}
 	_, err := svc.List(context.Background(), dto.ListLinksRequest{Query: string(long)})
-	var he *httperr.Error
-	if !errors.As(err, &he) || he.HTTPStatus() != http.StatusUnprocessableEntity || he.HTTPErrorCode() != httperr.CodeQueryTooLong {
+	var he *problem.Error
+	if !errors.As(err, &he) || problemHTTPStatus(he) != http.StatusUnprocessableEntity || he.Code() != httperr.CodeQueryTooLong {
 		t.Fatalf("want 422 query_too_long, got %v", err)
 	}
 	if store.lastFilter != nil {
@@ -151,8 +152,8 @@ func TestURLInvalidReturns422(t *testing.T) {
 	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	_, err := svc.List(context.Background(), dto.ListLinksRequest{URL: "not-a-url"})
-	var he *httperr.Error
-	if !errors.As(err, &he) || he.HTTPStatus() != http.StatusUnprocessableEntity {
+	var he *problem.Error
+	if !errors.As(err, &he) || problemHTTPStatus(he) != http.StatusUnprocessableEntity {
 		t.Fatalf("want 422 for invalid url, got %v", err)
 	}
 }
@@ -165,8 +166,8 @@ func TestSearchFilterRejectsBadContentType(t *testing.T) {
 	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	_, err := svc.List(context.Background(), dto.ListLinksRequest{Query: "rust", ContentType: "bogus"})
-	var he *httperr.Error
-	if !errors.As(err, &he) || he.HTTPStatus() != http.StatusUnprocessableEntity {
+	var he *problem.Error
+	if !errors.As(err, &he) || problemHTTPStatus(he) != http.StatusUnprocessableEntity {
 		t.Fatalf("want 422 for bad content_type in q= mode, got %v", err)
 	}
 	if store.lastFilter != nil {

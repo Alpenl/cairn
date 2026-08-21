@@ -2,14 +2,13 @@ package service
 
 import (
 	"context"
-	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/siteidentity"
 )
@@ -39,7 +38,7 @@ func NewConversionPreviewService(links repository.LinkLifecycleReader, content c
 func (s *ConversionPreviewService) Preview(ctx context.Context, rawLinkID string, request dto.ConversionPreviewRequest) (dto.ConversionPreviewResponse, error) { //nolint:gocyclo // 预览需枚举转换的每种前置条件与警告，分支即用户可见的提示项
 	id, err := uuid.Parse(strings.TrimSpace(rawLinkID))
 	if err != nil {
-		return dto.ConversionPreviewResponse{}, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return dto.ConversionPreviewResponse{}, problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 
 	link, err := s.links.GetLifecycleByID(ctx, id)
@@ -47,18 +46,18 @@ func (s *ConversionPreviewService) Preview(ctx context.Context, rawLinkID string
 		return dto.ConversionPreviewResponse{}, err
 	}
 	if link == nil {
-		return dto.ConversionPreviewResponse{}, httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return dto.ConversionPreviewResponse{}, problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 	if link.Status != model.LinkStatusDone || link.LibraryKind == nil {
-		return dto.ConversionPreviewResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeLibraryKindNotFinal, "library kind is not final")
+		return dto.ConversionPreviewResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeLibraryKindNotFinal, "library kind is not final")
 	}
 
 	target := model.LibraryKind(strings.TrimSpace(request.TargetKind))
 	if target != model.LibraryKindReading && target != model.LibraryKindSite {
-		return dto.ConversionPreviewResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidRequestedLibraryKind, "target_kind must be reading or site")
+		return dto.ConversionPreviewResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidRequestedLibraryKind, "target_kind must be reading or site")
 	}
 	if target == *link.LibraryKind {
-		return dto.ConversionPreviewResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeConversionTargetUnchanged, "conversion target is unchanged")
+		return dto.ConversionPreviewResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeConversionTargetUnchanged, "conversion target is unchanged")
 	}
 
 	response := dto.ConversionPreviewResponse{

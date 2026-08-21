@@ -58,10 +58,6 @@ type LinkTranslation struct {
 	// attempt that currently owns this reusable translation row. Generation 0
 	// is reserved for historical attempts that predate the v2 River protocol.
 	AttemptGeneration int64
-	// CurrentRiverJobID is the exact River row allowed to project this
-	// attempt. It intentionally has no database FK because River cleans
-	// terminal rows on an independent retention schedule.
-	CurrentRiverJobID *int64
 	// Stale is a read-time projection for full-article translations whose
 	// source hash no longer matches the currently saved original. It is not
 	// persisted in link_translations.
@@ -98,14 +94,6 @@ type TranslationAttemptSeed struct {
 	AttemptGeneration     int64
 	SourceHash            string
 	SourceContentRevision *int64
-}
-
-// TranslationScheduleCommand describes one atomic River scheduling change.
-// Previous is present only when a still-current attempt is being superseded;
-// the transactional scheduler must cancel it before inserting Seed.
-type TranslationScheduleCommand struct {
-	Seed     TranslationAttemptSeed
-	Previous *TranslationAttempt
 }
 
 // TranslationRequest is the domain input for creating or reusing a

@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -19,13 +18,6 @@ type Querier interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
-// Pool 在 Querier 之上额外暴露 Ping 与 Close，用于健康检查和优雅停机。
-type Pool interface {
-	Querier
-	Ping(ctx context.Context) error
-	Close()
 }
 
 // Options bundles the operator-tunable pgxpool sizing and lifecycle knobs.
@@ -51,13 +43,6 @@ type Options struct {
 	// HealthCheckPeriod 是 pgx 主动 ping 空闲连接的间隔。0 = 保持 pgx
 	// 默认（1 分钟）。降低可以更快发现死连接，代价是更多空载流量。
 	HealthCheckPeriod time.Duration
-	// AcquisitionGate is installed only for the application runtime. It
-	// rejects new persistence owners during shutdown while allowing contexts
-	// carrying an owner admitted before shutdown to finish.
-	AcquisitionGate *AcquisitionGate
-	// PoolShutdown makes the application Runtime's synchronous pgxpool close
-	// consume its cleanup deadline. Other process-lifetime pools may leave it nil.
-	PoolShutdown *PoolShutdown
 }
 
 // Open builds and pings a *pgxpool.Pool. The Options struct is value-typed
@@ -68,7 +53,7 @@ func Open(ctx context.Context, databaseURL string, opts Options) (*pgxpool.Pool,
 	if err != nil {
 		return nil, err
 	}
-	return openConfiguredPool(ctx, cfg, opts, defaultDatabasePingTimeout)
+	return openConfiguredPool(ctx, cfg, defaultDatabasePingTimeout)
 }
 
 func newPoolConfig(databaseURL string, opts Options) (*pgxpool.Config, error) {
@@ -77,39 +62,19 @@ func newPoolConfig(databaseURL string, opts Options) (*pgxpool.Config, error) {
 		return nil, fmt.Errorf("parse pgx config: %w", err)
 	}
 	applyPoolOptions(cfg, opts)
-	installAcquisitionGate(cfg, opts.AcquisitionGate)
-	if err := installPoolShutdown(cfg, opts.PoolShutdown); err != nil {
-		return nil, fmt.Errorf("install pool shutdown: %w", err)
-	}
 	return cfg, nil
 }
 
 func openConfiguredPool(
 	ctx context.Context,
 	cfg *pgxpool.Config,
-	opts Options,
 	pingTimeout time.Duration,
 ) (*pgxpool.Pool, error) {
 	if pingTimeout <= 0 {
 		pingTimeout = defaultDatabasePingTimeout
 	}
-	// NewWithConfig uses its context for the asynchronous initial MinConns
-	// constructors. Own that work independently so Ping failure can cancel it
-	// before synchronous pool destruction waits on puddle's destructor barrier.
-	initialConstructionCtx := ctx
-	if opts.PoolShutdown != nil {
-		var err error
-		initialConstructionCtx, err = opts.PoolShutdown.bindInitialConstructionContext(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("bind initial pool construction: %w", err)
-		}
-	}
-
-	pool, err := pgxpool.NewWithConfig(initialConstructionCtx, cfg)
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		if opts.PoolShutdown != nil {
-			opts.PoolShutdown.BeginShutdown()
-		}
 		return nil, fmt.Errorf("open pgx pool: %w", err)
 	}
 
@@ -117,22 +82,10 @@ func openConfiguredPool(
 	defer cancel()
 
 	if err := pool.Ping(pingCtx); err != nil {
-		if opts.PoolShutdown != nil {
-			opts.PoolShutdown.BeginShutdown()
-		}
-		var closeErr error
-		if opts.PoolShutdown != nil {
-			closeErr = opts.PoolShutdown.Close(pingCtx, pool)
-		} else {
-			pool.Close()
-		}
-		return nil, errors.Join(fmt.Errorf("ping pgx pool: %w", err), closeErr)
+		pool.Close()
+		return nil, fmt.Errorf("ping pgx pool: %w", err)
 	}
 
-	// Successful Open transfers the cancel function to PoolShutdown so initial
-	// MinConns warmup can finish. Runtime shutdown cancels any remaining work
-	// before persistence Drain. Pools without that capability retain pgx's
-	// process-lifetime construction behavior.
 	return pool, nil
 }
 

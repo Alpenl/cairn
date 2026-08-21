@@ -263,7 +263,7 @@ func TestReaderVNextPostgresCrossSurfaceChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadHomeAggregate after Feed action: %v", err)
 	}
-	if home.Freshness != repository.ReaderHomeFreshnessFresh || home.Counts["pending"] != 1 || home.Counts["reading"] != 1 || home.Counts["notes"] != 1 {
+	if home.Freshness != model.ReaderHomeFreshnessFresh || home.Counts["pending"] != 1 || home.Counts["reading"] != 1 || home.Counts["notes"] != 1 {
 		t.Fatalf("Home aggregate = freshness=%q counts=%#v", home.Freshness, home.Counts)
 	}
 	if len(home.ContinueReading) != 1 || home.ContinueReading[0].LinkID == nil || *home.ContinueReading[0].LinkID != linkID {

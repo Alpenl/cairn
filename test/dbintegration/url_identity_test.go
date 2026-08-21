@@ -1,7 +1,6 @@
 package dbintegration
 
 import (
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -212,8 +211,9 @@ func TestFeedURLIdentitySubscribeAndOPMLReuseCanonicalSubscription(t *testing.T)
 
 func assertUnprocessableCode(t *testing.T, err error, wantCode string) {
 	t.Helper()
-	var requestError *httperr.Error
-	if !errors.As(err, &requestError) || requestError.HTTPStatus() != 422 || requestError.HTTPErrorCode() != wantCode {
+	carrier, ok := httperr.As(err)
+	coder, coded := carrier.(httperr.ErrorCoder)
+	if !ok || !coded || carrier.HTTPStatus() != 422 || coder.HTTPErrorCode() != wantCode {
 		t.Fatalf("error = %v, want HTTP 422/%s", err, wantCode)
 	}
 }

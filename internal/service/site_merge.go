@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -72,7 +72,7 @@ func (s *SiteMergeService) loadMergeDetails(ctx context.Context, rawTarget strin
 		return nil, nil, err
 	}
 	if target == nil {
-		return nil, nil, httperr.NewWithCode(404, httperr.CodeSiteNotFound, "target site not found")
+		return nil, nil, problem.NewWithCode(problem.NotFound, problem.CodeSiteNotFound, "target site not found")
 	}
 	if target.Revision != targetRevision {
 		return nil, nil, siteMergeConflict("target site was changed")
@@ -92,7 +92,7 @@ func (s *SiteMergeService) loadMergeDetails(ctx context.Context, rawTarget strin
 			return nil, nil, getErr
 		}
 		if detail == nil {
-			return nil, nil, httperr.NewWithCode(404, httperr.CodeSiteNotFound, "source site not found")
+			return nil, nil, problem.NewWithCode(problem.NotFound, problem.CodeSiteNotFound, "source site not found")
 		}
 		if detail.Revision != source.Revision {
 			return nil, nil, siteMergeConflict("source site was changed")
@@ -200,8 +200,8 @@ func resolveSiteMergeConflicts(conflicts []dto.SiteMergeFieldConflictResponse, r
 }
 
 func invalidSiteMerge(message string) error {
-	return httperr.NewWithCode(422, "invalid_site_merge", message)
+	return problem.NewWithCode(problem.Invalid, "invalid_site_merge", message)
 }
 func siteMergeConflict(message string) error {
-	return httperr.NewWithCode(409, "site_merge_conflict", message)
+	return problem.NewWithCode(problem.Conflict, "site_merge_conflict", message)
 }

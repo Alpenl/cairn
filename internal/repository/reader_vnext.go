@@ -27,61 +27,6 @@ import (
 	"webtag/internal/urlidentity"
 )
 
-// ReaderVNextStore is the persistence boundary for the personal Reader
-// surfaces. It is intentionally separate from the link repository so Reader-owned data
-// does not make the existing link repository a second god interface.
-type ReaderVNextStore interface {
-	AppendThoughtOps(context.Context, []model.ReaderThoughtOp) ([]model.ReaderThoughtAck, error)
-	ListThoughts(context.Context, string, string, int) ([]model.ReaderThought, string, error)
-	SearchThoughts(context.Context, string, string, int) ([]model.ReaderThoughtSearch, int, string, error)
-	ListThoughtsSince(context.Context, string, int) ([]model.ReaderThought, string, error)
-	ListThoughtHistory(context.Context, string, int) ([]model.ReaderThought, string, error)
-	ListThoughtConflicts(context.Context, string, int) ([]model.ReaderThoughtConflict, string, error)
-	GetThought(context.Context, string) (*model.ReaderThought, error)
-	GetAIContext(context.Context, uuid.UUID) (*model.ReaderAIContext, error)
-	MarkThoughtHostTombstones(context.Context, string, string, string) error
-	CreateNote(context.Context, model.ReaderNote) (*model.ReaderNote, error)
-	ListNotes(context.Context, string, int) ([]model.ReaderNote, int, string, error)
-	SearchPublishedNotes(context.Context, string, int) ([]model.ReaderNoteSearch, int, error)
-	GetNote(context.Context, uuid.UUID) (*model.ReaderNote, error)
-	SaveNoteDraft(context.Context, model.ReaderNoteDraftCommand) (*model.ReaderNote, error)
-	DiscardNoteDraft(context.Context, model.ReaderNoteDiscardDraftCommand) error
-	PublishNote(context.Context, model.ReaderNotePublishCommand) (*model.ReaderNote, error)
-	ListNoteHistory(context.Context, uuid.UUID, int) ([]model.ReaderNoteHistory, error)
-	RestoreNoteRevision(context.Context, model.ReaderNoteRestoreCommand) (*model.ReaderNote, error)
-	CreateInbox(context.Context, model.ReaderInbox) (*model.ReaderInbox, error)
-	ListInbox(context.Context, model.ReaderInboxPartition, string, int) ([]model.ReaderInboxListItem, int, int, string, error)
-	GetInbox(context.Context, uuid.UUID) (*model.ReaderInbox, error)
-	PatchInbox(context.Context, model.ReaderInboxPatch) (*model.ReaderInbox, error)
-	DiscardInbox(context.Context, uuid.UUID) error
-	RestoreInbox(context.Context, uuid.UUID) error
-	ConfirmInbox(context.Context, uuid.UUID, *int64) (uuid.UUID, error)
-	BulkConfirmInbox(context.Context, []model.ReaderInboxBulkConfirmation) ([]model.ReaderInboxBulkResult, error)
-	ConfirmAIProposals(context.Context, model.ReaderInboxPartition) (model.ReaderInboxAIProposalConfirmation, error)
-	BulkDiscardInbox(context.Context, []uuid.UUID) ([]model.ReaderInboxBulkResult, error)
-	ClaimInboxProposal(context.Context, uuid.UUID, int64) (*model.ReaderInbox, error)
-	RetryInboxProposal(context.Context, uuid.UUID, int64) error
-	FailInboxProposal(context.Context, uuid.UUID, int64) error
-	CompleteInboxProposal(context.Context, uuid.UUID, int64, string, []string) error
-	CreateTodo(context.Context, model.ReaderTodo) (*model.ReaderTodo, error)
-	ListTodos(context.Context, string, int) (model.ReaderTodoPage, error)
-	PatchTodo(context.Context, model.ReaderTodoPatch) (*model.ReaderTodo, error)
-	DeleteTodo(context.Context, uuid.UUID) error
-	GetEngagement(context.Context, uuid.UUID) (*model.ReaderEngagement, error)
-	PatchEngagement(context.Context, model.ReaderEngagementPatch) (*model.ReaderEngagement, error)
-	LoadHomeAggregate(context.Context) (ReaderHomeAggregate, error)
-	HomeCounts(context.Context) (map[string]int, error)
-	ListFeedWithSources(context.Context, string, string, []string, int) (*model.ReaderFeedPage, error)
-	FeedbackFeed(context.Context, string, string) (model.ReaderFeedFeedback, error)
-	RelatedTags(context.Context, *uuid.UUID, int) ([]string, error)
-	ListActivity(context.Context, model.ReaderActivityQuery) (model.ReaderActivityPage, error)
-	UpdateLinkMetadata(context.Context, model.ReaderLinkMetadataPatch) (model.ReaderLinkMetadataUpdate, error)
-	SoftDeleteHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error)
-	RestoreHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error)
-	PurgeHost(context.Context, model.ReaderHostKind, uuid.UUID, uuid.UUID) error
-	ListTrash(context.Context, *model.ReaderHostKind, string, int) ([]model.ReaderTrashItem, int, string, error)
-}
-
 type PGXReaderVNextRepository struct {
 	db                 database.Querier
 	linkLifecycleQueue ReaderLinkLifecycleQueue
@@ -108,8 +53,6 @@ type ReaderLinkLifecycleQueue interface {
 	EnqueueTx(context.Context, pgx.Tx, model.ParseAttempt) error
 	CancelAllActiveTx(context.Context, pgx.Tx, uuid.UUID) error
 }
-
-var _ ReaderVNextStore = (*PGXReaderVNextRepository)(nil)
 
 type readerTxBeginner interface {
 	Begin(context.Context) (pgx.Tx, error)

@@ -11,8 +11,8 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/repository/repotest"
 )
@@ -86,12 +86,12 @@ func TestSubmitServiceSubmitRejectsInvalidURLAsClientError(t *testing.T) {
 	service := newTestSubmitService(&repotest.ObservableLinkStore{}, &submitFakeQueue{}, &submitFakeLocker{})
 
 	_, err := service.Submit(context.Background(), dto.LinkCreateRequest{URL: "   "})
-	var statusErr *httperr.Error
+	var statusErr *problem.Error
 	if !errors.As(err, &statusErr) {
 		t.Fatalf("Submit() error = %v, want StatusError", err)
 	}
-	if statusErr.HTTPStatus() != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want %d", statusErr.HTTPStatus(), http.StatusUnprocessableEntity)
+	if problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", problemHTTPStatus(statusErr), http.StatusUnprocessableEntity)
 	}
 }
 
@@ -118,12 +118,12 @@ func TestSubmitServiceSubmitRejectsUnsupportedOrUnsafeTargets(t *testing.T) {
 			t.Parallel()
 
 			_, err := service.Submit(context.Background(), dto.LinkCreateRequest{URL: tt.url})
-			var statusErr *httperr.Error
+			var statusErr *problem.Error
 			if !errors.As(err, &statusErr) {
 				t.Fatalf("Submit() error = %v, want StatusError", err)
 			}
-			if statusErr.HTTPStatus() != http.StatusUnprocessableEntity {
-				t.Fatalf("status = %d, want %d", statusErr.HTTPStatus(), http.StatusUnprocessableEntity)
+			if problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d", problemHTTPStatus(statusErr), http.StatusUnprocessableEntity)
 			}
 		})
 	}
@@ -348,12 +348,12 @@ func TestSubmitServiceRefreshHonorsCooldown(t *testing.T) {
 	if err == nil {
 		t.Fatal("Refresh() error = nil, want 429 cooldown error")
 	}
-	var statusErr *httperr.Error
+	var statusErr *problem.Error
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Refresh() error = %T, want *httperr.Error", err)
+		t.Fatalf("Refresh() error = %T, want *problem.Error", err)
 	}
-	if statusErr.HTTPStatus() != 429 {
-		t.Fatalf("status = %d, want 429", statusErr.HTTPStatus())
+	if problemHTTPStatus(statusErr) != 429 {
+		t.Fatalf("status = %d, want 429", problemHTTPStatus(statusErr))
 	}
 	if statusErr.RetryAfterSeconds() <= 0 || statusErr.RetryAfterSeconds() > 60 {
 		t.Fatalf("Retry-After = %d, want in (0, 60]", statusErr.RetryAfterSeconds())
@@ -411,11 +411,11 @@ func TestSubmitServiceRefreshRejectsInvalidIDAsClientError(t *testing.T) {
 	service := newTestSubmitService(&repotest.ObservableLinkStore{}, &submitFakeQueue{}, &submitFakeLocker{})
 
 	_, err := service.Refresh(context.Background(), "not-a-uuid")
-	var statusErr *httperr.Error
+	var statusErr *problem.Error
 	if !errors.As(err, &statusErr) {
 		t.Fatalf("Refresh() error = %v, want StatusError", err)
 	}
-	if statusErr.HTTPStatus() != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", statusErr.HTTPStatus(), http.StatusBadRequest)
+	if problemHTTPStatus(statusErr) != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", problemHTTPStatus(statusErr), http.StatusBadRequest)
 	}
 }

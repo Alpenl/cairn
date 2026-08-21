@@ -58,13 +58,6 @@ func TestDurableDeleteLinkRollsBackLifecycleWhenSoftDeleteFails(t *testing.T) {
 	translationID := schedulePendingTranslation(
 		t, pool, queue, ctx, linkID, "translation must survive final Link delete failure",
 	)
-	var translationRiverJobID int64
-	if err := pool.QueryRow(ctx,
-		`SELECT current_river_job_id FROM link_translations WHERE id=$1`,
-		translationID,
-	).Scan(&translationRiverJobID); err != nil {
-		t.Fatalf("read rollback translation River job: %v", err)
-	}
 
 	if _, err := pool.Exec(ctx, `
 		CREATE FUNCTION fail_delete_acceptance_soft_delete() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -109,19 +102,17 @@ func TestDurableDeleteLinkRollsBackLifecycleWhenSoftDeleteFails(t *testing.T) {
 
 	var translationStatus model.TranslationStatus
 	var translationReason string
-	var currentRiverJobID *int64
 	if err := pool.QueryRow(ctx, `
-		SELECT status,COALESCE(error_msg,''),current_river_job_id
+		SELECT status,COALESCE(error_msg,'')
 		FROM link_translations
 		WHERE id=$1`, translationID).Scan(
-		&translationStatus, &translationReason, &currentRiverJobID,
+		&translationStatus, &translationReason,
 	); err != nil {
 		t.Fatalf("read translation after final update rollback: %v", err)
 	}
-	if translationStatus != model.TranslationStatusPending || translationReason != "" ||
-		currentRiverJobID == nil || *currentRiverJobID != translationRiverJobID {
-		t.Fatalf("translation after rollback = %s/%q current=%v, want pending/empty/%d",
-			translationStatus, translationReason, currentRiverJobID, translationRiverJobID)
+	if translationStatus != model.TranslationStatusPending || translationReason != "" {
+		t.Fatalf("translation after rollback = %s/%q, want pending/empty",
+			translationStatus, translationReason)
 	}
 	assertActiveRiverAttempt(t, pool, attempt)
 	assertDeleteAcceptanceTranslationRiverActive(t, pool, translationID)

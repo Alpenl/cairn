@@ -101,6 +101,7 @@ func prepareProductionUpgradeFixture(t *testing.T, pool *pgxpool.Pool) {
 	defer func() { _ = tx.Rollback(t.Context()) }()
 	if _, err := tx.Exec(t.Context(), `
 		ALTER TABLE public.link_translations
+			ADD COLUMN current_river_job_id bigint,
 			DROP CONSTRAINT chk_link_translations_source_content_revision,
 			ADD CONSTRAINT chk_link_translations_source_content_revision
 			CHECK (source_content_revision IS NULL OR source_content_revision > 0);

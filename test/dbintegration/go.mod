@@ -31,8 +31,6 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/riverqueue/river v0.43.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	webtag v0.0.0
 )
@@ -110,7 +108,9 @@ require (
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.61.0 // indirect
+	github.com/riverqueue/river v0.43.0 // indirect
 	github.com/riverqueue/river/riverdriver v0.43.0 // indirect
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.43.0 // indirect
 	github.com/riverqueue/river/rivershared v0.43.0 // indirect
 	github.com/riverqueue/river/rivertype v0.43.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.3 // indirect

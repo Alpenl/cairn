@@ -12,7 +12,7 @@ import (
 )
 
 type readerInboxRestoreStoreStub struct {
-	repository.ReaderVNextStore
+	ReaderInboxStore
 	restoreErr   error
 	restoredID   uuid.UUID
 	restoreCalls int
@@ -27,7 +27,7 @@ func (s *readerInboxRestoreStoreStub) RestoreInbox(_ context.Context, id uuid.UU
 func TestRestoreInboxUsesDedicatedRepositoryCommandForRetries(t *testing.T) {
 	inboxID := uuid.New()
 	store := &readerInboxRestoreStoreStub{}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 
 	if err := service.RestoreInbox(context.Background(), inboxID.String()); err != nil {
 		t.Fatalf("first RestoreInbox() error = %v", err)
@@ -54,7 +54,7 @@ func TestRestoreInboxMapsMissingAndInvalidIdentityErrors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &readerInboxRestoreStoreStub{restoreErr: tc.restoreErr}
-			service := NewReaderVNextService(store, nil)
+			service := NewReaderVNextService(readerTestStores(store), nil)
 
 			err := service.RestoreInbox(context.Background(), tc.rawID)
 			assertReaderHTTPError(t, err, tc.status, tc.code)

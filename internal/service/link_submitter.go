@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strings"
 	"time"
 
@@ -11,8 +10,8 @@ import (
 
 	"webtag/internal/contentdoc"
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -328,14 +327,14 @@ func (s *linkSubmitter) reuseExisting(ctx context.Context, link *submitCandidate
 func (s *linkSubmitter) requireExisting(ctx context.Context, linkID string) (*submitCandidate, error) {
 	id, err := uuid.Parse(linkID)
 	if err != nil {
-		return nil, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return nil, problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 	link, err := s.reader.GetSubmitLookupByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if link == nil {
-		return nil, httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return nil, problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 	return submitCandidateFromLookup(link), nil
 }

@@ -3,14 +3,13 @@ package service
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -33,47 +32,47 @@ func NewConversionExecuteService(links repository.LinkLifecycleReader, commands 
 func (s *ConversionExecuteService) Execute(ctx context.Context, rawLinkID string, request dto.ConversionExecuteRequest) (dto.ConversionExecuteResponse, error) { //nolint:gocyclo // 转换编排：校验、落库、入队、指标各有失败分支
 	id, err := uuid.Parse(strings.TrimSpace(rawLinkID))
 	if err != nil {
-		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 	link, err := s.links.GetLifecycleByID(ctx, id)
 	if err != nil {
 		return dto.ConversionExecuteResponse{}, err
 	}
 	if link == nil {
-		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 	if link.Status != model.LinkStatusDone || link.LibraryKind == nil {
-		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeLibraryKindNotFinal, "library kind is not final")
+		return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeLibraryKindNotFinal, "library kind is not final")
 	}
 	target := model.LibraryKind(strings.TrimSpace(request.TargetKind))
 	if target != model.LibraryKindReading && target != model.LibraryKindSite {
-		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidRequestedLibraryKind, "target_kind must be reading or site")
+		return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidRequestedLibraryKind, "target_kind must be reading or site")
 	}
 	if target == *link.LibraryKind {
-		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeConversionTargetUnchanged, "conversion target is unchanged")
+		return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeConversionTargetUnchanged, "conversion target is unchanged")
 	}
 	if request.ExpectedContentRevision != link.ContentRevision {
-		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeRevisionConflict, "content revision has changed")
+		return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeRevisionConflict, "content revision has changed")
 	}
 	if target == model.LibraryKindSite && !request.ConfirmDestructive {
-		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeDestructiveConfirmationRequired, "destructive conversion requires confirmation")
+		return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeDestructiveConfirmationRequired, "destructive conversion requires confirmation")
 	}
 	var targetSiteID *uuid.UUID
 	if request.TargetSiteID != nil && strings.TrimSpace(*request.TargetSiteID) != "" {
 		parsed, parseErr := uuid.Parse(strings.TrimSpace(*request.TargetSiteID))
 		if parseErr != nil {
-			return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidSiteID, "invalid target site id")
+			return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.Malformed, problem.CodeInvalidSiteID, "invalid target site id")
 		}
 		targetSiteID = &parsed
 	}
 	if target == model.LibraryKindReading && targetSiteID != nil {
-		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidRequestedLibraryKind, "target_site_id is only valid for site conversion")
+		return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidRequestedLibraryKind, "target_site_id is only valid for site conversion")
 	}
 	if target == model.LibraryKindReading && request.ExpectedSiteRevision == nil {
-		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeRevisionConflict, "source site revision is required")
+		return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeRevisionConflict, "source site revision is required")
 	}
 	if targetSiteID != nil && request.ExpectedSiteRevision == nil {
-		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeRevisionConflict, "target site revision is required")
+		return dto.ConversionExecuteResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeRevisionConflict, "target site revision is required")
 	}
 
 	result, err := s.commands.ConvertLink(ctx, ConvertLinkCommand{
@@ -100,10 +99,10 @@ func trimOptional(value *string) *string {
 
 func mapConversionError(err error) error {
 	if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrSiteEntryNotFound) {
-		return httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 	if errors.Is(err, repository.ErrRevisionConflict) {
-		return httperr.NewWithCode(http.StatusConflict, httperr.CodeRevisionConflict, "revision has changed")
+		return problem.NewWithCode(problem.Conflict, problem.CodeRevisionConflict, "revision has changed")
 	}
 	return err
 }

@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -138,8 +138,8 @@ func TestSiteSplitStaleRevisionReturnsConflict(t *testing.T) {
 	site := &repository.SiteDetail{SiteListItem: repository.SiteListItem{Site: model.Site{ID: siteID, Revision: 5}}, Entries: []model.SiteEntry{{ID: remainingID}, {ID: movedID}}}
 	svc := NewSiteSplitService(&siteSplitFake{siteMergeReaderFake: siteMergeReaderFake{details: map[uuid.UUID]*repository.SiteDetail{siteID: site}}})
 	_, err := svc.Preview(context.Background(), siteID.String(), dto.SiteSplitRequest{ExpectedRevision: 4, EntryIDs: []string{movedID.String()}, Name: "Moved", PrimaryEntryID: movedID.String()})
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusConflict {
+	var statusErr *problem.Error
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusConflict {
 		t.Fatalf("stale preview error=%v", err)
 	}
 }

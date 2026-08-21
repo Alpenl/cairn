@@ -2,11 +2,10 @@ package service
 
 import (
 	"context"
-	"net/http"
 	"strings"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -37,7 +36,7 @@ func NormalizeTagLibraryKind(raw string) (string, bool) {
 func (s *TagReadService) ListScoped(ctx context.Context, rawScope string) ([]dto.TagCountResponse, error) {
 	scope, valid := NormalizeTagLibraryKind(rawScope)
 	if !valid {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidRequestedLibraryKind, "library_kind must be reading, site, or all")
+		return nil, problem.NewWithCode(problem.Invalid, problem.CodeInvalidRequestedLibraryKind, "library_kind must be reading, site, or all")
 	}
 	if scope == "" {
 		return s.List(ctx)

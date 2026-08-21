@@ -86,7 +86,7 @@ func (s *ReaderVNextService) ResummarizeInbox(ctx context.Context, rawID string)
 	if err != nil {
 		return dto.ReaderInboxResponse{}, err
 	}
-	item, err := s.store.GetInbox(ctx, id)
+	item, err := s.inbox.GetInbox(ctx, id)
 	if err != nil {
 		return dto.ReaderInboxResponse{}, mapReaderError(err)
 	}

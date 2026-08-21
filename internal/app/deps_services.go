@@ -18,7 +18,14 @@ import (
 // 编译期断言：service 实现满足 handler 声明的契约。断言放在装配层而非 service
 // 包内——service 是 handler 的下层，不得反向导入它。装配层同时看得见两侧，是校验
 // 桥接关系的唯一正确位置。
-var _ handler.ReaderService = (*service.ReaderVNextService)(nil)
+var (
+	_ handler.ReaderThoughtRoutes   = (*service.ReaderVNextService)(nil)
+	_ handler.ReaderNoteRoutes      = (*service.ReaderVNextService)(nil)
+	_ handler.ReaderInboxRoutes     = (*service.ReaderVNextService)(nil)
+	_ handler.ReaderTodoRoutes      = (*service.ReaderVNextService)(nil)
+	_ handler.ReaderAggregateRoutes = (*service.ReaderVNextService)(nil)
+	_ handler.ReaderHostRoutes      = (*service.ReaderVNextService)(nil)
+)
 
 func buildParsePipeline(cfg config.Config, layer *persistenceLayer, fetchManager *fetcher.Manager, analyzerSvc *analyzer.OpenAIAnalyzer) *service.ParsePipeline {
 	return service.NewParsePipeline(service.ParsePipelineOptions{

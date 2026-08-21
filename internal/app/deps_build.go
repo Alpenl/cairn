@@ -60,7 +60,7 @@ func buildRuntime(ctx context.Context, cfg config.Config) (built *Runtime, build
 
 	layer, err := openPersistenceLayer(ctx, cfg)
 	if layer != nil {
-		cleanup.Add(runtimeBuildPersistenceLayer, layer.cleanupBuildFailure)
+		cleanup.Add(runtimeBuildPersistenceLayer, layer.Close)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("open persistence: %w", err)
@@ -99,7 +99,14 @@ func buildRuntime(ctx context.Context, cfg config.Config) (built *Runtime, build
 	}
 	layer.reader = repository.NewPGXReaderVNextRepositoryWithLinkLifecycle(layer.pool, queue)
 	inboxCommands := durablework.NewInboxCommands(layer.pool, layer.reader, queue)
-	readerService := service.NewReaderVNextService(layer.reader, readerAI, service.ReaderVNextServiceOptions{
+	readerService := service.NewReaderVNextService(service.ReaderStores{
+		Thoughts: layer.reader,
+		Notes:    layer.reader,
+		Inbox:    layer.reader,
+		Todos:    layer.reader,
+		Library:  layer.reader,
+		Hosts:    layer.reader,
+	}, readerAI, service.ReaderVNextServiceOptions{
 		CursorSigningKey:      cfg.CursorSigningKey,
 		InboxProposalCommands: inboxCommands,
 	})
@@ -154,15 +161,11 @@ func buildRuntime(ctx context.Context, cfg config.Config) (built *Runtime, build
 		{name: runtimeBuildFeedScheduler, background: feedScheduler},
 		{name: runtimeBuildSitePayloadCleaner, background: services.sites.backgrounds.payloadCleaner},
 	}
-	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
-		backgrounds:    backgrounds,
-		cleanupTimeout: defaultRuntimeCleanupTimeout,
-		persistence:    layer,
-	})
+	resources := newRuntimeResources(backgrounds, layer)
 	return &Runtime{
 		Router: router,
-		start:  lifecycle.Start,
-		close:  lifecycle.Close,
+		start:  resources.Start,
+		close:  resources.Close,
 	}, nil
 }
 

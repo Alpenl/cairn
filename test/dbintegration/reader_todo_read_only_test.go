@@ -39,7 +39,7 @@ func TestReaderHomeAndTodosAreReadOnlyUnderConcurrency(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	reader := repository.NewPGXReaderVNextRepository(pool)
-	service := readerservice.NewReaderVNextService(reader, nil)
+	service := readerservice.NewReaderVNextService(postgresReaderStores(reader), nil)
 
 	if _, err := reader.CreateNote(ctx, model.ReaderNote{
 		Title:            "Concurrent read host",

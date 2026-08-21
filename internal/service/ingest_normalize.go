@@ -1,12 +1,11 @@
 package service
 
 import (
-	"net/http"
 	"strings"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 )
 
 // This file owns the dto.IngestRequest → normalizedIngest pipeline:
@@ -154,7 +153,7 @@ func normalizeIngestRequest(req dto.IngestRequest, defaultDestination string) (n
 	// Wave 9 MED 迁移：/api/ingest 入口的三种 422 都补上 slug，
 	// 帮上游"用户拿到错误后想自动重试还是抛错给人类"区分场景。
 	if len(req.Sources) == 0 {
-		return normalizedIngest{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestSourceRequired, "at least one source is required")
+		return normalizedIngest{}, problem.NewWithCode(problem.Invalid, problem.CodeIngestSourceRequired, "at least one source is required")
 	}
 	requestedKind, err := normalizeRequestedLibraryKind(req.RequestedLibraryKind)
 	if err != nil {
@@ -245,9 +244,9 @@ func normalizeIngestCaptureTarget(
 ) (string, model.RequestedLibraryKind, error) {
 	if strings.EqualFold(strings.TrimSpace(rawDestination), captureDestinationSite) {
 		if requestedKind != model.RequestedLibraryKindAuto && requestedKind != model.RequestedLibraryKindSite {
-			return "", "", httperr.NewWithCode(
-				http.StatusUnprocessableEntity,
-				httperr.CodeInvalidRequestedLibraryKind,
+			return "", "", problem.NewWithCode(
+				problem.Invalid,
+				problem.CodeInvalidRequestedLibraryKind,
 				"site destination requires requested_library_kind to be auto or site",
 			)
 		}
@@ -262,7 +261,7 @@ func accumulateIngestSources(sources []dto.IngestSource) (*ingestAccumulator, er
 	for _, src := range sources {
 		kind := strings.TrimSpace(strings.ToLower(src.Kind))
 		if kind == "" {
-			return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestSourceKindRequired, "source kind is required")
+			return nil, problem.NewWithCode(problem.Invalid, problem.CodeIngestSourceKindRequired, "source kind is required")
 		}
 
 		record := ingestSourceRecord{Kind: kind}
@@ -277,7 +276,7 @@ func accumulateIngestSources(sources []dto.IngestSource) (*ingestAccumulator, er
 		case "browser_capture":
 			err = handleBrowserCaptureSource(acc, src, &record)
 		default:
-			return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeUnsupportedIngestSourceKind, "unsupported source kind")
+			return nil, problem.NewWithCode(problem.Invalid, problem.CodeUnsupportedIngestSourceKind, "unsupported source kind")
 		}
 		if err != nil {
 			return nil, err

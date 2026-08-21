@@ -7,16 +7,15 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/model"
-	"webtag/internal/repository"
 )
 
 // readerTodoReadStore records source scans. TODO reads must use their stored
 // projection without walking Thought or Note bodies.
 type readerTodoReadStore struct {
-	repository.ReaderVNextStore
-
+	ReaderTodoStore
+	ReaderLibraryStore
 	page      model.ReaderTodoPage
-	aggregate repository.ReaderHomeAggregate
+	aggregate model.ReaderHomeAggregate
 	sources   int
 }
 
@@ -24,7 +23,7 @@ func (s *readerTodoReadStore) ListTodos(context.Context, string, int) (model.Rea
 	return s.page, nil
 }
 
-func (s *readerTodoReadStore) LoadHomeAggregate(context.Context) (repository.ReaderHomeAggregate, error) {
+func (s *readerTodoReadStore) LoadHomeAggregate(context.Context) (model.ReaderHomeAggregate, error) {
 	return s.aggregate, nil
 }
 
@@ -51,9 +50,9 @@ func TestTodoReadsDoNotReconcile(t *testing.T) {
 	}
 	store := &readerTodoReadStore{
 		page:      model.ReaderTodoPage{Items: []model.ReaderTodo{projection}},
-		aggregate: repository.ReaderHomeAggregate{Todos: []model.ReaderTodo{projection}, Counts: map[string]int{"todos": 1}},
+		aggregate: model.ReaderHomeAggregate{Todos: []model.ReaderTodo{projection}, Counts: map[string]int{"todos": 1}},
 	}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 	ctx := context.Background()
 
 	todos, err := service.ListTodos(ctx, "", 200)

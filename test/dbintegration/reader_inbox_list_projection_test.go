@@ -23,7 +23,7 @@ func TestReaderInboxListDoesNotCarryOversizedCaptureBody(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	repo := repository.NewPGXReaderVNextRepository(pool)
-	reader := service.NewReaderVNextService(repo, nil)
+	reader := service.NewReaderVNextService(postgresReaderStores(repo), nil)
 
 	const bodyMarker = "BODY-MUST-NOT-REACH-THE-INBOX-LIST"
 	const noteTailMarker = "NOTE-TAIL-MUST-NOT-REACH-THE-INBOX-LIST"

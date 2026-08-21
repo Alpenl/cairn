@@ -18,8 +18,7 @@ import (
 )
 
 type readerMetadataStoreStub struct {
-	repository.ReaderVNextStore
-
+	ReaderLibraryStore
 	calls  int
 	patch  model.ReaderLinkMetadataPatch
 	result model.ReaderLinkMetadataUpdate
@@ -59,7 +58,7 @@ func TestPatchLinkMetadataRejectsIncompleteOrInvalidTupleBeforeStore(t *testing.
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &readerMetadataStoreStub{}
-			reader := NewReaderVNextService(store, nil)
+			reader := NewReaderVNextService(readerTestStores(store), nil)
 
 			_, err := reader.PatchLinkMetadata(context.Background(), uuid.NewString(), readerMetadataRequest(t, tc.body), 7)
 			assertReaderHTTPError(t, err, http.StatusUnprocessableEntity, tc.code)
@@ -73,7 +72,7 @@ func TestPatchLinkMetadataRejectsIncompleteOrInvalidTupleBeforeStore(t *testing.
 func TestPatchLinkMetadataNormalizesCompleteReplacement(t *testing.T) {
 	linkID := uuid.New()
 	store := &readerMetadataStoreStub{result: model.ReaderLinkMetadataUpdate{MetadataRevision: 8, TagsChanged: true}}
-	reader := NewReaderVNextService(store, nil)
+	reader := NewReaderVNextService(readerTestStores(store), nil)
 
 	response, err := reader.PatchLinkMetadata(
 		context.Background(),
@@ -101,7 +100,7 @@ func TestPatchLinkMetadataNormalizesCompleteReplacement(t *testing.T) {
 func TestPatchLinkMetadataUsesUnicodeCaseFoldForNoopReplacement(t *testing.T) {
 	linkID := uuid.New()
 	store := &readerMetadataStoreStub{result: model.ReaderLinkMetadataUpdate{MetadataRevision: 7, TagsChanged: false}}
-	reader := NewReaderVNextService(store, nil)
+	reader := NewReaderVNextService(readerTestStores(store), nil)
 
 	response, err := reader.PatchLinkMetadata(
 		context.Background(),
@@ -145,7 +144,7 @@ func TestPatchLinkMetadataHandlesNoopAndConflict(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &readerMetadataStoreStub{result: tc.result, err: tc.err}
-			reader := NewReaderVNextService(store, nil)
+			reader := NewReaderVNextService(readerTestStores(store), nil)
 
 			response, err := reader.PatchLinkMetadata(context.Background(), linkID, request, 7)
 			if tc.err == nil {
@@ -176,7 +175,7 @@ func TestPatchLinkMetadataRejectsOutOfRangeStoreRevision(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &readerMetadataStoreStub{result: model.ReaderLinkMetadataUpdate{MetadataRevision: tc.revision, TagsChanged: true}}
-			reader := NewReaderVNextService(store, nil)
+			reader := NewReaderVNextService(readerTestStores(store), nil)
 
 			_, err := reader.PatchLinkMetadata(context.Background(), uuid.NewString(), request, model.LinkMetadataMaxRevision)
 			assertReaderHTTPError(t, err, http.StatusConflict, httperr.CodeMetadataRevisionConflict)

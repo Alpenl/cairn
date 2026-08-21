@@ -96,7 +96,7 @@ func TestObsoleteSubsystemCleanupMigratesLegacyObjects(t *testing.T) {
 	assertIndexExists(t, pool, "idx_link_translations_missing_reconcile", false)
 	assertIndexExists(t, pool, "idx_river_job_translation_terminal_history", false)
 	assertObsoleteCleanupTranslationStates(t, pool, translationIDs)
-	var hides, saveColumns int
+	var hides, saveColumns, retiredTranslationColumns int
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM reader_feed_hides`).Scan(&hides); err != nil {
 		t.Fatalf("count migrated Feed hides: %v", err)
 	}
@@ -107,6 +107,14 @@ func TestObsoleteSubsystemCleanupMigratesLegacyObjects(t *testing.T) {
 	}
 	if hides != 1 || saveColumns != 0 {
 		t.Fatalf("simplified Feed state = hides:%d obsolete_columns:%d, want 1/0", hides, saveColumns)
+	}
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM information_schema.columns
+		WHERE table_schema='public' AND table_name='link_translations'
+			AND column_name='current_river_job_id'`).Scan(&retiredTranslationColumns); err != nil {
+		t.Fatalf("inspect retired translation columns: %v", err)
+	}
+	if retiredTranslationColumns != 0 {
+		t.Fatalf("current_river_job_id columns = %d, want 0", retiredTranslationColumns)
 	}
 }
 
@@ -206,14 +214,12 @@ func assertObsoleteCleanupTranslationStates(t *testing.T, pool migrationRowQueri
 	var settled, active, unbound int
 	if err := pool.QueryRow(t.Context(), `SELECT
 		count(*) FILTER (WHERE id IN ($1,$2,$5,$6) AND status='failed'
-			AND error_msg='翻译服务暂时不可用，请重试' AND current_river_job_id IS NULL),
-		count(*) FILTER (WHERE id=$3 AND status='pending' AND error_msg IS NULL
-			AND current_river_job_id=$7),
-		count(*) FILTER (WHERE id=$4 AND status='pending' AND error_msg IS NULL
-			AND current_river_job_id IS NULL)
+			AND error_msg='翻译服务暂时不可用，请重试'),
+		count(*) FILTER (WHERE id=$3 AND status='pending' AND error_msg IS NULL),
+		count(*) FILTER (WHERE id=$4 AND status='pending' AND error_msg IS NULL)
 	FROM public.link_translations
 	WHERE id IN ($1,$2,$3,$4,$5,$6)`,
-		ids.terminal, ids.missing, ids.active, ids.unbound, ids.legacyBound, ids.legacyUnbound, ids.activeJobID).
+		ids.terminal, ids.missing, ids.active, ids.unbound, ids.legacyBound, ids.legacyUnbound).
 		Scan(&settled, &active, &unbound); err != nil {
 		t.Fatalf("inspect obsolete cleanup translation states: %v", err)
 	}

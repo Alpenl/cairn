@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -13,37 +12,9 @@ import (
 	"webtag/internal/model"
 )
 
-const translationColumns = "id, link_id, scope, block_key, start_offset, end_offset, source_text, translated_text, source_format, target_language, source_hash, source_content_revision, status, model, error_msg, attempt_generation, current_river_job_id, created_at, updated_at"
+const translationColumns = "id, link_id, scope, block_key, start_offset, end_offset, source_text, translated_text, source_format, target_language, source_hash, source_content_revision, status, model, error_msg, attempt_generation, created_at, updated_at"
 
 const (
-	// Summary-hash and saved-revision identities use different partial unique
-	// indexes, so one named ON CONFLICT target cannot cover both.
-	upsertPendingTranslationSQL = `INSERT INTO link_translations (
-		link_id, scope, block_key, start_offset, end_offset,
-		source_text, source_format, target_language, source_hash,
-		source_content_revision, status,
-		attempt_generation, current_river_job_id
-	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 1, NULL)
-	ON CONFLICT DO NOTHING
-	RETURNING ` + translationColumns
-
-	advancePendingTranslationSQL = `UPDATE link_translations SET
-		status = 'pending',
-		translated_text = NULL,
-		model = NULL,
-		error_msg = NULL,
-		attempt_generation = attempt_generation + 1,
-		current_river_job_id = NULL,
-		updated_at = NOW()
-	WHERE id = $1
-		AND (
-			status = 'failed'
-			OR ($2 AND status = 'done')
-			OR (status IN ('pending', 'processing')
-				AND updated_at < NOW() - $3::interval)
-		)
-	RETURNING ` + translationColumns
-
 	getHashTranslationByIdentitySQL = `SELECT ` + translationColumns + `
 		FROM link_translations
 		WHERE link_id = $1 AND scope = $2 AND block_key = $3
@@ -69,31 +40,21 @@ const (
 
 	markTranslationProcessingSQL = `UPDATE link_translations
 		SET status = 'processing', error_msg = NULL, updated_at = NOW()
-		WHERE id = $1 AND current_river_job_id = $2
-			AND attempt_generation = $3 AND source_hash = $4
-			AND source_content_revision IS NOT DISTINCT FROM $5
+		WHERE id = $1 AND attempt_generation = $2 AND source_hash = $3
+			AND source_content_revision IS NOT DISTINCT FROM $4
 			AND status IN ('pending', 'processing')
 		RETURNING ` + translationColumns
 
-	bindCurrentTranslationAttemptSQL = `UPDATE link_translations
-		SET current_river_job_id = $1
-		WHERE id = $2 AND attempt_generation = $3
-			AND status = 'pending' AND current_river_job_id IS NULL
-		RETURNING ` + translationColumns
-
 	completeTranslationSQL = `UPDATE link_translations
-		SET status = 'done', translated_text = $1, model = $2, error_msg = NULL,
-			current_river_job_id = NULL, updated_at = NOW()
-		WHERE id = $3 AND current_river_job_id = $4
-			AND attempt_generation = $5 AND source_hash = $6
-			AND source_content_revision IS NOT DISTINCT FROM $7
+		SET status = 'done', translated_text = $1, model = $2, error_msg = NULL, updated_at = NOW()
+		WHERE id = $3 AND attempt_generation = $4 AND source_hash = $5
+			AND source_content_revision IS NOT DISTINCT FROM $6
 			AND status = 'processing'`
 
 	failTranslationSQL = `UPDATE link_translations
-		SET status = 'failed', error_msg = $1, current_river_job_id = NULL, updated_at = NOW()
-		WHERE id = $2 AND current_river_job_id = $3
-			AND attempt_generation = $4 AND source_hash = $5
-			AND source_content_revision IS NOT DISTINCT FROM $6
+		SET status = 'failed', error_msg = $1, updated_at = NOW()
+		WHERE id = $2 AND attempt_generation = $3 AND source_hash = $4
+			AND source_content_revision IS NOT DISTINCT FROM $5
 			AND status IN ('pending', 'processing')`
 )
 
@@ -111,15 +72,7 @@ type UpsertTranslationParams struct {
 	// identities are keyed by SourceHash with a durable NULL revision.
 	SourceContentRevision *int64
 	Force                 bool
-	// StallAfter 是在途行的停滞阈值：pending / processing 超过它未更新即可被
-	// 重新排期。零值回落到 defaultTranslationStallAfter，避免历史调用方漏传时
-	// 谓词退化成「永不重排」。
-	StallAfter time.Duration
 }
-
-// defaultTranslationStallAfter 是 StallAfter 缺省时的兜底。
-// 调用方（service 层）应按实际的 job 超时推导后显式传入。
-const defaultTranslationStallAfter = 2 * time.Hour
 
 type translationTxBeginner interface {
 	database.TxBeginner
@@ -156,178 +109,6 @@ func (r *PGXTranslationRepository) FindByIdentity(ctx context.Context, params Up
 		return nil, fmt.Errorf("find link translation by identity: %w", err)
 	}
 	return item, nil
-}
-
-// SchedulePending returns scheduled=false when the same identity is already
-// done or active. The conditional ON CONFLICT update is the concurrency gate:
-// only one racing request can transition an absent/failed/done record to
-// pending. When it does, hook runs before commit so the River job and state
-// transition share one all-or-nothing transaction.
-func (r *PGXTranslationRepository) SchedulePending(ctx context.Context, params UpsertTranslationParams, hook func(context.Context, pgx.Tx, TranslationScheduleCommand) (int64, error)) (*model.LinkTranslation, bool, error) {
-	tx, err := r.tx.Begin(ctx)
-	if err != nil {
-		return nil, false, fmt.Errorf("begin schedule translation tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	previous, err := findTranslationByIdentityForUpdate(ctx, tx, params)
-	if err != nil {
-		return nil, false, err
-	}
-	translation, scheduled, err := upsertPendingTranslation(ctx, tx, params, previous)
-	if err != nil {
-		return nil, false, err
-	}
-	if scheduled {
-		if hook == nil {
-			return nil, false, errors.New("schedule translation: River insert hook is required")
-		}
-		seed := TranslationAttemptSeed{
-			TranslationID:         translation.ID,
-			AttemptGeneration:     translation.AttemptGeneration,
-			SourceHash:            translation.SourceHash,
-			SourceContentRevision: translation.SourceContentRevision,
-		}
-		command := TranslationScheduleCommand{
-			Seed:     seed,
-			Previous: supersededTranslationAttempt(previous),
-		}
-		riverJobID, hookErr := hook(ctx, tx, command)
-		if hookErr != nil {
-			return nil, false, hookErr
-		}
-		if riverJobID <= 0 {
-			return nil, false, fmt.Errorf("schedule translation: invalid River job ID %d", riverJobID)
-		}
-		translation, err = bindCurrentTranslationAttempt(ctx, tx, seed, riverJobID)
-		if err != nil {
-			return nil, false, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, false, fmt.Errorf("commit schedule translation tx: %w", err)
-	}
-	return translation, scheduled, nil
-}
-
-func supersededTranslationAttempt(item *model.LinkTranslation) *model.TranslationAttempt {
-	if item == nil || item.CurrentRiverJobID == nil || *item.CurrentRiverJobID <= 0 ||
-		(item.Status != model.TranslationStatusPending && item.Status != model.TranslationStatusProcessing) {
-		return nil
-	}
-	return &model.TranslationAttempt{
-		TranslationID:         item.ID,
-		AttemptGeneration:     item.AttemptGeneration,
-		RiverJobID:            *item.CurrentRiverJobID,
-		SourceHash:            item.SourceHash,
-		SourceContentRevision: item.SourceContentRevision,
-	}
-}
-
-func bindCurrentTranslationAttempt(
-	ctx context.Context,
-	db database.Querier,
-	seed TranslationAttemptSeed,
-	riverJobID int64,
-) (*model.LinkTranslation, error) {
-	item, err := scanTranslation(db.QueryRow(
-		ctx,
-		bindCurrentTranslationAttemptSQL,
-		riverJobID,
-		seed.TranslationID,
-		seed.AttemptGeneration,
-	))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, errors.New("bind current translation attempt: scheduled row no longer matches")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("bind current translation attempt: %w", err)
-	}
-	return item, nil
-}
-
-// translationStallInterval 把停滞阈值转成 PG interval 字面量。零值走兜底，
-// 保证谓词永远拿到一个有意义的窗口。
-func translationStallInterval(d time.Duration) string {
-	if d <= 0 {
-		d = defaultTranslationStallAfter
-	}
-	return fmt.Sprintf("%d seconds", int64(d.Seconds()))
-}
-
-func upsertPendingTranslation(
-	ctx context.Context,
-	db database.Querier,
-	params UpsertTranslationParams,
-	previous *model.LinkTranslation,
-) (*model.LinkTranslation, bool, error) {
-	row := db.QueryRow(
-		ctx,
-		upsertPendingTranslationSQL,
-		params.LinkID,
-		params.Scope,
-		params.BlockKey,
-		params.StartOffset,
-		params.EndOffset,
-		params.SourceText,
-		params.SourceFormat,
-		params.TargetLanguage,
-		params.SourceHash,
-		params.SourceContentRevision,
-	)
-	translation, err := scanTranslation(row)
-	if err == nil {
-		return translation, true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, fmt.Errorf("upsert link translation: %w", err)
-	}
-
-	if previous != nil && translationRescheduleEligible(previous, params, time.Now()) {
-		row = db.QueryRow(
-			ctx,
-			advancePendingTranslationSQL,
-			previous.ID,
-			params.Force,
-			translationStallInterval(params.StallAfter),
-		)
-		translation, err = scanTranslation(row)
-		if err == nil {
-			return translation, true, nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return nil, false, fmt.Errorf("advance link translation: %w", err)
-		}
-	}
-
-	existing, findErr := findTranslationByIdentity(ctx, db, params)
-	if findErr != nil {
-		return nil, false, findErr
-	}
-	if existing == nil {
-		return nil, false, errors.New("upsert link translation: conflict row disappeared")
-	}
-	return existing, false, nil
-}
-
-func translationRescheduleEligible(item *model.LinkTranslation, params UpsertTranslationParams, now time.Time) bool {
-	if item == nil {
-		return false
-	}
-	switch item.Status {
-	case model.TranslationStatusFailed:
-		return true
-	case model.TranslationStatusDone:
-		return params.Force
-	case model.TranslationStatusPending, model.TranslationStatusProcessing:
-		stallAfter := params.StallAfter
-		if stallAfter <= 0 {
-			stallAfter = defaultTranslationStallAfter
-		}
-		return !item.UpdatedAt.IsZero() && !now.Before(item.UpdatedAt.Add(stallAfter))
-	default:
-		return false
-	}
 }
 
 func findTranslationByIdentity(ctx context.Context, db database.Querier, params UpsertTranslationParams) (*model.LinkTranslation, error) {
@@ -494,7 +275,6 @@ func (r *PGXTranslationRepository) MarkProcessing(ctx context.Context, attempt m
 		ctx,
 		markTranslationProcessingSQL,
 		attempt.TranslationID,
-		attempt.RiverJobID,
 		attempt.AttemptGeneration,
 		attempt.SourceHash,
 		attempt.SourceContentRevision,
@@ -515,7 +295,6 @@ func (r *PGXTranslationRepository) Complete(ctx context.Context, attempt model.T
 		translatedText,
 		modelName,
 		attempt.TranslationID,
-		attempt.RiverJobID,
 		attempt.AttemptGeneration,
 		attempt.SourceHash,
 		attempt.SourceContentRevision,
@@ -532,7 +311,6 @@ func (r *PGXTranslationRepository) Fail(ctx context.Context, attempt model.Trans
 		failTranslationSQL,
 		message,
 		attempt.TranslationID,
-		attempt.RiverJobID,
 		attempt.AttemptGeneration,
 		attempt.SourceHash,
 		attempt.SourceContentRevision,
@@ -566,7 +344,6 @@ func scanTranslation(row translationScanner) (*model.LinkTranslation, error) {
 		&item.Model,
 		&item.ErrorMsg,
 		&item.AttemptGeneration,
-		&item.CurrentRiverJobID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	); err != nil {

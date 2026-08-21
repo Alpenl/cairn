@@ -16,6 +16,7 @@ import (
 	"webtag/internal/errsafe"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/repository/repotest"
 )
@@ -570,15 +571,15 @@ func TestLinkReadServiceListRejectsAbusiveFilters(t *testing.T) {
 			if err == nil {
 				t.Fatalf("List() error = nil, want %q", tc.want)
 			}
-			var statusErr *httperr.Error
+			var statusErr *problem.Error
 			if !errors.As(err, &statusErr) {
-				t.Fatalf("List() error = %T, want *httperr.Error", err)
+				t.Fatalf("List() error = %T, want *problem.Error", err)
 			}
-			if statusErr.HTTPStatus() != http.StatusUnprocessableEntity {
-				t.Fatalf("status = %d, want 422", statusErr.HTTPStatus())
+			if problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want 422", problemHTTPStatus(statusErr))
 			}
-			if statusErr.HTTPMessage() != tc.want {
-				t.Fatalf("message = %q, want %q", statusErr.HTTPMessage(), tc.want)
+			if statusErr.Message() != tc.want {
+				t.Fatalf("message = %q, want %q", statusErr.Message(), tc.want)
 			}
 		})
 	}
@@ -640,15 +641,15 @@ func TestLinkReadServiceListRejectsInvalidCreatedRange(t *testing.T) {
 			if err == nil {
 				t.Fatal("List() error = nil, want stable 422")
 			}
-			var statusErr *httperr.Error
+			var statusErr *problem.Error
 			if !errors.As(err, &statusErr) {
-				t.Fatalf("List() error = %T, want *httperr.Error", err)
+				t.Fatalf("List() error = %T, want *problem.Error", err)
 			}
-			if statusErr.HTTPStatus() != http.StatusUnprocessableEntity {
-				t.Fatalf("status = %d, want 422", statusErr.HTTPStatus())
+			if problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want 422", problemHTTPStatus(statusErr))
 			}
-			if statusErr.HTTPErrorCode() != "invalid_created_range" {
-				t.Fatalf("error_code = %q, want invalid_created_range", statusErr.HTTPErrorCode())
+			if statusErr.Code() != "invalid_created_range" {
+				t.Fatalf("error_code = %q, want invalid_created_range", statusErr.Code())
 			}
 			if store.lastListFilter != nil {
 				t.Fatal("invalid range reached repository")
@@ -727,18 +728,18 @@ func TestSplitAndValidateStatuses(t *testing.T) {
 				if err == nil {
 					t.Fatalf("splitAndValidateStatuses(%q) error = nil, want %q", tc.raw, tc.wantMsg)
 				}
-				var statusErr *httperr.Error
+				var statusErr *problem.Error
 				if !errors.As(err, &statusErr) {
-					t.Fatalf("error = %T, want *httperr.Error", err)
+					t.Fatalf("error = %T, want *problem.Error", err)
 				}
-				if statusErr.HTTPStatus() != tc.httpState {
-					t.Fatalf("status = %d, want %d", statusErr.HTTPStatus(), tc.httpState)
+				if problemHTTPStatus(statusErr) != tc.httpState {
+					t.Fatalf("status = %d, want %d", problemHTTPStatus(statusErr), tc.httpState)
 				}
-				if statusErr.HTTPMessage() != tc.wantMsg {
-					t.Fatalf("message = %q, want %q", statusErr.HTTPMessage(), tc.wantMsg)
+				if statusErr.Message() != tc.wantMsg {
+					t.Fatalf("message = %q, want %q", statusErr.Message(), tc.wantMsg)
 				}
-				if statusErr.HTTPErrorCode() != tc.wantSlug {
-					t.Fatalf("slug = %q, want %q", statusErr.HTTPErrorCode(), tc.wantSlug)
+				if statusErr.Code() != tc.wantSlug {
+					t.Fatalf("slug = %q, want %q", statusErr.Code(), tc.wantSlug)
 				}
 				return
 			}
@@ -919,12 +920,12 @@ func TestLinkReadServiceListRejectsIllegalStatus(t *testing.T) {
 	if err == nil {
 		t.Fatal("List() error = nil, want 400 for illegal status")
 	}
-	var statusErr *httperr.Error
+	var statusErr *problem.Error
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("error = %T, want *httperr.Error", err)
+		t.Fatalf("error = %T, want *problem.Error", err)
 	}
-	if statusErr.HTTPStatus() != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", statusErr.HTTPStatus())
+	if problemHTTPStatus(statusErr) != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", problemHTTPStatus(statusErr))
 	}
 }
 
@@ -1077,8 +1078,8 @@ func TestLinkReadServiceListRejectsCursorAndPageCombination(t *testing.T) {
 	if err == nil {
 		t.Fatal("List() error = nil, want 422 for page+after combination")
 	}
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusUnprocessableEntity {
+	var statusErr *problem.Error
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity {
 		t.Fatalf("error = %v, want 422", err)
 	}
 }
@@ -1095,8 +1096,8 @@ func TestLinkReadServiceListRejectsMalformedCursor(t *testing.T) {
 	if err == nil {
 		t.Fatal("List() error = nil, want 422 for malformed cursor")
 	}
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != http.StatusUnprocessableEntity {
+	var statusErr *problem.Error
+	if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity {
 		t.Fatalf("error = %v, want 422", err)
 	}
 }

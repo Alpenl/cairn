@@ -3,15 +3,14 @@ package service
 import (
 	"context"
 	"errors"
-	"net/http"
 	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -30,7 +29,7 @@ func (s *LinkReadService) GetWithContent(ctx context.Context, linkID string, inc
 	if err != nil {
 		// 带 slug：客户端可以按 error_code=invalid_link_id 直接区分"链接不
 		// 存在"和"链接 ID 格式错误"，不必再解析 message。
-		return dto.LinkResponse{}, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return dto.LinkResponse{}, problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 
 	link, err := s.links.GetDetailByID(ctx, id)
@@ -38,7 +37,7 @@ func (s *LinkReadService) GetWithContent(ctx context.Context, linkID string, inc
 		return dto.LinkResponse{}, err
 	}
 	if link == nil {
-		return dto.LinkResponse{}, httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return dto.LinkResponse{}, problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 
 	resp := linkDetailToResponse(*link)
@@ -88,7 +87,7 @@ func (s *LinkReadService) attachSavedContent(ctx context.Context, linkID uuid.UU
 func (s *LinkReadService) Delete(ctx context.Context, linkID string) error {
 	id, err := uuid.Parse(strings.TrimSpace(linkID))
 	if err != nil {
-		return httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 
 	link, err := s.links.GetLifecycleByID(ctx, id)
@@ -96,7 +95,7 @@ func (s *LinkReadService) Delete(ctx context.Context, linkID string) error {
 		return err
 	}
 	if link == nil {
-		return httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 
 	err = s.mutationLocker.WithURL(ctx, link.URL, func(lockCtx context.Context) error {
@@ -107,7 +106,7 @@ func (s *LinkReadService) Delete(ctx context.Context, linkID string) error {
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+			return problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 		}
 		return err
 	}

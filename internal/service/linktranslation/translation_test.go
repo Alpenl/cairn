@@ -410,9 +410,9 @@ func TestTranslationServiceListReturnsNotFoundForMissingSnapshot(t *testing.T) {
 
 	svc := NewService(ServiceOptions{Translations: &translationListReaderStub{}})
 	_, err := svc.List(context.Background(), uuid.New())
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != 404 ||
-		statusErr.HTTPErrorCode() != httperr.CodeLinkNotFound {
+	statusErr, ok := httperr.As(err)
+	coder, coded := statusErr.(httperr.ErrorCoder)
+	if !ok || !coded || statusErr.HTTPStatus() != 404 || coder.HTTPErrorCode() != httperr.CodeLinkNotFound {
 		t.Fatalf("List() error = %v, want 404 %s", err, httperr.CodeLinkNotFound)
 	}
 }
@@ -427,9 +427,9 @@ func TestTranslationServiceListRejectsSiteSnapshot(t *testing.T) {
 		Translations: &translationListReaderStub{snapshot: translationListSnapshot(link, nil)},
 	})
 	_, err := svc.List(context.Background(), link.ID)
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != 409 ||
-		statusErr.HTTPErrorCode() != httperr.CodeSiteOriginalContentForbidden {
+	statusErr, ok := httperr.As(err)
+	coder, coded := statusErr.(httperr.ErrorCoder)
+	if !ok || !coded || statusErr.HTTPStatus() != 409 || coder.HTTPErrorCode() != httperr.CodeSiteOriginalContentForbidden {
 		t.Fatalf("List() error = %v, want 409 %s", err, httperr.CodeSiteOriginalContentForbidden)
 	}
 }

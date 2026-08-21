@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -217,8 +216,9 @@ func thoughtSearchIdentityContext(t *testing.T, installationID string) context.C
 func assertThoughtSearchInvalidCursor(t *testing.T, search *service.LibrarySearchService, ctx context.Context, query, cursor string) {
 	t.Helper()
 	_, err := search.Search(ctx, query, 20, 20, 20, cursor)
-	var coder interface{ HTTPErrorCode() string }
-	if !errors.As(err, &coder) || coder.HTTPErrorCode() != httperr.CodeInvalidCursor {
+	carrier, ok := httperr.As(err)
+	coder, coded := carrier.(httperr.ErrorCoder)
+	if !ok || !coded || coder.HTTPErrorCode() != httperr.CodeInvalidCursor {
 		t.Fatalf("Search(cursor=%q) error = %v, want %q", cursor, err, httperr.CodeInvalidCursor)
 	}
 }

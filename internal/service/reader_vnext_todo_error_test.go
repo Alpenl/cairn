@@ -14,7 +14,7 @@ import (
 )
 
 type readerTodoPatchErrorStore struct {
-	repository.ReaderVNextStore
+	ReaderTodoStore
 	calls int
 	err   error
 }
@@ -25,7 +25,7 @@ func (s *readerTodoPatchErrorStore) PatchTodo(context.Context, model.ReaderTodoP
 }
 
 type readerTodoPatchCaptureStore struct {
-	repository.ReaderVNextStore
+	ReaderTodoStore
 	command *model.ReaderTodoPatch
 	err     error
 }
@@ -50,7 +50,7 @@ func TestReaderTodoPatchErrorContract(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &readerTodoPatchErrorStore{err: tt.repository}
-			service := NewReaderVNextService(store, nil)
+			service := NewReaderVNextService(readerTestStores(store), nil)
 			id := uuid.New().String()
 			_, err := service.PatchTodo(context.Background(), id, dto.ReaderTodoPatchRequest{})
 			carrier, ok := httperr.As(err)
@@ -76,7 +76,7 @@ func TestReaderTodoPatchErrorContract(t *testing.T) {
 
 func TestReaderTodoPatchRejectsInvalidIDBeforeStore(t *testing.T) {
 	store := &readerTodoPatchErrorStore{}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 
 	_, err := service.PatchTodo(context.Background(), "not-a-uuid", dto.ReaderTodoPatchRequest{})
 	carrier, ok := httperr.As(err)
@@ -99,7 +99,7 @@ func TestReaderTodoPatchPassesNegativeHostRevisionToProjectedCAS(t *testing.T) {
 	negative := int64(-1)
 	done := true
 	store := &readerTodoPatchCaptureStore{err: repository.ErrRevisionConflict}
-	service := NewReaderVNextService(store, nil)
+	service := NewReaderVNextService(readerTestStores(store), nil)
 
 	_, err := service.PatchTodo(context.Background(), uuid.New().String(), dto.ReaderTodoPatchRequest{
 		Done:                 &done,

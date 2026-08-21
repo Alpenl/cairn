@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
-	"net/http"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
 	"webtag/internal/observability"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -57,9 +56,9 @@ func (s *TreeReadService) ListDomains(ctx context.Context) (dto.DomainTreeSummar
 func (s *TreeReadService) ListDomainsScoped(ctx context.Context, rawScope string) (dto.DomainTreeSummaryEnvelope, error) {
 	kind, valid := model.NormalizeOptionalLibraryKind(rawScope)
 	if !valid {
-		return dto.DomainTreeSummaryEnvelope{}, httperr.NewWithCode(
-			http.StatusUnprocessableEntity,
-			httperr.CodeInvalidRequestedLibraryKind,
+		return dto.DomainTreeSummaryEnvelope{}, problem.NewWithCode(
+			problem.Invalid,
+			problem.CodeInvalidRequestedLibraryKind,
 			"library_kind must be reading or site",
 		)
 	}

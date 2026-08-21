@@ -173,7 +173,11 @@ func fullSmokeDeps() handler.Dependencies {
 		// never invokes the Reader handlers. An embedded interface is enough to
 		// expose the complete method set without duplicating a no-op implementation
 		// for every Reader vNext operation.
-		Reader:            smokeReaderService{},
+		Reader: handler.ReaderRoutes{
+			Thoughts: smokeReaderService{}, Aggregate: smokeReaderService{},
+			Notes: smokeReaderService{}, Hosts: smokeReaderService{},
+			Inbox: smokeReaderService{}, Todos: smokeReaderService{},
+		},
 		LinksWrite:        smokeLinkWriteService{},
 		LinksRead:         smokeLinkReadService{},
 		LinksContent:      smokeLinkContentService{},
@@ -192,7 +196,12 @@ func fullSmokeDeps() handler.Dependencies {
 }
 
 type smokeReaderService struct {
-	handler.ReaderService
+	handler.ReaderThoughtRoutes
+	handler.ReaderNoteRoutes
+	handler.ReaderInboxRoutes
+	handler.ReaderTodoRoutes
+	handler.ReaderAggregateRoutes
+	handler.ReaderHostRoutes
 }
 
 func (smokeReaderService) RestoreHost(context.Context, string, string) (dto.ReaderHostLifecycleResponse, error) {

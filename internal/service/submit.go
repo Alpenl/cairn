@@ -3,14 +3,13 @@ package service
 import (
 	"context"
 	"errors"
-	"net/http"
 	neturl "net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/security"
 	"webtag/internal/urlidentity"
 )
@@ -77,7 +76,7 @@ func normalizeCaptureDestination(raw, fallback string) (string, error) {
 	case captureDestinationLibrary, captureDestinationInbox:
 		return destination, nil
 	default:
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_destination", "destination must be library or inbox")
+		return "", problem.NewWithCode(problem.Invalid, "invalid_destination", "destination must be library or inbox")
 	}
 }
 
@@ -85,7 +84,7 @@ func normalizeCaptureDestination(raw, fallback string) (string, error) {
 // 能解析出主机，且主机不在 SSRF 黑名单内。任何失败都返回 422 httperr，调用方
 // 直接透传即可。
 //
-// Wave 9 MED 迁移：把这条热路径上的所有 httperr.New 改成 NewWithCode，
+// Wave 9 MED 迁移：把这条热路径上的所有 problem.New 改成 NewWithCode，
 // 让前端能按 slug 分支处理（"是格式不合法还是 SSRF 拒绝？"），不再依
 // 赖 message 字面量做正则。
 //
@@ -96,10 +95,10 @@ func normalizeCaptureDestination(raw, fallback string) (string, error) {
 func validateURL(rawURL string) (string, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeURLRequired, "url is required")
+		return "", problem.NewWithCode(problem.Invalid, problem.CodeURLRequired, "url is required")
 	}
 	if len(rawURL) > maxLinkURLLength {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeURLTooLong, "url exceeds length limit")
+		return "", problem.NewWithCode(problem.Invalid, problem.CodeURLTooLong, "url exceeds length limit")
 	}
 
 	normalized, err := urlidentity.Normalize(rawURL)
@@ -110,10 +109,10 @@ func validateURL(rawURL string) (string, error) {
 	// 主机写成黑名单匹配不到的样子，规范化前判定等于给绕过留门。
 	host, err := normalizedHost(normalized)
 	if err != nil {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidURL, "invalid url")
+		return "", problem.NewWithCode(problem.Invalid, problem.CodeInvalidURL, "invalid url")
 	}
 	if security.IsUnsafeHost(host) {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeUnsafeURLTarget, "unsafe url target")
+		return "", problem.NewWithCode(problem.Invalid, problem.CodeUnsafeURLTarget, "unsafe url target")
 	}
 	return normalized, nil
 }
@@ -123,11 +122,11 @@ func validateURL(rawURL string) (string, error) {
 func urlIdentityError(err error) error {
 	switch {
 	case errors.Is(err, urlidentity.ErrEmpty):
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeURLRequired, "url is required")
+		return problem.NewWithCode(problem.Invalid, problem.CodeURLRequired, "url is required")
 	case errors.Is(err, urlidentity.ErrUnsupportedScheme):
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeUnsupportedURLScheme, "unsupported url scheme")
+		return problem.NewWithCode(problem.Invalid, problem.CodeUnsupportedURLScheme, "unsupported url scheme")
 	default:
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidURL, "invalid url")
+		return problem.NewWithCode(problem.Invalid, problem.CodeInvalidURL, "invalid url")
 	}
 }
 
@@ -170,9 +169,9 @@ func validateLinkDescription(description *string) error {
 	if description == nil || utf8.RuneCountInString(*description) <= maxLinkDescriptionLength {
 		return nil
 	}
-	return httperr.NewWithCode(
-		http.StatusUnprocessableEntity,
-		httperr.CodeDescriptionTooLong,
+	return problem.NewWithCode(
+		problem.Invalid,
+		problem.CodeDescriptionTooLong,
 		"description exceeds length limit",
 	)
 }
@@ -186,7 +185,7 @@ func normalizeRequestedLibraryKind(raw string) (model.RequestedLibraryKind, erro
 	case model.RequestedLibraryKindSite:
 		return model.RequestedLibraryKindSite, nil
 	default:
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidRequestedLibraryKind, "requested_library_kind must be auto, reading, or site")
+		return "", problem.NewWithCode(problem.Invalid, problem.CodeInvalidRequestedLibraryKind, "requested_library_kind must be auto, reading, or site")
 	}
 }
 

@@ -53,13 +53,13 @@ type rf5aFaultAfterRiverInsertQueue struct {
 func (q *rf5aFaultAfterRiverInsertQueue) EnqueueTranslationTx(
 	ctx context.Context,
 	tx pgx.Tx,
-	command model.TranslationScheduleCommand,
+	seed model.TranslationAttemptSeed,
 ) (int64, error) {
-	jobID, err := q.delegate.EnqueueTranslationTx(ctx, tx, command)
+	jobID, err := q.delegate.EnqueueTranslationTx(ctx, tx, seed)
 	if err != nil {
 		return 0, err
 	}
-	q.translationID = command.Seed.TranslationID
+	q.translationID = seed.TranslationID
 	q.riverJobID = jobID
 	return 0, q.err
 }
@@ -331,12 +331,12 @@ func TestTranslationSourceScheduleSuccessKeepsResponseProductAttemptAndRiverArgs
 		StartOffset: 0, EndOffset: 5, SourceText: "Alpha",
 		ExpectedContentRevision: &fixture.revision,
 	})
-	if err != nil || response == nil || response.CurrentRiverJobID == nil {
+	if err != nil || response == nil {
 		t.Fatalf("Create(identity roundtrip) = %+v, %v", response, err)
 	}
 	if response.LinkID != fixture.linkID ||
 		response.SourceContentRevision == nil || *response.SourceContentRevision != fixture.revision ||
-		response.AttemptGeneration != 1 || *response.CurrentRiverJobID <= 0 {
+		response.AttemptGeneration != 1 {
 		t.Fatalf("response identity = %+v, want link %s/revision %d/generation 1",
 			response, fixture.linkID, fixture.revision)
 	}
@@ -344,8 +344,7 @@ func TestTranslationSourceScheduleSuccessKeepsResponseProductAttemptAndRiverArgs
 	if err != nil || persisted == nil || persisted.ID != response.ID ||
 		persisted.SourceHash != response.SourceHash ||
 		persisted.SourceContentRevision == nil || *persisted.SourceContentRevision != *response.SourceContentRevision ||
-		persisted.AttemptGeneration != response.AttemptGeneration || persisted.CurrentRiverJobID == nil ||
-		*persisted.CurrentRiverJobID != *response.CurrentRiverJobID {
+		persisted.AttemptGeneration != response.AttemptGeneration {
 		t.Fatalf("persisted current attempt = %+v, %v; response=%+v", persisted, err, response)
 	}
 
@@ -354,13 +353,14 @@ func TestTranslationSourceScheduleSuccessKeepsResponseProductAttemptAndRiverArgs
 	if err := harness.pool.QueryRow(t.Context(), `SELECT id, kind,
 		args->>'translation_id', args->>'attempt_generation', args->>'source_hash',
 		args->>'source_content_revision', state::text
-		FROM river_job WHERE id=$1`, *response.CurrentRiverJobID).Scan(
+		FROM river_job
+		WHERE kind=$1 AND args->>'translation_id'=$2`, model.TranslationJobKind, response.ID.String()).Scan(
 		&riverID, &kind, &translationArg, &generationArg,
 		&sourceHashArg, &sourceRevisionArg, &state,
 	); err != nil {
 		t.Fatalf("read current River attempt: %v", err)
 	}
-	if riverID != *response.CurrentRiverJobID || kind != model.TranslationJobKind ||
+	if riverID <= 0 || kind != model.TranslationJobKind ||
 		translationArg != response.ID.String() ||
 		generationArg != strconv.FormatInt(response.AttemptGeneration, 10) ||
 		sourceHashArg != response.SourceHash ||
@@ -433,14 +433,12 @@ func (h *rf5aScheduleHarness) createSource(
 
 func assertRF5AScheduleError(t *testing.T, err error, wantStatus int, wantCode string) httperr.ConflictIdentity {
 	t.Helper()
-	var status httperr.StatusCarrier
-	var code httperr.ErrorCoder
-	if !errors.As(err, &status) || status.HTTPStatus() != wantStatus ||
-		!errors.As(err, &code) || code.HTTPErrorCode() != wantCode {
+	status, ok := httperr.As(err)
+	code, coded := status.(httperr.ErrorCoder)
+	if !ok || !coded || status.HTTPStatus() != wantStatus || code.HTTPErrorCode() != wantCode {
 		t.Fatalf("schedule error = %v, want HTTP %d/%s", err, wantStatus, wantCode)
 	}
-	var identityProvider httperr.CurrentIdentityProvider
-	if errors.As(err, &identityProvider) {
+	if identityProvider, present := status.(httperr.CurrentIdentityProvider); present {
 		if identity, ok := identityProvider.HTTPCurrentIdentity(); ok {
 			return identity
 		}

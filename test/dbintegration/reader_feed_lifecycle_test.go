@@ -182,20 +182,18 @@ func assertReaderFeedLifecycleDeleted(
 
 	var translationStatus model.TranslationStatus
 	var translationReason string
-	var currentRiverJobID *int64
 	if err := pool.QueryRow(ctx,
-		`SELECT status,COALESCE(error_msg,''),current_river_job_id
+		`SELECT status,COALESCE(error_msg,'')
 		 FROM link_translations WHERE id=$1`,
 		fixture.translationID,
-	).Scan(&translationStatus, &translationReason, &currentRiverJobID); err != nil {
+	).Scan(&translationStatus, &translationReason); err != nil {
 		t.Fatalf("read translation attempt after Feed unsave: %v", err)
 	}
-	if translationStatus != model.TranslationStatusFailed || translationReason != "link_deleted" || currentRiverJobID != nil {
+	if translationStatus != model.TranslationStatusFailed || translationReason != "link_deleted" {
 		t.Fatalf(
-			"translation after Feed unsave = %s/%q current=%v, want failed/link_deleted current=nil",
+			"translation after Feed unsave = %s/%q, want failed/link_deleted",
 			translationStatus,
 			translationReason,
-			currentRiverJobID,
 		)
 	}
 	assertReaderFeedRiverCancellation(t, pool, "translate_link_v2", "translation_id", fixture.translationID, true)
@@ -228,20 +226,18 @@ func assertReaderFeedLifecycleActive(
 
 	var translationStatus model.TranslationStatus
 	var translationReason string
-	var currentRiverJobID *int64
 	if err := pool.QueryRow(ctx,
-		`SELECT status,COALESCE(error_msg,''),current_river_job_id
+		`SELECT status,COALESCE(error_msg,'')
 		 FROM link_translations WHERE id=$1`,
 		fixture.translationID,
-	).Scan(&translationStatus, &translationReason, &currentRiverJobID); err != nil {
+	).Scan(&translationStatus, &translationReason); err != nil {
 		t.Fatalf("read active translation attempt: %v", err)
 	}
-	if translationStatus != model.TranslationStatusPending || translationReason != "" || currentRiverJobID == nil {
+	if translationStatus != model.TranslationStatusPending || translationReason != "" {
 		t.Fatalf(
-			"active translation = %s/%q current=%v, want pending/empty current job",
+			"active translation = %s/%q, want pending/empty",
 			translationStatus,
 			translationReason,
-			currentRiverJobID,
 		)
 	}
 	assertReaderFeedRiverCancellation(t, pool, "translate_link_v2", "translation_id", fixture.translationID, false)

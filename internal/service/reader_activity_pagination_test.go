@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"testing"
@@ -11,11 +10,10 @@ import (
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
-	"webtag/internal/repository"
 )
 
 type readerActivityPageStore struct {
-	repository.ReaderVNextStore
+	ReaderLibraryStore
 	items []model.ReaderActivity
 	calls []model.ReaderActivityQuery
 }
@@ -51,7 +49,7 @@ func TestReaderActivityPaginatesBeyondOneHundredWithoutDuplicates(t *testing.T) 
 			Kind: "tag", Key: key, NormalizedKey: key, LastAt: when,
 		})
 	}
-	service := NewReaderVNextService(store, nil, ReaderVNextServiceOptions{CursorSigningKey: "activity-test-key"})
+	service := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{CursorSigningKey: "activity-test-key"})
 	ctx := context.Background()
 
 	first, err := service.Activity(ctx, "tag", "", 100)
@@ -90,7 +88,7 @@ func TestReaderActivityCursorRejectsTamperingAndCrossQueryReuse(t *testing.T) {
 		{Kind: "tag", Key: "alpha", NormalizedKey: "alpha", LastAt: when},
 		{Kind: "tag", Key: "beta", NormalizedKey: "beta", LastAt: when},
 	}}
-	service := NewReaderVNextService(store, nil, ReaderVNextServiceOptions{CursorSigningKey: "activity-test-key"})
+	service := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{CursorSigningKey: "activity-test-key"})
 	ctx := context.Background()
 
 	first, err := service.Activity(ctx, "tag", "", 1)
@@ -108,12 +106,12 @@ func TestReaderActivityCursorRejectsTamperingAndCrossQueryReuse(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := service.Activity(tc.ctx, tc.kind, tc.cursor, 1)
-			var carrier httperr.StatusCarrier
-			if !errors.As(err, &carrier) || carrier.HTTPStatus() != http.StatusUnprocessableEntity {
+			carrier, ok := httperr.As(err)
+			if !ok || carrier.HTTPStatus() != http.StatusUnprocessableEntity {
 				t.Fatalf("Activity() error = %v, want stable 422", err)
 			}
-			coder, ok := carrier.(httperr.ErrorCoder)
-			if !ok || coder.HTTPErrorCode() != httperr.CodeInvalidCursor {
+			coder, coded := carrier.(httperr.ErrorCoder)
+			if !coded || coder.HTTPErrorCode() != httperr.CodeInvalidCursor {
 				t.Fatalf("Activity() error = %v, want %q", err, httperr.CodeInvalidCursor)
 			}
 		})

@@ -8,11 +8,10 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
-	"webtag/internal/httperr"
+	"webtag/internal/problem"
 )
 
 const (
@@ -75,9 +74,9 @@ func ParseArchiveV2Sections(values []string, present bool) (ArchiveV2Selection, 
 }
 
 func invalidArchiveV2Sections() error {
-	return httperr.NewWithCode(
-		http.StatusUnprocessableEntity,
-		httperr.CodeInvalidArchiveSections,
+	return problem.NewWithCode(
+		problem.Invalid,
+		problem.CodeInvalidArchiveSections,
 		"sections must be one of base, base,thoughts, base,notes, or base,thoughts,notes",
 	)
 }

@@ -2,7 +2,6 @@ package dbintegration
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -140,8 +139,9 @@ func TestContentSaveCannotCrossCaptureRevision(t *testing.T) {
 	close(blocking.release)
 
 	saveErr := <-saveDone
-	var httpErr *httperr.Error
-	if !errors.As(saveErr, &httpErr) || httpErr.HTTPStatus() != 409 || httpErr.HTTPErrorCode() != httperr.CodeLinkNotReady {
+	carrier, ok := httperr.As(saveErr)
+	coder, coded := carrier.(httperr.ErrorCoder)
+	if !ok || !coded || carrier.HTTPStatus() != 409 || coder.HTTPErrorCode() != httperr.CodeLinkNotReady {
 		t.Fatalf("Save() error = %v, want 409/%s", saveErr, httperr.CodeLinkNotReady)
 	}
 	assertLinkRevisionState(t, pool, remote.ID.String(), model.LinkStatusPending, inputB, nil)

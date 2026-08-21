@@ -22,12 +22,11 @@ func translationRevisionRow(
 	return pgxmock.NewRows([]string{
 		"id", "link_id", "scope", "block_key", "start_offset", "end_offset",
 		"source_text", "translated_text", "source_format", "target_language", "source_hash",
-		"source_content_revision", "status", "model", "error_msg", "attempt_generation",
-		"current_river_job_id", "created_at", "updated_at",
+		"source_content_revision", "status", "model", "error_msg", "attempt_generation", "created_at", "updated_at",
 	}).AddRow(
 		id, linkID, "selection", "content", 2, 7,
 		"hello", nil, "plain", "zh-CN", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		revision, string(status), nil, nil, generation, nil, now, now,
+		revision, string(status), nil, nil, generation, now, now,
 	)
 }
 
