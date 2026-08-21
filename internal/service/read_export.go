@@ -12,39 +12,30 @@ import (
 )
 
 // exportBatchSize is the cursor page size the export stream walks the table in.
-// 500 keeps each round trip and the per-batch concept-display lookup bounded
-// while still amortizing the cursor overhead across a meaningful number of rows
+// 500 keeps each round trip bounded while still amortizing the cursor overhead
+// across a meaningful number of rows
 // — the whole point of streaming is that the response never holds more than one
 // batch of LinkResponse objects in memory regardless of how large the knowledge
 // base grows.
 const exportBatchSize = 500
 
-// Export streams every done link as a single JSON array to w, batched by a
+// ExportArchiveLinks streams every done link as a single JSON array to w, batched by a
 // (created_at, id) cursor so memory stays O(exportBatchSize) no matter how many
 // links exist. Each element is a LinkResponse — the same DTO the read API
-// returns — so input_* raw multimodal fields and the embedding vector are never
-// serialized (LinkResponse simply has no such fields). Concept display names
-// override link.tags per batch exactly like the List path, so synonymous
-// surface forms collapse to one canonical string.
+// returns — so input_* raw multimodal fields are never serialized
+// (LinkResponse simply has no such fields).
 //
 // The array framing ("[", item commas, "]") is written incrementally: callers
 // that wire this to an http.ResponseWriter get a true stream. An error after
 // the opening "[" has already flushed leaves a truncated (invalid-JSON)
-// response — that is acceptable for a best-effort bulk export and far better
-// than buffering the entire table to guarantee atomicity; the handler logs the
-// failure and the client re-requests. Note the opening "[" is written before
+// response — that is acceptable for a streaming archive and far better than
+// buffering the entire table to guarantee atomicity; the client rejects the
+// truncated archive and re-requests. Note the opening "[" is written before
 // the first batch query, so even a first-batch DB error reaches the client as
 // a truncated body ("[") under an already-committed 200 — same contract as a
 // mid-stream failure; the returned error still lands in the handler's log.
-func (s *LinkReadService) Export(ctx context.Context, w io.Writer) error {
-	_, err := s.ExportWithCount(ctx, w)
-	return err
-}
-
-// ExportWithCount is the archive-v2 variant of Export. It keeps the same
-// cursor-batched, constant-memory stream while returning the exact number of
-// rows emitted into the JSON array for the archive manifest.
-func (s *LinkReadService) ExportWithCount(ctx context.Context, w io.Writer) (int, error) {
+// The returned count is written into the v2 manifest.
+func (s *LinkReadService) ExportArchiveLinks(ctx context.Context, w io.Writer) (int, error) {
 	if _, err := io.WriteString(w, "["); err != nil {
 		return 0, err
 	}
@@ -67,12 +58,8 @@ func (s *LinkReadService) ExportWithCount(ctx context.Context, w io.Writer) (int
 			break
 		}
 
-		displayByLink := s.fetchDisplayNames(ctx, links)
 		for i := range links {
 			resp := linkToResponse(links[i])
-			if names, ok := displayByLink[links[i].ID]; ok && len(names) > 0 {
-				resp.Tags = names
-			}
 			if err := writeExportItem(w, resp, written == 0); err != nil {
 				return 0, err
 			}

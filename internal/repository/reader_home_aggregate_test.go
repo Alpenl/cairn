@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
 
-	"webtag/internal/model"
 	"webtag/internal/readertext"
 )
 
@@ -41,8 +40,8 @@ func TestReaderHomeFreshnessHasStableRawStates(t *testing.T) {
 	}
 }
 
-func TestChecklistTodosForSourcesPreservesStableProjectionIdentity(t *testing.T) {
-	sources := []readerTodoHostSource{{
+func TestReaderChecklistTodosPreservesStableProjectionIdentity(t *testing.T) {
+	source := readerTodoHostSource{
 		originKind:   "note",
 		hostID:       "note-1",
 		hostRevision: 8,
@@ -50,13 +49,13 @@ func TestChecklistTodosForSourcesPreservesStableProjectionIdentity(t *testing.T)
 		sourceKind:   "note",
 		sourceID:     "note-1",
 		live:         true,
-	}}
-
-	items := checklistTodosForSources(sources)
-	if len(items) != 2 {
-		t.Fatalf("checklistTodosForSources() returned %d items, want 2", len(items))
 	}
-	blocks := readertext.List(sources[0].body)
+
+	items := readerChecklistTodos(source)
+	if len(items) != 2 {
+		t.Fatalf("readerChecklistTodos() returned %d items, want 2", len(items))
+	}
+	blocks := readertext.List(source.body)
 	wantOccurrences := []string{"1", "2"}
 	for index, item := range items {
 		if item.OriginKind != "note" || item.OriginHostID == nil || *item.OriginHostID != "note-1" || item.HostRevision != 8 {
@@ -128,17 +127,6 @@ func TestLoadHomeAggregateReadsOneReadOnlySnapshot(t *testing.T) {
 	}
 	if len(aggregate.ContinueReading) != 1 || aggregate.ContinueReading[0].Key != "link:"+linkID.String() {
 		t.Fatalf("ContinueReading = %#v", aggregate.ContinueReading)
-	}
-	// Continue reading is a reason without a ranking signal behind it: it names
-	// the contract constant, claims no contribution, and stays out of the score
-	// evidence that clients audit column by column.
-	resumed := aggregate.ContinueReading[0]
-	if resumed.ReasonCode != model.ReaderFeedReasonContinueReading {
-		t.Fatalf("ContinueReading reason code = %q, want %q", resumed.ReasonCode, model.ReaderFeedReasonContinueReading)
-	}
-	if resumed.Score != 0 || resumed.ReasonContribution != 0 ||
-		resumed.ScoreContributions != (model.ReaderFeedScoreContributions{}) || len(resumed.EnabledScoreSignals) != 0 {
-		t.Fatalf("ContinueReading score evidence = %#v, want an unscored item", resumed)
 	}
 	if len(aggregate.RecentThoughts) != 1 || aggregate.RecentThoughts[0].ID != "thought-1" {
 		t.Fatalf("RecentThoughts = %#v", aggregate.RecentThoughts)

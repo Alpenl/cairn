@@ -10,8 +10,6 @@ import (
 
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
-	"webtag/internal/model"
-	"webtag/internal/observability"
 	"webtag/internal/repository"
 )
 
@@ -19,20 +17,16 @@ import (
 // intentionally separate because it needs all preview conflicts resolved and
 // must lock every site in one repository transaction.
 type SiteMergeService struct {
-	sites   repository.SiteReader
-	writer  repository.SiteMergeWriter
-	metrics *observability.Metrics
+	sites siteMergeStore
 }
 
-func NewSiteMergeServiceWithMetrics(sites repository.SiteReader, metrics *observability.Metrics) *SiteMergeService {
-	svc := NewSiteMergeService(sites)
-	svc.metrics = metrics
-	return svc
+type siteMergeStore interface {
+	siteDetailReader
+	ExecuteSiteMerge(context.Context, repository.ExecuteSiteMergeParams) (repository.SiteMergeResult, error)
 }
 
-func NewSiteMergeService(sites repository.SiteReader) *SiteMergeService {
-	writer, _ := sites.(repository.SiteMergeWriter)
-	return &SiteMergeService{sites: sites, writer: writer}
+func NewSiteMergeService(sites siteMergeStore) *SiteMergeService {
+	return &SiteMergeService{sites: sites}
 }
 
 func (s *SiteMergeService) Preview(ctx context.Context, request dto.SiteMergePreviewRequest) (dto.SiteMergePreviewResponse, error) {
@@ -44,9 +38,6 @@ func (s *SiteMergeService) Preview(ctx context.Context, request dto.SiteMergePre
 }
 
 func (s *SiteMergeService) Execute(ctx context.Context, request dto.SiteMergeExecuteRequest) (dto.SiteMergeExecuteResponse, error) {
-	if s.writer == nil {
-		return dto.SiteMergeExecuteResponse{}, httperr.NewWithCode(503, "site_library_unavailable", "site merge is not configured")
-	}
 	target, details, err := s.loadMergeDetails(ctx, request.TargetSiteID, request.TargetRevision, request.Sources)
 	if err != nil {
 		return dto.SiteMergeExecuteResponse{}, err
@@ -60,23 +51,14 @@ func (s *SiteMergeService) Execute(ctx context.Context, request dto.SiteMergeExe
 		id, _ := uuid.Parse(source.SiteID)
 		sources = append(sources, repository.SiteMergeSource{ID: id, Revision: source.Revision})
 	}
-	result, err := s.writer.ExecuteSiteMerge(ctx, repository.ExecuteSiteMergeParams{TargetID: target.ID, TargetRevision: target.Revision, Sources: sources, Name: overrides.name, Intro: overrides.intro, HomepageURL: overrides.homepage, IconURL: overrides.icon, UserNote: overrides.note})
+	result, err := s.sites.ExecuteSiteMerge(ctx, repository.ExecuteSiteMergeParams{TargetID: target.ID, TargetRevision: target.Revision, Sources: sources, Name: overrides.name, Intro: overrides.intro, HomepageURL: overrides.homepage, IconURL: overrides.icon, UserNote: overrides.note})
 	if errors.Is(err, repository.ErrRevisionConflict) {
-		s.recordMerge("conflict")
 		return dto.SiteMergeExecuteResponse{}, siteMergeConflict("site was changed")
 	}
 	if err != nil {
-		s.recordMerge("error")
 		return dto.SiteMergeExecuteResponse{}, err
 	}
-	s.recordMerge("success")
 	return dto.SiteMergeExecuteResponse{SiteID: result.SiteID.String(), Revision: result.Revision, MovedEntries: result.MovedEntries, DeletedLinks: result.DeletedLinks}, nil
-}
-
-func (s *SiteMergeService) recordMerge(result string) {
-	if s != nil && s.metrics != nil && s.metrics.SiteMergeTotal != nil {
-		s.metrics.SiteMergeTotal.WithLabelValues(result).Inc()
-	}
 }
 
 func (s *SiteMergeService) loadMergeDetails(ctx context.Context, rawTarget string, targetRevision int64, sources []dto.SiteRevisionRef) (*repository.SiteDetail, []*repository.SiteDetail, error) {
@@ -121,7 +103,7 @@ func (s *SiteMergeService) loadMergeDetails(ctx context.Context, rawTarget strin
 }
 
 func siteMergePreview(target *repository.SiteDetail, details []*repository.SiteDetail) dto.SiteMergePreviewResponse {
-	out := dto.SiteMergePreviewResponse{TargetSiteID: target.ID.String(), TargetRevision: target.Revision, Entries: []dto.SiteMergePreviewEntryResponse{}, UserTags: []string{}, IdentityKeys: []string{}, FieldConflicts: []dto.SiteMergeFieldConflictResponse{}}
+	out := dto.SiteMergePreviewResponse{TargetSiteID: target.ID.String(), TargetRevision: target.Revision, Entries: []dto.SiteMergePreviewEntryResponse{}, Tags: []string{}, IdentityKeys: []string{}, FieldConflicts: []dto.SiteMergeFieldConflictResponse{}}
 	urls := map[string]struct{}{}
 	tags := map[string]string{}
 	for index, detail := range details {
@@ -131,9 +113,7 @@ func siteMergePreview(target *repository.SiteDetail, details []*repository.SiteD
 			out.Entries = append(out.Entries, dto.SiteMergePreviewEntryResponse{ID: entry.ID.String(), SiteID: detail.ID.String(), LinkID: entry.LinkID.String(), Name: entry.EntryName, URL: entry.NormalizedURL, Duplicate: duplicate})
 		}
 		for _, tag := range detail.Tags {
-			if tag.Source == model.FieldSourceUser {
-				tags[tag.NormalizedTag] = tag.Tag
-			}
+			tags[tag.NormalizedTag] = tag.Tag
 		}
 		for _, identity := range detail.Identities {
 			out.IdentityKeys = append(out.IdentityKeys, identity.IdentityKey)
@@ -143,25 +123,25 @@ func siteMergePreview(target *repository.SiteDetail, details []*repository.SiteD
 		}
 	}
 	for _, tag := range tags {
-		out.UserTags = append(out.UserTags, tag)
+		out.Tags = append(out.Tags, tag)
 	}
-	sort.Strings(out.UserTags)
+	sort.Strings(out.Tags)
 	sort.Strings(out.IdentityKeys)
 	out.RequiresResolution = len(out.FieldConflicts) > 0
 	return out
 }
 
 func appendSiteMergeConflicts(out *dto.SiteMergePreviewResponse, target, source *repository.SiteDetail) {
-	compare := func(field, targetValue, sourceValue string, targetUser, sourceUser bool) {
-		if targetUser && sourceUser && strings.TrimSpace(targetValue) != "" && strings.TrimSpace(sourceValue) != "" && targetValue != sourceValue {
+	compare := func(field, targetValue, sourceValue string) {
+		if strings.TrimSpace(targetValue) != "" && strings.TrimSpace(sourceValue) != "" && targetValue != sourceValue {
 			out.FieldConflicts = append(out.FieldConflicts, dto.SiteMergeFieldConflictResponse{Field: field, TargetValue: targetValue, SourceSiteID: source.ID.String(), SourceValue: sourceValue})
 		}
 	}
-	compare("name", target.Name, source.Name, target.NameSource == model.FieldSourceUser, source.NameSource == model.FieldSourceUser)
-	compare("intro", target.Intro, source.Intro, target.IntroSource == model.FieldSourceUser, source.IntroSource == model.FieldSourceUser)
-	compare("homepage_url", stringValue(target.HomepageURL), stringValue(source.HomepageURL), target.HomepageSource != nil && *target.HomepageSource == model.FieldSourceUser, source.HomepageSource != nil && *source.HomepageSource == model.FieldSourceUser)
-	compare("icon_url", stringValue(target.IconURL), stringValue(source.IconURL), target.IconSource != nil && *target.IconSource == model.FieldSourceUser, source.IconSource != nil && *source.IconSource == model.FieldSourceUser)
-	compare("user_note", target.UserNote, source.UserNote, strings.TrimSpace(target.UserNote) != "", strings.TrimSpace(source.UserNote) != "")
+	compare("name", target.Name, source.Name)
+	compare("intro", target.Intro, source.Intro)
+	compare("homepage_url", stringValue(target.HomepageURL), stringValue(source.HomepageURL))
+	compare("icon_url", stringValue(target.IconURL), stringValue(source.IconURL))
+	compare("user_note", target.UserNote, source.UserNote)
 }
 
 type siteMergeOverrides struct{ name, intro, homepage, icon, note *string }
@@ -184,7 +164,7 @@ func resolveSiteMergeConflicts(conflicts []dto.SiteMergeFieldConflictResponse, r
 		key := conflict.Field + ":" + conflict.SourceSiteID
 		resolution, ok := byKey[key]
 		if !ok {
-			return siteMergeOverrides{}, siteMergeConflict("every user field conflict requires a resolution")
+			return siteMergeOverrides{}, siteMergeConflict("every field conflict requires a resolution")
 		}
 		if resolution.Choice == "target" {
 			if resolution.SourceSiteID != conflict.SourceSiteID {

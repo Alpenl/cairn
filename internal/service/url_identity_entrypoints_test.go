@@ -50,10 +50,9 @@ type urlEntryPoint struct {
 func collectionEntryPoints() []urlEntryPoint {
 	return []urlEntryPoint{
 		{
-			// POST /api/links, POST /api/links/batch, GET /api/links?url=,
-			// and the RSS subscription save all take their identity from this
-			// one function; asserting it once is asserting all four.
-			name: "links/batch/url-lookup/rss",
+			// POST /api/links, GET /api/links?url=, and the RSS subscription
+			// save all take their identity from this one function.
+			name: "links/url-lookup/rss",
 			identity: func(_ *testing.T, raw string) (string, error) {
 				return validateURL(raw)
 			},
@@ -86,7 +85,7 @@ func collectionEntryPoints() []urlEntryPoint {
 			name: "reader inbox ingest",
 			identity: func(t *testing.T, raw string) (string, error) {
 				store := &inboxIdentityStore{}
-				service := NewReaderVNextService(store, nil)
+				service := NewReaderVNextService(store, nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
 				_, err := service.CreateInbox(context.Background(), dto.ReaderInboxCreateRequest{URL: raw})
 				if err != nil {
 					if store.created {
@@ -115,6 +114,15 @@ func (s *inboxIdentityStore) CreateInbox(_ context.Context, item model.ReaderInb
 	s.identityKey = item.IdentityKey
 	stored := item
 	return &stored, nil
+}
+
+func (s *inboxIdentityStore) CreateInboxProposal(ctx context.Context, command CreateInboxProposalCommand) (InboxProposalResult, error) {
+	item, err := s.CreateInbox(ctx, command.Inbox)
+	return InboxProposalResult{Inbox: item}, err
+}
+
+func (s *inboxIdentityStore) EnsureInboxProposal(context.Context, EnsureInboxProposalCommand) (InboxProposalResult, error) {
+	return InboxProposalResult{}, nil
 }
 
 func TestCollectionEntryPointsAgreeOnOneURLIdentity(t *testing.T) {
@@ -311,11 +319,8 @@ func TestRSSCapturePreservesDisplayURLAndUsesCanonicalIdentity(t *testing.T) {
 	links := &repotest.ObservableLinkStore{CreateFunc: func(_ context.Context, params repository.CreateLinkParams) (*model.Link, error) {
 		return &model.Link{ID: uuid.New(), URL: params.URL, SourceKey: params.SourceKey, Status: params.Status}, nil
 	}}
-	jobs := &repotest.ObservableJobStore{CreateFunc: func(_ context.Context, linkID uuid.UUID) (*model.ParseJob, error) {
-		return &model.ParseJob{ID: uuid.New(), LinkID: linkID, Status: model.JobStatusPending}, nil
-	}}
 	locker := &submitFakeLocker{}
-	ingest := newTestIngestService(links, jobs, &submitFakeQueue{}, locker)
+	ingest := newTestIngestService(links, &submitFakeQueue{}, locker)
 	submitted := "  HTTPS://WWW.Contract.Example.com//docs/guide/?b=2&a=1&utm_source=rss#frag  "
 	if _, err := ingest.AnalyzeRSS(context.Background(), RSSIngestRequest{
 		URL: submitted, SubscriptionID: uuid.New(), ItemID: uuid.New(),
@@ -337,7 +342,7 @@ func TestRSSCapturePreservesDisplayURLAndUsesCanonicalIdentity(t *testing.T) {
 func TestReaderInboxPreservesDisplayURLAndStoresCanonicalIdentity(t *testing.T) {
 	submitted := "  HTTPS://WWW.Contract.Example.com//docs/guide/?b=2&a=1&utm_source=news#frag  "
 	store := &inboxIdentityStore{}
-	reader := NewReaderVNextService(store, nil)
+	reader := NewReaderVNextService(store, nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
 	if _, err := reader.CreateInbox(context.Background(), dto.ReaderInboxCreateRequest{URL: submitted}); err != nil {
 		t.Fatalf("CreateInbox() error = %v", err)
 	}

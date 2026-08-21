@@ -20,8 +20,6 @@ import {
 
 export interface NotePanelProps {
   ann: Annotation
-  /** Historical recovery callers must pass the quarantined target explicitly. */
-  locator?: AnnotationLocator
   /** Historical annotations are view-only until an explicit reattach succeeds. */
   readOnly?: boolean
   onSave: (val: string) => void | Promise<void>
@@ -37,7 +35,6 @@ export interface NotePanelProps {
 
 export function NotePanel({
   ann,
-  locator: providedLocator,
   readOnly = false,
   onSave,
   onDelete,
@@ -47,7 +44,7 @@ export function NotePanel({
   const [val, setVal] = useState(ann.note || '')
   const [busy, setBusy] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
-  const locator = providedLocator ?? annotationLocator(ann)
+  const locator = annotationLocator(ann)
   const targetKey = locator ? annotationLocatorTargetKey(locator) : null
   const locatorIdentity = locator && targetKey
     ? `${locator.id}\0${locator.blockKey}\0${targetKey}`

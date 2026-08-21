@@ -49,19 +49,6 @@ describe('RC-01A route model', () => {
     expect(parsed).toEqual(expected)
   })
 
-  it('preserves internal review identity and trims the review id', () => {
-    expect(parseReaderRoute('https://reader.invalid/?view=review')).toEqual({
-      kind: 'internal',
-      id: 'review',
-    })
-    expect(parseReaderRoute('https://reader.invalid/?view=unknown')).toEqual({ kind: 'surface', id: 'home' })
-    expect(parseReaderRoute('https://reader.invalid/?view=review&review_id=%20abc%20')).toEqual({
-      kind: 'internal',
-      id: 'review',
-      reviewId: 'abc',
-    })
-  })
-
   it('uses the first populated route channel and keeps invalid values fail-closed', () => {
     expect(parseReaderRoute('https://reader.invalid/?surface=feed&view=notes&tool=settings')).toEqual({
       kind: 'surface',
@@ -214,7 +201,7 @@ describe('RC-01A route model', () => {
       IDENTITY_A,
     )).toBe(true)
     expect(rememberReaderRoute(
-      { kind: 'internal', id: 'review', reviewId: 'R-B' },
+      { kind: 'library', id: 'notes' },
       storage,
       undefined,
       IDENTITY_B,
@@ -226,16 +213,15 @@ describe('RC-01A route model', () => {
       inboxId: 'I-A',
     })
     expect(parseReaderRoute('/', undefined, { storage, identity: IDENTITY_B })).toEqual({
-      kind: 'internal',
-      id: 'review',
-      reviewId: 'R-B',
+      kind: 'library',
+      id: 'notes',
     })
     expect(parseReaderRoute('/?view=notes', undefined, { storage, identity: IDENTITY_B })).toEqual({
       kind: 'library',
       id: 'notes',
     })
     expect(storage.getItem(readerLastLocationStorageKey(IDENTITY_A))).toBe('?view=pending&inbox_id=I-A')
-    expect(storage.getItem(readerLastLocationStorageKey(IDENTITY_B))).toBe('?view=review&review_id=R-B')
+    expect(storage.getItem(readerLastLocationStorageKey(IDENTITY_B))).toBe('?view=notes')
   })
 
   it('separates canonical origins while equivalent configs share one physical route owner', async () => {
@@ -263,7 +249,7 @@ describe('RC-01A route model', () => {
 
   it('drops malformed stored object ids without claiming the legacy global key', () => {
     const storage = new StorageMock()
-    storage.setItem(READER_LAST_LOCATION_STORAGE_KEY, '?view=review&review_id=legacy')
+    storage.setItem(READER_LAST_LOCATION_STORAGE_KEY, '?view=notes&note_id=legacy')
     storage.setItem(readerLastLocationStorageKey(IDENTITY_A), '?view=pending&inbox_id=%00')
     expect(parseReaderRoute('/', undefined, { storage, identity: IDENTITY_A })).toEqual({
       kind: 'library', id: 'pending',
@@ -281,8 +267,6 @@ describe('RC-01A route model', () => {
     [{ kind: 'library', id: 'notes' }, '?view=notes'],
     [{ kind: 'tool', id: 'todo' }, '?tool=todo'],
     [{ kind: 'tool', id: 'settings' }, '?tool=settings'],
-    [{ kind: 'internal', id: 'review' }, '?view=review'],
-    [{ kind: 'internal', id: 'review', reviewId: 'abc' }, '?view=review&review_id=abc'],
   ] satisfies readonly [ReaderRoute, string][])('serializes %s canonically', (route, search) => {
     const url = readerRouteURL(route, 'https://reader.invalid/?view=stale&other=discarded')
     expect(url.search).toBe(search)
@@ -293,7 +277,7 @@ describe('RC-01A route model', () => {
     expect(readerRouteURL(
       { kind: 'library', id: 'reading' },
       'https://reader.invalid/?view=read&note_id=stale&site_id=stale',
-      { linkId: ' L1 ', noteId: 'N1', siteId: 'S1', contentHistoryLinkId: 'H1' },
+      { linkId: ' L1 ', noteId: 'N1', siteId: 'S1' },
     ).search).toBe('?view=reading&link_id=L1')
     expect(readerRouteURL(
       { kind: 'library', id: 'notes' },
@@ -305,11 +289,6 @@ describe('RC-01A route model', () => {
       'https://reader.invalid/?view=sites&note_id=stale',
       { noteId: 'N1', siteId: ' S1 ' },
     ).search).toBe('?view=sites&site_id=S1')
-    expect(readerRouteURL(
-      { kind: 'tool', id: 'history' },
-      'https://reader.invalid/?tool=history&thought_view=live',
-      { contentHistoryLinkId: ' H1 ' },
-    ).search).toBe('?tool=history&thought_view=live&content_history_link_id=H1')
   })
 
   it.each([
@@ -347,27 +326,15 @@ describe('RC-01A route model', () => {
     expect(readerThoughtHostTarget(thought)).toBeNull()
   })
 
-  it('compares route identity, including review ids', () => {
+  it('compares canonical route identity', () => {
     expect(sameReaderRoute(
       { kind: 'library', id: 'reading' },
       { kind: 'library', id: 'reading' },
     )).toBe(true)
-    expect(sameReaderRoute(
-      { kind: 'internal', id: 'review', reviewId: 'abc' },
-      { kind: 'internal', id: 'review', reviewId: 'abc' },
-    )).toBe(true)
-    expect(sameReaderRoute(
-      { kind: 'internal', id: 'review', reviewId: 'abc' },
-      { kind: 'internal', id: 'review', reviewId: 'xyz' },
-    )).toBe(false)
     expect(sameReaderRoute(
       { kind: 'surface', id: 'home' },
       { kind: 'library', id: 'reading' },
     )).toBe(false)
-    expect(sameReaderRoute(
-      { kind: 'internal', id: 'review', reviewId: ' abc ' },
-      { kind: 'internal', id: 'review', reviewId: 'abc' },
-    )).toBe(true)
     expect(sameReaderRoute(
       { kind: 'library', id: 'pending', inboxId: ' ' },
       { kind: 'library', id: 'pending' },

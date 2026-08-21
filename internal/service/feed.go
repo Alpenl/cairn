@@ -112,7 +112,11 @@ func NewFeedService(options FeedServiceOptions) *FeedService {
 	if now == nil {
 		now = time.Now
 	}
-	return &FeedService{store: options.Store, remote: options.Remote, analyzer: options.Analyzer, locker: options.Locker, logger: options.Logger, now: now}
+	locker := options.Locker
+	if locker == nil {
+		locker = noopURLLocker{}
+	}
+	return &FeedService{store: options.Store, remote: options.Remote, analyzer: options.Analyzer, locker: locker, logger: options.Logger, now: now}
 }
 
 func (s *FeedService) ListSubscriptions(ctx context.Context, rawURL string) (model.FeedSubscriptionsResponse, error) {
@@ -539,15 +543,9 @@ func pointerValue(value *string) string {
 }
 
 func (s *FeedService) withMutation(ctx context.Context, key string, fn func(context.Context) error) error {
-	if s.locker == nil {
-		return fn(ctx)
-	}
 	return s.locker.WithURL(ctx, key, fn)
 }
 
 func (s *FeedService) withMutations(ctx context.Context, keys []string, fn func(context.Context) error) error {
-	if s.locker == nil {
-		return fn(ctx)
-	}
 	return s.locker.WithURLs(ctx, keys, fn)
 }

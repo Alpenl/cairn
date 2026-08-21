@@ -14,14 +14,8 @@ import (
 	"webtag/internal/repository/repotest"
 )
 
-// repotest.ObservableLinkStore / ObservableJobStore replace the previous
-// per-test spy fakes (submitFakeLinkStore / submitFakeJobStore). Both
-// observables are mu-protected internally so the Batch concurrent path
-// (errgroup-driven Submit fan-out) remains race-free.
-//
-// The submitFake* types kept here (commands / locker) carry
-// their own bookkeeping because their surfaces are tiny and the
-// observable abstraction is link/job-store specific.
+// The submitFake* types keep only the business-row and queue observations that
+// remain part of the durable command contract.
 
 type submitFakeQueue struct {
 	mu          sync.Mutex
@@ -67,14 +61,13 @@ func (s *submitFakeLocker) WithURLs(ctx context.Context, rawURLs []string, fn fu
 
 // submitFakeSubmitter is the in-memory adapter for LinkSubmissionCommands.
 // Tests cross the same application seam as production while retaining the
-// observable link/job stores and queue ordering assertions.
+// observable Link store and queue ordering assertions.
 type submitFakeSubmitter struct {
-	mu              sync.Mutex
-	links           *repotest.ObservableLinkStore
-	jobs            *repotest.ObservableJobStore
-	queue           *submitFakeQueue
-	requeueCaptures []*LinkCapture
-	intentUpdates   []UpdateLinkIntentCommand
+	mu                 sync.Mutex
+	links              *repotest.ObservableLinkStore
+	queue              *submitFakeQueue
+	requeueCaptures    []*LinkCapture
+	libraryKindUpdates []SetLinkLibraryKindCommand
 }
 
 func (s *submitFakeSubmitter) withQueue(queue *submitFakeQueue) *submitFakeSubmitter {
@@ -87,14 +80,10 @@ func (s *submitFakeSubmitter) SubmitLink(ctx context.Context, command SubmitLink
 	if err != nil {
 		return LinkSubmissionResult{}, err
 	}
-	job, err := s.jobs.Create(ctx, link.ID)
-	if err != nil {
-		return LinkSubmissionResult{}, err
-	}
 	if s.queue != nil {
 		s.queue.enqueue(link.ID)
 	}
-	return LinkSubmissionResult{Link: link, Job: job, Inserted: true}, nil
+	return LinkSubmissionResult{Link: link, Enqueued: true}, nil
 }
 
 func (s *submitFakeSubmitter) RequeueLink(ctx context.Context, command RequeueLinkCommand) (LinkSubmissionResult, error) {
@@ -111,86 +100,28 @@ func (s *submitFakeSubmitter) RequeueLink(ctx context.Context, command RequeueLi
 	}); err != nil {
 		return LinkSubmissionResult{}, err
 	}
-	job, err := s.jobs.Create(ctx, command.LinkID)
-	if err != nil {
-		return LinkSubmissionResult{}, err
-	}
 	if s.queue != nil {
 		if err := s.queue.cancel(command.LinkID); err != nil {
 			return LinkSubmissionResult{}, err
 		}
 		s.queue.enqueue(command.LinkID)
 	}
-	return LinkSubmissionResult{Job: job, Inserted: true}, nil
+	return LinkSubmissionResult{Enqueued: true}, nil
 }
 
-func (s *submitFakeSubmitter) UpdateLinkIntent(ctx context.Context, command UpdateLinkIntentCommand) (UpdateLinkIntentResult, error) {
+func (s *submitFakeSubmitter) SetLinkLibraryKind(ctx context.Context, command SetLinkLibraryKindCommand) (SetLinkLibraryKindResult, error) {
 	s.mu.Lock()
-	s.intentUpdates = append(s.intentUpdates, command)
+	s.libraryKindUpdates = append(s.libraryKindUpdates, command)
 	s.mu.Unlock()
 	link, err := s.links.GetByID(ctx, command.LinkID)
 	if err != nil || link == nil {
-		return UpdateLinkIntentResult{}, err
+		return SetLinkLibraryKindResult{}, err
 	}
 	if link.Status == model.LinkStatusPending || link.Status == model.LinkStatusProcessing {
-		return UpdateLinkIntentResult{Status: link.Status}, nil
+		return SetLinkLibraryKindResult{Status: link.Status}, nil
 	}
-	result, err := s.RequeueLink(ctx, RequeueLinkCommand{LinkID: command.LinkID})
-	return UpdateLinkIntentResult{Status: model.LinkStatusPending, Job: result.Job}, err
-}
-
-// SubmitBatch mirrors the production multi-row INSERT contract against
-// the observable test stores. The production path uses ON CONFLICT
-// (source_key) to either insert a fresh row or return the existing
-// one; the fake models that by consulting the canonical SourceKey and
-// then the legacy URL map under that same identity.
-//
-// When a URL already has a row in ByURL the fake returns it with
-// Inserted=false and skips the job Create. Otherwise it falls through
-// to the per-item Create/Create pair. This is what lets existing
-// SubmitService tests preconfigure ByURL to assert the existing-link
-// branch (TestSubmitServiceBatchReturnsPerItemResponsesInOrder relies
-// on this).
-func (s *submitFakeSubmitter) SubmitLinksBatch(ctx context.Context, command SubmitLinksBatchCommand) ([]LinkSubmissionResult, error) {
-	if len(command.Captures) == 0 {
-		return nil, nil
-	}
-	results := make([]LinkSubmissionResult, 0, len(command.Captures))
-	for _, capture := range command.Captures {
-		identityKey := capture.SourceKey
-		if identityKey == "" {
-			identityKey = capture.URL
-		}
-		existing, _ := s.links.GetBySourceKey(ctx, identityKey)
-		if existing == nil {
-			existing, _ = s.links.GetByURL(ctx, identityKey)
-		}
-		if existing != nil {
-			linkCopy := *existing
-			results = append(results, LinkSubmissionResult{
-				Link:     &linkCopy,
-				Inserted: false,
-			})
-			continue
-		}
-		link, err := s.links.Create(ctx, repositoryCapture(capture))
-		if err != nil {
-			return nil, err
-		}
-		job, err := s.jobs.Create(ctx, link.ID)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, LinkSubmissionResult{
-			Link:     link,
-			Job:      job,
-			Inserted: true,
-		})
-		if s.queue != nil {
-			s.queue.enqueue(link.ID)
-		}
-	}
-	return results, nil
+	_, err = s.RequeueLink(ctx, RequeueLinkCommand{LinkID: command.LinkID})
+	return SetLinkLibraryKindResult{Status: model.LinkStatusPending}, err
 }
 
 func repositoryCapture(capture LinkCapture) repository.CreateLinkParams {
@@ -201,50 +132,48 @@ func repositoryCapture(capture LinkCapture) repository.CreateLinkParams {
 		Description: capture.Description, Status: capture.Status, Domain: capture.Domain,
 		ContentType: capture.ContentType, PathDepth: capture.PathDepth, ParentPath: capture.ParentPath,
 		ParentID: capture.ParentID, RequestedLibraryKind: capture.RequestedLibraryKind,
-		RequestedLibraryKindSource: capture.RequestedLibraryKindSource,
-		PredictedLibraryKind:       capture.PredictedLibraryKind,
+		UserSelectedLibraryKind: capture.UserSelectedLibraryKind,
 	}
 }
 
 // newTestSubmitService wires the Observable test surface into the
 // SubmitService constructor. Production code passes the same
 // *PGXLinkRepository twice; tests pass the Observable link store as reader
-// plus a thin adapter that fans the
-// SubmitNew call out to both stores.
-func newTestSubmitService(links *repotest.ObservableLinkStore, jobs *repotest.ObservableJobStore, queue *submitFakeQueue, locker URLLocker) *SubmitService {
-	commands := (&submitFakeSubmitter{links: links, jobs: jobs}).withQueue(queue)
-	return NewSubmitService(links, jobs, commands, locker, SubmitServiceOptions{})
+// plus a thin in-memory durable command adapter.
+func newTestSubmitService(links *repotest.ObservableLinkStore, queue *submitFakeQueue, locker URLLocker) *SubmitService {
+	commands := (&submitFakeSubmitter{links: links}).withQueue(queue)
+	submit, _ := NewLinkServices(links, commands, locker, SubmitServiceOptions{})
+	return submit
 }
 
 // newTestIngestService is the IngestService counterpart used by the
 // /api/ingest tests after Wave 12.3 M5 split Ingest off SubmitService.
-// It accepts the same Observable fakes so an ingest test can keep
-// asserting against linkStore.CreateCalls / jobStore.CreateCalls without
-// any rewrite — only the receiver type changed.
-func newTestIngestService(links *repotest.ObservableLinkStore, jobs *repotest.ObservableJobStore, queue *submitFakeQueue, locker URLLocker) *IngestService {
-	commands := (&submitFakeSubmitter{links: links, jobs: jobs}).withQueue(queue)
-	return NewIngestService(links, jobs, commands, locker)
+// It accepts the same Link observable and queue fake.
+func newTestIngestService(links *repotest.ObservableLinkStore, queue *submitFakeQueue, locker URLLocker) *IngestService {
+	commands := (&submitFakeSubmitter{links: links}).withQueue(queue)
+	_, ingest := NewLinkServices(links, commands, locker, SubmitServiceOptions{})
+	return ingest
 }
 
 func newFakeSubmitService(
 	links *repotest.ObservableLinkStore,
 	commands *submitFakeSubmitter,
-	jobs *repotest.ObservableJobStore,
 	queue *submitFakeQueue,
 	locker URLLocker,
 	opts SubmitServiceOptions,
 ) *SubmitService {
-	return NewSubmitService(links, jobs, commands.withQueue(queue), locker, opts)
+	submit, _ := NewLinkServices(links, commands.withQueue(queue), locker, opts)
+	return submit
 }
 
 func newFakeIngestService(
 	links *repotest.ObservableLinkStore,
 	commands *submitFakeSubmitter,
-	jobs *repotest.ObservableJobStore,
 	queue *submitFakeQueue,
 	locker URLLocker,
 ) *IngestService {
-	return NewIngestService(links, jobs, commands.withQueue(queue), locker)
+	_, ingest := NewLinkServices(links, commands.withQueue(queue), locker, SubmitServiceOptions{})
+	return ingest
 }
 
 func assertStringFieldIfPresent(t *testing.T, params repository.CreateLinkParams, fieldName string, want string) {
@@ -278,20 +207,6 @@ func readStringField(params repository.CreateLinkParams, fieldName string) strin
 	}
 }
 
-// submitResponseEqual compares two SubmitResponse values for equality with
-// pointer-aware semantics on JobID. The L3 cleanup made JobID a *string so a
-// raw == comparison would compare pointer identity instead of the underlying
-// values; this helper dereferences when both sides are non-nil.
 func submitResponseEqual(a, b dto.SubmitResponse) bool {
-	if a.LinkID != b.LinkID || a.Status != b.Status {
-		return false
-	}
-	switch {
-	case a.JobID == nil && b.JobID == nil:
-		return true
-	case a.JobID == nil || b.JobID == nil:
-		return false
-	default:
-		return *a.JobID == *b.JobID
-	}
+	return a == b
 }

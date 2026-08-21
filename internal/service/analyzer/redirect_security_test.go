@@ -16,7 +16,6 @@ func TestAnalyzerDoesNotRetryCredentialedHTTPSDowngrade(t *testing.T) {
 
 	providerCalls := 0
 	providerClient := fetcher.NewHTTPClientWithOptions(fetcher.HTTPClientOptions{
-		AllowUnsafeTargets: true,
 		Client: &http.Client{Transport: visionRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 			providerCalls++
 			if providerCalls > 1 {
@@ -33,7 +32,7 @@ func TestAnalyzerDoesNotRetryCredentialedHTTPSDowngrade(t *testing.T) {
 		})},
 	}).Raw()
 	a := NewOpenAIAnalyzer(OpenAIAnalyzerOptions{
-		BaseURL: "https://provider.example", APIKey: "fictional-key", Model: "test",
+		BaseURL: "https://8.8.8.8", APIKey: "fictional-key", Model: "test",
 		HTTPClient: providerClient, EmptyResponseRetries: 3,
 	})
 

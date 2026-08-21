@@ -55,7 +55,6 @@ data class QueueEntity(
     val lastErrorCode: String?,
     val lastHttpStatus: Int?,
     val linkId: String?,
-    val jobId: String?,
     val leaseOwner: String?,
     val leaseExpiresAt: Long?,
     val updatedAt: Long,
@@ -79,7 +78,6 @@ data class RecentResultEntity(
     val urlNonce: ByteArray,
     val cryptoVersion: Int,
     val linkId: String,
-    val jobId: String?,
     val status: String,
     val createdAt: Long,
     val apiOrigin: String,
@@ -160,7 +158,7 @@ interface QueueDao {
         "UPDATE queue_entries SET state = :state, firstFailedAt = :firstFailedAt, " +
             "attemptCount = :attemptCount, nextAttemptAt = :nextAttemptAt, " +
             "lastErrorKind = :lastErrorKind, lastErrorCode = :lastErrorCode, " +
-            "lastHttpStatus = :lastHttpStatus, linkId = :linkId, jobId = :jobId, " +
+            "lastHttpStatus = :lastHttpStatus, linkId = :linkId, " +
             "leaseOwner = NULL, leaseExpiresAt = NULL, updatedAt = :updatedAt " +
             "WHERE id = :id AND apiOrigin = :queueOrigin AND clientDataNamespace = :queueNamespace " +
             "AND leaseOwner = :owner AND leaseExpiresAt > :updatedAt " +
@@ -181,7 +179,6 @@ interface QueueDao {
         lastErrorCode: String?,
         lastHttpStatus: Int?,
         linkId: String?,
-        jobId: String?,
         activeOrigin: String,
         activeNamespace: String,
         activationRevision: Long,
@@ -234,7 +231,7 @@ interface QueueDao {
             "apiOrigin = :newOrigin, clientDataNamespace = :newNamespace, " +
             "state = 'pending_submit', firstFailedAt = NULL, attemptCount = 0, " +
             "nextAttemptAt = NULL, lastErrorKind = NULL, lastErrorCode = NULL, " +
-            "lastHttpStatus = NULL, linkId = NULL, jobId = NULL, " +
+            "lastHttpStatus = NULL, linkId = NULL, " +
             "leaseOwner = NULL, leaseExpiresAt = NULL, updatedAt = :now " +
             "WHERE id = :id AND apiOrigin = :oldOrigin AND clientDataNamespace = :oldNamespace " +
             "AND (leaseOwner IS NULL OR leaseExpiresAt <= :now)",
@@ -259,7 +256,7 @@ interface QueueDao {
     fun recent(): RecentResultEntity?
 
     @Query(
-        "UPDATE recent_results SET linkId = :linkId, jobId = :jobId, status = :status, " +
+        "UPDATE recent_results SET linkId = :linkId, status = :status, " +
             "createdAt = :createdAt, refreshNotBefore = NULL, refreshBlockReason = NULL " +
             "WHERE id = 1 AND apiOrigin = :apiOrigin AND clientDataNamespace = :namespace " +
             "AND linkId = :expectedLinkId " +
@@ -272,7 +269,6 @@ interface QueueDao {
         namespace: String,
         expectedLinkId: String,
         linkId: String,
-        jobId: String?,
         status: String,
         createdAt: Long,
         activationRevision: Long,
@@ -324,7 +320,7 @@ interface QueueDao {
         TodoOutboxEntity::class,
         TodoSyncStateEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class QueueDatabase : RoomDatabase() {
@@ -342,7 +338,7 @@ abstract class QueueDatabase : RoomDatabase() {
                 "webtag-share-queue.db",
             )
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
                 .also { instance = it }
         }
@@ -382,6 +378,102 @@ abstract class QueueDatabase : RoomDatabase() {
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 migrateTodoStorageV2ToV3(database)
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("DROP INDEX IF EXISTS index_queue_entries_state_nextAttemptAt")
+                database.execSQL("DROP INDEX IF EXISTS index_queue_entries_leaseOwner")
+                database.execSQL(
+                    """
+                    CREATE TABLE queue_entries_without_job_id (
+                        id TEXT NOT NULL,
+                        schemaVersion INTEGER NOT NULL,
+                        urlCiphertext BLOB NOT NULL,
+                        urlNonce BLOB NOT NULL,
+                        cryptoVersion INTEGER NOT NULL,
+                        idempotencyKey TEXT NOT NULL,
+                        requestFingerprint TEXT NOT NULL,
+                        apiOrigin TEXT NOT NULL,
+                        clientDataNamespace TEXT NOT NULL,
+                        state TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        firstFailedAt INTEGER,
+                        attemptCount INTEGER NOT NULL,
+                        nextAttemptAt INTEGER,
+                        lastErrorKind TEXT,
+                        lastErrorCode TEXT,
+                        lastHttpStatus INTEGER,
+                        linkId TEXT,
+                        leaseOwner TEXT,
+                        leaseExpiresAt INTEGER,
+                        updatedAt INTEGER NOT NULL,
+                        PRIMARY KEY(id)
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    """
+                    INSERT INTO queue_entries_without_job_id (
+                        id, schemaVersion, urlCiphertext, urlNonce, cryptoVersion,
+                        idempotencyKey, requestFingerprint, apiOrigin, clientDataNamespace,
+                        state, createdAt, firstFailedAt, attemptCount, nextAttemptAt,
+                        lastErrorKind, lastErrorCode, lastHttpStatus, linkId,
+                        leaseOwner, leaseExpiresAt, updatedAt
+                    )
+                    SELECT id, schemaVersion, urlCiphertext, urlNonce, cryptoVersion,
+                           idempotencyKey, requestFingerprint, apiOrigin, clientDataNamespace,
+                           state, createdAt, firstFailedAt, attemptCount, nextAttemptAt,
+                           lastErrorKind, lastErrorCode, lastHttpStatus, linkId,
+                           leaseOwner, leaseExpiresAt, updatedAt
+                    FROM queue_entries
+                    """.trimIndent(),
+                )
+                database.execSQL("DROP TABLE queue_entries")
+                database.execSQL("ALTER TABLE queue_entries_without_job_id RENAME TO queue_entries")
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_queue_entries_state_nextAttemptAt " +
+                        "ON queue_entries (state, nextAttemptAt)",
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_queue_entries_leaseOwner " +
+                        "ON queue_entries (leaseOwner)",
+                )
+
+                database.execSQL(
+                    """
+                    CREATE TABLE recent_results_without_job_id (
+                        id INTEGER NOT NULL,
+                        urlCiphertext BLOB NOT NULL,
+                        urlNonce BLOB NOT NULL,
+                        cryptoVersion INTEGER NOT NULL,
+                        linkId TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        apiOrigin TEXT NOT NULL,
+                        clientDataNamespace TEXT NOT NULL,
+                        refreshNotBefore INTEGER,
+                        refreshBlockReason TEXT,
+                        PRIMARY KEY(id)
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    """
+                    INSERT INTO recent_results_without_job_id (
+                        id, urlCiphertext, urlNonce, cryptoVersion, linkId, status,
+                        createdAt, apiOrigin, clientDataNamespace, refreshNotBefore,
+                        refreshBlockReason
+                    )
+                    SELECT id, urlCiphertext, urlNonce, cryptoVersion, linkId, status,
+                           createdAt, apiOrigin, clientDataNamespace, refreshNotBefore,
+                           refreshBlockReason
+                    FROM recent_results
+                    """.trimIndent(),
+                )
+                database.execSQL("DROP TABLE recent_results")
+                database.execSQL("ALTER TABLE recent_results_without_job_id RENAME TO recent_results")
             }
         }
     }
@@ -435,7 +527,6 @@ class QueueRepository(
             lastErrorCode = null,
             lastHttpStatus = null,
             linkId = null,
-            jobId = null,
             leaseOwner = null,
             leaseExpiresAt = null,
             updatedAt = now,
@@ -521,7 +612,6 @@ class QueueRepository(
         errorCode: String?,
         statusCode: Int?,
         linkId: String?,
-        jobId: String?,
         activation: ActiveSessionSnapshot,
         now: Long = System.currentTimeMillis(),
     ): SubmitCommitOutcome = database.runInTransaction(java.util.concurrent.Callable {
@@ -540,7 +630,6 @@ class QueueRepository(
             lastErrorCode = errorCode?.take(80),
             lastHttpStatus = statusCode,
             linkId = linkId,
-            jobId = jobId,
             activeOrigin = identity.origin,
             activeNamespace = identity.clientDataNamespace,
             activationRevision = activation.activationRevision,
@@ -590,7 +679,6 @@ class QueueRepository(
                     urlNonce = encrypted.nonce,
                     cryptoVersion = encrypted.version,
                     linkId = result.linkId,
-                    jobId = result.jobId,
                     status = result.status,
                     createdAt = result.createdAt,
                     apiOrigin = result.identity.origin,
@@ -822,7 +910,6 @@ class QueueRepository(
             namespace = identity.clientDataNamespace,
             expectedLinkId = expectedLinkId,
             linkId = response.linkId,
-            jobId = response.jobId,
             status = response.status,
             createdAt = now,
             activationRevision = activation.activationRevision,
@@ -865,7 +952,6 @@ class QueueRepository(
             return RecentResult(
                 url = "",
                 linkId = "",
-                jobId = null,
                 status = "identity_mismatch",
                 createdAt = result.createdAt,
                 identity = resultIdentity,
@@ -883,7 +969,6 @@ class QueueRepository(
         return RecentResult(
             url,
             result.linkId,
-            result.jobId,
             result.status,
             result.createdAt,
             resultIdentity,

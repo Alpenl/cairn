@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 
 	"webtag/internal/database"
 )
@@ -144,58 +143,27 @@ func reconcileSchemaLedger(ctx context.Context, db database.Querier, target stri
 			Detail: "schema_migrations does not exist; this database has never been migrated"})
 	}
 
-	// An unknown target is a report, not a transport failure: the manifest came
-	// from a different release than the binary running here, and the operator
-	// has to see that stated rather than receive a generic error.
-	targetIndex, known := stepIndexOf(target)
-	if !known {
+	if target != CurrentSchemaMigrationID {
 		problems = append(problems, LedgerProblem{Ledger: ledger, Kind: LedgerProblemUnknownTarget,
-			Detail: fmt.Sprintf("declared schema target %q is not a step this migrate binary defines", target)})
+			Detail: fmt.Sprintf("declared schema target %q is not the current target %q", target, CurrentSchemaMigrationID)})
 		return state, problems, nil
 	}
 
-	state.Head, state.Missing, state.Extra = diffSchemaLedger(state.Applied, targetIndex)
-
-	if len(state.Missing) > 0 {
-		problems = append(problems, LedgerProblem{Ledger: ledger, Kind: LedgerProblemBehind,
-			Detail: fmt.Sprintf("schema target %s not reached; missing %s", target, strings.Join(state.Missing, ", "))})
-	}
-	if len(state.Extra) > 0 {
+	ledgerState, classifyErr := classifySchemaVersions(state.Applied)
+	if classifyErr != nil {
+		state.Extra = slices.Clone(state.Applied)
 		problems = append(problems, LedgerProblem{Ledger: ledger, Kind: LedgerProblemAhead,
-			Detail: fmt.Sprintf("schema ledger is past target %s; unexpected %s", target, strings.Join(state.Extra, ", "))})
+			Detail: classifyErr.Error()})
+		return state, problems, nil //nolint:nilerr // invalid ledger contents are reconciliation findings, not query failures
 	}
-	state.AtTarget = len(state.Missing) == 0 && len(state.Extra) == 0
+	state.Head = ledgerState.startVersion
+	if ledgerState.kind != schemaLedgerCurrent {
+		state.Missing = []string{CurrentSchemaMigrationID}
+		problems = append(problems, LedgerProblem{Ledger: ledger, Kind: LedgerProblemBehind,
+			Detail: fmt.Sprintf("schema target %s not reached; missing %s", target, CurrentSchemaMigrationID)})
+	}
+	state.AtTarget = ledgerState.kind == schemaLedgerCurrent
 	return state, problems, nil
-}
-
-// diffSchemaLedger measures a recorded version set against the plan prefix
-// ending at targetIndex. Versions the plan does not define at all count as
-// extra: only a newer migrate binary could have written them.
-func diffSchemaLedger(applied []string, targetIndex int) (head string, missing, extra []string) {
-	missing, extra = []string{}, []string{}
-	appliedSet := make(map[string]struct{}, len(applied))
-	for _, version := range applied {
-		appliedSet[version] = struct{}{}
-	}
-	for index, step := range steps {
-		if _, recorded := appliedSet[step.ID]; !recorded {
-			if index <= targetIndex {
-				missing = append(missing, step.ID)
-			}
-			continue
-		}
-		head = step.ID
-		delete(appliedSet, step.ID)
-		if index > targetIndex {
-			extra = append(extra, step.ID)
-		}
-	}
-	foreign := make([]string, 0, len(appliedSet))
-	for version := range appliedSet {
-		foreign = append(foreign, version)
-	}
-	slices.Sort(foreign)
-	return head, missing, append(extra, foreign...)
 }
 
 func reconcileRiverLedger(ctx context.Context, db database.Querier, target int) (RiverLedgerState, []LedgerProblem, error) {

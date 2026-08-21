@@ -54,15 +54,16 @@ func TestContentRepositoryReplacesAndReadsStructuredSnapshot(t *testing.T) {
 	repo := NewPGXLinkRepository(mock)
 	id := uuid.New()
 	revision := time.Now().UTC()
+	contentRevision := int64(2)
 	document := "## Fresh"
 	content := model.SavedContent{Text: "Fresh", Document: &document, Format: model.ContentFormatMarkdown}
 
 	mock.ExpectQuery(regexp.QuoteMeta("SET content = $1, content_document = $2, content_format = $3")).
-		WithArgs(content.Text, content.Document, content.Format, content.CJKChars, content.Words, id, revision).
+		WithArgs(content.Text, content.Document, content.Format, content.CJKChars, content.Words, id, revision, contentRevision).
 		WillReturnRows(mock.NewRows([]string{"content_revision"}).AddRow(int64(3)))
-	newRevision, replaced, err := repo.ReplaceContentIfCurrent(context.Background(), id, revision, content)
+	newRevision, replaced, err := repo.ReplaceContentIfCurrentWithRevision(context.Background(), id, revision, contentRevision, content)
 	if err != nil || !replaced || newRevision != 3 {
-		t.Fatalf("ReplaceContentIfCurrent() = %v, %v, %v; want 3, true, nil", newRevision, replaced, err)
+		t.Fatalf("ReplaceContentIfCurrentWithRevision() = %v, %v, %v; want 3, true, nil", newRevision, replaced, err)
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT content, content_document, content_format, content_source, content_revision FROM links WHERE id = $1 AND deleted_at IS NULL")).

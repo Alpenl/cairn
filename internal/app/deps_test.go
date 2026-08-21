@@ -3,70 +3,10 @@ package app
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
-	"time"
 
 	"webtag/internal/config"
 )
-
-func TestRuntimeHTTPClientsKeepFetcherSafeWhenAIUnsafeTargetsEnabled(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("ok"))
-	}))
-	defer server.Close()
-
-	httpClients := newRuntimeHTTPClientOwner()
-	t.Cleanup(func() { _ = httpClients.Stop(context.Background()) })
-	stack := httpClients.buildFetcherStack(config.Config{
-		Fetcher: config.FetcherConfig{
-			RetryAttempts: 2,
-			RetryDelayMS:  25,
-		},
-		Analyzer: config.AnalyzerConfig{
-			AllowUnsafeTargets: true,
-		},
-	}, nil)
-	fetchClient, analyzerClient, visionClient := stack.fetchClient, stack.analyzerClient, stack.visionClient
-
-	fetchReq, fetchCancel, err := fetchClient.NewRequest(context.Background(), time.Second, http.MethodGet, server.URL, nil)
-	if err != nil {
-		t.Fatalf("fetch NewRequest() error = %v", err)
-	}
-	defer fetchCancel()
-
-	_, err = fetchClient.DoWithRetry(fetchReq)
-	if err == nil {
-		t.Fatal("fetch DoWithRetry() error = nil, want unsafe target rejection")
-	}
-
-	analyzerReq, analyzerCancel, err := analyzerClient.NewRequest(context.Background(), time.Second, http.MethodGet, server.URL, nil)
-	if err != nil {
-		t.Fatalf("analyzer NewRequest() error = %v", err)
-	}
-	defer analyzerCancel()
-
-	resp, err := analyzerClient.Raw().Do(analyzerReq)
-	if err != nil {
-		t.Fatalf("analyzer Raw().Do() error = %v, want success with explicit AI unsafe target override", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-
-	visionReq, visionCancel, err := visionClient.NewRequest(context.Background(), time.Second, http.MethodGet, server.URL, nil)
-	if err != nil {
-		t.Fatalf("vision NewRequest() error = %v", err)
-	}
-	defer visionCancel()
-	if _, err := visionClient.Do(visionReq); err == nil {
-		t.Fatal("vision Do() error = nil, want unsafe target rejection despite AI override")
-	}
-}
 
 // TestBuildRuntimeReturnsErrorOnInvalidDatabaseURL covers the
 // fail-fast path in BuildRuntime — a malformed DSN must surface as a

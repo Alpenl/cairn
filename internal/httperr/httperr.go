@@ -18,7 +18,7 @@
 //   - httperr.Error: HTTP status carrier (this package). Surfaces
 //     HTTPStatus()/HTTPMessage() to the presentation layer verbatim.
 //   - service.PipelineRunError: wraps fetch/analyze failures already
-//     persisted to the parse_jobs row (errors.Is matches
+//     persisted to the Link row (errors.Is matches
 //     errsafe.ErrAlreadyPersisted) so the worker loop skips a second
 //     write.
 //   - analyzer.analyzerCallError: transport-level analyzer errors with
@@ -49,8 +49,6 @@ import (
 const (
 	// CodeLinkNotFound —— /api/links/:id 系列：链接不存在。404 路径。
 	CodeLinkNotFound = "link_not_found"
-	// CodeJobNotFound —— /api/jobs/:id：解析任务不存在。404 路径。
-	CodeJobNotFound = "job_not_found"
 	// CodeInvalidLinkID —— linkID UUID 解析失败。400 路径。
 	CodeInvalidLinkID        = "invalid_link_id"
 	CodeInvalidSiteID        = "invalid_site_id"
@@ -65,8 +63,6 @@ const (
 	CodeSiteEntryNotFound    = "site_entry_not_found"
 	CodeSiteEntryUpdateEmpty = "site_entry_update_empty"
 	CodeSiteDeleteConfirm    = "site_delete_confirmation_required"
-	// CodeInvalidJobID —— jobID UUID 解析失败。400 路径。
-	CodeInvalidJobID = "invalid_job_id"
 	// CodeCooldownActive —— refresh 触发 per-link 冷却窗口。429 路径。
 	CodeCooldownActive = "cooldown_active"
 	// CodeLinkNotReady —— 对未解析完成（非 done）的 link 做「保存原文」。409 路径。
@@ -80,10 +76,6 @@ const (
 	// CodeTranslationContentUnavailable means full translation was requested
 	// before the original article had been saved.
 	CodeTranslationContentUnavailable = "translation_content_unavailable"
-	// CodeTranslationSchedulingUnavailable means a rolling deployment gate is
-	// intentionally refusing work that cannot yet be scheduled with the active
-	// River job protocol. 503 path.
-	CodeTranslationSchedulingUnavailable = "translation_scheduling_unavailable"
 	// CodeContentRevisionConflict means the saved-content generation observed
 	// by a translation client is no longer current. 409 path.
 	CodeContentRevisionConflict = "content_revision_conflict"
@@ -98,36 +90,27 @@ const (
 	// not satisfy the bounded Link metadata contract.
 	CodeInvalidLinkMetadata = "invalid_link_metadata"
 	// CodeSourceBlockConflict means a summary source hash is no longer current.
-	// Retired deep-research blocks cannot enter the scheduling path. 409 path.
+	// 409 path.
 	CodeSourceBlockConflict = "source_block_conflict"
-	// CodeTranslationSchemaTransition means the expand-phase legacy unique
-	// constraint temporarily prevented a revision-aware row insert. 409 path.
-	CodeTranslationSchemaTransition = "translation_schema_transition"
 	// CodeInvalidCursor —— ?after= 游标 token 解析失败或与 ?page= 冲突。422 路径。
 	CodeInvalidCursor = "invalid_cursor"
 	// CodeInvalidArchiveSections rejects a non-canonical v2 archive selector
 	// before the handler begins the streaming response. 422 path.
 	CodeInvalidArchiveSections = "invalid_archive_sections"
-	// CodeArchiveReaderUnavailable rejects a selected private archive group
-	// before the handler installs streaming download headers. 503 path.
-	CodeArchiveReaderUnavailable = "archive_reader_unavailable"
-	// CodeInvalidFeedReason means a Feed snapshot could not freeze a complete
-	// score-backed reason tuple. Clients must not guess a replacement reason.
-	CodeInvalidFeedReason = "invalid_feed_reason"
 	// CodeInvalidCreatedRange rejects one-sided, malformed, equal, or reversed
 	// created_at ranges on GET /api/links. Omitting both bounds remains valid.
 	CodeInvalidCreatedRange = "invalid_created_range"
 
-	// 以下为 Wave 9 MED 迁移补的 422 slug 集合：把 submit / batch / ingest
+	// 以下为 Wave 9 MED 迁移补的 422 slug 集合：把 submit / ingest
 	// 三条 URL 校验路径上的 httperr.New(...) 改为 NewWithCode(...) 后，
 	// 前端 / 上游可以按 slug 分支处理（"是 URL 不合法还是 unsafe SSRF？"
-	// "是 batch 缺 items 还是超额？"），不再依赖 message 字面量做正则匹配。
+	// 的错误语义变成稳定代码，不再依赖 message 字面量做正则匹配。
 
 	// CodeURLRequired —— validateURL 入参为空字符串。422 路径。
 	CodeURLRequired = "url_required"
 	// CodeInvalidURL —— validateURL 解析失败或 host 为空。422 路径。
 	CodeInvalidURL = "invalid_url"
-	// CodeURLTooLong —— link URL 超过 2048 字符。Batch 将其作为逐项错误返回。
+	// CodeURLTooLong —— link URL 超过 2048 字符。
 	CodeURLTooLong = "url_too_long"
 	// CodeDescriptionTooLong —— link description 超过 4096 字符。
 	CodeDescriptionTooLong = "description_too_long"
@@ -135,11 +118,6 @@ const (
 	CodeUnsupportedURLScheme = "unsupported_url_scheme"
 	// CodeUnsafeURLTarget —— validateURL 命中 SSRF 黑名单。422 路径。
 	CodeUnsafeURLTarget = "unsafe_url_target"
-
-	// CodeBatchItemsRequired —— SubmitBatch 收到空 items。422 路径。
-	CodeBatchItemsRequired = "batch_items_required"
-	// CodeBatchItemsExceedLimit —— SubmitBatch items 数量超过 defaultBatchSubmitLimit。422 路径。
-	CodeBatchItemsExceedLimit = "batch_items_exceed_limit"
 
 	// CodeIngestSourceRequired —— /api/ingest 缺 sources。422 路径。
 	CodeIngestSourceRequired = "ingest_source_required"
@@ -180,15 +158,13 @@ const (
 	CodeUnsupportedLowConfidenceFilter = "unsupported_low_confidence_filter"
 	// CodeDomainFilterTooLong —— ?domain= 长度超过 maxListDomainLen。422 路径。
 	CodeDomainFilterTooLong = "domain_filter_too_long"
-	// CodeQueryTooLong —— ?q= 混合搜索 query 长度超过 maxListQueryLen。422 路径。
+	// CodeQueryTooLong —— ?q= 搜索 query 长度超过 maxListQueryLen。422 路径。
 	CodeQueryTooLong = "query_too_long"
 	// CodeUnsupportedStatusFilter —— ?status= 含 pending/processing/failed/done
 	// 之外的非法状态值。400 路径：浏览器扩展按此 slug 区分"客户端传错状态"
 	// 与其它过滤错误。
 	CodeUnsupportedStatusFilter = "unsupported_status_filter"
 
-	// CodeUnsupportedParseDepth —— parse_depth 不在 light/deep/full 之列。422 路径。
-	CodeUnsupportedParseDepth = "unsupported_parse_depth"
 	// CodeInvalidRequestedLibraryKind rejects values other than auto, reading,
 	// and site at the capture boundary.
 	CodeInvalidRequestedLibraryKind = "invalid_requested_library_kind"
@@ -235,9 +211,8 @@ type ErrorCoder interface {
 
 // ConflictIdentity is the authoritative translation source identity observed
 // when a conditional request is rejected. ContentRevision identifies saved
-// content; SourceHash identifies the summary block. Retired deep-research
-// rows remain readable but cannot produce a scheduling conflict. Nil pointers
-// preserve which identity domain applies.
+// content; SourceHash identifies the summary block. Nil pointers preserve
+// which identity domain applies.
 type ConflictIdentity struct {
 	ContentRevision *int64
 	BlockKey        string

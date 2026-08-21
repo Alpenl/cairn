@@ -26,10 +26,8 @@ func (f conversionLinksFake) GetLifecycleByID(context.Context, uuid.UUID) (*repo
 	}
 	projection := repository.LinkLifecycleProjection{
 		ID: f.link.ID, URL: f.link.URL, Status: f.link.Status,
-		LibraryKind: f.link.LibraryKind, LibraryKindSource: f.link.LibraryKindSource,
-		LibraryKindLocked:    f.link.LibraryKindLocked,
-		ClassificationReason: f.link.ClassificationReason,
-		ContentRevision:      f.link.ContentRevision, HasContent: f.link.HasContent,
+		LibraryKind: f.link.LibraryKind, LibraryKindLocked: f.link.LibraryKindLocked,
+		ContentRevision: f.link.ContentRevision, HasContent: f.link.HasContent,
 	}
 	return &projection, f.err
 }
@@ -78,8 +76,8 @@ func (f conversionSiteLookupFake) FindByIdentityKey(context.Context, string) (*r
 func TestConversionPreviewReadingToSiteReportsAssets(t *testing.T) {
 	id := uuid.New()
 	kind := model.LibraryKindReading
-	link := &model.Link{ID: id, Status: model.LinkStatusDone, LibraryKind: &kind, ContentRevision: 7}
-	svc := NewConversionPreviewService(conversionLinksFake{link: link}, conversionContentFake{content: &model.SavedContent{Text: "saved"}}, conversionTranslationsFake{rows: []model.LinkTranslation{{}, {}, {}}})
+	link := &model.Link{ID: id, URL: "https://example.com/article", Status: model.LinkStatusDone, LibraryKind: &kind, ContentRevision: 7}
+	svc := NewConversionPreviewService(conversionLinksFake{link: link}, conversionContentFake{content: &model.SavedContent{Text: "saved"}}, conversionTranslationsFake{rows: []model.LinkTranslation{{}, {}, {}}}, conversionSiteLookupFake{})
 
 	got, err := svc.Preview(context.Background(), id.String(), dto.ConversionPreviewRequest{TargetKind: "site"})
 	if err != nil {
@@ -96,7 +94,7 @@ func TestConversionPreviewReadingToSiteReportsAssets(t *testing.T) {
 func TestConversionPreviewSiteToReadingRequiresReparse(t *testing.T) {
 	id := uuid.New()
 	kind := model.LibraryKindSite
-	svc := NewConversionPreviewService(conversionLinksFake{link: &model.Link{ID: id, Status: model.LinkStatusDone, LibraryKind: &kind}}, nil, nil, nil)
+	svc := NewConversionPreviewService(conversionLinksFake{link: &model.Link{ID: id, Status: model.LinkStatusDone, LibraryKind: &kind}}, conversionContentFake{}, conversionTranslationsFake{}, conversionSiteLookupFake{})
 	got, err := svc.Preview(context.Background(), id.String(), dto.ConversionPreviewRequest{TargetKind: "reading"})
 	if err != nil {
 		t.Fatalf("Preview() error = %v", err)
@@ -109,7 +107,7 @@ func TestConversionPreviewSiteToReadingRequiresReparse(t *testing.T) {
 func TestConversionPreviewReadingToSiteIncludesCASReadyMatchingSite(t *testing.T) {
 	id, siteID := uuid.New(), uuid.New()
 	kind := model.LibraryKindReading
-	svc := NewConversionPreviewService(conversionLinksFake{link: &model.Link{ID: id, URL: "https://example.com/tool", Status: model.LinkStatusDone, LibraryKind: &kind}}, nil, nil, conversionSiteLookupFake{candidate: &repository.SiteConversionCandidate{ID: siteID, Name: "Example", Revision: 9}})
+	svc := NewConversionPreviewService(conversionLinksFake{link: &model.Link{ID: id, URL: "https://example.com/tool", Status: model.LinkStatusDone, LibraryKind: &kind}}, conversionContentFake{}, conversionTranslationsFake{}, conversionSiteLookupFake{candidate: &repository.SiteConversionCandidate{ID: siteID, Name: "Example", Revision: 9}})
 	got, err := svc.Preview(context.Background(), id.String(), dto.ConversionPreviewRequest{TargetKind: "site"})
 	if err != nil {
 		t.Fatalf("Preview() error = %v", err)
@@ -135,7 +133,7 @@ func TestConversionPreviewRejectsUnavailableOrUnchangedLink(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewConversionPreviewService(conversionLinksFake{link: tt.link}, nil, nil).Preview(context.Background(), tt.raw, dto.ConversionPreviewRequest{TargetKind: tt.target})
+			_, err := NewConversionPreviewService(conversionLinksFake{link: tt.link}, conversionContentFake{}, conversionTranslationsFake{}, conversionSiteLookupFake{}).Preview(context.Background(), tt.raw, dto.ConversionPreviewRequest{TargetKind: tt.target})
 			status, ok := httperr.As(err)
 			code := ""
 			if coded, yes := status.(httperr.ErrorCoder); yes {

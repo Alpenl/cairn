@@ -33,16 +33,15 @@ func TestTranslationRepositoryRealDBStateMachine(t *testing.T) {
 	)
 	source := "Persistent translation works."
 	params := repository.UpsertTranslationParams{
-		LinkID:                  linkID,
-		Scope:                   model.TranslationScopeSelection,
-		BlockKey:                "summary",
-		StartOffset:             0,
-		EndOffset:               len(source),
-		SourceText:              source,
-		SourceFormat:            model.TranslationFormatPlain,
-		TargetLanguage:          model.TranslationTargetChinese,
-		SourceHash:              fmt.Sprintf("%x", sha256.Sum256([]byte(source))),
-		AllowExistingReschedule: true,
+		LinkID:         linkID,
+		Scope:          model.TranslationScopeSelection,
+		BlockKey:       "summary",
+		StartOffset:    0,
+		EndOffset:      len(source),
+		SourceText:     source,
+		SourceFormat:   model.TranslationFormatPlain,
+		TargetLanguage: model.TranslationTargetChinese,
+		SourceHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(source))),
 	}
 
 	const firstRiverJobID int64 = 1001
@@ -698,8 +697,7 @@ func translationSelectionParams(linkID uuid.UUID, source string) repository.Upse
 		LinkID: linkID, Scope: model.TranslationScopeSelection,
 		BlockKey: "summary", StartOffset: 0, EndOffset: len(source),
 		SourceText: source, SourceFormat: model.TranslationFormatPlain,
-		TargetLanguage:          model.TranslationTargetChinese,
-		SourceHash:              fmt.Sprintf("%x", sha256.Sum256([]byte(source))),
-		AllowExistingReschedule: true,
+		TargetLanguage: model.TranslationTargetChinese,
+		SourceHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(source))),
 	}
 }

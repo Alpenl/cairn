@@ -4,7 +4,6 @@ package migrate
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -95,46 +94,12 @@ func TestUserDeletedThoughtIsContentFreeAndTerminalDB(t *testing.T) {
 	}
 }
 
-func TestConceptMergeProposalSurvivesConceptDeletionDB(t *testing.T) {
-	pool := migrationTestPool(t, 2)
-	requireMigratedIntegritySchema(t, pool)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-
-	winnerID, loserID, proposalID := uuid.New(), uuid.New(), uuid.New()
-	defer func() {
-		_, _ = pool.Exec(context.WithoutCancel(ctx), `DELETE FROM concept_merge_proposal WHERE id=$1`, proposalID)
-		_, _ = pool.Exec(context.WithoutCancel(ctx), `DELETE FROM concept WHERE id=ANY($1::uuid[])`, []uuid.UUID{winnerID, loserID})
-	}()
-	if _, err := pool.Exec(ctx, `INSERT INTO concept (id,primary_name) VALUES ($1,'winner'),($2,'loser')`, winnerID, loserID); err != nil {
-		t.Fatalf("insert concepts: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO concept_merge_proposal (id,winner_id,loser_id,score)
-		VALUES ($1,$2,$3,0.9)`, proposalID, winnerID, loserID); err != nil {
-		t.Fatalf("insert proposal: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `DELETE FROM concept WHERE id=ANY($1::uuid[])`, []uuid.UUID{winnerID, loserID}); err != nil {
-		t.Fatalf("delete proposal concepts: %v", err)
-	}
-	var gotWinner, gotLoser uuid.UUID
-	if err := pool.QueryRow(ctx, `SELECT winner_id,loser_id FROM concept_merge_proposal WHERE id=$1`, proposalID).Scan(&gotWinner, &gotLoser); err != nil {
-		t.Fatalf("proposal audit disappeared: %v", err)
-	}
-	if gotWinner != winnerID || gotLoser != loserID {
-		t.Fatalf("proposal audit IDs = (%s,%s), want (%s,%s)", gotWinner, gotLoser, winnerID, loserID)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE concept_merge_proposal SET status='approved' WHERE id=$1`, proposalID); err == nil || !strings.Contains(err.Error(), "chk_merge_proposal_decision_audit") {
-		t.Fatalf("incomplete terminal update error = %v, want decision audit constraint", err)
-	}
-}
-
 func requireMigratedIntegritySchema(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	var ready bool
 	if err := pool.QueryRow(t.Context(), `SELECT
 		to_regclass('public.reader_thoughts') IS NOT NULL
-		AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='reader_thoughts' AND column_name='user_deleted')
-		AND EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conname='chk_merge_proposal_decision_audit')`).Scan(&ready); err != nil {
+		AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='reader_thoughts' AND column_name='user_deleted')`).Scan(&ready); err != nil {
 		t.Fatalf("inspect migrated integrity schema: %v", err)
 	}
 	if !ready {

@@ -19,6 +19,7 @@ import com.alpenl.webtag.share.security.EncryptedValue
 import java.util.UUID
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -30,7 +31,7 @@ import org.junit.runner.RunWith
 class QueueDatabaseMigrationInstrumentedTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val helper = MigrationTestHelper(instrumentation, QueueDatabase::class.java)
-    private val databaseName = "queue-v1-v3-${UUID.randomUUID()}.db"
+    private val databaseName = "queue-v1-v4-${UUID.randomUUID()}.db"
 
     @Before
     fun cleanBefore() {
@@ -142,7 +143,7 @@ class QueueDatabaseMigrationInstrumentedTest {
         }
 
         val room = Room.databaseBuilder(instrumentation.targetContext, QueueDatabase::class.java, databaseName)
-            .addMigrations(QueueDatabase.MIGRATION_1_2, QueueDatabase.MIGRATION_2_3)
+            .addMigrations(QueueDatabase.MIGRATION_1_2, QueueDatabase.MIGRATION_2_3, QueueDatabase.MIGRATION_3_4)
             .allowMainThreadQueries()
             .build()
         try {
@@ -231,7 +232,7 @@ class QueueDatabaseMigrationInstrumentedTest {
         }
 
         val room = Room.databaseBuilder(instrumentation.targetContext, QueueDatabase::class.java, databaseName)
-            .addMigrations(QueueDatabase.MIGRATION_1_2, QueueDatabase.MIGRATION_2_3)
+            .addMigrations(QueueDatabase.MIGRATION_1_2, QueueDatabase.MIGRATION_2_3, QueueDatabase.MIGRATION_3_4)
             .allowMainThreadQueries()
             .build()
         try {
@@ -310,7 +311,7 @@ class QueueDatabaseMigrationInstrumentedTest {
         }
 
         val room = Room.databaseBuilder(instrumentation.targetContext, QueueDatabase::class.java, databaseName)
-            .addMigrations(QueueDatabase.MIGRATION_1_2, QueueDatabase.MIGRATION_2_3)
+            .addMigrations(QueueDatabase.MIGRATION_1_2, QueueDatabase.MIGRATION_2_3, QueueDatabase.MIGRATION_3_4)
             .allowMainThreadQueries()
             .build()
         try {
@@ -326,6 +327,81 @@ class QueueDatabaseMigrationInstrumentedTest {
     @Test
     fun recoveryMakesBlockedAuthLegacyOperationExecutable() {
         assertRecoveryNormalizesState(TodoOutboxState.BLOCKED_AUTH)
+    }
+
+    @Test
+    fun migrationDropsLegacyTaskIdsWithoutChangingDurableQueueState() {
+        val origin = "https://example.org"
+        val namespace = "q".repeat(43)
+        val queueId = UUID.randomUUID().toString()
+
+        helper.createDatabase(databaseName, 3).use { database ->
+            database.execSQL(
+                """
+                INSERT INTO queue_entries (
+                    id, schemaVersion, urlCiphertext, urlNonce, cryptoVersion,
+                    idempotencyKey, requestFingerprint, apiOrigin, clientDataNamespace,
+                    state, createdAt, firstFailedAt, attemptCount, nextAttemptAt,
+                    lastErrorKind, lastErrorCode, lastHttpStatus, linkId, jobId,
+                    leaseOwner, leaseExpiresAt, updatedAt
+                ) VALUES (?, 1, ?, ?, 1, ?, ?, ?, ?, 'retry_wait', 1000, NULL, 2,
+                          2000, 'NO_NETWORK', NULL, NULL, ?, ?, NULL, NULL, 1000)
+                """.trimIndent(),
+                arrayOf(
+                    queueId,
+                    byteArrayOf(1, 2, 3),
+                    byteArrayOf(4, 5, 6),
+                    "idem-$queueId",
+                    "fingerprint-$queueId",
+                    origin,
+                    namespace,
+                    "link-$queueId",
+                    "legacy-task-$queueId",
+                ),
+            )
+            database.execSQL(
+                """
+                INSERT INTO recent_results (
+                    id, urlCiphertext, urlNonce, cryptoVersion, linkId, jobId, status,
+                    createdAt, apiOrigin, clientDataNamespace, refreshNotBefore,
+                    refreshBlockReason
+                ) VALUES (1, ?, ?, 1, ?, ?, 'failed', 3000, ?, ?, NULL, NULL)
+                """.trimIndent(),
+                arrayOf(
+                    byteArrayOf(7, 8, 9),
+                    byteArrayOf(10, 11, 12),
+                    "recent-$queueId",
+                    "legacy-recent-task-$queueId",
+                    origin,
+                    namespace,
+                ),
+            )
+        }
+
+        helper.runMigrationsAndValidate(
+            databaseName,
+            4,
+            true,
+            QueueDatabase.MIGRATION_3_4,
+        ).use { database ->
+            assertFalse(hasColumn(database, "queue_entries", "jobId"))
+            assertFalse(hasColumn(database, "recent_results", "jobId"))
+            database.query(
+                "SELECT state, attemptCount, nextAttemptAt, linkId FROM queue_entries WHERE id=?",
+                arrayOf(queueId),
+            ).use {
+                assertTrue(it.moveToFirst())
+                assertEquals("retry_wait", it.getString(0))
+                assertEquals(2, it.getInt(1))
+                assertEquals(2000L, it.getLong(2))
+                assertEquals("link-$queueId", it.getString(3))
+            }
+            database.query("SELECT status, linkId FROM recent_results WHERE id=1").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("failed", it.getString(0))
+                assertEquals("recent-$queueId", it.getString(1))
+            }
+        }
     }
 
     @Test
@@ -385,7 +461,7 @@ class QueueDatabaseMigrationInstrumentedTest {
         ).close()
 
         val room = Room.databaseBuilder(instrumentation.targetContext, QueueDatabase::class.java, databaseName)
-            .addMigrations(QueueDatabase.MIGRATION_1_2, QueueDatabase.MIGRATION_2_3)
+            .addMigrations(QueueDatabase.MIGRATION_1_2, QueueDatabase.MIGRATION_2_3, QueueDatabase.MIGRATION_3_4)
             .allowMainThreadQueries()
             .build()
         try {
@@ -502,6 +578,18 @@ class QueueDatabaseMigrationInstrumentedTest {
                 entity.quarantinedLegacyState,
             ),
         )
+    }
+
+    private fun hasColumn(
+        database: androidx.sqlite.db.SupportSQLiteDatabase,
+        table: String,
+        column: String,
+    ): Boolean = database.query("PRAGMA table_info($table)").use { cursor ->
+        val nameIndex = cursor.getColumnIndexOrThrow("name")
+        while (cursor.moveToNext()) {
+            if (cursor.getString(nameIndex) == column) return@use true
+        }
+        false
     }
 
     private fun android.database.Cursor.toOutboxEntity() = TodoOutboxEntity(

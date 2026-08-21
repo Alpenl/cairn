@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"webtag/internal/model"
-	"webtag/internal/readertext"
 	"webtag/internal/repository"
+	"webtag/internal/urlidentity"
 )
 
 // TestReaderVNextPostgresCrossSurfaceChain is the executable database evidence
@@ -36,11 +36,11 @@ func TestReaderVNextPostgresCrossSurfaceChain(t *testing.T) {
 		t.Fatalf("ListInbox before confirm = %#v, want the pending capture", inboxItems)
 	}
 
-	linkID, err := reader.ConfirmInbox(ctx, inboxID)
+	linkID, err := reader.ConfirmInbox(ctx, inboxID, nil)
 	if err != nil {
 		t.Fatalf("ConfirmInbox: %v", err)
 	}
-	confirmedLinkID, err := reader.ConfirmInbox(ctx, inboxID)
+	confirmedLinkID, err := reader.ConfirmInbox(ctx, inboxID, nil)
 	if err != nil {
 		t.Fatalf("ConfirmInbox idempotent retry: %v", err)
 	}
@@ -79,7 +79,10 @@ func TestReaderVNextPostgresCrossSurfaceChain(t *testing.T) {
 
 	// thought -> sync -> search -> note -> TODO
 	initialNoteContent := "# Captured\n\nOriginal quote\n\n- [ ] Re-read the captured article"
-	note := seedReaderVNextNote(t, pool, "Captured follow-up", initialNoteContent)
+	note, err := reader.CreateNote(ctx, model.ReaderNote{Title: "Captured follow-up", PublishedContent: initialNoteContent})
+	if err != nil {
+		t.Fatalf("CreateNote: %v", err)
+	}
 	thoughtID := "thought-" + uuid.NewString()
 	initialTarget := readerVNextJSON(t, map[string]any{
 		"kind":    "note",
@@ -94,6 +97,7 @@ func TestReaderVNextPostgresCrossSurfaceChain(t *testing.T) {
 	acks, err := reader.AppendThoughtOps(ctx, []model.ReaderThoughtOp{{
 		OpID:          "op-" + uuid.NewString(),
 		DeviceID:      "reader-device-a",
+		LogicalClock:  1,
 		OperationKind: "add",
 		AnnotationID:  thoughtID,
 		HostKind:      "note",
@@ -189,28 +193,8 @@ func TestReaderVNextPostgresCrossSurfaceChain(t *testing.T) {
 		t.Fatalf("ListNoteHistory = %#v, %v; want published revision 2", noteHistory, err)
 	}
 
-	blocks := readertext.List(published.PublishedContent)
-	if len(blocks) != 1 {
-		t.Fatalf("readertext.List(published note) = %#v, want one checklist block", blocks)
-	}
-	hostKind, hostID := "note", note.ID.String()
-	originRef := readerVNextJSON(t, map[string]any{
-		"block_ref":  blocks[0].BlockRef,
-		"text":       blocks[0].Text,
-		"occurrence": blocks[0].Occurrence,
-	})
-	if err := reader.ReconcileTodoProjections(ctx, []model.ReaderTodo{{
-		Text:           blocks[0].Text,
-		OriginKind:     "note",
-		OriginHostKind: &hostKind,
-		OriginHostID:   &hostID,
-		OriginRef:      originRef,
-		HostRevision:   published.PublishedRevision,
-	}}); err != nil {
-		t.Fatalf("ReconcileTodoProjections: %v", err)
-	}
 	todos, err := reader.ListTodos(ctx, "", 200)
-	if err != nil || len(todos.Items) != 1 || todos.Items[0].Text != blocks[0].Text || todos.Items[0].HostRevision != published.PublishedRevision {
+	if err != nil || len(todos.Items) != 1 || todos.Items[0].Text != "Re-read the captured article" || todos.Items[0].HostRevision != published.PublishedRevision {
 		t.Fatalf("ListTodos before completion = %#v, %v", todos, err)
 	}
 	done := true
@@ -233,13 +217,13 @@ func TestReaderVNextPostgresCrossSurfaceChain(t *testing.T) {
 	// Feed action -> shared engagement -> Home aggregate. Keep a second Inbox
 	// item active and a third one expired so the mixed Feed has both durable
 	// reading and active Inbox cards, while expired captures never leak into
-	// the Feed or its section/source totals.
+	// the Feed.
 	pendingInboxID := seedReaderVNextInbox(t, pool, "https://reader-vnext.example/pending", "Pending feed capture", "Pending feed body", "")
 	expiredInboxID := seedReaderVNextInbox(t, pool, "https://reader-vnext.example/expired", "Expired feed capture", "Expired feed body", "")
-	if _, err := pool.Exec(t.Context(), `UPDATE reader_inbox SET expired_at=NOW() WHERE id=$1`, expiredInboxID); err != nil {
+	if _, err := pool.Exec(t.Context(), `UPDATE reader_inbox SET expires_at=NOW() - INTERVAL '1 second' WHERE id=$1`, expiredInboxID); err != nil {
 		t.Fatalf("expire Feed Inbox fixture: %v", err)
 	}
-	feedPage, err := reader.ListFeed(ctx, "recommended", "", "", 50)
+	feedPage, err := reader.ListFeedWithSources(ctx, "recommended", "", nil, 50)
 	if err != nil {
 		t.Fatalf("ListFeed mixed page: %v", err)
 	}
@@ -255,29 +239,15 @@ func TestReaderVNextPostgresCrossSurfaceChain(t *testing.T) {
 			expiredFeedInbox = true
 		}
 	}
-	if feedPage.SnapshotID == "" || !feedLink || !feedInbox || expiredFeedInbox {
+	if !feedLink || !feedInbox || expiredFeedInbox {
 		t.Fatalf("mixed Feed page = %#v, want reading link and active Inbox only", feedPage)
 	}
-	var inboxSectionCount, inboxSourceCount int
-	for _, section := range feedPage.Sections {
-		if section.Source == "inbox" {
-			inboxSectionCount = section.Count
-		}
-	}
-	for _, source := range feedPage.Sources {
-		if source.ID == "inbox" {
-			inboxSourceCount = source.Count
-		}
-	}
-	if inboxSectionCount != 1 || inboxSourceCount != 1 {
-		t.Fatalf("Feed Inbox counts = section:%d source:%d, want active-only 1", inboxSectionCount, inboxSourceCount)
-	}
-	if _, err := reader.FeedbackFeed(ctx, "link:"+linkID.String(), "save"); err != nil {
-		t.Fatalf("FeedbackFeed save action: %v", err)
+	if _, err := reader.FeedbackFeed(ctx, "link:"+linkID.String(), "hide"); err != nil {
+		t.Fatalf("FeedbackFeed hide action: %v", err)
 	}
 	engagement, err := reader.GetEngagement(ctx, linkID)
 	if err != nil || engagement == nil || engagement.ReadLater {
-		t.Fatalf("GetEngagement after Feed save = %#v, %v; save must not set read_later", engagement, err)
+		t.Fatalf("GetEngagement after Feed hide = %#v, %v; hide must not set read_later", engagement, err)
 	}
 	read := true
 	progress := float32(0.4)
@@ -299,57 +269,20 @@ func TestReaderVNextPostgresCrossSurfaceChain(t *testing.T) {
 	if len(home.ContinueReading) != 1 || home.ContinueReading[0].LinkID == nil || *home.ContinueReading[0].LinkID != linkID {
 		t.Fatalf("Home continue reading = %#v, want Feed link %s", home.ContinueReading, linkID)
 	}
-	// A half-read link is the data condition that puts a non-scoring reason on
-	// Home. It must reach the client as the contract constant with no score
-	// evidence attached, because a client audits the reason against the
-	// contributions column by column.
-	resumed := home.ContinueReading[0]
-	if resumed.ReasonCode != model.ReaderFeedReasonContinueReading {
-		t.Fatalf("Home continue reading reason = %q, want %q", resumed.ReasonCode, model.ReaderFeedReasonContinueReading)
-	}
-	if resumed.Score != 0 || resumed.ReasonContribution != 0 ||
-		resumed.ScoreContributions != (model.ReaderFeedScoreContributions{}) || len(resumed.EnabledScoreSignals) != 0 {
-		t.Fatalf("Home continue reading score evidence = %#v, want an unscored card", resumed)
-	}
-
-	// content history -> restore -> readable current snapshot
-	currentContent, err := links.GetContent(ctx, linkID)
-	if err != nil || currentContent == nil {
-		t.Fatalf("GetContent before edit: %#v, %v", currentContent, err)
-	}
-	editedRevision, edited, err := links.EditContentIfRevision(ctx, linkID, currentContent.Revision, model.SavedContent{
-		Text:   "Edited article body",
-		Format: model.ContentFormatPlain,
-	})
-	if err != nil || !edited || editedRevision != currentContent.Revision+1 {
-		t.Fatalf("EditContentIfRevision = revision=%d edited=%v err=%v", editedRevision, edited, err)
-	}
-	historyBeforeRestore, err := reader.ListContentHistory(ctx, linkID, 20)
-	if err != nil || len(historyBeforeRestore) != 1 || historyBeforeRestore[0].Revision != currentContent.Revision {
-		t.Fatalf("ListContentHistory before restore = %#v, %v", historyBeforeRestore, err)
-	}
-	restoredRevision, err := reader.RestoreContentHistory(ctx, linkID, historyBeforeRestore[0].ID, editedRevision)
-	if err != nil || restoredRevision != editedRevision+1 {
-		t.Fatalf("RestoreContentHistory = revision=%d err=%v, want %d", restoredRevision, err, editedRevision+1)
-	}
-	restoredContent, err := links.GetContent(ctx, linkID)
-	if err != nil || restoredContent == nil || restoredContent.Text != currentContent.Text || restoredContent.Revision != restoredRevision {
-		t.Fatalf("GetContent after restore = %#v, %v; want original body at revision %d", restoredContent, err, restoredRevision)
-	}
-	historyAfterRestore, err := reader.ListContentHistory(ctx, linkID, 20)
-	if err != nil || len(historyAfterRestore) < 2 {
-		t.Fatalf("ListContentHistory after restore = %#v, %v; want current edited snapshot retained", historyAfterRestore, err)
-	}
 
 }
 
 func seedReaderVNextInbox(t *testing.T, pool *pgxpool.Pool, rawURL, title, body, summary string) uuid.UUID {
 	t.Helper()
+	identityKey, err := urlidentity.Normalize(rawURL)
+	if err != nil {
+		t.Fatalf("normalize Reader Inbox URL %s: %v", rawURL, err)
+	}
 	var id uuid.UUID
 	if err := pool.QueryRow(t.Context(), `
-		INSERT INTO reader_inbox (url,source_kind,title,body,summary,suggested_tags,tags)
-		VALUES ($1,'browser_capture',$2,$3,NULLIF($4,''),ARRAY[]::text[],ARRAY[]::text[])
-		RETURNING id`, rawURL, title, body, summary).Scan(&id); err != nil {
+		INSERT INTO reader_inbox (url,identity_key,source_kind,title,body,summary,suggested_tags,tags)
+		VALUES ($1,$2,'browser_capture',$3,$4,NULLIF($5,''),ARRAY[]::text[],ARRAY[]::text[])
+		RETURNING id`, rawURL, identityKey, title, body, summary).Scan(&id); err != nil {
 		t.Fatalf("seed Reader Inbox %s: %v", rawURL, err)
 	}
 	return id
@@ -362,8 +295,8 @@ func seedReaderVNextSavedLink(t *testing.T, pool *pgxpool.Pool, rawURL, title, b
 		INSERT INTO links (
 			url,source_kind,source_key,input_title,input_text,title,summary,tags,status,
 			content,content_document,content_format,content_source,content_revision,
-			library_kind,library_kind_source,first_collected_at,created_at,updated_at)
-		VALUES ($1,'browser_capture',$1,$3,$2,$3,$4,ARRAY[]::text[],'done',$2,$2,'markdown','user',1,'reading','user',NOW(),NOW(),NOW())
+			library_kind,library_kind_locked,first_collected_at,created_at,updated_at)
+		VALUES ($1,'browser_capture',$1,$3,$2,$3,$4,ARRAY[]::text[],'done',$2,$2,'markdown','user',1,'reading',false,NOW(),NOW(),NOW())
 		RETURNING id`, rawURL, body, title, summary).Scan(&id); err != nil {
 		t.Fatalf("seed Reader saved link %s: %v", rawURL, err)
 	}

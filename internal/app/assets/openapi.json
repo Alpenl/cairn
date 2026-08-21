@@ -51,12 +51,8 @@
       "description": "Authenticated client identity and optional HttpOnly browser-session exchange"
     },
     {
-      "name": "admin-concept-merges",
-      "description": "Legacy admin review queue for existing concept-merge proposals. The default tagging path no longer creates proposals or normalizes links.tags; these endpoints remain only for reviewing historical rows."
-    },
-    {
       "name": "ops",
-      "description": "Health, readiness, metrics, debug UI"
+      "description": "Health and readiness"
     }
   ],
   "paths": {
@@ -66,7 +62,7 @@
           "links"
         ],
         "summary": "Submit a single URL",
-        "description": "Idempotent by URL: any existing URL returns its current link/job state without creating work, including failed links. Only a new URL creates and enqueues a parse job. Retry or forced re-analysis is explicit through POST /api/links/{link_id}/refresh. Clients that may retry after an ambiguous timeout should also send a stable Idempotency-Key for the exact same request.",
+        "description": "Idempotent by URL: any existing URL returns its current link state without creating work, including failed links. Only a new URL creates and queues asynchronous parsing. Retry or forced re-analysis is explicit through POST /api/links/{link_id}/refresh. Clients that may retry after an ambiguous timeout should also send a stable Idempotency-Key for the exact same request.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -114,9 +110,6 @@
           "425": {
             "$ref": "#/components/responses/AuthenticatedIdempotencyInProgress"
           },
-          "429": {
-            "$ref": "#/components/responses/AuthenticatedTooManyRequests"
-          },
           "500": {
             "$ref": "#/components/responses/AuthenticatedInternalError"
           },
@@ -130,7 +123,7 @@
           "links"
         ],
         "summary": "List, search or existence-check links",
-        "description": "Lists links filtered by collection kind and enrichment status. A plain legacy request defaults to completed reading links, preventing website cards from appearing in article readers. library_kind=reading|site explicitly selects a collection. The optional status= parameter takes pending|processing|failed|done; an explicit status query may return either collection and unresolved automatic captures. The status filter combines orthogonally with tags/domain/content_type, the paired created_at range, and both pagination modes. Two optional modes override the normal list path: q= runs hybrid search and url= performs an exact normalized-URL existence check.",
+        "description": "Lists links filtered by collection kind and enrichment status. A plain legacy request defaults to completed reading links, preventing website cards from appearing in article readers. library_kind=reading|site explicitly selects a collection. The optional status= parameter takes pending|processing|failed|done; an explicit status query may return either collection and unresolved automatic captures. The status filter combines with tags/domain/content_type, the paired created_at range, and both pagination modes. Two optional modes override the normal list path: q= runs keyword search and url= performs an exact normalized-URL existence check.",
         "parameters": [
           {
             "name": "status",
@@ -213,7 +206,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "Hybrid search query. Non-blank switches to semantic+keyword search: when EMBEDDING_MODEL is configured the query is vectorized and matched against link content vectors (cosine nearest, top-50) merged with an ILIKE(title/summary/tags) keyword match, deduped, semantic hits first; when the model is unset or vectorization fails it degrades to pure ILIKE. Top-50, not paginated (page/after ignored). Blank/whitespace is treated as not supplied. Combines with status/tags/domain/content_type. Over 512 runes returns 422.",
+            "description": "Keyword query over title, summary, and tags. Results are ordered newest first, limited to 50, and are not paginated (page/after ignored). Blank or whitespace is treated as not supplied. Combines with status, tags, domain, and content_type. Over 512 runes returns 422.",
             "schema": {
               "type": "string"
             }
@@ -284,58 +277,13 @@
         }
       }
     },
-    "/api/links/batch": {
-      "post": {
-        "tags": [
-          "links"
-        ],
-        "summary": "Submit multiple URLs",
-        "description": "Body is an object whose `items` field contains 1–100 LinkCreateRequest entries. The response contains a parallel array of per-item outcome envelopes; each envelope has either result or error. Existing URLs are reported without creating work in every state, including failed; use POST /api/links/{link_id}/refresh for retry.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BatchCreateRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Accepted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BatchSubmitResponse"
-                }
-              }
-            },
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "413": {
-            "$ref": "#/components/responses/AuthenticatedPayloadTooLarge"
-          },
-          "422": {
-            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
-          },
-          "429": {
-            "$ref": "#/components/responses/AuthenticatedTooManyRequests"
-          }
-        }
-      }
-    },
     "/api/links/{link_id}/refresh": {
       "post": {
         "tags": [
           "links"
         ],
         "summary": "Force-reparse an existing link",
-        "description": "Re-queues a link for analysis. Works for terminal links in both done and failed states — calling refresh on a failed link transitions it back to pending, clears its error, and enqueues a fresh parse job (this is how the extension's failed-link retry works). Subject to a per-link cooldown (default 60s); a follow-up within the window returns 429 with a Retry-After header. For a link already pending or processing, the in-flight parse job is returned as-is (202) instead of enqueuing a duplicate.",
+        "description": "Queues a fresh analysis for a link. Works for terminal links in both done and failed states — calling refresh on a failed link transitions it back to pending and clears its error (this is how the extension's failed-link retry works). Subject to a per-link cooldown (default 60s); a follow-up within the window returns 429 with a Retry-After header. For a link already pending or processing, its current asynchronous state is returned as-is (202) instead of creating duplicate work.",
         "parameters": [
           {
             "$ref": "#/components/parameters/LinkID"
@@ -706,7 +654,7 @@
           "links"
         ],
         "summary": "Translate selected text or a saved full article to Simplified Chinese",
-        "description": "Creates or reuses a persistent translation. New and retried model calls are queued durably and return 202; an existing completed translation returns 200. scope=selection requires a Reader block anchor and selected source_text. scope=full reads the saved original from the server and never accepts client-supplied full content. Strict source identity is required: saved full/content/content-document requests identify their observed generation with expected_content_revision, while summary requests use expected_source_hash because that block does not share the saved-content generation lifecycle. Historical deep-research rows remain readable, but new deep-research schedules are rejected. A stale identity returns 409 content_revision_conflict or source_block_conflict with error.current_identity. A retryable schema collision returns translation_schema_transition. The API auto-detects any source language and only targets zh-CN.",
+        "description": "Creates or reuses a persistent translation. New and retried model calls are queued durably and return 202; an existing completed translation returns 200. scope=selection requires a Reader block anchor and selected source_text. scope=full reads the saved original from the server and never accepts client-supplied full content. Strict source identity is required: saved full/content/content-document requests identify their observed generation with expected_content_revision, while summary requests use expected_source_hash because that block does not share the saved-content generation lifecycle. A stale identity returns 409 content_revision_conflict or source_block_conflict with error.current_identity. The API auto-detects any source language and only targets zh-CN.",
         "parameters": [
           {
             "$ref": "#/components/parameters/LinkID"
@@ -767,9 +715,6 @@
           },
           "422": {
             "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
-          },
-          "429": {
-            "$ref": "#/components/responses/AuthenticatedTooManyRequests"
           },
           "503": {
             "$ref": "#/components/responses/AuthenticatedServiceUnavailable"
@@ -934,189 +879,6 @@
         }
       }
     },
-    "/api/admin/concept-merges": {
-      "get": {
-        "tags": [
-          "admin-concept-merges"
-        ],
-        "summary": "List pending concept-merge proposals",
-        "description": "Returns the queue of LLM-judged synonym pairs awaiting an admin decision. Each row carries the winner/loser surface names, use counts, pg_trgm similarity score, and the LLM's short reason. `limit` is clamped to [1, 200]; `offset` to [0, 10000].",
-        "parameters": [
-          {
-            "name": "limit",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 50,
-              "minimum": 1,
-              "maximum": 200
-            }
-          },
-          {
-            "name": "offset",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 0,
-              "minimum": 0,
-              "maximum": 10000
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "items": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "winner_id": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "winner_name": {
-                            "type": "string"
-                          },
-                          "winner_use_count": {
-                            "type": "integer"
-                          },
-                          "loser_id": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "loser_name": {
-                            "type": "string"
-                          },
-                          "loser_use_count": {
-                            "type": "integer"
-                          },
-                          "score": {
-                            "type": "number",
-                            "format": "float",
-                            "minimum": 0,
-                            "maximum": 1
-                          },
-                          "llm_reason": {
-                            "type": "string"
-                          },
-                          "created_at_unix": {
-                            "type": "integer"
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "AdminBearer": []
-          }
-        ]
-      }
-    },
-    "/api/admin/concept-merges/{id}/approve": {
-      "post": {
-        "tags": [
-          "admin-concept-merges"
-        ],
-        "summary": "Approve a concept-merge proposal",
-        "description": "Runs the transactional merge — re-points link_concept and concept_alias rows from loser to winner, folds use_count, deletes loser. Returns 409 when the proposal was already decided (race against another admin session). `X-Admin-Actor` header is recorded as `decided_by`; falls back to `admin` when missing.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Admin-Actor",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Optional admin identifier to record in `decided_by`."
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Merged"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "security": [
-          {
-            "AdminBearer": []
-          }
-        ]
-      }
-    },
-    "/api/admin/concept-merges/{id}/reject": {
-      "post": {
-        "tags": [
-          "admin-concept-merges"
-        ],
-        "summary": "Reject a concept-merge proposal",
-        "description": "Marks the proposal as `rejected` without moving any data. The same pair will not be re-proposed by the judge (the candidate query excludes any pair that already has a row in `concept_merge_proposal`).",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Admin-Actor",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Rejected"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "security": [
-          {
-            "AdminBearer": []
-          }
-        ]
-      }
-    },
     "/api/ingest": {
       "post": {
         "tags": [
@@ -1155,94 +917,6 @@
           },
           "422": {
             "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
-          },
-          "429": {
-            "$ref": "#/components/responses/AuthenticatedTooManyRequests"
-          }
-        }
-      }
-    },
-    "/api/jobs/{job_id}": {
-      "get": {
-        "tags": [
-          "jobs"
-        ],
-        "summary": "Get parse job status",
-        "description": "When status is `done`, the embedded `link` field contains the full LinkResponse.",
-        "parameters": [
-          {
-            "name": "job_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobResponse"
-                }
-              }
-            },
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/AuthenticatedBadRequest"
-          },
-          "404": {
-            "$ref": "#/components/responses/AuthenticatedNotFound"
-          }
-        }
-      }
-    },
-    "/api/jobs": {
-      "get": {
-        "tags": [
-          "jobs"
-        ],
-        "summary": "Batch get parse job statuses",
-        "parameters": [
-          {
-            "name": "ids",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Comma-separated job ids."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/JobResponse"
-                  }
-                }
-              }
-            },
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/AuthenticatedBadRequest"
           }
         }
       }
@@ -1356,343 +1030,6 @@
         }
       }
     },
-    "/api/library-classification-rules": {
-      "get": {
-        "tags": [
-          "library rules"
-        ],
-        "summary": "List personal classification rules",
-        "responses": {
-          "200": {
-            "description": "Rules",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ClassificationRuleResponse"
-                  }
-                }
-              }
-            },
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "library rules"
-        ],
-        "summary": "Create a personal classification rule",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ClassificationRuleCreateRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ClassificationRuleResponse"
-                }
-              }
-            },
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "413": {
-            "$ref": "#/components/responses/AuthenticatedPayloadTooLarge"
-          },
-          "422": {
-            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
-          }
-        }
-      }
-    },
-    "/api/library-classification-rules/{rule_id}": {
-      "patch": {
-        "tags": [
-          "library rules"
-        ],
-        "summary": "Update a personal classification rule",
-        "parameters": [
-          {
-            "name": "rule_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "If-Match",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Current numeric rule revision, optionally quoted."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ClassificationRuleUpdateRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Updated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ClassificationRuleResponse"
-                }
-              }
-            },
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/AuthenticatedBadRequest"
-          },
-          "409": {
-            "$ref": "#/components/responses/AuthenticatedConflict"
-          },
-          "428": {
-            "description": "The mandatory If-Match revision precondition is absent or unparsable (error_code=classification_rule_revision_required).",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "413": {
-            "$ref": "#/components/responses/AuthenticatedPayloadTooLarge"
-          },
-          "422": {
-            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "library rules"
-        ],
-        "summary": "Delete a personal classification rule",
-        "parameters": [
-          {
-            "name": "rule_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "If-Match",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Deleted",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/AuthenticatedBadRequest"
-          },
-          "409": {
-            "$ref": "#/components/responses/AuthenticatedConflict"
-          },
-          "428": {
-            "description": "The mandatory If-Match revision precondition is absent or unparsable (error_code=classification_rule_revision_required).",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/library-reviews": {
-      "get": {
-        "tags": [
-          "library reviews"
-        ],
-        "summary": "List durable library review items",
-        "parameters": [
-          {
-            "name": "status",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "pending",
-                "applied",
-                "dismissed"
-              ]
-            }
-          },
-          {
-            "name": "type",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "classification_uncertain",
-                "migration_suggestion",
-                "note_conflict",
-                "merge_conflict"
-              ]
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 30
-            }
-          },
-          {
-            "name": "offset",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Review items",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/LibraryReviewResponse"
-                  }
-                }
-              }
-            },
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "422": {
-            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
-          }
-        }
-      }
-    },
-    "/api/library-reviews/{review_id}/resolve": {
-      "post": {
-        "tags": [
-          "library reviews"
-        ],
-        "summary": "Resolve a pending review item",
-        "parameters": [
-          {
-            "name": "review_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LibraryReviewResolveRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Resolved item",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LibraryReviewResponse"
-                }
-              }
-            },
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "409": {
-            "$ref": "#/components/responses/AuthenticatedConflict"
-          },
-          "413": {
-            "$ref": "#/components/responses/AuthenticatedPayloadTooLarge"
-          },
-          "422": {
-            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
-          }
-        }
-      }
-    },
     "/api/capabilities": {
       "get": {
         "tags": [
@@ -1733,8 +1070,7 @@
               "enum": [
                 "all",
                 "pinned",
-                "recent",
-                "review"
+                "recent"
               ]
             }
           },
@@ -2099,6 +1435,12 @@
           "409": {
             "$ref": "#/components/responses/AuthenticatedConflict"
           },
+          "413": {
+            "$ref": "#/components/responses/AuthenticatedPayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
+          },
           "428": {
             "description": "The mandatory If-Match revision precondition is absent or unparsable (error_code=site_revision_required).",
             "headers": {
@@ -2113,12 +1455,6 @@
                 }
               }
             }
-          },
-          "413": {
-            "$ref": "#/components/responses/AuthenticatedPayloadTooLarge"
-          },
-          "422": {
-            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
           }
         }
       },
@@ -2439,45 +1775,13 @@
         }
       }
     },
-    "/api/export": {
-      "get": {
-        "tags": [
-          "links"
-        ],
-        "summary": "Export the full knowledge base as a JSON array",
-        "description": "Streams every done link as a single JSON array, batched server-side by a cursor so the response never buffers the whole table (safe as the library grows). Each element is a LinkResponse with the same fields the read API returns; the raw input_* multimodal fields and the embedding vector are intentionally not included. Served behind the EXTENSION_API_TOKEN group — when that token is configured a missing/incorrect Bearer token returns 401. A Content-Disposition: attachment header carries a dated filename (webtag-export-YYYY-MM-DD.json). Because the response streams, a server error after the first byte leaves a truncated array rather than a clean 500; clients should treat a non-parseable body as a transient failure and retry.",
-        "responses": {
-          "200": {
-            "description": "OK — streamed JSON array of all done links.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/LinkResponse"
-                  }
-                }
-              }
-            },
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        }
-      }
-    },
     "/api/export/v2": {
       "get": {
         "tags": [
           "links"
         ],
         "summary": "Download complete versioned archive",
-        "description": "Streams schema_version=2 metadata plus links, sites, site entries, site tags, site identities, classification rules, and an optional installation-scoped reader object. Omit sections only for full-archive compatibility; new clients send one explicit canonical selector. The server filters unselected private groups before querying or serializing them. The response may be truncated on a mid-stream error; clients must require valid JSON, validate the manifest counts and checksum against the received bytes, and fence it to the active identity before accepting it. Reader private content is available only to the authenticated export request and never enters ordinary logs, traces, or metric labels.",
+        "description": "Streams schema_version=2 metadata plus links, sites, site entries, site tags, site identities, and the installation-scoped Reader archive. Omit sections only for full-archive compatibility; new clients send one explicit canonical selector. The server filters unselected private groups before querying or serializing them. The response may be truncated on a mid-stream error; clients must require valid JSON, validate the manifest counts and checksum against the received bytes, and fence it to the active identity before accepting it. Reader private content is available only to the authenticated export request and never enters ordinary logs, traces, or metric labels.",
         "parameters": [
           {
             "name": "sections",
@@ -2510,41 +1814,6 @@
           },
           "422": {
             "$ref": "#/components/responses/AuthenticatedArchiveV2InvalidSections"
-          },
-          "503": {
-            "$ref": "#/components/responses/AuthenticatedArchiveV2ReaderUnavailable"
-          }
-        }
-      }
-    },
-    "/api/export/concepts": {
-      "get": {
-        "tags": [
-          "links"
-        ],
-        "summary": "Export the installation concept vocabulary",
-        "description": "Streams the installation concept vocabulary as a single JSON array, batched server-side by a (created_at, id) cursor so the response never buffers the whole vocabulary. Independent of GET /api/export, this endpoint uses the same installation authentication and returns a dated webtag-concepts-YYYY-MM-DD.json attachment. Because the response streams, a server error after the first byte leaves a truncated array rather than a clean 500; clients should retry on a non-parseable body.",
-        "responses": {
-          "200": {
-            "description": "OK — streamed JSON array of installation concepts.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ConceptExportItem"
-                  }
-                }
-              }
-            },
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -3283,9 +2552,6 @@
           "409": {
             "$ref": "#/components/responses/AuthenticatedConflict"
           },
-          "429": {
-            "$ref": "#/components/responses/AuthenticatedTooManyRequests"
-          },
           "500": {
             "$ref": "#/components/responses/AuthenticatedInternalError"
           }
@@ -3480,137 +2746,13 @@
         "security": []
       }
     },
-    "/metrics": {
-      "get": {
-        "tags": [
-          "ops"
-        ],
-        "summary": "Prometheus metrics",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": []
-      }
-    },
-    "/": {
-      "get": {
-        "tags": [
-          "ops"
-        ],
-        "summary": "Debug UI (HTML)",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "text/html": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": []
-      }
-    },
-    "/docs": {
-      "get": {
-        "tags": [
-          "ops"
-        ],
-        "summary": "Scalar OpenAPI documentation viewer",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "text/html": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": []
-      }
-    },
-    "/openapi.json": {
-      "get": {
-        "tags": [
-          "ops"
-        ],
-        "summary": "Raw OpenAPI 3.1 specification",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        },
-        "security": []
-      }
-    },
-    "/static/{path}": {
-      "get": {
-        "tags": [
-          "ops"
-        ],
-        "summary": "Embedded static asset (debug UI HTML, OpenAPI spec, Scalar viewer)",
-        "description": "Serves files from the embedded `assets/` filesystem. Currently exposes index.html, openapi.json, scalar.html — the same payloads that /, /openapi.json, /docs render. Treat as an internal asset channel; production callers should prefer the dedicated routes.",
-        "parameters": [
-          {
-            "name": "path",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "text/html": {
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "security": []
-      }
-    },
     "/api/session": {
       "get": {
         "tags": [
           "auth"
         ],
         "summary": "Get the authenticated client identity snapshot",
-        "description": "Returns the authoritative opaque installation data namespace and representation contract for the current installation token, browser session, or explicitly enabled anonymous installation. The endpoint remains inside the public API guard even when session exchange is disabled. Responses are private and no-store.",
+        "description": "Returns the authoritative opaque installation data namespace and representation contract for the current installation token or browser session. The endpoint remains inside the public API guard even when session exchange is disabled. Responses are private and no-store.",
         "operationId": "getSessionIdentity",
         "security": [
           {
@@ -3658,7 +2800,7 @@
           "auth"
         ],
         "summary": "Exchange the installation token for a browser session cookie",
-        "description": "Trades the configured EXTENSION_API_TOKEN for a signed, time-limited session stored in an HttpOnly cookie. Explicitly open installations may create a session without a token. The signed value is never returned in the response body. Subsequent requests use the cookie together with X-WebTag-Session for CSRF protection. Sessions end on expiry, signing-key rotation, or process restart when an ephemeral signing key is used.",
+        "description": "Trades the configured EXTENSION_API_TOKEN for a signed, time-limited session stored in an HttpOnly cookie. The signed value is never returned in the response body. Subsequent requests use the cookie together with X-WebTag-Session for CSRF protection. Sessions end on expiry, signing-key rotation, or process restart when an ephemeral signing key is used.",
         "operationId": "createSession",
         "security": [],
         "requestBody": {
@@ -3674,7 +2816,8 @@
                   "token": {
                     "type": "string",
                     "maxLength": 512,
-                    "description": "Static installation token configured by EXTENSION_API_TOKEN. May be empty only when PUBLIC_API_OPEN explicitly enables anonymous access."
+                    "minLength": 1,
+                    "description": "Required static installation token configured by EXTENSION_API_TOKEN."
                   }
                 }
               }
@@ -3959,63 +3102,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/api/annotations/{id}/reattach": {
-      "post": {
-        "tags": [
-          "reader"
-        ],
-        "deprecated": true,
-        "summary": "Reattach a historical Reader thought to an explicit host",
-        "description": "Only a still-historical thought tombstone can be manually reattached. The server validates request shape, source existence and lifecycle, and target availability before comparing either expected revision. A missing, deleted, unavailable, or unknown source/target is always reader_not_found; an existing source without a tombstone is always thought_reattach_invalid_state; revision_conflict is returned only after both lifecycle checks pass. /api/v1 is an identical compatibility alias.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ReaderID"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReaderThoughtReattachRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Reattached thought",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReaderThoughtResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "The source thought is missing, explicitly deleted, or not present in this installation, or the target host is missing, unavailable, or not present in this installation (error_code=reader_not_found). This precedence is independent of expected_last_sequence and expected_host_revision.",
-            "$ref": "#/components/responses/AuthenticatedNotFound"
-          },
-          "409": {
-            "description": "The source exists but is not a historical tombstone (error_code=thought_reattach_invalid_state), or a valid source and target fail source/target compare-and-swap (error_code=revision_conflict).",
-            "$ref": "#/components/responses/AuthenticatedConflict"
-          },
-          "413": {
-            "$ref": "#/components/responses/AuthenticatedPayloadTooLarge"
-          },
-          "422": {
-            "description": "The request structure, target host kind or ID, revision format, or quote reanchor result is invalid (error_code=invalid_request_body, invalid_thought_host, invalid_target_host_id, reader_last_sequence_invalid, reader_host_revision_required, or invalid_reanchor_ops).",
-            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
           }
         }
       }
@@ -4481,7 +3567,7 @@
           "reader"
         ],
         "summary": "List a Reader inbox partition",
-        "description": "Pending Inbox captures are partitioned by their materialized expiration marker. active is the default and contains pending rows whose expired_at is null; expired contains pending rows whose expired_at is set. Pagination is stable within the requested partition. Items carry the narrow queue projection (ReaderInboxListItemResponse): the capture body, the user note, the raw AI proposal payload and the category memberships are served only by GET /api/inbox/{id}.",
+        "description": "Pending Inbox captures are partitioned by the server clock and expires_at. active is the default and contains rows without a deadline or whose deadline is still in the future; expired contains rows whose deadline has passed. Pagination is stable within the requested partition. Items carry the narrow queue projection (ReaderInboxListItemResponse): the capture body, the user note, AI proposal fields and category memberships are served only by GET /api/inbox/{id}.",
         "parameters": [
           {
             "name": "partition",
@@ -4568,7 +3654,7 @@
           "reader"
         ],
         "summary": "Confirm the next AI-ready Inbox proposal batch",
-        "description": "The server owns candidate selection. It selects at most 100 pending captures in the requested partition with a nonempty trimmed title and a current completed proposal job; stale, running, failed, and blank-title jobs are excluded. Each response is one atomic, idempotent transaction in stable server order. Clients repeat this action with the same partition until remaining_count is zero and must not derive candidates or batches locally.",
+        "description": "The server owns candidate selection. It selects at most 100 pending captures in the requested partition with a nonempty trimmed title and a completed proposal for the current metadata revision; stale, running, failed, and blank-title proposals are excluded. Each response is one atomic, idempotent transaction in stable server order. Clients repeat this action with the same partition until remaining_count is zero and must not derive candidates or batches locally.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4896,7 +3982,7 @@
           "reader"
         ],
         "summary": "Restore a trashed or expired inbox capture",
-        "description": "Restores a trashed Inbox capture to pending and re-anchors uniquely matching Thoughts. Restoring an expired live capture clears expired_at and starts a fresh 30-day expires_at deadline without changing capture, category, thought, or proposal data. Repeating a live nonexpired restore is an idempotent success and does not move its deadline.",
+        "description": "Restores a trashed Inbox capture and re-anchors uniquely matching Thoughts. Restoring an expired live capture starts a fresh 30-day expires_at deadline without changing capture, category, thought, or proposal data. Repeating a live nonexpired restore is an idempotent success and does not move its deadline.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ReaderID"
@@ -4992,7 +4078,7 @@
         ],
         "responses": {
           "202": {
-            "description": "Summary job accepted",
+            "description": "Summary proposal accepted; poll GET /api/inbox/{id} while proposal_status is pending or running",
             "headers": {
               "X-WebTag-Data-Namespace": {
                 "$ref": "#/components/headers/WebTagDataNamespace"
@@ -5008,7 +4094,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReaderInboxJobResponse"
+                  "$ref": "#/components/schemas/ReaderInboxResponse"
                 }
               }
             }
@@ -5018,42 +4104,6 @@
           },
           "503": {
             "$ref": "#/components/responses/AuthenticatedIdempotencyUnavailable"
-          }
-        }
-      }
-    },
-    "/api/inbox/jobs/{job_id}": {
-      "get": {
-        "tags": [
-          "reader"
-        ],
-        "summary": "Get an inbox summary job",
-        "parameters": [
-          {
-            "name": "job_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Summary job",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReaderInboxJobResponse"
-                }
-              }
-            }
           }
         }
       }
@@ -5101,132 +4151,6 @@
                 }
               }
             }
-          },
-          "422": {
-            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
-          }
-        }
-      }
-    },
-    "/api/categories": {
-      "get": {
-        "tags": [
-          "reader"
-        ],
-        "summary": "List Reader categories",
-        "responses": {
-          "200": {
-            "description": "Categories",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReaderCategoriesResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "reader"
-        ],
-        "summary": "Create a Reader category",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReaderCategoryRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Created",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReaderCategoryResponse"
-                }
-              }
-            }
-          },
-          "413": {
-            "$ref": "#/components/responses/AuthenticatedPayloadTooLarge"
-          },
-          "422": {
-            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
-          }
-        }
-      }
-    },
-    "/api/categories/{id}": {
-      "delete": {
-        "tags": [
-          "reader"
-        ],
-        "summary": "Delete a Reader category",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ReaderID"
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Deleted",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/categories/{id}/members": {
-      "put": {
-        "tags": [
-          "reader"
-        ],
-        "summary": "Set a Reader category membership",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ReaderID"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReaderCategoryMembershipRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Updated",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            }
-          },
-          "413": {
-            "$ref": "#/components/responses/AuthenticatedPayloadTooLarge"
           },
           "422": {
             "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
@@ -5480,17 +4404,9 @@
             }
           },
           {
-            "name": "snapshot_id",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
             "name": "source",
             "in": "query",
-            "description": "Optional repeated source filter. The normalized set is part of snapshot identity.",
+            "description": "Optional repeated source filter. A cursor is valid only for the same normalized source set.",
             "style": "form",
             "explode": true,
             "schema": {
@@ -5560,7 +4476,7 @@
         },
         "responses": {
           "200": {
-            "description": "Recorded feedback with its stable subscription-save association when applicable",
+            "description": "Applied the Feed action and returned the currently visible Link when applicable",
             "headers": {
               "X-WebTag-Data-Namespace": {
                 "$ref": "#/components/headers/WebTagDataNamespace"
@@ -5663,7 +4579,7 @@
           "reader"
         ],
         "summary": "Replace link metadata with metadata-revision CAS",
-        "description": "Replaces the complete user-owned metadata tuple; it is not a partial merge. Every request must provide title, summary, and tags. title and summary may be null to clear them; tags must be a non-null array and [] clears all tags. Tags are trimmed and case-insensitively de-duplicated while preserving the first spelling and order. Send If-Match as the quoted positive decimal LinkResponse.metadata_revision, for example \"7\". Do not reuse the opaque representation ETag from GET /api/links/{link_id}: that validator is only for representation caching/If-None-Match, not this metadata CAS. A changed normalized tuple increments metadata_revision once; an identical normalized tuple is a successful no-op that retains its revision. The successful response body and ETag both carry the authoritative post-write metadata revision.",
+        "description": "Replaces the complete user-owned metadata tuple; it is not a partial merge. Every request must provide title, summary, and tags. title and summary may be null to clear them; tags must be a non-null array and [] clears all tags. Tags are trimmed and case-insensitively de-duplicated while preserving the first spelling and order. Send If-Match as the quoted positive decimal LinkResponse.metadata_revision, for example \"7\". A changed normalized tuple increments metadata_revision once; an identical normalized tuple is a successful no-op that retains its revision. The successful response body and ETag both carry the authoritative post-write metadata revision.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ReaderLinkID"
@@ -5755,112 +4671,12 @@
         }
       }
     },
-    "/api/links/{link_id}/content-history": {
-      "get": {
-        "tags": [
-          "reader"
-        ],
-        "summary": "List saved content history",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ReaderLinkID"
-          },
-          {
-            "$ref": "#/components/parameters/ReaderLimit"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "History",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "items"
-                  ],
-                  "properties": {
-                    "items": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/ReaderContentHistoryResponse"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/links/{link_id}/content-history/{history_id}/restore": {
-      "post": {
-        "tags": [
-          "reader"
-        ],
-        "summary": "Restore saved content history",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ReaderLinkID"
-          },
-          {
-            "name": "history_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 1
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReaderContentHistoryRestoreRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Restored",
-            "headers": {
-              "X-WebTag-Data-Namespace": {
-                "$ref": "#/components/headers/WebTagDataNamespace"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReaderContentHistoryRestoreResponse"
-                }
-              }
-            }
-          },
-          "413": {
-            "$ref": "#/components/responses/AuthenticatedPayloadTooLarge"
-          },
-          "422": {
-            "$ref": "#/components/responses/AuthenticatedUnprocessableEntity"
-          }
-        }
-      }
-    },
     "/api/reader/related-tags": {
       "get": {
         "tags": [
           "reader"
         ],
-        "summary": "Get related semantic tags",
+        "summary": "Get related tags",
         "parameters": [
           {
             "name": "link_id",
@@ -5890,7 +4706,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Returns tags that co-occur with the current link tags, bounded by the requested limit."
       }
     },
     "/api/reader/activity": {
@@ -6018,11 +4835,6 @@
   },
   "components": {
     "securitySchemes": {
-      "AdminBearer": {
-        "type": "http",
-        "scheme": "bearer",
-        "description": "Static operator credential configured by ADMIN_AUTH_TOKEN for every /api/admin/* operation. Non-dev deployments require this bearer token and fail closed when it is empty. When APP_ENV=dev and ADMIN_AUTH_TOKEN is empty, the runtime intentionally permits unauthenticated access for local debugging only; clients must not rely on that exemption."
-      },
       "SessionCookie": {
         "type": "apiKey",
         "in": "cookie",
@@ -6038,7 +4850,7 @@
       "InstallationTokenBearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Static installation credential configured by EXTENSION_API_TOKEN. Send it as Authorization: Bearer <token>. Installations remain fail-closed unless PUBLIC_API_OPEN explicitly enables anonymous access."
+        "description": "Required static installation credential configured by EXTENSION_API_TOKEN. Send it as Authorization: Bearer <token>."
       }
     },
     "parameters": {
@@ -6046,7 +4858,7 @@
         "name": "Idempotency-Key",
         "in": "header",
         "required": false,
-        "description": "Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires.",
+        "description": "Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires.",
         "schema": {
           "type": "string",
           "minLength": 1
@@ -6182,7 +4994,7 @@
         "name": "If-Match",
         "in": "header",
         "required": true,
-        "description": "Quoted canonical decimal metadata CAS token taken from LinkResponse.metadata_revision or the prior successful PATCH response ETag. It must represent a JavaScript-safe value from 1 through 9007199254740991, for example \"7\". This is not the opaque representation ETag returned by GET /api/links/{link_id}.",
+        "description": "Quoted canonical decimal metadata CAS token taken from LinkResponse.metadata_revision or the prior successful PATCH response ETag. It must represent a JavaScript-safe value from 1 through 9007199254740991, for example \"7\".",
         "schema": {
           "type": "string",
           "pattern": "^\"[1-9][0-9]*\"$",
@@ -6258,16 +5070,6 @@
       },
       "UnprocessableEntity": {
         "description": "Request body invalid, query filter exceeds limits (e.g. >32 tag filters), or pagination parameters conflict.",
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/ErrorResponse"
-            }
-          }
-        }
-      },
-      "TooManyRequests": {
-        "description": "Throttled: per-IP rate limit exceeded (error_code rate_limit_exceeded) or per-link refresh cooldown active (cooldown_active). Retry-After carries the wait hint when available.",
         "content": {
           "application/json": {
             "schema": {
@@ -6352,7 +5154,7 @@
         }
       },
       "AuthenticatedTranslationConflict": {
-        "description": "Translation request conflict. Operational conflicts use link_not_ready, site_original_content_forbidden, or translation_content_unavailable and omit current_identity. Source-CAS conflicts use content_revision_conflict, source_block_conflict, or the retryable translation_schema_transition and require error.current_identity with the authoritative current revision or block identity.",
+        "description": "Translation request conflict. Operational conflicts use link_not_ready, site_original_content_forbidden, or translation_content_unavailable and omit current_identity. Source-CAS conflicts use content_revision_conflict or source_block_conflict and require error.current_identity with the authoritative current revision or block identity.",
         "content": {
           "application/json": {
             "schema": {
@@ -6427,7 +5229,7 @@
         }
       },
       "AuthenticatedTooManyRequests": {
-        "description": "Throttled: per-IP rate limit exceeded (error_code rate_limit_exceeded) or per-link refresh cooldown active (cooldown_active). Retry-After carries the wait hint when available.",
+        "description": "Per-link refresh cooldown active (error_code cooldown_active). Retry-After carries the remaining wait in whole seconds.",
         "content": {
           "application/json": {
             "schema": {
@@ -6443,21 +5245,6 @@
       },
       "AuthenticatedArchiveV2InvalidSections": {
         "description": "The sections query parameter is absent from the compatibility path but present with an empty, duplicate, non-canonical, whitespace, reordered, or case-variant value. The handler returns error_code=invalid_archive_sections before attachment headers or archive bytes are written.",
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/ErrorResponse"
-            }
-          }
-        },
-        "headers": {
-          "X-WebTag-Data-Namespace": {
-            "$ref": "#/components/headers/WebTagDataNamespace"
-          }
-        }
-      },
-      "AuthenticatedArchiveV2ReaderUnavailable": {
-        "description": "A request selecting thoughts or notes reached a deployment whose Reader archive store is unavailable. The handler returns 503 error_code=archive_reader_unavailable before attachment headers or archive bytes are written; retry after the Reader schema and exporter are available. base remains available without a Reader archive store.",
         "content": {
           "application/json": {
             "schema": {
@@ -6559,16 +5346,7 @@
             "$ref": "#/components/schemas/ArchiveV2SiteIdentity"
           },
           {
-            "$ref": "#/components/schemas/ArchiveV2ClassificationRule"
-          },
-          {
             "$ref": "#/components/schemas/ArchiveV2ReaderInbox"
-          },
-          {
-            "$ref": "#/components/schemas/ArchiveV2ReaderCategory"
-          },
-          {
-            "$ref": "#/components/schemas/ArchiveV2ReaderCategorizable"
           },
           {
             "$ref": "#/components/schemas/ArchiveV2ReaderTodo"
@@ -6577,19 +5355,7 @@
             "$ref": "#/components/schemas/ArchiveV2ReaderEngagement"
           },
           {
-            "$ref": "#/components/schemas/ArchiveV2ReaderFeedFeedback"
-          },
-          {
-            "$ref": "#/components/schemas/ArchiveV2ReaderFeedSnapshot"
-          },
-          {
-            "$ref": "#/components/schemas/ArchiveV2ReaderTagActivity"
-          },
-          {
-            "$ref": "#/components/schemas/ArchiveV2ReaderDomainActivity"
-          },
-          {
-            "$ref": "#/components/schemas/ArchiveV2ReaderContentHistory"
+            "$ref": "#/components/schemas/ArchiveV2ReaderFeedHide"
           },
           {
             "$ref": "#/components/schemas/ArchiveV2ReaderThought"
@@ -6638,14 +5404,6 @@
         "type": "integer",
         "minimum": 1,
         "maximum": 9007199254740991
-      },
-      "ArchiveV2FieldSource": {
-        "type": "string",
-        "enum": [
-          "auto",
-          "user",
-          "migration"
-        ]
       },
       "ArchiveV2HostKind": {
         "type": "string",
@@ -6702,19 +5460,12 @@
           "id",
           "site_key",
           "name",
-          "name_source",
           "intro",
-          "intro_source",
           "homepage_url",
-          "homepage_source",
           "icon_url",
-          "icon_source",
           "user_note",
           "pinned",
           "primary_entry_id",
-          "primary_source",
-          "grouping_locked",
-          "needs_review",
           "revision",
           "first_collected_at",
           "last_collected_at",
@@ -6734,15 +5485,9 @@
             "minLength": 1,
             "maxLength": 256
           },
-          "name_source": {
-            "$ref": "#/components/schemas/ArchiveV2FieldSource"
-          },
           "intro": {
             "type": "string",
             "maxLength": 1000
-          },
-          "intro_source": {
-            "$ref": "#/components/schemas/ArchiveV2FieldSource"
           },
           "homepage_url": {
             "type": [
@@ -6751,32 +5496,12 @@
             ],
             "maxLength": 2048
           },
-          "homepage_source": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ArchiveV2FieldSource"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "icon_url": {
             "type": [
               "string",
               "null"
             ],
             "maxLength": 2048
-          },
-          "icon_source": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ArchiveV2FieldSource"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "user_note": {
             "type": "string",
@@ -6794,15 +5519,6 @@
                 "type": "null"
               }
             ]
-          },
-          "primary_source": {
-            "$ref": "#/components/schemas/ArchiveV2FieldSource"
-          },
-          "grouping_locked": {
-            "type": "boolean"
-          },
-          "needs_review": {
-            "type": "boolean"
           },
           "revision": {
             "$ref": "#/components/schemas/ArchiveV2SafePositiveInteger"
@@ -6829,9 +5545,7 @@
           "site_id",
           "link_id",
           "entry_name",
-          "entry_name_source",
           "purpose",
-          "purpose_source",
           "normalized_url",
           "first_collected_at",
           "last_recollected_at",
@@ -6853,15 +5567,9 @@
             "minLength": 1,
             "maxLength": 256
           },
-          "entry_name_source": {
-            "$ref": "#/components/schemas/ArchiveV2FieldSource"
-          },
           "purpose": {
             "type": "string",
             "maxLength": 1000
-          },
-          "purpose_source": {
-            "$ref": "#/components/schemas/ArchiveV2FieldSource"
           },
           "normalized_url": {
             "type": "string",
@@ -6896,8 +5604,6 @@
           "site_id",
           "tag",
           "normalized_tag",
-          "source",
-          "concept_id",
           "created_at",
           "updated_at"
         ],
@@ -6915,19 +5621,6 @@
             "minLength": 1,
             "maxLength": 128
           },
-          "source": {
-            "$ref": "#/components/schemas/ArchiveV2FieldSource"
-          },
-          "concept_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ArchiveV2UUID"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "created_at": {
             "$ref": "#/components/schemas/ArchiveV2DateTime"
           },
@@ -6942,8 +5635,6 @@
         "required": [
           "identity_key",
           "site_id",
-          "source",
-          "locked",
           "created_at",
           "updated_at"
         ],
@@ -6954,75 +5645,6 @@
           },
           "site_id": {
             "$ref": "#/components/schemas/ArchiveV2UUID"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "auto",
-              "manual_merge",
-              "manual_split",
-              "migration"
-            ]
-          },
-          "locked": {
-            "type": "boolean"
-          },
-          "created_at": {
-            "$ref": "#/components/schemas/ArchiveV2DateTime"
-          },
-          "updated_at": {
-            "$ref": "#/components/schemas/ArchiveV2DateTime"
-          }
-        }
-      },
-      "ArchiveV2ClassificationRule": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "host",
-          "identity_adapter",
-          "path_prefix",
-          "target_kind",
-          "enabled",
-          "revision",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/ArchiveV2UUID"
-          },
-          "host": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 253
-          },
-          "identity_adapter": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "path_prefix": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 2048
-          },
-          "target_kind": {
-            "type": "string",
-            "enum": [
-              "reading",
-              "site"
-            ]
-          },
-          "enabled": {
-            "type": "boolean"
-          },
-          "revision": {
-            "$ref": "#/components/schemas/ArchiveV2SafePositiveInteger"
           },
           "created_at": {
             "$ref": "#/components/schemas/ArchiveV2DateTime"
@@ -7244,11 +5866,10 @@
       "ArchiveV2FeedSave": {
         "type": "object",
         "additionalProperties": false,
-        "description": "The durable feed-item to saved-link association retained independently of feed item link_id.",
+        "description": "The durable Reader save association. feed_items.link_id remains reserved for the separate Analyze workflow.",
         "required": [
           "feed_item_id",
           "link_id",
-          "created_link",
           "created_at"
         ],
         "properties": {
@@ -7257,9 +5878,6 @@
           },
           "link_id": {
             "$ref": "#/components/schemas/ArchiveV2UUID"
-          },
-          "created_link": {
-            "type": "boolean"
           },
           "created_at": {
             "$ref": "#/components/schemas/ArchiveV2DateTime"
@@ -7280,9 +5898,7 @@
           "tags",
           "status",
           "metadata_revision",
-          "job_id",
           "expires_at",
-          "expired_at",
           "deleted_at",
           "created_at",
           "updated_at"
@@ -7330,34 +5946,13 @@
             "type": "string",
             "enum": [
               "pending",
-              "confirmed",
-              "discarded"
+              "confirmed"
             ]
           },
           "metadata_revision": {
             "$ref": "#/components/schemas/ArchiveV2SafePositiveInteger"
           },
-          "job_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ArchiveV2UUID"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "expires_at": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ArchiveV2DateTime"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "expired_at": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ArchiveV2DateTime"
@@ -7382,47 +5977,6 @@
           },
           "updated_at": {
             "$ref": "#/components/schemas/ArchiveV2DateTime"
-          }
-        }
-      },
-      "ArchiveV2ReaderCategory": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "name",
-          "created_at"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/ArchiveV2UUID"
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1
-          },
-          "created_at": {
-            "$ref": "#/components/schemas/ArchiveV2DateTime"
-          }
-        }
-      },
-      "ArchiveV2ReaderCategorizable": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "category_id",
-          "host_kind",
-          "host_id"
-        ],
-        "properties": {
-          "category_id": {
-            "$ref": "#/components/schemas/ArchiveV2UUID"
-          },
-          "host_kind": {
-            "$ref": "#/components/schemas/ArchiveV2HostKind"
-          },
-          "host_id": {
-            "$ref": "#/components/schemas/ArchiveV2UUID"
           }
         }
       },
@@ -7571,167 +6125,17 @@
           }
         }
       },
-      "ArchiveV2ReaderFeedFeedback": {
+      "ArchiveV2ReaderFeedHide": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "item_key",
-          "action",
           "created_at"
         ],
         "properties": {
           "item_key": {
             "type": "string",
             "minLength": 1
-          },
-          "action": {
-            "type": "string",
-            "enum": [
-              "not_interested",
-              "hide",
-              "save",
-              "unsave"
-            ]
-          },
-          "created_at": {
-            "$ref": "#/components/schemas/ArchiveV2DateTime"
-          }
-        }
-      },
-      "ArchiveV2ReaderFeedSnapshot": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "mode",
-          "items",
-          "created_at"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/ArchiveV2UUID"
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "recommended",
-              "chronological"
-            ]
-          },
-          "items": {
-            "type": "array",
-            "items": {}
-          },
-          "created_at": {
-            "$ref": "#/components/schemas/ArchiveV2DateTime"
-          }
-        }
-      },
-      "ArchiveV2ReaderTagActivity": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "tag",
-          "last_at",
-          "last_link_id"
-        ],
-        "properties": {
-          "tag": {
-            "type": "string",
-            "minLength": 1
-          },
-          "last_at": {
-            "$ref": "#/components/schemas/ArchiveV2DateTime"
-          },
-          "last_link_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ArchiveV2UUID"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        }
-      },
-      "ArchiveV2ReaderDomainActivity": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "domain",
-          "last_at",
-          "last_link_id"
-        ],
-        "properties": {
-          "domain": {
-            "type": "string",
-            "minLength": 1
-          },
-          "last_at": {
-            "$ref": "#/components/schemas/ArchiveV2DateTime"
-          },
-          "last_link_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ArchiveV2UUID"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        }
-      },
-      "ArchiveV2ReaderContentHistory": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "link_id",
-          "revision",
-          "content",
-          "content_document",
-          "content_format",
-          "content_source",
-          "created_at"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/ArchiveV2SafePositiveInteger"
-          },
-          "link_id": {
-            "$ref": "#/components/schemas/ArchiveV2UUID"
-          },
-          "revision": {
-            "$ref": "#/components/schemas/ArchiveV2SafePositiveInteger"
-          },
-          "content": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "content_document": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "content_format": {
-            "type": "string",
-            "enum": [
-              "plain",
-              "markdown",
-              "html"
-            ]
-          },
-          "content_source": {
-            "type": "string",
-            "enum": [
-              "fetched",
-              "user"
-            ]
           },
           "created_at": {
             "$ref": "#/components/schemas/ArchiveV2DateTime"
@@ -7817,7 +6221,7 @@
             ],
             "properties": {
               "logical_clock": {
-                "$ref": "#/components/schemas/ArchiveV2SafeNonNegativeInteger"
+                "$ref": "#/components/schemas/ArchiveV2SafePositiveInteger"
               },
               "device_id": {
                 "$ref": "#/components/schemas/ArchiveV2ThoughtOperationIdentifier"
@@ -7906,7 +6310,7 @@
             "$ref": "#/components/schemas/ArchiveV2ThoughtOperationIdentifier"
           },
           "logical_clock": {
-            "$ref": "#/components/schemas/ArchiveV2SafeNonNegativeInteger"
+            "$ref": "#/components/schemas/ArchiveV2SafePositiveInteger"
           },
           "operation_kind": {
             "type": "string",
@@ -8168,15 +6572,9 @@
           "feed_items",
           "feed_saves",
           "inbox",
-          "categories",
-          "categorizables",
           "todos",
           "engagement",
-          "feed_feedback",
-          "feed_snapshots",
-          "tag_activity",
-          "domain_activity",
-          "content_history"
+          "feed_hides"
         ],
         "properties": {
           "schema_version": {
@@ -8217,18 +6615,6 @@
               "$ref": "#/components/schemas/ArchiveV2ReaderInbox"
             }
           },
-          "categories": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ArchiveV2ReaderCategory"
-            }
-          },
-          "categorizables": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ArchiveV2ReaderCategorizable"
-            }
-          },
           "todos": {
             "type": "array",
             "items": {
@@ -8241,34 +6627,10 @@
               "$ref": "#/components/schemas/ArchiveV2ReaderEngagement"
             }
           },
-          "feed_feedback": {
+          "feed_hides": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ArchiveV2ReaderFeedFeedback"
-            }
-          },
-          "feed_snapshots": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ArchiveV2ReaderFeedSnapshot"
-            }
-          },
-          "tag_activity": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ArchiveV2ReaderTagActivity"
-            }
-          },
-          "domain_activity": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ArchiveV2ReaderDomainActivity"
-            }
-          },
-          "content_history": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ArchiveV2ReaderContentHistory"
+              "$ref": "#/components/schemas/ArchiveV2ReaderFeedHide"
             }
           },
           "thoughts": {
@@ -8351,7 +6713,7 @@
       "ArchiveV2Response": {
         "type": "object",
         "additionalProperties": false,
-        "description": "The versioned archive. reader is absent only when the server has no Reader archive store; its selected private groups are otherwise defined by manifest.sections.",
+        "description": "The versioned archive. Reader base arrays are always present; selected private groups are defined by manifest.sections.",
         "required": [
           "schema_version",
           "exported_at",
@@ -8361,7 +6723,7 @@
           "site_entries",
           "site_tags",
           "site_identities",
-          "classification_rules",
+          "reader",
           "manifest"
         ],
         "properties": {
@@ -8407,12 +6769,6 @@
               "$ref": "#/components/schemas/ArchiveV2SiteIdentity"
             }
           },
-          "classification_rules": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ArchiveV2ClassificationRule"
-            }
-          },
           "reader": {
             "$ref": "#/components/schemas/ArchiveV2Reader"
           },
@@ -8440,7 +6796,7 @@
           "representation_contract": {
             "type": "string",
             "const": "v3",
-            "description": "Representation and ETag contract understood by this server."
+            "description": "Client data representation contract understood by this server."
           }
         }
       },
@@ -8475,7 +6831,6 @@
         "required": [
           "library_kinds",
           "site_library",
-          "site_auto_classification",
           "site_management",
           "site_advanced_management",
           "archive_versions",
@@ -8487,9 +6842,6 @@
             "type": "boolean"
           },
           "site_library": {
-            "type": "boolean"
-          },
-          "site_auto_classification": {
             "type": "boolean"
           },
           "site_management": {
@@ -8523,7 +6875,7 @@
           "home",
           "feed",
           "ai",
-          "semantic",
+          "related_tags",
           "activity",
           "history",
           "trash"
@@ -8553,7 +6905,7 @@
           "ai": {
             "type": "boolean"
           },
-          "semantic": {
+          "related_tags": {
             "type": "boolean"
           },
           "activity": {
@@ -8712,7 +7064,7 @@
           "target_site_id",
           "target_revision",
           "entries",
-          "user_tags",
+          "tags",
           "identity_keys",
           "field_conflicts",
           "requires_resolution"
@@ -8732,7 +7084,7 @@
               "$ref": "#/components/schemas/SiteMergePreviewEntryResponse"
             }
           },
-          "user_tags": {
+          "tags": {
             "type": "array",
             "items": {
               "type": "string"
@@ -8939,7 +7291,7 @@
           "payload",
           "entries",
           "identities",
-          "user_tags"
+          "tags"
         ],
         "properties": {
           "source_site_id": {
@@ -8965,7 +7317,7 @@
               "$ref": "#/components/schemas/SiteSplitIdentityResponse"
             }
           },
-          "user_tags": {
+          "tags": {
             "type": "array",
             "items": {
               "type": "string"
@@ -9001,223 +7353,6 @@
           },
           "moved_entries": {
             "type": "integer"
-          }
-        }
-      },
-      "ClassificationRuleCreateRequest": {
-        "type": "object",
-        "required": [
-          "host",
-          "target_kind"
-        ],
-        "properties": {
-          "host": {
-            "type": "string",
-            "maxLength": 253
-          },
-          "identity_adapter": {
-            "type": "string",
-            "maxLength": 64
-          },
-          "path_prefix": {
-            "type": "string",
-            "maxLength": 2048
-          },
-          "target_kind": {
-            "type": "string",
-            "enum": [
-              "reading",
-              "site"
-            ]
-          },
-          "enabled": {
-            "type": "boolean"
-          }
-        }
-      },
-      "ClassificationRuleUpdateRequest": {
-        "type": "object",
-        "minProperties": 1,
-        "properties": {
-          "host": {
-            "type": "string",
-            "maxLength": 253
-          },
-          "identity_adapter": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 64
-          },
-          "path_prefix": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 2048
-          },
-          "target_kind": {
-            "type": "string",
-            "enum": [
-              "reading",
-              "site"
-            ]
-          },
-          "enabled": {
-            "type": "boolean"
-          }
-        }
-      },
-      "ClassificationRuleResponse": {
-        "type": "object",
-        "required": [
-          "id",
-          "host",
-          "target_kind",
-          "enabled",
-          "revision",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "host": {
-            "type": "string"
-          },
-          "identity_adapter": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "path_prefix": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "target_kind": {
-            "type": "string",
-            "enum": [
-              "reading",
-              "site"
-            ]
-          },
-          "enabled": {
-            "type": "boolean"
-          },
-          "revision": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "LibraryReviewResolveRequest": {
-        "type": "object",
-        "required": [
-          "expected_revision",
-          "resolution"
-        ],
-        "properties": {
-          "expected_revision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "resolution": {
-            "type": "string",
-            "enum": [
-              "applied",
-              "dismissed"
-            ]
-          },
-          "action": {
-            "type": "string",
-            "enum": [
-              "keep_reading",
-              "move_to_site"
-            ]
-          },
-          "confirm_destructive": {
-            "type": "boolean"
-          }
-        }
-      },
-      "LibraryReviewResponse": {
-        "type": "object",
-        "required": [
-          "id",
-          "kind",
-          "payload",
-          "status",
-          "revision",
-          "created_at"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "classification_uncertain",
-              "migration_suggestion",
-              "note_conflict",
-              "merge_conflict"
-            ]
-          },
-          "link_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "site_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "payload": {
-            "type": "object"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "applied",
-              "dismissed"
-            ]
-          },
-          "revision": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "resolved_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
           }
         }
       },
@@ -9411,8 +7546,7 @@
               "reading",
               "sites",
               "processing",
-              "failed",
-              "review"
+              "failed"
             ]
           },
           "link_id": {
@@ -9479,10 +7613,6 @@
           "reparse_required": {
             "type": "boolean"
           },
-          "parse_job_id": {
-            "type": "string",
-            "format": "uuid"
-          },
           "reader_target": {
             "$ref": "#/components/schemas/ReaderTarget"
           }
@@ -9536,35 +7666,13 @@
           }
         }
       },
-      "SiteTagResponse": {
-        "type": "object",
-        "required": [
-          "tag",
-          "source"
-        ],
-        "properties": {
-          "tag": {
-            "type": "string"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "auto",
-              "user",
-              "migration"
-            ]
-          }
-        }
-      },
       "SiteEntryResponse": {
         "type": "object",
         "required": [
           "id",
           "link_id",
           "name",
-          "name_source",
           "purpose",
-          "purpose_source",
           "url",
           "first_collected_at"
         ],
@@ -9580,24 +7688,8 @@
           "name": {
             "type": "string"
           },
-          "name_source": {
-            "type": "string",
-            "enum": [
-              "auto",
-              "user",
-              "migration"
-            ]
-          },
           "purpose": {
             "type": "string"
-          },
-          "purpose_source": {
-            "type": "string",
-            "enum": [
-              "auto",
-              "user",
-              "migration"
-            ]
           },
           "url": {
             "type": "string",
@@ -9652,7 +7744,6 @@
           "tags",
           "entry_count",
           "pinned",
-          "needs_review",
           "revision",
           "first_collected_at",
           "last_collected_at"
@@ -9697,9 +7788,6 @@
           "pinned": {
             "type": "boolean"
           },
-          "needs_review": {
-            "type": "boolean"
-          },
           "primary_entry": {
             "anyOf": [
               {
@@ -9733,23 +7821,12 @@
             "type": "object",
             "required": [
               "user_note",
-              "grouping_locked",
-              "tags_with_source",
               "entries",
               "related_readings"
             ],
             "properties": {
               "user_note": {
                 "type": "string"
-              },
-              "grouping_locked": {
-                "type": "boolean"
-              },
-              "tags_with_source": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/SiteTagResponse"
-                }
               },
               "entries": {
                 "type": "array",
@@ -9766,43 +7843,6 @@
             }
           }
         ]
-      },
-      "ConceptExportItem": {
-        "type": "object",
-        "description": "One concept vocabulary entry in the GET /api/export/concepts stream. Internal embedding data is not exposed.",
-        "required": [
-          "id",
-          "primary_name",
-          "display_name",
-          "aliases",
-          "use_count",
-          "created_at"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "primary_name": {
-            "type": "string"
-          },
-          "display_name": {
-            "type": "string"
-          },
-          "aliases": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "use_count": {
-            "type": "integer"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
       },
       "FeedURLRequest": {
         "type": "object",
@@ -10405,27 +8445,13 @@
               "library",
               "inbox"
             ],
-            "description": "Durable capture host. Omitted or library stores the URL in the link library; inbox stores a pending Reader Inbox item without creating a link or parse job."
+            "description": "Durable capture host. Omitted or library stores the URL in the link library; inbox stores a pending Reader Inbox item without creating a link or asynchronous parsing work."
           },
           "description": {
             "type": [
               "string",
               "null"
             ]
-          },
-          "parse_depth": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "enum": [
-              "light",
-              "deep",
-              "full",
-              null,
-              ""
-            ],
-            "description": "Override the deployment's default fetch depth for this link. 'light' uses the truncated tag-only path (~7x cheaper LLM input, ~3x faster). 'deep' / 'full' uses the full body fetch chain. Omitted or empty uses the FETCH_PREFER_LIGHT env default. Case-insensitive."
           },
           "requested_library_kind": {
             "type": "string",
@@ -10435,49 +8461,6 @@
               "site"
             ],
             "description": "Requested capture destination. Omitted is equivalent to auto; the server returns the final library kind after classification."
-          }
-        }
-      },
-      "BatchCreateRequest": {
-        "type": "object",
-        "required": [
-          "items"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 100,
-            "items": {
-              "$ref": "#/components/schemas/LinkCreateRequest"
-            }
-          }
-        }
-      },
-      "BatchSubmitResponse": {
-        "type": "object",
-        "description": "Parallel array of per-item outcomes. Each item is a partial-success envelope: result is set on success, error is set on failure. Indices line up with the request order.",
-        "required": [
-          "results"
-        ],
-        "properties": {
-          "results": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BatchItemResponse"
-            }
-          }
-        }
-      },
-      "BatchItemResponse": {
-        "type": "object",
-        "description": "One item from /api/links/batch. Either result or error is present, never both.",
-        "properties": {
-          "result": {
-            "$ref": "#/components/schemas/SubmitResponse"
-          },
-          "error": {
-            "type": "string"
           }
         }
       },
@@ -10511,7 +8494,7 @@
               "inbox",
               "site"
             ],
-            "description": "Durable capture host. Omitted or library stores the normalized source as a link under requested or automatic library-kind rules; inbox stores a pending Reader Inbox item without creating a link or parse job; site explicitly forces the site library."
+            "description": "Durable capture host. Omitted or library stores the normalized source as a link under requested or automatic library-kind rules; inbox stores a pending Reader Inbox item without creating a link or asynchronous parsing work; site explicitly forces the site library."
           }
         }
       },
@@ -10565,15 +8548,11 @@
       },
       "SubmitResponse": {
         "type": "object",
-        "description": "A library or site response carries link_id and may carry job_id; an Inbox response carries inbox_id and does not create a link or parse job. destination is present on new Inbox and explicit site responses. Legacy library responses may omit destination.",
+        "description": "A library or site response carries link_id; an Inbox response carries inbox_id and does not create a link. destination is present on new Inbox and explicit site responses. Legacy library responses may omit destination.",
         "required": [
           "status"
         ],
         "properties": {
-          "job_id": {
-            "type": "string",
-            "format": "uuid"
-          },
           "link_id": {
             "type": "string",
             "format": "uuid",
@@ -10709,13 +8688,13 @@
             "type": "integer",
             "format": "int64",
             "minimum": 1,
-            "description": "Saved-content generation observed by the caller. Required for scope=full and for scope=selection with block_key=content or content-document. It must be omitted for summary. Historical deep-research rows remain readable, but new deep-research schedules are rejected."
+            "description": "Saved-content generation observed by the caller. Required for scope=full and for scope=selection with block_key=content or content-document. It must be omitted for summary."
           },
           "expected_source_hash": {
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Source hash observed by the caller for a summary selection. Required for summary in strict mode; summary intentionally does not use expected_content_revision. Historical deep-research rows remain readable, but new deep-research schedules are rejected."
+            "description": "Source hash observed by the caller for a summary selection. Required for summary; summary intentionally does not use expected_content_revision."
           },
           "force": {
             "type": "boolean",
@@ -10798,7 +8777,7 @@
             ],
             "format": "int64",
             "minimum": 1,
-            "description": "Saved-content generation this translation belongs to. Null means a summary identity or a historical deep-research row. Historical deep-research rows remain readable, but new deep-research schedules are rejected. Clients must not infer that a null row belongs to the current saved document."
+            "description": "Saved-content generation this translation belongs to. Null is reserved for summary identities, which are versioned by source hash."
           },
           "status": {
             "type": "string",
@@ -10846,7 +8825,7 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0,
-            "description": "Authoritative current saved-content generation for the link. Zero means no saved-content generation has been created. This value is independent of items so empty and all-legacy lists remain unambiguous."
+            "description": "Authoritative current saved-content generation for the link. Zero means no saved-content generation has been created. This value is independent of items so an empty list remains unambiguous."
           },
           "current_summary_source_hash": {
             "type": [
@@ -10971,38 +8950,6 @@
               "site"
             ]
           },
-          "library_kind_source": {
-            "type": "string",
-            "enum": [
-              "auto",
-              "user",
-              "migration"
-            ]
-          },
-          "library_kind_locked": {
-            "type": "boolean"
-          },
-          "predicted_library_kind": {
-            "type": "string",
-            "enum": [
-              "reading",
-              "site"
-            ]
-          },
-          "classification_confidence": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "classification_reason": {
-            "type": "string"
-          },
-          "classification_explanation": {
-            "type": "string"
-          },
-          "classifier_version": {
-            "type": "string"
-          },
           "content_revision": {
             "type": "integer",
             "minimum": 1
@@ -11017,7 +8964,6 @@
           "status": {
             "type": "string",
             "enum": [
-              "skeleton",
               "pending",
               "processing",
               "done",
@@ -11106,58 +9052,6 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
-          }
-        }
-      },
-      "JobResponse": {
-        "type": "object",
-        "required": [
-          "id",
-          "link_id",
-          "status",
-          "error_category",
-          "error_msg",
-          "link"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "link_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "processing",
-              "done",
-              "failed"
-            ]
-          },
-          "error_category": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "error_msg": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "link": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/LinkResponse"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         }
       },
@@ -11552,7 +9446,6 @@
           "status": {
             "type": "string",
             "enum": [
-              "skeleton",
               "pending",
               "processing",
               "done",
@@ -11664,9 +9557,6 @@
           },
           {
             "$ref": "#/components/schemas/TranslationSourceBlockConflictResponse"
-          },
-          {
-            "$ref": "#/components/schemas/TranslationSchemaTransitionConflictResponse"
           }
         ]
       },
@@ -11791,44 +9681,6 @@
           }
         }
       },
-      "TranslationSchemaTransitionConflictResponse": {
-        "type": "object",
-        "required": [
-          "error"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "error": {
-            "$ref": "#/components/schemas/TranslationSchemaTransitionConflictDetail"
-          }
-        }
-      },
-      "TranslationSchemaTransitionConflictDetail": {
-        "type": "object",
-        "required": [
-          "code",
-          "error_code",
-          "message",
-          "current_identity"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "code": {
-            "type": "integer",
-            "const": 409
-          },
-          "error_code": {
-            "type": "string",
-            "const": "translation_schema_transition"
-          },
-          "message": {
-            "type": "string"
-          },
-          "current_identity": {
-            "$ref": "#/components/schemas/SavedTranslationSourceIdentity"
-          }
-        }
-      },
       "SavedTranslationSourceIdentity": {
         "type": "object",
         "description": "Authoritative saved-content identity. Generation zero is valid when no saved-content generation has been created.",
@@ -11873,7 +9725,7 @@
       },
       "TranslationSourceIdentity": {
         "type": "object",
-        "description": "Authoritative translation source identity returned after a 409 source-CAS rejection. Saved content uses content_revision and summary uses source_hash. Historical deep-research rows remain readable, but new deep-research schedules are rejected; those rows therefore never produce a conflict identity. Fields outside the applicable identity domain are omitted.",
+        "description": "Authoritative translation source identity returned after a 409 source-CAS rejection. Saved content uses content_revision and summary uses source_hash. Fields outside the applicable identity domain are omitted.",
         "properties": {
           "content_revision": {
             "type": "integer",
@@ -11903,9 +9755,9 @@
           "logical_clock": {
             "type": "integer",
             "format": "int64",
-            "minimum": 0,
+            "minimum": 1,
             "maximum": 9007199254740991,
-            "description": "Lamport component. Zero is retained only for legacy operations."
+            "description": "Positive Lamport component used for deterministic Thought ordering."
           },
           "device_id": {
             "type": "string",
@@ -11937,7 +9789,7 @@
           "contract_version": {
             "type": "integer",
             "const": 1,
-            "description": "Thought Lamport wire contract. The server still accepts missing version and clock as an explicit legacy-zero operation."
+            "description": "Current Thought Lamport wire contract."
           },
           "op_id": {
             "type": "string",
@@ -12190,7 +10042,7 @@
           "logical_clock": {
             "type": "integer",
             "format": "int64",
-            "minimum": 0
+            "minimum": 1
           },
           "operation_kind": {
             "type": "string",
@@ -12268,41 +10120,6 @@
           },
           "next_cursor": {
             "type": "string"
-          }
-        }
-      },
-      "ReaderThoughtReattachRequest": {
-        "type": "object",
-        "required": [
-          "target_host_kind",
-          "target_host_id",
-          "expected_last_sequence",
-          "expected_host_revision"
-        ],
-        "properties": {
-          "target_host_kind": {
-            "type": "string",
-            "enum": [
-              "link",
-              "note",
-              "inbox"
-            ]
-          },
-          "target_host_id": {
-            "type": "string",
-            "format": "uuid",
-            "maxLength": 256
-          },
-          "expected_last_sequence": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "expected_host_revision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1,
-            "description": "Expected current revision of the target host: links use content_revision, notes use published_revision, and inbox items use metadata_revision."
           }
         }
       },
@@ -12712,14 +10529,11 @@
           "body",
           "note",
           "suggested_tags",
-          "proposal_signals",
           "proposal_status",
           "tags",
-          "category_ids",
           "status",
           "metadata_revision",
           "expires_at",
-          "expired_at",
           "expired",
           "created_at",
           "updated_at"
@@ -12762,20 +10576,16 @@
               "type": "string"
             }
           },
-          "proposal_signals": {
-            "type": "object",
-            "additionalProperties": true,
-            "description": "AI proposal-owned structured signals."
-          },
           "proposal_status": {
             "type": "string",
             "enum": [
+              "idle",
               "pending",
               "running",
               "completed",
               "failed"
             ],
-            "description": "AI proposal lifecycle; it does not change metadata_revision."
+            "description": "Product-facing AI proposal lifecycle. River owns job attempts and terminal queue state; editing metadata returns this field to idle."
           },
           "tags": {
             "type": "array",
@@ -12783,33 +10593,17 @@
               "type": "string"
             }
           },
-          "category_ids": {
-            "type": "array",
-            "description": "User-owned category memberships currently attached to this Inbox capture.",
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
           "status": {
             "type": "string",
             "enum": [
               "pending",
-              "confirmed",
-              "discarded"
+              "confirmed"
             ]
           },
           "metadata_revision": {
             "type": "integer",
             "format": "int64",
             "minimum": 1
-          },
-          "job_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
           },
           "deleted_at": {
             "type": [
@@ -12826,17 +10620,9 @@
             "format": "date-time",
             "description": "The non-destructive Inbox expiration deadline, or null for grandfathered rows."
           },
-          "expired_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time",
-            "description": "The materialized expiration time. A non-null value places a pending capture in the expired partition."
-          },
           "expired": {
             "type": "boolean",
-            "description": "Derived from expired_at; clients must not infer it from wall-clock comparison with expires_at."
+            "description": "Derived by PostgreSQL from expires_at and the server clock; clients must not compare against their own clock."
           },
           "created_at": {
             "type": "string",
@@ -12850,7 +10636,7 @@
       },
       "ReaderInboxListItemResponse": {
         "type": "object",
-        "description": "Queue projection of an Inbox capture. It deliberately omits body, note, proposal_signals, suggested_tags and category_ids: a capture accepts a 4 MiB body and a 1 MiB note, and this list is read every time the Inbox opens. Clients that need those fields read GET /api/inbox/{id}, whose contract is unchanged.",
+        "description": "Queue projection of an Inbox capture. It deliberately omits body, note and suggested_tags: a capture accepts a 4 MiB body and a 1 MiB note, and this list is read every time the Inbox opens. Clients that need those fields read GET /api/inbox/{id}.",
         "required": [
           "id",
           "url",
@@ -12895,8 +10681,7 @@
             "type": "string",
             "enum": [
               "pending",
-              "confirmed",
-              "discarded"
+              "confirmed"
             ]
           },
           "metadata_revision": {
@@ -12907,7 +10692,7 @@
           },
           "expired": {
             "type": "boolean",
-            "description": "Derived from the materialized expired_at; clients must not infer it from wall-clock comparison."
+            "description": "Derived by PostgreSQL from expires_at and the server clock; clients must not compare against their own clock."
           },
           "updated_at": {
             "type": "string",
@@ -13061,46 +10846,6 @@
           }
         }
       },
-      "ReaderInboxJobResponse": {
-        "type": "object",
-        "required": [
-          "inbox_id",
-          "status",
-          "job_id"
-        ],
-        "properties": {
-          "inbox_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "status": {
-            "type": "string"
-          },
-          "job_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "attempts": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "error": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "finished_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
       "ReaderConfirmResponse": {
         "type": "object",
         "required": [
@@ -13120,79 +10865,6 @@
           "status": {
             "type": "string",
             "const": "confirmed"
-          }
-        }
-      },
-      "ReaderCategoryRequest": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 128
-          }
-        }
-      },
-      "ReaderCategoryResponse": {
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "count",
-          "created_at"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "name": {
-            "type": "string"
-          },
-          "count": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "ReaderCategoriesResponse": {
-        "type": "object",
-        "required": [
-          "items"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ReaderCategoryResponse"
-            }
-          }
-        }
-      },
-      "ReaderCategoryMembershipRequest": {
-        "type": "object",
-        "required": [
-          "host_kind",
-          "host_id",
-          "present"
-        ],
-        "properties": {
-          "host_kind": {
-            "type": "string",
-            "maxLength": 32
-          },
-          "host_id": {
-            "type": "string",
-            "maxLength": 256
-          },
-          "present": {
-            "type": "boolean"
           }
         }
       },
@@ -13409,414 +11081,35 @@
           }
         }
       },
-      "ReaderFeedSectionResponse": {
-        "type": "object",
-        "required": [
-          "id",
-          "source",
-          "label",
-          "count",
-          "capabilities"
-        ],
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "reading",
-              "inbox",
-              "subscription"
-            ]
-          },
-          "label": {
-            "type": "string"
-          },
-          "count": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "capabilities": {
-            "type": "array",
-            "uniqueItems": true,
-            "items": {
-              "$ref": "#/components/schemas/ReaderFeedAction"
-            }
-          }
-        }
-      },
-      "ReaderFeedSourceResponse": {
-        "type": "object",
-        "required": [
-          "id",
-          "label",
-          "enabled",
-          "count",
-          "capabilities"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "enum": [
-              "reading",
-              "inbox",
-              "subscription"
-            ]
-          },
-          "label": {
-            "type": "string"
-          },
-          "enabled": {
-            "type": "boolean"
-          },
-          "count": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "capabilities": {
-            "type": "array",
-            "uniqueItems": true,
-            "items": {
-              "$ref": "#/components/schemas/ReaderFeedAction"
-            }
-          }
-        }
-      },
-      "ReaderFeedAction": {
-        "type": "string",
-        "enum": [
-          "confirm",
-          "discard",
-          "read",
-          "read_later",
-          "save",
-          "unsave",
-          "hide",
-          "not_interested",
-          "open",
-          "open_workspace"
-        ]
-      },
-      "ReaderFeedScoreSignal": {
-        "type": "string",
-        "description": "A ranking signal. Every signal owns one column of ReaderFeedScoreContributions, which is why this set is narrower than ReaderFeedReasonCode.",
-        "enum": [
-          "pending_confirmation",
-          "saved_library",
-          "subscription_recent",
-          "unread",
-          "read_later",
-          "chronological_fallback"
-        ]
-      },
-      "ReaderFeedReasonCode": {
-        "type": "string",
-        "description": "Why a card is on screen. The six ReaderFeedScoreSignal values are the reasons the ranking pass can win with; continue_reading is Home-only, carries no score contribution and never appears in enabled_score_signals.",
-        "enum": [
-          "pending_confirmation",
-          "saved_library",
-          "subscription_recent",
-          "unread",
-          "read_later",
-          "chronological_fallback",
-          "continue_reading"
-        ]
-      },
-      "ReaderFeedPendingConfirmationParams": {
-        "type": "object",
-        "required": [
-          "source"
-        ],
-        "properties": {
-          "source": {
-            "type": "string",
-            "const": "inbox"
-          }
-        },
-        "additionalProperties": false
-      },
-      "ReaderFeedSavedLibraryParams": {
-        "type": "object",
-        "required": [
-          "source"
-        ],
-        "properties": {
-          "source": {
-            "type": "string",
-            "const": "reading"
-          }
-        },
-        "additionalProperties": false
-      },
-      "ReaderFeedSubscriptionRecentParams": {
-        "type": "object",
-        "required": [
-          "source"
-        ],
-        "properties": {
-          "source": {
-            "type": "string",
-            "const": "subscription"
-          }
-        },
-        "additionalProperties": false
-      },
-      "ReaderFeedUnreadParams": {
-        "type": "object",
-        "required": [
-          "read"
-        ],
-        "properties": {
-          "read": {
-            "type": "boolean",
-            "const": false
-          }
-        },
-        "additionalProperties": false
-      },
-      "ReaderFeedReadLaterParams": {
-        "type": "object",
-        "required": [
-          "read_later"
-        ],
-        "properties": {
-          "read_later": {
-            "type": "boolean",
-            "const": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "ReaderFeedChronologicalFallbackParams": {
-        "type": "object",
-        "required": [
-          "created_at"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "additionalProperties": false
-      },
-      "ReaderFeedScoreContributions": {
-        "type": "object",
-        "required": [
-          "pending_confirmation",
-          "saved_library",
-          "subscription_recent",
-          "unread",
-          "read_later",
-          "chronological_fallback"
-        ],
-        "properties": {
-          "pending_confirmation": {
-            "type": "integer"
-          },
-          "saved_library": {
-            "type": "integer"
-          },
-          "subscription_recent": {
-            "type": "integer"
-          },
-          "unread": {
-            "type": "integer"
-          },
-          "read_later": {
-            "type": "integer"
-          },
-          "chronological_fallback": {
-            "type": "integer"
-          }
-        },
-        "additionalProperties": false
-      },
-      "ReaderFeedReasonTuple": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": [
-              "reason_code",
-              "reason_params",
-              "reason_contribution"
-            ],
-            "properties": {
-              "reason_code": {
-                "type": "string",
-                "const": "pending_confirmation"
-              },
-              "reason_params": {
-                "$ref": "#/components/schemas/ReaderFeedPendingConfirmationParams"
-              },
-              "reason_contribution": {
-                "type": "integer",
-                "minimum": 0
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "reason_code",
-              "reason_params",
-              "reason_contribution"
-            ],
-            "properties": {
-              "reason_code": {
-                "type": "string",
-                "const": "saved_library"
-              },
-              "reason_params": {
-                "$ref": "#/components/schemas/ReaderFeedSavedLibraryParams"
-              },
-              "reason_contribution": {
-                "type": "integer",
-                "minimum": 0
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "reason_code",
-              "reason_params",
-              "reason_contribution"
-            ],
-            "properties": {
-              "reason_code": {
-                "type": "string",
-                "const": "subscription_recent"
-              },
-              "reason_params": {
-                "$ref": "#/components/schemas/ReaderFeedSubscriptionRecentParams"
-              },
-              "reason_contribution": {
-                "type": "integer",
-                "minimum": 0
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "reason_code",
-              "reason_params",
-              "reason_contribution"
-            ],
-            "properties": {
-              "reason_code": {
-                "type": "string",
-                "const": "unread"
-              },
-              "reason_params": {
-                "$ref": "#/components/schemas/ReaderFeedUnreadParams"
-              },
-              "reason_contribution": {
-                "type": "integer",
-                "minimum": 0
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "reason_code",
-              "reason_params",
-              "reason_contribution"
-            ],
-            "properties": {
-              "reason_code": {
-                "type": "string",
-                "const": "read_later"
-              },
-              "reason_params": {
-                "$ref": "#/components/schemas/ReaderFeedReadLaterParams"
-              },
-              "reason_contribution": {
-                "type": "integer",
-                "minimum": 0
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "reason_code",
-              "reason_params",
-              "reason_contribution"
-            ],
-            "properties": {
-              "reason_code": {
-                "type": "string",
-                "const": "chronological_fallback"
-              },
-              "reason_params": {
-                "$ref": "#/components/schemas/ReaderFeedChronologicalFallbackParams"
-              },
-              "reason_contribution": {
-                "type": "integer",
-                "minimum": 0
-              }
-            }
-          }
-        ]
-      },
       "ReaderFeedItemResponse": {
         "type": "object",
         "required": [
           "key",
           "source",
+          "resource_key",
           "title",
           "summary",
           "url",
           "read",
           "read_later",
           "saved",
-          "reason_code",
-          "reason_text",
-          "event_at",
-          "created_at"
+          "event_at"
         ],
         "properties": {
           "key": {
             "type": "string"
           },
           "source": {
-            "type": "string"
-          },
-          "item_type": {
             "type": "string",
             "enum": [
               "reading",
               "inbox",
               "subscription"
-            ],
-            "description": "Explicit union discriminator. It mirrors source for compatibility with older Reader clients."
+            ]
           },
           "resource_key": {
             "type": "string",
-            "description": "Stable resource identity. For subscription items this may be the linked saved link while action_key remains the feed-item identity."
-          },
-          "action_key": {
-            "type": "string",
-            "description": "Canonical installation-scoped key accepted by Reader Feed action endpoints; key remains its legacy alias."
-          },
-          "dedupe_key": {
-            "type": "string",
-            "description": "Stable URL/resource key used to prevent duplicate cards in one snapshot."
-          },
-          "section_id": {
-            "type": "string"
-          },
-          "actions": {
-            "type": "array",
-            "uniqueItems": true,
-            "items": {
-              "$ref": "#/components/schemas/ReaderFeedAction"
-            },
-            "description": "Actions currently supported for this item. An empty collection means item actions are disabled."
+            "description": "Stable resource identity used to merge the same reading across live pages."
           },
           "title": {
             "type": "string"
@@ -13859,84 +11152,29 @@
             "type": "boolean",
             "description": "Whether this subscription item has a feed-save association; independent from read_later."
           },
-          "reason_code": {
-            "$ref": "#/components/schemas/ReaderFeedReasonCode"
-          },
-          "reason_text": {
-            "type": "string"
-          },
-          "published_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
           "event_at": {
             "type": "string",
             "format": "date-time",
-            "description": "Authoritative visible Feed instant: published_at when present, otherwise created_at. Chronological ordering and cursors use this same value."
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
+            "description": "Visible Feed instant: published_at when present, otherwise created_at."
           }
         }
-      },
-      "ReaderRankedFeedItemResponse": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/ReaderFeedItemResponse"
-          },
-          {
-            "type": "object",
-            "required": [
-              "score",
-              "score_contributions",
-              "enabled_score_signals"
-            ],
-            "properties": {
-              "score": {
-                "type": "integer"
-              },
-              "score_contributions": {
-                "$ref": "#/components/schemas/ReaderFeedScoreContributions"
-              },
-              "enabled_score_signals": {
-                "type": "array",
-                "uniqueItems": true,
-                "items": {
-                  "$ref": "#/components/schemas/ReaderFeedScoreSignal"
-                }
-              }
-            }
-          },
-          {
-            "$ref": "#/components/schemas/ReaderFeedReasonTuple"
-          }
-        ]
       },
       "ReaderFeedResponse": {
         "type": "object",
         "required": [
           "items",
-          "snapshot_id",
           "mode"
         ],
         "properties": {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ReaderRankedFeedItemResponse"
+              "$ref": "#/components/schemas/ReaderFeedItemResponse"
             }
           },
           "next_cursor": {
             "type": "string",
-            "description": "Opaque snapshot-bound cursor. In chronological mode it encodes the complete event_at DESC, resource_key ASC tuple and must be returned unchanged."
-          },
-          "snapshot_id": {
-            "type": "string",
-            "format": "uuid"
+            "description": "Opaque live keyset cursor bound to the current mode and normalized source filter."
           },
           "mode": {
             "type": "string",
@@ -13944,35 +11182,6 @@
               "recommended",
               "chronological"
             ]
-          },
-          "capabilities": {
-            "type": "array",
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "enum": [
-                "snapshot",
-                "cursor",
-                "dedupe",
-                "reason",
-                "source_filter",
-                "actions",
-                "inbox_batch"
-              ]
-            },
-            "description": "Additive Feed capabilities. Older clients may omit or ignore this collection; an empty collection is capability-off."
-          },
-          "sections": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ReaderFeedSectionResponse"
-            }
-          },
-          "sources": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ReaderFeedSourceResponse"
-            }
           }
         }
       },
@@ -13985,7 +11194,6 @@
           "action": {
             "type": "string",
             "enum": [
-              "not_interested",
               "hide",
               "save",
               "unsave"
@@ -13993,33 +11201,11 @@
           }
         }
       },
-      "ReaderFeedSaveAssociationResponse": {
-        "type": "object",
-        "required": [
-          "feed_item_id",
-          "link_id",
-          "created_link"
-        ],
-        "properties": {
-          "feed_item_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "link_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "created_link": {
-            "type": "boolean"
-          }
-        }
-      },
       "ReaderFeedFeedbackResponse": {
         "type": "object",
         "required": [
           "item_key",
-          "action",
-          "saved"
+          "action"
         ],
         "properties": {
           "item_key": {
@@ -14028,19 +11214,15 @@
           "action": {
             "type": "string",
             "enum": [
-              "not_interested",
               "hide",
               "save",
               "unsave"
             ]
           },
-          "saved": {
-            "type": "boolean",
-            "description": "Current subscription save state, independent from read_later."
-          },
-          "association": {
-            "$ref": "#/components/schemas/ReaderFeedSaveAssociationResponse",
-            "description": "The association changed by a subscription save or unsave."
+          "link_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The Library Link visible after a subscription save-state change. It is absent after unsave unless the item has a separate Analyze result."
           }
         }
       },
@@ -14163,85 +11345,10 @@
           }
         }
       },
-      "ReaderContentHistoryResponse": {
-        "type": "object",
-        "required": [
-          "id",
-          "revision",
-          "content_format",
-          "content_source",
-          "created_at"
-        ],
-        "properties": {
-          "id": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "revision": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "content": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "content_document": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "content_format": {
-            "type": "string"
-          },
-          "content_source": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "ReaderContentHistoryRestoreRequest": {
-        "type": "object",
-        "required": [
-          "expected_content_revision"
-        ],
-        "properties": {
-          "expected_content_revision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          }
-        }
-      },
-      "ReaderContentHistoryRestoreResponse": {
-        "type": "object",
-        "required": [
-          "link_id",
-          "content_revision"
-        ],
-        "properties": {
-          "link_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "content_revision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          }
-        }
-      },
       "ReaderRelatedTagsResponse": {
         "type": "object",
         "required": [
-          "items",
-          "model",
-          "degraded"
+          "items"
         ],
         "properties": {
           "items": {
@@ -14249,12 +11356,6 @@
             "items": {
               "type": "string"
             }
-          },
-          "model": {
-            "type": "string"
-          },
-          "degraded": {
-            "type": "boolean"
           }
         }
       },
@@ -14419,10 +11520,6 @@
           },
           "build_time": {
             "type": "string"
-          },
-          "unsafe_targets_allowed": {
-            "type": "boolean",
-            "description": "Present only when AI_ALLOW_UNSAFE_TARGETS=true"
           }
         }
       },

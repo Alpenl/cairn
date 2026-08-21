@@ -12,10 +12,6 @@ const LOCAL_FALLBACK_LIMIT = 12
 export interface ReaderRelatedTagsState {
   readonly tags: string[]
   readonly source: 'server' | 'local'
-  readonly mode: 'semantic' | 'cooccurrence' | 'local'
-  /** The server's model/generation marker; null means the response omitted a usable marker. */
-  readonly model: string | null
-  readonly degraded: boolean
   readonly loading: boolean
   readonly error: ApiError | null
   readonly reload: () => void
@@ -89,14 +85,6 @@ function normalizeTags(items: readonly string[] | undefined): string[] {
   return normalized
 }
 
-function normalizeModel(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null
-}
-
-function isCooccurrenceModel(model: string | null): boolean {
-  return model?.toLowerCase().startsWith('cooccurrence') ?? false
-}
-
 export function useReaderRelatedTags(
   link: LinkResponse | null | undefined,
   corpus: LinkResponse[],
@@ -119,17 +107,9 @@ export function useReaderRelatedTags(
     [corpus, link],
   )
   const serverData = resource.error ? undefined : resource.data
-  const serverModel = normalizeModel(serverData?.model)
   const serverTags = useMemo(
     () => normalizeTags(serverData?.items).slice(0, LOCAL_FALLBACK_LIMIT),
     [serverData?.items],
-  )
-  const serverDegraded = Boolean(
-    serverData && (
-      serverData.degraded ||
-      !serverModel ||
-      isCooccurrenceModel(serverModel)
-    ),
   )
   const reload = useCallback(() => {
     void resource.reload()
@@ -139,19 +119,11 @@ export function useReaderRelatedTags(
     () => ({
       tags: serverData ? serverTags : localTags,
       source: serverData ? 'server' : 'local',
-      mode: serverData
-        ? (serverDegraded ? 'cooccurrence' : 'semantic')
-        : 'local',
-      model: serverModel,
-      // A local result is useful, but it is not authoritative global semantic
-      // data. Keep that distinction visible to consumers instead of treating
-      // an unavailable endpoint as a successful empty response.
-      degraded: serverData ? serverDegraded : true,
       loading: resource.loading,
       error: resource.error,
       reload,
     }),
-    [localTags, reload, resource.error, resource.loading, serverData, serverDegraded, serverModel, serverTags],
+    [localTags, reload, resource.error, resource.loading, serverData, serverTags],
   )
 }
 

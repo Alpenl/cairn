@@ -32,8 +32,6 @@ type readerVNextChainHandler struct {
 	feedbackAction   string
 	engagement       dto.ReaderEngagementResponse
 	home             dto.ReaderHomeResponse
-	restoreLink      string
-	restoreHistory   int64
 }
 
 func newReaderVNextChainHandler() *readerVNextChainHandler {
@@ -66,18 +64,17 @@ func newReaderVNextChainHandler() *readerVNextChainHandler {
 		},
 		feed: dto.ReaderFeedResponse{
 			Items: []dto.ReaderFeedItemResponse{{
-				Key: "link:" + linkText, Source: "reading", ItemType: "reading", ResourceKey: "link:" + linkText,
-				ActionKey: "link:" + linkText, DedupeKey: "url:https://capture.example.test/article", SectionID: "reading",
-				Actions: []string{"read", "save", "open"}, Title: "Captured article", Summary: "Captured summary",
+				Key: "link:" + linkText, Source: "reading", ResourceKey: "link:" + linkText,
+				Title: "Captured article", Summary: "Captured summary",
 				URL: "https://capture.example.test/article", LinkID: &linkText, Read: false, ReadLater: false,
-				ReasonCode: "reading_progress", ReasonText: "来自最近捕获的内容", CreatedAt: now,
+				EventAt: now,
 			}},
-			SnapshotID: "snapshot-1", Mode: "recommended", Capabilities: []string{"snapshot", "reason", "actions"},
+			Mode: "recommended",
 		},
 		engagement: dto.ReaderEngagementResponse{LinkID: linkText, Progress: 0, UpdatedAt: now},
 		home: dto.ReaderHomeResponse{
 			Today: "2026-08-10", Summary: "继续整理捕获内容", Counts: map[string]int{"pending": 0, "reading": 1, "notes": 1, "todos": 1},
-			ContinueReading: []dto.ReaderFeedItemResponse{{Key: "link:" + linkText, Source: "reading", Title: "Captured article", Summary: "Captured summary", URL: "https://capture.example.test/article", LinkID: &linkText, ReasonCode: "reading_progress", ReasonText: "来自最近捕获的内容", CreatedAt: now}},
+			ContinueReading: []dto.ReaderFeedItemResponse{{Key: "link:" + linkText, Source: "reading", ResourceKey: "link:" + linkText, Title: "Captured article", Summary: "Captured summary", URL: "https://capture.example.test/article", LinkID: &linkText, EventAt: now}},
 			RecentThoughts:  []dto.ReaderThoughtResponse{}, Todos: []dto.ReaderTodoResponse{}, Freshness: dto.ReaderHomeFreshnessFresh,
 		},
 	}
@@ -172,13 +169,13 @@ func (s *readerVNextChainHandler) PatchTodo(_ context.Context, _ string, request
 	return s.todo, nil
 }
 
-func (s *readerVNextChainHandler) Feed(context.Context, string, string, string, int) (dto.ReaderFeedResponse, error) {
+func (s *readerVNextChainHandler) FeedWithSources(context.Context, string, string, []string, int) (dto.ReaderFeedResponse, error) {
 	return s.feed, nil
 }
 
 func (s *readerVNextChainHandler) FeedbackFeed(_ context.Context, itemKey, action string) (dto.ReaderFeedFeedbackResponse, error) {
 	s.feedbackKey, s.feedbackAction = itemKey, action
-	return dto.ReaderFeedFeedbackResponse{ItemKey: itemKey, Action: action, Saved: action == "save"}, nil
+	return dto.ReaderFeedFeedbackResponse{ItemKey: itemKey, Action: action}, nil
 }
 
 func (s *readerVNextChainHandler) PatchEngagement(_ context.Context, _ string, request dto.ReaderEngagementRequest) (dto.ReaderEngagementResponse, error) {
@@ -191,15 +188,6 @@ func (s *readerVNextChainHandler) PatchEngagement(_ context.Context, _ string, r
 func (s *readerVNextChainHandler) Home(context.Context) (dto.ReaderHomeResponse, error) {
 	s.home.RecentThoughts = []dto.ReaderThoughtResponse{s.thought}
 	return s.home, nil
-}
-
-func (s *readerVNextChainHandler) ListContentHistory(context.Context, string, int) ([]dto.ReaderContentHistoryResponse, error) {
-	return []dto.ReaderContentHistoryResponse{{ID: 1, Revision: 1, Content: stringPointerForHandler("The original body."), ContentFormat: "plain", ContentSource: "fetched", CreatedAt: s.inbox.CreatedAt}}, nil
-}
-
-func (s *readerVNextChainHandler) RestoreContentHistory(_ context.Context, linkID string, historyID, expectedRevision int64) (dto.ReaderContentHistoryRestoreResponse, error) {
-	s.restoreLink, s.restoreHistory = linkID, historyID
-	return dto.ReaderContentHistoryRestoreResponse{LinkID: linkID, ContentRevision: expectedRevision + 1}, nil
 }
 
 func serveReaderChainRequest(t *testing.T, router http.Handler, method, path string, body []byte) *httptest.ResponseRecorder {
@@ -230,7 +218,7 @@ func TestRegisterReaderRoutesCrossSurfaceChain(t *testing.T) {
 	noteID := stub.note.ID
 	linkID := *stub.thought.LinkID
 
-	response := serveReaderChainRequest(t, router, http.MethodPost, "/api/v1/inbox", []byte(`{"url":"https://capture.example.test/article","source_kind":"browser_capture","body":"Captured body","tags":["capture"]}`))
+	response := serveReaderChainRequest(t, router, http.MethodPost, "/api/inbox", []byte(`{"url":"https://capture.example.test/article","source_kind":"browser_capture","body":"Captured body","tags":["capture"]}`))
 	if response.Code != http.StatusCreated || stub.inboxCalls != 1 {
 		t.Fatalf("create inbox status=%d calls=%d body=%s", response.Code, stub.inboxCalls, response.Body.String())
 	}
@@ -240,14 +228,14 @@ func TestRegisterReaderRoutesCrossSurfaceChain(t *testing.T) {
 		t.Fatalf("created inbox = %#v", inbox)
 	}
 
-	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/v1/inbox", nil)
+	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/inbox", nil)
 	var pending dto.ReaderInboxResponsePage
 	decodeReaderChainJSON(t, response, &pending)
 	if response.Code != http.StatusOK || len(pending.Items) != 1 || pending.Items[0].ID != inboxID {
 		t.Fatalf("pending inbox status=%d page=%#v", response.Code, pending)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/inbox/"+inboxID+"/confirm", nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/inbox/"+inboxID+"/confirm", nil)
 	request.Header.Set("If-Match", `"1"`)
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -257,87 +245,72 @@ func TestRegisterReaderRoutesCrossSurfaceChain(t *testing.T) {
 		t.Fatalf("confirmation status=%d response=%#v calls=%d inbox=%q", response.Code, confirmation, stub.confirmCalls, stub.inbox.Status)
 	}
 
-	thoughtBody := []byte(`{"ops":[{"op_id":"thought-op-1","device_id":"device-1","operation_kind":"add","annotation_id":"thought-1","host_kind":"link","host_id":"` + linkID + `","target":{"kind":"saved-content","host_id":"` + linkID + `","version":{"content_revision":3}},"payload":{"body":"A synced idea becomes searchable.","quote":{"exact":"Captured body"}}}]}`)
-	response = serveReaderChainRequest(t, router, http.MethodPost, "/api/v1/annotations/ops", thoughtBody)
+	thoughtBody := []byte(`{"ops":[{"contract_version":1,"op_id":"thought-op-1","device_id":"device-1","logical_clock":1,"operation_kind":"add","annotation_id":"thought-1","host_kind":"link","host_id":"` + linkID + `","target":{"kind":"saved-content","host_id":"` + linkID + `","version":{"content_revision":3}},"payload":{"body":"A synced idea becomes searchable.","quote":{"exact":"Captured body"}}}]}`)
+	response = serveReaderChainRequest(t, router, http.MethodPost, "/api/annotations/ops", thoughtBody)
 	if response.Code != http.StatusOK || stub.thoughtCalls != 1 {
 		t.Fatalf("thought push status=%d calls=%d body=%s", response.Code, stub.thoughtCalls, response.Body.String())
 	}
-	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/v1/annotations/sync?after=0&limit=100", nil)
+	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/annotations/sync?after=0&limit=100", nil)
 	var synced dto.ReaderThoughtsResponse
 	decodeReaderChainJSON(t, response, &synced)
 	if response.Code != http.StatusOK || len(synced.Items) != 1 || synced.Items[0].ID != stub.thought.ID {
 		t.Fatalf("thought sync status=%d response=%#v", response.Code, synced)
 	}
 
-	response = serveReaderChainRequest(t, router, http.MethodPost, "/api/v1/notes", []byte(`{"title":"Captured idea note"}`))
+	response = serveReaderChainRequest(t, router, http.MethodPost, "/api/notes", []byte(`{"title":"Captured idea note"}`))
 	var createdNote dto.ReaderNoteResponse
 	decodeReaderChainJSON(t, response, &createdNote)
 	if response.Code != http.StatusCreated || createdNote.ID != noteID {
 		t.Fatalf("note create status=%d note=%#v", response.Code, createdNote)
 	}
 	draftBody := []byte(`{"content":"# Follow up\n\n- [ ] Re-read the captured article","expected_draft_revision":1}`)
-	response = serveReaderChainRequest(t, router, http.MethodPatch, "/api/v1/notes/"+noteID+"/draft", draftBody)
+	response = serveReaderChainRequest(t, router, http.MethodPatch, "/api/notes/"+noteID+"/draft", draftBody)
 	var draft dto.ReaderNoteResponse
 	decodeReaderChainJSON(t, response, &draft)
 	if response.Code != http.StatusOK || !draft.Dirty || draft.DraftContent == nil || stub.noteDraftCalls != 1 {
 		t.Fatalf("note draft status=%d note=%#v calls=%d", response.Code, draft, stub.noteDraftCalls)
 	}
 	publishBody := []byte(`{"expected_draft_revision":2,"expected_published_revision":1,"reanchor_ops":[{"thought_id":"thought-1","status":"reanchored"}]}`)
-	response = serveReaderChainRequest(t, router, http.MethodPost, "/api/v1/notes/"+noteID+"/publish", publishBody)
+	response = serveReaderChainRequest(t, router, http.MethodPost, "/api/notes/"+noteID+"/publish", publishBody)
 	var published dto.ReaderNoteResponse
 	decodeReaderChainJSON(t, response, &published)
 	if response.Code != http.StatusOK || published.Dirty || published.DraftContent != nil || published.PublishedRevision != 2 || stub.notePublishCalls != 1 {
 		t.Fatalf("note publish status=%d note=%#v calls=%d", response.Code, published, stub.notePublishCalls)
 	}
 
-	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/v1/todos", nil)
+	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/todos", nil)
 	var todos dto.ReaderTodosResponse
 	decodeReaderChainJSON(t, response, &todos)
 	if response.Code != http.StatusOK || len(todos.Items) != 1 || todos.Items[0].OriginHostID == nil || *todos.Items[0].OriginHostID != noteID {
 		t.Fatalf("todo projection status=%d todos=%#v", response.Code, todos)
 	}
-	response = serveReaderChainRequest(t, router, http.MethodPatch, "/api/v1/todos/"+stub.todo.ID, []byte(`{"done":true}`))
+	response = serveReaderChainRequest(t, router, http.MethodPatch, "/api/todos/"+stub.todo.ID, []byte(`{"done":true}`))
 	var completed dto.ReaderTodoResponse
 	decodeReaderChainJSON(t, response, &completed)
 	if response.Code != http.StatusOK || !completed.Done || completed.CompletedAt == nil {
 		t.Fatalf("todo completion status=%d todo=%#v", response.Code, completed)
 	}
 
-	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/v1/reader-feed?mode=recommended", nil)
+	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/reader-feed?mode=recommended", nil)
 	var feed dto.ReaderFeedResponse
 	decodeReaderChainJSON(t, response, &feed)
 	if response.Code != http.StatusOK || len(feed.Items) != 1 || feed.Items[0].Key != "link:"+linkID {
 		t.Fatalf("feed status=%d feed=%#v", response.Code, feed)
 	}
-	response = serveReaderChainRequest(t, router, http.MethodPost, "/api/v1/reader-feed/feedback?item_key="+feed.Items[0].Key, []byte(`{"action":"save"}`))
+	response = serveReaderChainRequest(t, router, http.MethodPost, "/api/reader-feed/feedback?item_key="+feed.Items[0].Key, []byte(`{"action":"hide"}`))
 	var feedback dto.ReaderFeedFeedbackResponse
 	decodeReaderChainJSON(t, response, &feedback)
-	if response.Code != http.StatusOK || feedback.ItemKey != feed.Items[0].Key || !feedback.Saved || stub.feedbackKey != feed.Items[0].Key || stub.feedbackAction != "save" {
+	if response.Code != http.StatusOK || feedback.ItemKey != feed.Items[0].Key || feedback.Action != "hide" || stub.feedbackKey != feed.Items[0].Key || stub.feedbackAction != "hide" {
 		t.Fatalf("feed action status=%d key=%q action=%q", response.Code, stub.feedbackKey, stub.feedbackAction)
 	}
-	response = serveReaderChainRequest(t, router, http.MethodPatch, "/api/v1/engagement/"+linkID, []byte(`{"read":true}`))
+	response = serveReaderChainRequest(t, router, http.MethodPatch, "/api/engagement/"+linkID, []byte(`{"read":true}`))
 	var engagement dto.ReaderEngagementResponse
 	decodeReaderChainJSON(t, response, &engagement)
 	if response.Code != http.StatusOK || !engagement.Read || engagement.LinkID != linkID {
 		t.Fatalf("engagement status=%d response=%#v", response.Code, engagement)
 	}
 
-	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/v1/links/"+linkID+"/content-history", nil)
-	var history struct {
-		Items []dto.ReaderContentHistoryResponse `json:"items"`
-	}
-	decodeReaderChainJSON(t, response, &history)
-	if response.Code != http.StatusOK || len(history.Items) != 1 || history.Items[0].Revision != 1 {
-		t.Fatalf("history status=%d response=%#v", response.Code, history)
-	}
-	response = serveReaderChainRequest(t, router, http.MethodPost, "/api/v1/links/"+linkID+"/content-history/1/restore", []byte(`{"expected_content_revision":3}`))
-	var restored dto.ReaderContentHistoryRestoreResponse
-	decodeReaderChainJSON(t, response, &restored)
-	if response.Code != http.StatusOK || restored.LinkID != linkID || restored.ContentRevision != 4 || stub.restoreLink != linkID || stub.restoreHistory != 1 {
-		t.Fatalf("restore status=%d response=%#v target=(%q,%d)", response.Code, restored, stub.restoreLink, stub.restoreHistory)
-	}
-
-	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/v1/home", nil)
+	response = serveReaderChainRequest(t, router, http.MethodGet, "/api/home", nil)
 	var home dto.ReaderHomeResponse
 	decodeReaderChainJSON(t, response, &home)
 	if response.Code != http.StatusOK || len(home.RecentThoughts) != 1 || len(home.Todos) != 1 || home.ContinueReading[0].Key != feed.Items[0].Key {

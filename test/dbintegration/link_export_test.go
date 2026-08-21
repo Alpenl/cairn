@@ -1,8 +1,8 @@
-// link_export_test.go exercises the Phase 10 GET /api/export streaming read
-// against a real Postgres. The pure-Go unit tests in internal/service cover the
-// cursor-batch loop + array framing with in-memory fakes; this file proves the
-// service streams the actual done-link rows from the DB, excludes non-done
-// links, carries the full business fields, and never leaks input_* / embedding.
+// link_export_test.go exercises the Archive v2 links section against a real
+// Postgres. The pure-Go unit tests in internal/service cover the cursor-batch
+// loop and array framing with in-memory fakes; this file proves the service
+// streams the actual done-link rows from the DB, excludes non-done links,
+// carries the full business fields, and never leaks raw input fields.
 package dbintegration
 
 import (
@@ -12,24 +12,22 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgvector/pgvector-go"
 
 	"webtag/internal/repository"
 	"webtag/internal/service"
 )
 
 // seedExportLink inserts a link in the given status, optionally with raw input_*
-// payload and an embedding vector — exactly the sensitive fields the export must
-// NOT serialize. Returns the id.
+// payload. These raw capture fields must not be serialized.
 func seedExportLink(t *testing.T, pool *pgxpool.Pool, url, status, title string, tags []string, withSensitive bool) {
 	t.Helper()
 	if withSensitive {
 		if _, err := pool.Exec(context.Background(),
 			`INSERT INTO links (url, source_key, status, title, summary, tags, domain, content_type, fetcher_type,
-			                    input_title, input_text, input_html, embedding, embedding_model, first_collected_at)
+			                    input_title, input_text, input_html, first_collected_at)
 			 VALUES ($1, $1, $2, $3, 'a summary', $4, 'example.com', 'article', 'basic',
-			         'raw input title', 'raw input text', '<p>raw html</p>', $5, 'export-model', NOW())`,
-			url, status, title, tags, pgvector.NewVector(unitVec(0)),
+			         'raw input title', 'raw input text', '<p>raw html</p>', NOW())`,
+			url, status, title, tags,
 		); err != nil {
 			t.Fatalf("seed export link %q: %v", url, err)
 		}
@@ -44,14 +42,14 @@ func seedExportLink(t *testing.T, pool *pgxpool.Pool, url, status, title string,
 	}
 }
 
-// TestExportStreamsDoneLinksOnlyWithFullFields: export returns every done link
-// (and only done links) with full business fields, and never serializes the
-// raw input_* fields or the embedding vector.
-func TestExportStreamsDoneLinksOnlyWithFullFields(t *testing.T) {
+// TestExportArchiveLinksStreamsDoneLinksOnlyWithFullFields verifies that the
+// v2 links section returns every done link (and only done links) with full
+// business fields, and never serializes the raw input_* fields.
+func TestExportArchiveLinksStreamsDoneLinksOnlyWithFullFields(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := context.Background()
 
-	// Two done links (one carrying sensitive input_*/embedding columns) and two
+	// Two done links (one carrying sensitive input_* columns) and two
 	// non-done links that must be excluded from the export.
 	seedExportLink(t, pool, "https://example.com/done-1", "done", "Done One", []string{"go", "db"}, true)
 	seedExportLink(t, pool, "https://example.com/done-2", "done", "Done Two", []string{"ai"}, false)
@@ -62,8 +60,12 @@ func TestExportStreamsDoneLinksOnlyWithFullFields(t *testing.T) {
 	svc := service.NewLinkReadService(service.LinkReadServiceOptions{Links: links})
 
 	var buf bytes.Buffer
-	if err := svc.Export(ctx, &buf); err != nil {
-		t.Fatalf("Export: %v", err)
+	count, err := svc.ExportArchiveLinks(ctx, &buf)
+	if err != nil {
+		t.Fatalf("ExportArchiveLinks: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("ExportArchiveLinks count = %d, want 2", count)
 	}
 
 	// Decode into generic maps so we can assert which JSON keys are present /
@@ -104,7 +106,7 @@ func TestExportStreamsDoneLinksOnlyWithFullFields(t *testing.T) {
 	}
 
 	// Sensitive fields must NEVER appear.
-	for _, forbidden := range []string{"input_title", "input_text", "input_html", "input_images", "embedding", "embedding_model"} {
+	for _, forbidden := range []string{"input_title", "input_text", "input_html", "input_images"} {
 		if _, ok := done1[forbidden]; ok {
 			t.Errorf("export leaked forbidden field %q", forbidden)
 		}

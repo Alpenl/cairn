@@ -54,7 +54,11 @@ func (s *contentKindStore) UpdateContentIfCurrent(context.Context, uuid.UUID, ti
 	s.contentWriteCalled = true
 	return 0, false, nil
 }
-func (s *contentKindStore) ReplaceContentIfCurrent(context.Context, uuid.UUID, time.Time, model.SavedContent) (int64, bool, error) {
+func (s *contentKindStore) ReplaceContentIfCurrentWithRevision(context.Context, uuid.UUID, time.Time, int64, model.SavedContent) (int64, bool, error) {
+	s.contentWriteCalled = true
+	return 0, false, nil
+}
+func (s *contentKindStore) EditContentIfRevision(context.Context, uuid.UUID, int64, model.SavedContent) (int64, bool, error) {
 	s.contentWriteCalled = true
 	return 0, false, nil
 }

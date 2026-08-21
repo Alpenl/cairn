@@ -21,73 +21,51 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
 
-	"webtag/internal/errsafe"
 	"webtag/internal/model"
-	"webtag/internal/observability"
 	"webtag/internal/service"
 	"webtag/internal/service/linktranslation"
 )
 
-func parseLinkArgs(linkID, parseJobID uuid.UUID) service.ParseLinkArgs {
-	return service.ParseLinkArgs{LinkID: linkID, ParseJobID: parseJobID}
+func parseLinkArgs(attempt model.ParseAttempt) service.ParseLinkArgs {
+	return service.ParseLinkArgs{
+		LinkID:                   attempt.LinkID,
+		ParseGeneration:          attempt.Generation,
+		ExpectedMetadataRevision: attempt.ExpectedMetadataRevision,
+	}
 }
 
-// ErrTranslationSchedulingPaused reports that the rollout deliberately accepts
-// no new translation jobs while legacy work drains.
-var ErrTranslationSchedulingPaused = errors.New("translation scheduling is paused during job protocol rollout")
+const defaultTerminalJobRetention = 7 * 24 * time.Hour
 
-const (
-	translationTerminalProjectionTimeout = 10 * time.Second
-	defaultTerminalJobRetention          = 7 * 24 * time.Hour
-)
-
-func translationArgsFromSeed(seed model.TranslationAttemptSeed, protocol model.TranslationJobScheduleProtocol) (river.JobArgs, error) {
-	if protocol == model.TranslationJobScheduleLegacy || protocol == model.TranslationJobScheduleV2 {
-		if seed.SourceHash == "" {
-			return nil, errors.New("translation attempt seed is missing source_hash")
-		}
-		if seed.SourceContentRevision != nil && *seed.SourceContentRevision <= 0 {
-			return nil, errors.New("translation attempt seed has invalid source_content_revision")
-		}
+func translationArgsFromSeed(seed model.TranslationAttemptSeed) (linktranslation.JobArgs, error) {
+	if seed.SourceHash == "" {
+		return linktranslation.JobArgs{}, errors.New("translation attempt seed is missing source_hash")
 	}
-	switch protocol {
-	case model.TranslationJobScheduleLegacy:
-		return linktranslation.LegacyJobArgs{
-			TranslationID:         seed.TranslationID,
-			AttemptGeneration:     seed.AttemptGeneration,
-			SourceHash:            seed.SourceHash,
-			SourceContentRevision: seed.SourceContentRevision,
-		}, nil
-	case model.TranslationJobScheduleV2:
-		return linktranslation.JobArgs{
-			TranslationID:         seed.TranslationID,
-			AttemptGeneration:     seed.AttemptGeneration,
-			SourceHash:            seed.SourceHash,
-			SourceContentRevision: seed.SourceContentRevision,
-		}, nil
-	case model.TranslationJobSchedulePaused:
-		return nil, ErrTranslationSchedulingPaused
-	default:
-		return nil, fmt.Errorf("unsupported translation schedule protocol %q", protocol)
+	if seed.SourceContentRevision != nil && *seed.SourceContentRevision <= 0 {
+		return linktranslation.JobArgs{}, errors.New("translation attempt seed has invalid source_content_revision")
 	}
+	return linktranslation.JobArgs{
+		TranslationID:         seed.TranslationID,
+		AttemptGeneration:     seed.AttemptGeneration,
+		SourceHash:            seed.SourceHash,
+		SourceContentRevision: seed.SourceContentRevision,
+	}, nil
 }
 
 // ErrQueueClosed 表示队列已进入停机流程，新的 Enqueue 将被拒收。沿用旧内存
 // 队列的同名 sentinel，让上层调用方（linkSubmitter）的错误处理无需改动。
 var ErrQueueClosed = errors.New("queue is closed")
 
-const selectActiveParseJobsForLinksSQL = `SELECT id
+const selectActiveParseRiverJobsForLinksSQL = `SELECT id
 	FROM river_job
 	WHERE kind = $1
 	  AND args->>'link_id' = ANY($2::text[])
-	  AND ($3::text IS NULL OR COALESCE(args->>'parse_job_id', '') <> $3)
 	  AND state IN ('available', 'pending', 'retryable', 'running', 'scheduled')
 	ORDER BY id
 	FOR UPDATE`
 
 const selectActiveTranslationJobsForLinksSQL = `SELECT id
 	FROM river_job
-	WHERE kind = ANY($1::text[])
+	WHERE kind = $1
 	  AND args->>'translation_id' IN (
 		SELECT id::text
 		FROM link_translations
@@ -107,14 +85,8 @@ type RiverQueueOptions struct {
 	Processor service.ParseProcessor
 	// TranslationProcessor is optional for compatibility with parse-only test
 	// harnesses. Production wiring always supplies it and therefore registers
-	// the rollout-selected translation workers on the same durable queue.
+	// the translation worker on the same durable queue.
 	TranslationProcessor linktranslation.JobProcessor
-	// TranslationAttempts resolves legacy jobs to the exact persisted current
-	// attempt. It is required only when the rollout registers a legacy worker.
-	TranslationAttempts linktranslation.LegacyAttemptResolver
-	// TranslationJobsRollout selects the worker compatibility set and the
-	// durable job protocol used by translation scheduling.
-	TranslationJobsRollout model.TranslationJobsRolloutStage
 	// TranslationJobTimeout overrides the parse-oriented global timeout for
 	// multi-chunk translations. Zero falls back to JobTimeout.
 	TranslationJobTimeout time.Duration
@@ -122,25 +94,12 @@ type RiverQueueOptions struct {
 	// wiring supplies the shared ReaderVNextService so durable Inbox summary
 	// jobs run on this same River client.
 	ReaderInboxProcessor service.ReaderInboxSummaryJobProcessor
-	// LinkEmbeddingBackfill is optional because the embedding feature is
-	// capability-gated. When present, River registers an installation-level
-	// periodic worker for the idempotent link vector repair scan.
-	LinkEmbeddingBackfill interface {
-		Run(context.Context) (filled int, failed int, skipped int, err error)
-	}
-	// ContentHistoryRetention is always supplied by production wiring. It is a
-	// direct maintenance repository rather than a service use case: the worker
-	// only invokes bounded transactions and never reads snapshot text.
-	ContentHistoryRetention contentHistoryCleanupStore
-	// Metrics receives aggregate retention outcomes. Labels are intentionally
-	// limited to backlog and bounded failure category.
-	Metrics *observability.Metrics
 	// MaxWorkers 是默认队列的并发 worker 数，映射自 PARSE_CONCURRENCY。<=0
 	// 时强制为 1，避免 River 因 MaxWorkers=0 拒绝启动。
 	MaxWorkers int
 	// JobTimeout 是单条 job 的最长执行时间（0 = River 默认 1 分钟）。一条解析
-	// job 要跑完 fetch（含 light→deep 升级、ytdlp 30s 等）+ AI analyze
-	// （AI_REQUEST_TIMEOUT_MS 默认 60s）+ embedding 写入，1 分钟默认远不够。
+	// job 要跑完 fetch 和 AI analyze（AI_REQUEST_TIMEOUT_MS 默认 60s），
+	// 1 分钟默认不够。
 	JobTimeout time.Duration
 	// RescueAfter 是 job 进入 running 后多久被 rescuer 判为「卡死」并重排 /
 	// discard（River.Config.RescueStuckJobsAfter）。0 = River 默认 1 小时。
@@ -167,124 +126,76 @@ type RiverQueueOptions struct {
 //   - 失败兜底持久化不再在队列层：ParsePipeline.Run 自行写 failed 终态；
 //     River 对返回 error 的 job 走重试 / rescue / discard。
 type RiverQueue struct {
-	client                 *river.Client[pgx.Tx]
-	pool                   *pgxpool.Pool
-	logger                 *slog.Logger
-	translationJobsRollout model.TranslationJobsRolloutStage
+	client *river.Client[pgx.Tx]
+	pool   *pgxpool.Pool
+	logger *slog.Logger
 }
 
 // NewRiverQueue 构造 River 客户端并注册解析 worker。它不启动客户端——调用
 // Start 才开始拉取 / 执行 job。Pool 与 Processor 必填。
 func NewRiverQueue(opts RiverQueueOptions) (*RiverQueue, error) {
-	rollout, maxWorkers, err := normalizeRiverQueueOptions(&opts)
+	maxWorkers, err := normalizeRiverQueueOptions(&opts)
 	if err != nil {
 		return nil, err
 	}
-	translationPolicy := rollout.JobPolicy()
-
-	workers, err := registerRiverWorkers(opts, rollout, translationPolicy)
-	if err != nil {
-		return nil, err
-	}
+	workers := registerRiverWorkers(opts)
 
 	client, err := river.NewClient(
 		riverpgxv5.New(opts.Pool),
-		newRiverClientConfig(opts, workers, maxWorkers, translationPolicy),
+		newRiverClientConfig(opts, workers, maxWorkers),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("river queue: new client: %w", err)
 	}
 
 	return &RiverQueue{
-		client:                 client,
-		pool:                   opts.Pool,
-		logger:                 opts.Logger,
-		translationJobsRollout: rollout,
+		client: client,
+		pool:   opts.Pool,
+		logger: opts.Logger,
 	}, nil
 }
 
 // normalizeRiverQueueOptions validates the required options and fills the
-// defaults in place, returning the effective rollout stage and worker count.
+// defaults in place, returning the effective worker count.
 // Every default is applied only after the check that guards it, so a caller
 // still sees the same first rejection it would have seen with no defaulting at
 // all. opts is a pointer so the retention default reaches the river.Config
 // built afterwards.
-func normalizeRiverQueueOptions(opts *RiverQueueOptions) (model.TranslationJobsRolloutStage, int, error) {
+func normalizeRiverQueueOptions(opts *RiverQueueOptions) (int, error) {
 	if opts.Pool == nil {
-		return "", 0, fmt.Errorf("river queue: pool is required")
+		return 0, fmt.Errorf("river queue: pool is required")
 	}
 	if opts.Processor == nil {
-		return "", 0, fmt.Errorf("river queue: processor is required")
-	}
-	rollout := opts.TranslationJobsRollout
-	if rollout == "" {
-		rollout = model.TranslationJobsRolloutStrictV2
-	} else if !rollout.Valid() {
-		return "", 0, fmt.Errorf("river queue: invalid translation jobs rollout stage %q", rollout)
+		return 0, fmt.Errorf("river queue: processor is required")
 	}
 	maxWorkers := opts.MaxWorkers
 	if maxWorkers <= 0 {
 		maxWorkers = 1
 	}
 	if opts.TerminalJobRetention < -1 {
-		return "", 0, fmt.Errorf("river queue: terminal job retention cannot be less than -1")
+		return 0, fmt.Errorf("river queue: terminal job retention cannot be less than -1")
 	}
 	if opts.TerminalJobRetention == 0 {
 		opts.TerminalJobRetention = defaultTerminalJobRetention
 	}
-	return rollout, maxWorkers, nil
+	return maxWorkers, nil
 }
 
-// registerRiverWorkers builds the worker registry for the compatibility set the
-// rollout selected. Translation workers appear only when a processor is wired,
-// which keeps parse-only test harnesses free of translation dependencies; a
-// legacy worker without its attempt resolver must fail here rather than at
-// client construction, since such a worker would pick up legacy jobs it cannot
-// resolve to a persisted attempt.
-func registerRiverWorkers(
-	opts RiverQueueOptions,
-	rollout model.TranslationJobsRolloutStage,
-	translationPolicy model.TranslationJobsPolicy,
-) (*river.Workers, error) {
+// registerRiverWorkers keeps translation and Inbox optional for parse-only test
+// harnesses. Production wiring supplies all three processors.
+func registerRiverWorkers(opts RiverQueueOptions) *river.Workers {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, service.NewParseLinkWorker(opts.Processor, opts.JobTimeout))
 	if opts.TranslationProcessor != nil {
-		if translationPolicy.RegisterLegacyWorker {
-			if opts.TranslationAttempts == nil {
-				return nil, fmt.Errorf("river queue: legacy translation attempt resolver is required during %s rollout", rollout)
-			}
-			river.AddWorker(workers, linktranslation.NewLegacyWorker(
-				opts.TranslationAttempts,
-				opts.TranslationProcessor,
-				opts.TranslationJobTimeout,
-				opts.Logger,
-			))
-		}
-		if translationPolicy.RegisterV2Worker {
-			river.AddWorker(workers, newTranslationV2Worker(opts))
-		}
+		river.AddWorker(workers, newTranslationWorker(opts))
 	}
 	if opts.ReaderInboxProcessor != nil {
 		river.AddWorker(workers, service.NewReaderInboxSummaryWorker(opts.ReaderInboxProcessor, service.ReaderInboxSummaryJobTimeout))
-		if expiryProcessor, ok := opts.ReaderInboxProcessor.(service.ReaderInboxExpiryJobProcessor); ok {
-			river.AddWorker(workers, NewReaderInboxExpiryWorker(expiryProcessor, service.ReaderInboxExpiryJobTimeout))
-		}
 	}
-	if opts.LinkEmbeddingBackfill != nil {
-		river.AddWorker(workers, NewLinkEmbeddingBackfillWorker(opts.LinkEmbeddingBackfill, service.LinkEmbeddingBackfillJobTimeout))
-	}
-	if opts.ContentHistoryRetention != nil {
-		river.AddWorker(workers, NewContentHistoryRetentionWorker(
-			opts.ContentHistoryRetention,
-			ContentHistoryRetentionJobTimeout,
-			opts.Logger,
-			opts.Metrics,
-		))
-	}
-	return workers, nil
+	return workers
 }
 
-func newTranslationV2Worker(opts RiverQueueOptions) *linktranslation.Worker {
+func newTranslationWorker(opts RiverQueueOptions) *linktranslation.Worker {
 	return linktranslation.NewWorkerWithOptions(
 		opts.TranslationProcessor,
 		linktranslation.WorkerOptions{
@@ -294,31 +205,12 @@ func newTranslationV2Worker(opts RiverQueueOptions) *linktranslation.Worker {
 	)
 }
 
-// TranslationJobsRollout returns the immutable stage that selects both this
-// queue's worker set/job wire format and the translation service's scheduling
-// gate. The service reads it from the queue so the two decisions cannot be
-// configured independently at the composition root.
-func (q *RiverQueue) TranslationJobsRollout() model.TranslationJobsRolloutStage {
-	return q.translationJobsRollout
-}
-
 func newRiverClientConfig(
 	opts RiverQueueOptions,
 	workers *river.Workers,
 	maxWorkers int,
-	translationPolicy model.TranslationJobsPolicy,
 ) *river.Config {
-	registrations := riverPeriodicJobRegistrations(opts)
-	periodicJobs := make([]*river.PeriodicJob, 0, len(registrations))
-	for _, registration := range registrations {
-		periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-			river.PeriodicInterval(registration.interval),
-			registration.constructor,
-			&river.PeriodicJobOpts{ID: registration.id, RunOnStart: registration.runOnStart},
-		))
-	}
 	return &river.Config{
-		PeriodicJobs: periodicJobs,
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: maxWorkers},
 		},
@@ -332,63 +224,19 @@ func newRiverClientConfig(
 		RescueStuckJobsAfter: opts.RescueAfter,
 		Logger:               opts.Logger,
 		ErrorHandler: &riverErrorHandler{
-			processor:                 opts.Processor,
-			translationProcessor:      opts.TranslationProcessor,
-			legacyTranslationAttempts: opts.TranslationAttempts,
-			translationPolicy:         translationPolicy,
-			logger:                    opts.Logger,
+			processor: opts.Processor,
+			logger:    opts.Logger,
 		},
 	}
 }
 
-type riverPeriodicJobRegistration struct {
-	id          string
-	interval    time.Duration
-	runOnStart  bool
-	constructor river.PeriodicJobConstructor
-}
-
-func riverPeriodicJobRegistrations(opts RiverQueueOptions) []riverPeriodicJobRegistration {
-	registrations := make([]riverPeriodicJobRegistration, 0, 3)
-	if _, ok := opts.ReaderInboxProcessor.(service.ReaderInboxExpiryJobProcessor); ok {
-		registrations = append(registrations, riverPeriodicJobRegistration{
-			id: service.ReaderInboxExpiryJobKind, interval: service.ReaderInboxExpiryInterval, runOnStart: true,
-			constructor: func() (river.JobArgs, *river.InsertOpts) {
-				return service.ReaderInboxExpiryJobArgs{BatchSize: service.ReaderInboxExpiryBatchSize}, nil
-			},
-		})
-	}
-	if opts.LinkEmbeddingBackfill != nil {
-		registrations = append(registrations, riverPeriodicJobRegistration{
-			id: service.LinkEmbeddingBackfillJobKind, interval: service.LinkEmbeddingBackfillInterval, runOnStart: true,
-			constructor: func() (river.JobArgs, *river.InsertOpts) {
-				return service.LinkEmbeddingBackfillJobArgs{}, nil
-			},
-		})
-	}
-	if opts.ContentHistoryRetention != nil {
-		registrations = append(registrations, riverPeriodicJobRegistration{
-			id: ContentHistoryRetentionJobKind, interval: ContentHistoryRetentionInterval, runOnStart: true,
-			constructor: func() (river.JobArgs, *river.InsertOpts) {
-				return ContentHistoryRetentionJobArgs{}, nil
-			},
-		})
-	}
-	return registrations
-}
-
 type riverErrorHandler struct {
-	processor                 service.ParseProcessor
-	translationProcessor      linktranslation.JobProcessor
-	legacyTranslationAttempts linktranslation.LegacyAttemptResolver
-	translationPolicy         model.TranslationJobsPolicy
-	logger                    *slog.Logger
+	processor service.ParseProcessor
+	logger    *slog.Logger
 }
 
 func (h *riverErrorHandler) HandleError(ctx context.Context, job *rivertype.JobRow, workErr error) *river.ErrorHandlerResult {
-	if h.projectFinalFailure(ctx, job, workErr) {
-		return &river.ErrorHandlerResult{SetCancelled: true}
-	}
+	h.projectFinalFailure(ctx, job, workErr)
 	return nil
 }
 
@@ -397,172 +245,26 @@ func (h *riverErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobR
 	return nil
 }
 
-func (h *riverErrorHandler) projectFinalFailure(ctx context.Context, job *rivertype.JobRow, cause error) bool {
+func (h *riverErrorHandler) projectFinalFailure(ctx context.Context, job *rivertype.JobRow, cause error) {
 	if job == nil {
-		return false
-	}
-	if handled, cancelJob := h.handleTranslationTerminal(ctx, job, cause); handled {
-		return cancelJob
+		return
 	}
 	if job.Attempt < job.MaxAttempts {
-		return false
+		return
 	}
 	if job.Kind != (service.ParseLinkArgs{}).Kind() {
-		return false
+		return
 	}
 	var args service.ParseLinkArgs
-	if err := json.Unmarshal(job.EncodedArgs, &args); err != nil || args.LinkID == uuid.Nil || args.ParseJobID == uuid.Nil {
+	if err := json.Unmarshal(job.EncodedArgs, &args); err != nil || args.LinkID == uuid.Nil || args.ParseGeneration <= 0 || args.ExpectedMetadataRevision <= 0 {
 		if h.logger != nil {
 			h.logger.Error("river discarded parse job with invalid args", "river_job_id", job.ID)
 		}
-		return false
-	}
-	if err := h.processor.RecordDiscard(ctx, args.LinkID, args.ParseJobID, cause); err != nil && h.logger != nil {
-		h.logger.Error("failed to project discarded parse job", "river_job_id", job.ID, "link_id", args.LinkID.String(), "parse_job_id", args.ParseJobID.String())
-	}
-	return false
-}
-
-func (h *riverErrorHandler) handleTranslationTerminal(ctx context.Context, job *rivertype.JobRow, cause error) (bool, bool) {
-	var project func(context.Context, *rivertype.JobRow, error, bool)
-	switch job.Kind {
-	case (linktranslation.JobArgs{}).Kind():
-		project = h.projectV2TranslationTerminal
-	case (linktranslation.LegacyJobArgs{}).Kind():
-		if !h.translationPolicy.RegisterLegacyWorker {
-			return true, false
-		}
-		project = h.projectLegacyTranslationTerminal
-	default:
-		return false, false
-	}
-
-	if errors.Is(cause, rivertype.ErrJobCancelledRemotely) {
-		return true, false
-	}
-	if errors.Is(cause, errsafe.ErrUnsafeTarget) {
-		project(ctx, job, cause, false)
-		return true, true
-	}
-	if errors.Is(cause, context.Canceled) {
-		// River cancels the error context before terminal projection. Let the product
-		// state update outlive that cancellation, while bounding it with a timeout.
-		projectionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), translationTerminalProjectionTimeout)
-		defer cancel()
-		project(projectionCtx, job, cause, true)
-		return true, true
-	} else if job.Attempt >= job.MaxAttempts {
-		project(ctx, job, cause, false)
-	}
-	return true, false
-}
-
-func (h *riverErrorHandler) projectV2TranslationTerminal(ctx context.Context, job *rivertype.JobRow, cause error, cancelled bool) {
-	if h.translationProcessor == nil {
 		return
 	}
-	resolution := translationAttemptFromV2Job(job)
-	if resolution.Rejected() {
-		h.logTranslationTerminalRejection(ctx, job, resolution.Rejection)
-		return
+	if err := h.processor.RecordDiscard(ctx, args.Attempt(), cause); err != nil && h.logger != nil {
+		h.logger.Error("failed to project discarded parse job", "river_job_id", job.ID, "link_id", args.LinkID.String(), "parse_generation", args.ParseGeneration)
 	}
-	h.projectResolvedTranslationTerminal(ctx, resolution.Attempt, cause, cancelled, "v2")
-}
-
-func (h *riverErrorHandler) projectLegacyTranslationTerminal(ctx context.Context, job *rivertype.JobRow, cause error, cancelled bool) {
-	if h.translationProcessor == nil || h.legacyTranslationAttempts == nil {
-		return
-	}
-	if job == nil || job.ID <= 0 {
-		h.logTranslationTerminalRejection(ctx, job, model.TranslationAttemptRejectionInvalidRiverJobID)
-		return
-	}
-	if job.Kind != (linktranslation.LegacyJobArgs{}).Kind() {
-		h.logTranslationTerminalRejection(ctx, job, model.TranslationAttemptRejectionKindMismatch)
-		return
-	}
-	var args linktranslation.LegacyJobArgs
-	if err := json.Unmarshal(job.EncodedArgs, &args); err != nil {
-		h.logTranslationTerminalRejection(ctx, job, model.TranslationAttemptRejectionMalformedArgs)
-		return
-	}
-	if args.TranslationID == uuid.Nil {
-		h.logTranslationTerminalRejection(ctx, job, model.TranslationAttemptRejectionMissingTranslationID)
-		return
-	}
-	resolution, err := linktranslation.ResolveLegacyAttempt(
-		ctx, h.legacyTranslationAttempts, args, job.ID,
-	)
-	if err != nil {
-		if h.logger != nil {
-			h.logger.ErrorContext(ctx, "failed to resolve legacy translation attempt",
-				"river_job_id", job.ID,
-				"translation_id", args.TranslationID.String(),
-			)
-		}
-		return
-	}
-	if resolution.Rejected() {
-		h.logTranslationTerminalRejection(ctx, job, resolution.Rejection)
-		return
-	}
-	h.projectResolvedTranslationTerminal(ctx, resolution.Attempt, cause, cancelled, "legacy")
-}
-
-func (h *riverErrorHandler) projectResolvedTranslationTerminal(
-	ctx context.Context,
-	attempt model.TranslationAttempt,
-	cause error,
-	cancelled bool,
-	protocol string,
-) {
-	projection := "failure"
-	if cancelled {
-		projection = "cancellation"
-	}
-	var err error
-	if cancelled {
-		err = h.translationProcessor.RecordCancellation(ctx, attempt, cause)
-	} else {
-		err = h.translationProcessor.RecordDiscard(ctx, attempt, cause)
-	}
-	if err != nil && h.logger != nil {
-		h.logger.ErrorContext(ctx, "failed to project terminal translation job",
-			"protocol", protocol,
-			"projection", projection,
-			"river_job_id", attempt.RiverJobID,
-			"translation_id", attempt.TranslationID.String(),
-		)
-	}
-}
-
-func translationAttemptFromV2Job(job *rivertype.JobRow) model.TranslationAttemptResolution {
-	return linktranslation.ResolveV2Attempt(job)
-}
-
-func rejectedTranslationAttemptResolution(reason model.TranslationAttemptRejectionReason) model.TranslationAttemptResolution {
-	return model.TranslationAttemptResolution{Rejection: reason}
-}
-
-func (h *riverErrorHandler) logTranslationTerminalRejection(
-	ctx context.Context,
-	job *rivertype.JobRow,
-	reason model.TranslationAttemptRejectionReason,
-) {
-	if h.logger == nil {
-		return
-	}
-	var riverJobID int64
-	var kind string
-	if job != nil {
-		riverJobID = job.ID
-		kind = job.Kind
-	}
-	h.logger.WarnContext(ctx, "translation terminal projection rejected",
-		"reason", reason.String(),
-		"river_job_id", riverJobID,
-		"kind", kind,
-	)
 }
 
 // Enqueue 在自有事务里插入一条解析 job（非事务调用方用，如 Refresh）。
@@ -570,40 +272,30 @@ func (h *riverErrorHandler) logTranslationTerminalRejection(
 //
 // 返回 ErrQueueClosed 的时机：River 客户端已停机时 Insert 会报错——这里不
 // 强行区分，统一冒泡原始错误即可，上层只关心「入队是否成功」。
-func (q *RiverQueue) Enqueue(ctx context.Context, linkID, parseJobID uuid.UUID) error {
-	_, err := q.client.Insert(ctx, parseLinkArgs(linkID, parseJobID), nil)
+func (q *RiverQueue) Enqueue(ctx context.Context, attempt model.ParseAttempt) error {
+	_, err := q.client.Insert(ctx, parseLinkArgs(attempt), nil)
 	if err != nil {
-		return fmt.Errorf("river enqueue link %s: %w", linkID, err)
-	}
-	return nil
-}
-
-// EnqueueReaderInboxSummary inserts a durable Inbox summary job. The job
-// identity and captured metadata revision are already persisted by the Reader
-// repository; River's unique active-state policy makes enqueue retries safe.
-func (q *RiverQueue) EnqueueReaderInboxSummary(ctx context.Context, args service.ReaderInboxSummaryJobArgs) error {
-	if _, err := q.client.Insert(ctx, args, nil); err != nil {
-		return fmt.Errorf("river enqueue Reader inbox job %s: %w", args.JobID, err)
+		return fmt.Errorf("river enqueue link %s generation %d: %w", attempt.LinkID, attempt.Generation, err)
 	}
 	return nil
 }
 
 // EnqueueReaderInboxSummaryTx inserts proposal work in the caller's product
-// transaction. A rollback removes both the reader_inbox_jobs attempt and the
+// transaction. A rollback removes both the Inbox proposal transition and the
 // River row; a commit makes both visible together.
 func (q *RiverQueue) EnqueueReaderInboxSummaryTx(ctx context.Context, tx pgx.Tx, args service.ReaderInboxSummaryJobArgs) error {
 	if _, err := q.client.InsertTx(ctx, tx, args, nil); err != nil {
-		return fmt.Errorf("river enqueue Reader inbox job %s (tx): %w", args.JobID, err)
+		return fmt.Errorf("river enqueue Reader inbox %s revision %d (tx): %w", args.InboxID, args.ExpectedMetadataRevision, err)
 	}
 	return nil
 }
 
-// EnqueueTranslation inserts a durable rollout-selected translation job in its
-// own transaction. Production request handling uses EnqueueTranslationTx so
+// EnqueueTranslation inserts a durable translation job in its own transaction.
+// Production request handling uses EnqueueTranslationTx so
 // the pending state transition and River insert commit atomically; this adapter
 // is retained for explicit maintenance and integration-test scheduling.
 func (q *RiverQueue) EnqueueTranslation(ctx context.Context, seed model.TranslationAttemptSeed) (int64, error) {
-	args, err := translationArgsFromSeed(seed, q.translationJobsRollout.JobPolicy().ScheduleProtocol)
+	args, err := translationArgsFromSeed(seed)
 	if err != nil {
 		return 0, err
 	}
@@ -614,8 +306,8 @@ func (q *RiverQueue) EnqueueTranslation(ctx context.Context, seed model.Translat
 	return translationInsertResultID(result, seed.TranslationID)
 }
 
-// EnqueueTranslationTx applies a rollout-selected scheduling command in the
-// caller's transaction. When Previous is present it is cancelled before Seed
+// EnqueueTranslationTx applies a scheduling command in the caller's
+// transaction. When Previous is present it is cancelled before Seed
 // is inserted, so rollback restores the old job together with product state.
 func (q *RiverQueue) EnqueueTranslationTx(ctx context.Context, tx pgx.Tx, command model.TranslationScheduleCommand) (int64, error) {
 	seed := command.Seed
@@ -631,7 +323,7 @@ func (q *RiverQueue) EnqueueTranslationTx(ctx context.Context, tx pgx.Tx, comman
 		}
 	}
 
-	args, err := translationArgsFromSeed(seed, q.translationJobsRollout.JobPolicy().ScheduleProtocol)
+	args, err := translationArgsFromSeed(seed)
 	if err != nil {
 		return 0, err
 	}
@@ -655,10 +347,10 @@ func translationInsertResultID(result *rivertype.JobInsertResult, translationID 
 // EnqueueTx 在调用方提供的事务里插入解析 job，实现「入队与 link 写同事务」。
 // tx 必须由同一个 Pool 开出。事务回滚则 job 不入库（River 的快照可见性保证
 // 跨事务，未提交的 job 不会被 worker 拉取）。
-func (q *RiverQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, linkID, parseJobID uuid.UUID) error {
-	_, err := q.client.InsertTx(ctx, tx, parseLinkArgs(linkID, parseJobID), nil)
+func (q *RiverQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, attempt model.ParseAttempt) error {
+	_, err := q.client.InsertTx(ctx, tx, parseLinkArgs(attempt), nil)
 	if err != nil {
-		return fmt.Errorf("river enqueue link %s (tx): %w", linkID, err)
+		return fmt.Errorf("river enqueue link %s generation %d (tx): %w", attempt.LinkID, attempt.Generation, err)
 	}
 	return nil
 }
@@ -667,14 +359,13 @@ func (q *RiverQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, linkID, parseJobI
 // the caller's requeue transaction. River immediately finalizes queued jobs;
 // running jobs receive cancel_attempted_at plus a transactional NOTIFY so the
 // worker that owns them cancels its context after commit.
-func (q *RiverQueue) CancelActiveTx(ctx context.Context, tx pgx.Tx, linkID, keepParseJobID uuid.UUID) error {
-	keep := keepParseJobID.String()
-	return q.cancelActiveForLinksTx(ctx, tx, []uuid.UUID{linkID}, &keep)
+func (q *RiverQueue) CancelActiveTx(ctx context.Context, tx pgx.Tx, linkID uuid.UUID) error {
+	return q.cancelActiveForLinksTx(ctx, tx, []uuid.UUID{linkID})
 }
 
 // CancelAllActiveTx cancels every active River parse and translation row for
 // linkID. It is the delete counterpart of CancelActiveTx: no attempt is
-// retained, including legacy parse rows whose args omit parse_job_id.
+// retained, including rows created by older argument protocols.
 func (q *RiverQueue) CancelAllActiveTx(ctx context.Context, tx pgx.Tx, linkID uuid.UUID) error {
 	return q.cancelAllActiveForLinksTx(ctx, tx, []uuid.UUID{linkID})
 }
@@ -683,7 +374,7 @@ func (q *RiverQueue) cancelAllActiveForLinksTx(ctx context.Context, tx pgx.Tx, l
 	if len(linkIDs) == 0 {
 		return nil
 	}
-	jobIDs, err := q.activeParseJobIDsForLinks(ctx, tx, linkIDs, nil)
+	jobIDs, err := q.activeParseRiverJobIDsForLinks(ctx, tx, linkIDs)
 	if err != nil {
 		return err
 	}
@@ -695,28 +386,27 @@ func (q *RiverQueue) cancelAllActiveForLinksTx(ctx context.Context, tx pgx.Tx, l
 	return q.cancelRiverJobsTx(ctx, tx, jobIDs)
 }
 
-func (q *RiverQueue) cancelActiveForLinksTx(ctx context.Context, tx pgx.Tx, linkIDs []uuid.UUID, keepParseJobID *string) error {
+func (q *RiverQueue) cancelActiveForLinksTx(ctx context.Context, tx pgx.Tx, linkIDs []uuid.UUID) error {
 	if len(linkIDs) == 0 {
 		return nil
 	}
-	jobIDs, err := q.activeParseJobIDsForLinks(ctx, tx, linkIDs, keepParseJobID)
+	jobIDs, err := q.activeParseRiverJobIDsForLinks(ctx, tx, linkIDs)
 	if err != nil {
 		return err
 	}
 	return q.cancelRiverJobsTx(ctx, tx, jobIDs)
 }
 
-func (q *RiverQueue) activeParseJobIDsForLinks(ctx context.Context, tx pgx.Tx, linkIDs []uuid.UUID, keepParseJobID *string) ([]int64, error) {
+func (q *RiverQueue) activeParseRiverJobIDsForLinks(ctx context.Context, tx pgx.Tx, linkIDs []uuid.UUID) ([]int64, error) {
 	encodedLinkIDs := make([]string, 0, len(linkIDs))
 	for _, linkID := range linkIDs {
 		encodedLinkIDs = append(encodedLinkIDs, linkID.String())
 	}
 	rows, err := tx.Query(
 		ctx,
-		selectActiveParseJobsForLinksSQL,
+		selectActiveParseRiverJobsForLinksSQL,
 		(service.ParseLinkArgs{}).Kind(),
 		encodedLinkIDs,
-		keepParseJobID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list active River parse attempts for %d links: %w", len(linkIDs), err)
@@ -746,10 +436,7 @@ func activeTranslationJobIDsForLinks(ctx context.Context, tx pgx.Tx, linkIDs []u
 	rows, err := tx.Query(
 		ctx,
 		selectActiveTranslationJobsForLinksSQL,
-		[]string{
-			(linktranslation.LegacyJobArgs{}).Kind(),
-			(linktranslation.JobArgs{}).Kind(),
-		},
+		(linktranslation.JobArgs{}).Kind(),
 		encodedLinkIDs,
 	)
 	if err != nil {

@@ -52,8 +52,8 @@ func (f *fakeContentStore) UpdateContentIfCurrent(_ context.Context, id uuid.UUI
 	}
 	return f.record(id, content), true, nil
 }
-func (f *fakeContentStore) ReplaceContentIfCurrent(_ context.Context, id uuid.UUID, expectedUpdatedAt time.Time, content model.SavedContent) (int64, bool, error) {
-	if f.link == nil || f.link.Status != model.LinkStatusDone || !f.link.UpdatedAt.Equal(expectedUpdatedAt) {
+func (f *fakeContentStore) ReplaceContentIfCurrentWithRevision(_ context.Context, id uuid.UUID, expectedUpdatedAt time.Time, expectedContentRevision int64, content model.SavedContent) (int64, bool, error) {
+	if f.link == nil || f.link.Status != model.LinkStatusDone || !f.link.UpdatedAt.Equal(expectedUpdatedAt) || f.link.ContentRevision != expectedContentRevision {
 		return 0, false, nil
 	}
 	return f.record(id, content), true, nil

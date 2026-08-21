@@ -76,8 +76,11 @@ func TestReaderThoughtSearchPostgresSnapshotAndCursorContract(t *testing.T) {
 	const mutableSentinel = "mutable-sentinel-must-not-search"
 	const malformedSnapshotSentinel = "malformed-snapshot-must-not-search"
 	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO reader_thoughts (id,host_kind,host_id,target,quote,body,source,deleted,last_sequence,created_at,updated_at)
-		VALUES ($1,'note','malformed-host','{"kind":"note"}'::jsonb,'{"exact":"mutable quote"}'::jsonb,$2,$3,false,1,$4,$4)`,
+		INSERT INTO reader_thoughts (
+			id,host_kind,host_id,target,quote,body,source,deleted,last_sequence,created_at,updated_at,
+			winner_logical_clock,winner_device_id,winner_op_id
+		)
+		VALUES ($1,'note','malformed-host','{"kind":"note"}'::jsonb,'{"exact":"mutable quote"}'::jsonb,$2,$3,false,1,$4,$4,1,'search-fixture',$1)`,
 		malformedThoughtID, mutableSentinel, mutableSentinel, updatedAt,
 	); err != nil {
 		t.Fatalf("seed malformed search thought: %v", err)
@@ -124,10 +127,9 @@ func TestReaderThoughtSearchPostgresSnapshotAndCursorContract(t *testing.T) {
 	for number := 1; number <= 21; number++ {
 		seedReaderThoughtSearchFixture(t, pool, fmt.Sprintf("page-%02d", number), "cursor-page-token", "page-source", "page quote", false, updatedAt, nil)
 	}
-	searchService := service.NewLibrarySearchServiceWithMetricsAndOptions(
-		repository.NewPGXLinkRepository(pool), repository.NewPGXSiteRepository(pool), nil, nil,
+	searchService := service.NewLibrarySearchService(
+		repository.NewPGXLinkRepository(pool), repository.NewPGXSiteRepository(pool), repo,
 		service.LibrarySearchServiceOptions{CursorSigningKey: "dbintegration-thought-search-key"},
-		repo,
 	)
 	installationA := thoughtSearchIdentityContext(t, "40000000-0000-0000-0000-000000000004")
 	installationB := thoughtSearchIdentityContext(t, "50000000-0000-0000-0000-000000000005")
@@ -152,8 +154,14 @@ func TestReaderThoughtSearchPostgresSnapshotAndCursorContract(t *testing.T) {
 	// must not enter the stream, and a later lifecycle snapshot must not replace
 	// the active projection until a fresh search begins.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO reader_thoughts (id,host_kind,host_id,target,quote,body,source,deleted,last_sequence,created_at,updated_at)
-		VALUES ('page-00-late','note','host-page-00-late','{"kind":"note"}'::jsonb,'{}'::jsonb,'cursor-page-token','page-source',false,2,NOW(),$1)`,
+		INSERT INTO reader_thoughts (
+			id,host_kind,host_id,target,quote,body,source,deleted,last_sequence,created_at,updated_at,
+			winner_logical_clock,winner_device_id,winner_op_id
+		)
+		VALUES (
+			'page-00-late','note','host-page-00-late','{"kind":"note"}'::jsonb,'{}'::jsonb,
+			'cursor-page-token','page-source',false,2,NOW(),$1,1,'search-fixture','page-00-late'
+		)`,
 		updatedAt,
 	); err != nil {
 		t.Fatalf("seed post-snapshot thought: %v", err)
@@ -199,7 +207,7 @@ func TestReaderThoughtSearchPostgresSnapshotAndCursorContract(t *testing.T) {
 
 func thoughtSearchIdentityContext(t *testing.T, installationID string) context.Context {
 	t.Helper()
-	identity, err := representation.NewClientIdentity(representation.VersionBase{RepresentationNamespace: uuid.MustParse(installationID)})
+	identity, err := representation.NewClientIdentity(uuid.MustParse(installationID))
 	if err != nil {
 		t.Fatalf("NewClientIdentity(%q): %v", installationID, err)
 	}
@@ -283,8 +291,11 @@ func seedReaderThoughtSearchFixture(
 ) {
 	t.Helper()
 	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO reader_thoughts (id,host_kind,host_id,target,quote,body,source,deleted,last_sequence,created_at,updated_at)
-		VALUES ($1,'note',$2,'{"kind":"note"}'::jsonb,$3::jsonb,$4,$5,$6,1,$7,$7)`,
+		INSERT INTO reader_thoughts (
+			id,host_kind,host_id,target,quote,body,source,deleted,last_sequence,created_at,updated_at,
+			winner_logical_clock,winner_device_id,winner_op_id
+		)
+		VALUES ($1,'note',$2,'{"kind":"note"}'::jsonb,$3::jsonb,$4,$5,$6,1,$7,$7,1,'search-fixture',$1)`,
 		id, "host-"+id, readerVNextJSON(t, map[string]string{"exact": quote}), body, source, deleted, updatedAt,
 	); err != nil {
 		t.Fatalf("seed thought %q: %v", id, err)

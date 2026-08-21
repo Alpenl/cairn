@@ -256,7 +256,6 @@ class SettingsSnapshotLoaderTest {
     private fun recent(url: String, linkId: String, notBefore: Long) = RecentResult(
         url = url,
         linkId = linkId,
-        jobId = null,
         status = "failed",
         createdAt = 1_000,
         identity = QueueIdentity("https://old.example", "old-namespace"),

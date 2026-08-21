@@ -23,7 +23,6 @@ func TestTranslatorHTTPSDowngradeIsSanitizedAndNotReplayed(t *testing.T) {
 
 	calls := 0
 	providerClient := fetcher.NewHTTPClientWithOptions(fetcher.HTTPClientOptions{
-		AllowUnsafeTargets: true,
 		Client: &http.Client{Transport: translatorRedirectRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls++
 			if calls > 1 {
@@ -40,7 +39,7 @@ func TestTranslatorHTTPSDowngradeIsSanitizedAndNotReplayed(t *testing.T) {
 		})},
 	}).Raw()
 	client := NewOpenAITranslator(Options{
-		BaseURL:        "https://provider.example",
+		BaseURL:        "https://8.8.8.8",
 		APIKey:         "fictional-translation-key",
 		Model:          "translation-test",
 		HTTPClient:     providerClient,

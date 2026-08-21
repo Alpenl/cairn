@@ -43,9 +43,9 @@ func TestSavedContentGenerationMatrix(t *testing.T) { //nolint:gocyclo // each t
 				fixture := newSavedGenerationFixture(t, repo, "replace", true)
 				before := readSavedGeneration(t, repo, fixture.linkID)
 				body := generationBody("replacement body", true)
-				revision, replaced, err := repo.ReplaceContentIfCurrent(t.Context(), fixture.linkID, fixture.parsedAt, body)
+				revision, replaced, err := repo.ReplaceContentIfCurrentWithRevision(t.Context(), fixture.linkID, fixture.parsedAt, before.revision, body)
 				if err != nil || !replaced {
-					t.Fatalf("ReplaceContentIfCurrent() = revision %d, replaced %v, error %v; want replaced", revision, replaced, err)
+					t.Fatalf("ReplaceContentIfCurrentWithRevision() = revision %d, replaced %v, error %v; want replaced", revision, replaced, err)
 				}
 				return generationOutcome(fixture.linkID, before, 1, bodyIdentity(body)).withReturnedRevision(revision)
 			},
@@ -79,9 +79,9 @@ func TestSavedContentGenerationMatrix(t *testing.T) { //nolint:gocyclo // each t
 			mutate: func(t *testing.T, repo *savedGenerationHarness) savedGenerationOutcome {
 				fixture := newSavedGenerationFixture(t, repo, "replace-cas-loss", true)
 				before := readSavedGeneration(t, repo, fixture.linkID)
-				revision, replaced, err := repo.ReplaceContentIfCurrent(t.Context(), fixture.linkID, fixture.parsedAt.Add(time.Hour), generationBody("stale replacement", true))
+				revision, replaced, err := repo.ReplaceContentIfCurrentWithRevision(t.Context(), fixture.linkID, fixture.parsedAt.Add(time.Hour), before.revision, generationBody("stale replacement", true))
 				if err != nil || replaced || revision != 0 {
-					t.Fatalf("stale ReplaceContentIfCurrent() = revision %d, replaced %v, error %v; want 0, false, nil", revision, replaced, err)
+					t.Fatalf("stale ReplaceContentIfCurrentWithRevision() = revision %d, replaced %v, error %v; want 0, false, nil", revision, replaced, err)
 				}
 				return generationOutcome(fixture.linkID, before, 0, before.body)
 			},
@@ -92,7 +92,7 @@ func TestSavedContentGenerationMatrix(t *testing.T) { //nolint:gocyclo // each t
 				fixture := newSavedGenerationFixture(t, repo, "capture-requeue", true)
 				before := readSavedGeneration(t, repo, fixture.linkID)
 				captureText := "new browser capture"
-				job, err := repo.RequeueExisting(t.Context(), fixture.linkID, &repository.CreateLinkParams{
+				attempt, err := requeueLinkForTest(t.Context(), repo.pool, repo.PGXLinkRepository, fixture.linkID, &repository.CreateLinkParams{
 					URL:                  fixture.url,
 					SourceKind:           "browser_capture",
 					SourceKey:            fixture.url,
@@ -100,8 +100,8 @@ func TestSavedContentGenerationMatrix(t *testing.T) { //nolint:gocyclo // each t
 					Status:               model.LinkStatusPending,
 					RequestedLibraryKind: model.RequestedLibraryKindReading,
 				})
-				if err != nil || job == nil {
-					t.Fatalf("RequeueExistingTx(capture) = %#v, %v", job, err)
+				if err != nil || attempt.Generation <= fixture.attempt.Generation {
+					t.Fatalf("RequeueExistingTx(capture) = %#v, %v", attempt, err)
 				}
 				return generationOutcome(fixture.linkID, before, 1, absentGenerationBody()).withStatus(model.LinkStatusPending)
 			},
@@ -111,9 +111,9 @@ func TestSavedContentGenerationMatrix(t *testing.T) { //nolint:gocyclo // each t
 			mutate: func(t *testing.T, repo *savedGenerationHarness) savedGenerationOutcome {
 				fixture := newSavedGenerationFixture(t, repo, "refresh-requeue", true)
 				before := readSavedGeneration(t, repo, fixture.linkID)
-				job, err := repo.RequeueExisting(t.Context(), fixture.linkID, nil)
-				if err != nil || job == nil {
-					t.Fatalf("RequeueExistingTx(refresh) = %#v, %v", job, err)
+				attempt, err := requeueLinkForTest(t.Context(), repo.pool, repo.PGXLinkRepository, fixture.linkID, nil)
+				if err != nil || attempt.Generation <= fixture.attempt.Generation {
+					t.Fatalf("RequeueExistingTx(refresh) = %#v, %v", attempt, err)
 				}
 				return generationOutcome(fixture.linkID, before, 0, before.body).withStatus(model.LinkStatusPending)
 			},
@@ -145,7 +145,7 @@ func TestSavedContentGenerationMatrix(t *testing.T) { //nolint:gocyclo // each t
 				fixture := newAutomaticSavedGenerationFixture(t, repo, "site-complete", true)
 				mustMarkGenerationParseProcessing(t, repo, fixture)
 				before := readSavedGeneration(t, repo, fixture.linkID)
-				result, err := repo.CompleteSiteParse(t.Context(), generationSiteParseParams(fixture, true), fixture.jobID)
+				result, err := repo.CompleteSiteParse(t.Context(), generationSiteParseParams(fixture, true))
 				if err != nil || result.SiteID == uuid.Nil || result.EntryID == uuid.Nil {
 					t.Fatalf("CompleteSiteParse() = %#v, %v", result, err)
 				}
@@ -160,7 +160,7 @@ func TestSavedContentGenerationMatrix(t *testing.T) { //nolint:gocyclo // each t
 				fixture := newAutomaticSavedGenerationFixture(t, repo, "site-complete-rollback", true)
 				mustMarkGenerationParseProcessing(t, repo, fixture)
 				before := readSavedGeneration(t, repo, fixture.linkID)
-				_, err := repo.CompleteSiteParse(t.Context(), generationSiteParseParams(fixture, false), fixture.jobID)
+				_, err := repo.CompleteSiteParse(t.Context(), generationSiteParseParams(fixture, false))
 				if err == nil {
 					t.Fatal("CompleteSiteParse(invalid aggregate) succeeded; want transaction rollback")
 				}
@@ -213,8 +213,13 @@ func TestSavedContentGenerationMatrix(t *testing.T) { //nolint:gocyclo // each t
 					ExpectedContentRevision: before.revision,
 					ExpectedSiteRevision:    site.SiteRevision,
 				})
-				if err != nil || result.ParseJobID == nil {
+				if err != nil {
 					t.Fatalf("ConvertLink(site to reading) = %#v, %v", result, err)
+				}
+				converted, getErr := repo.GetByID(t.Context(), fixture.linkID)
+				if getErr != nil || converted == nil || converted.Status != model.LinkStatusPending ||
+					converted.ParseGeneration <= fixture.attempt.Generation {
+					t.Fatalf("converted Link = %#v, %v; want pending newer generation", converted, getErr)
 				}
 				return generationOutcome(fixture.linkID, before, 1, absentGenerationBody()).
 					withReturnedRevision(result.ContentRevision).
@@ -237,38 +242,6 @@ func TestSavedContentGenerationMatrix(t *testing.T) { //nolint:gocyclo // each t
 				})
 				if !errors.Is(err, rollbackErr) {
 					t.Fatalf("ConvertLink(site to reading rollback) error = %v, want %v", err, rollbackErr)
-				}
-				return generationOutcome(fixture.linkID, before, 0, before.body).
-					withStatus(model.LinkStatusDone).
-					withKind(model.LibraryKindSite)
-			},
-		},
-		{
-			name: "historical migration creates a new empty generation",
-			mutate: func(t *testing.T, repo *savedGenerationHarness) savedGenerationOutcome {
-				fixture := newSavedGenerationFixture(t, repo, "historical-migration", false)
-				assessment := prepareGenerationHistoricalMigration(t, repo, fixture)
-				before := readSavedGeneration(t, repo, fixture.linkID)
-				outcome, err := repo.CommitHistoricalMigrationAssessment(t.Context(), assessment)
-				if err != nil || outcome != repository.HistoricalMigrationOutcomeAutoMigrated {
-					t.Fatalf("CommitHistoricalMigrationAssessment() = %q, %v", outcome, err)
-				}
-				return generationOutcome(fixture.linkID, before, 1, absentGenerationBody()).
-					withStatus(model.LinkStatusDone).
-					withKind(model.LibraryKindSite)
-			},
-		},
-		{
-			name: "historical migration retry is a no-op",
-			mutate: func(t *testing.T, repo *savedGenerationHarness) savedGenerationOutcome {
-				fixture := newSavedGenerationFixture(t, repo, "historical-migration-retry", false)
-				assessment := prepareGenerationHistoricalMigration(t, repo, fixture)
-				if outcome, err := repo.CommitHistoricalMigrationAssessment(t.Context(), assessment); err != nil || outcome != repository.HistoricalMigrationOutcomeAutoMigrated {
-					t.Fatalf("first CommitHistoricalMigrationAssessment() = %q, %v", outcome, err)
-				}
-				before := readSavedGeneration(t, repo, fixture.linkID)
-				if outcome, err := repo.CommitHistoricalMigrationAssessment(t.Context(), assessment); err != nil || outcome != repository.HistoricalMigrationOutcomeNoop {
-					t.Fatalf("second CommitHistoricalMigrationAssessment() = %q, %v, want no-op", outcome, err)
 				}
 				return generationOutcome(fixture.linkID, before, 0, before.body).
 					withStatus(model.LinkStatusDone).
@@ -310,11 +283,10 @@ type savedGenerationHarness struct {
 }
 
 type savedGenerationFixture struct {
-	linkID                   uuid.UUID
-	jobID                    uuid.UUID
-	expectedMetadataRevision int64
-	url                      string
-	parsedAt                 time.Time
+	linkID   uuid.UUID
+	attempt  model.ParseAttempt
+	url      string
+	parsedAt time.Time
 }
 
 type savedGenerationBody struct {
@@ -372,7 +344,6 @@ func newSavedGenerationFixture(t *testing.T, repo *savedGenerationHarness, slug 
 		slug,
 		saveBody,
 		model.RequestedLibraryKindReading,
-		model.RequestedLibraryKindSourceUser,
 	)
 }
 
@@ -384,16 +355,27 @@ func newAutomaticSavedGenerationFixture(t *testing.T, repo *savedGenerationHarne
 		slug,
 		saveBody,
 		model.RequestedLibraryKindAuto,
-		model.RequestedLibraryKindSourceAuto,
 	)
-	if err := repo.UpdateLibraryClassification(t.Context(), repository.UpdateLibraryClassificationParams{
-		ID: fixture.linkID, Kind: model.LibraryKindReading, Source: model.LibraryKindSourceAuto,
-	}); err != nil {
+	if _, err := repo.pool.Exec(t.Context(), `UPDATE links SET library_kind='reading', library_kind_locked=false WHERE id=$1`, fixture.linkID); err != nil {
 		t.Fatalf("seed automatic reading classification for %s: %v", slug, err)
 	}
 	link, err := repo.GetByID(t.Context(), fixture.linkID)
 	if err != nil || link == nil {
 		t.Fatalf("GetByID(automatic reading, %s) = %#v, %v", slug, link, err)
+	}
+	// The base fixture is terminal so content-generation tests can start from
+	// an already parsed snapshot. Site completion tests need a fresh runnable
+	// generation, however; create that generation after the classification
+	// intent is installed instead of teaching MarkParseProcessing to accept a
+	// terminal Link.
+	attempt, err := requeueLinkForTest(t.Context(), repo.pool, repo.PGXLinkRepository, fixture.linkID, nil)
+	if err != nil {
+		t.Fatalf("seed automatic reading generation for %s: %v", slug, err)
+	}
+	fixture.attempt = attempt
+	link, err = repo.GetByID(t.Context(), fixture.linkID)
+	if err != nil || link == nil {
+		t.Fatalf("GetByID(requeued automatic reading, %s) = %#v, %v", slug, link, err)
 	}
 	fixture.parsedAt = link.UpdatedAt
 	return fixture
@@ -405,21 +387,21 @@ func newSavedGenerationFixtureWithIntent(
 	slug string,
 	saveBody bool,
 	requestedKind model.RequestedLibraryKind,
-	requestedSource model.RequestedLibraryKindSource,
 ) savedGenerationFixture {
 	t.Helper()
 	ctx := t.Context()
 	rawURL := fmt.Sprintf("https://saved-generation.example.com/%s", slug)
-	link, job, err := repo.SubmitNew(ctx, repository.CreateLinkParams{
-		URL:                        rawURL,
-		SourceKind:                 "url",
-		SourceKey:                  rawURL,
-		Status:                     model.LinkStatusPending,
-		RequestedLibraryKind:       requestedKind,
-		RequestedLibraryKindSource: requestedSource,
+	link, attemptRef, err := submitLinkForTest(ctx, repo.pool, repo.PGXLinkRepository, repository.CreateLinkParams{
+		URL:                     rawURL,
+		SourceKind:              "url",
+		SourceKey:               rawURL,
+		Status:                  model.LinkStatusPending,
+		RequestedLibraryKind:    requestedKind,
+		UserSelectedLibraryKind: requestedKind != model.RequestedLibraryKindAuto,
 	})
-	if err != nil || link == nil || job == nil {
-		t.Fatalf("SubmitNew(%s) = link %#v, job %#v, error %v", slug, link, job, err)
+	attempt, attemptErr := requireParseAttempt(link, attemptRef)
+	if err != nil || attemptErr != nil {
+		t.Fatalf("SubmitTx(%s) = link %#v, attempt %#v, error %v", slug, link, attempt, err)
 	}
 	if err := repo.UpdateState(ctx, repository.UpdateLinkStateParams{ID: link.ID, Status: model.LinkStatusDone}); err != nil {
 		t.Fatalf("UpdateState(done, %s): %v", slug, err)
@@ -429,11 +411,10 @@ func newSavedGenerationFixtureWithIntent(
 		t.Fatalf("GetByID(parsed, %s) = %#v, %v", slug, parsed, err)
 	}
 	fixture := savedGenerationFixture{
-		linkID:                   link.ID,
-		jobID:                    job.ID,
-		expectedMetadataRevision: job.ExpectedMetadataRevision,
-		url:                      rawURL,
-		parsedAt:                 parsed.UpdatedAt,
+		linkID:   link.ID,
+		attempt:  attempt,
+		url:      rawURL,
+		parsedAt: parsed.UpdatedAt,
 	}
 	if !saveBody {
 		return fixture
@@ -522,13 +503,14 @@ func absentGenerationBody() savedGenerationBody {
 
 func mustMarkGenerationParseProcessing(t *testing.T, repo *savedGenerationHarness, fixture savedGenerationFixture) {
 	t.Helper()
-	if err := repo.MarkParseProcessing(t.Context(), fixture.linkID, fixture.jobID); err != nil {
+	if err := repo.MarkParseProcessing(t.Context(), fixture.attempt); err != nil {
 		t.Fatalf("MarkParseProcessing(%s): %v", fixture.linkID, err)
 	}
 }
 
 func generationSiteParseParams(fixture savedGenerationFixture, validAggregate bool) repository.CompleteSiteParseParams {
 	title := "Saved generation site"
+	expectedKind := model.LibraryKindReading
 	fetcherType := "test"
 	domain := "saved-generation.example.com"
 	contentType := string(model.ContentTypeHomepage)
@@ -539,7 +521,8 @@ func generationSiteParseParams(fixture savedGenerationFixture, validAggregate bo
 	return repository.CompleteSiteParseParams{
 		Analysis: repository.UpdateLinkAnalysisParams{
 			ID:                       fixture.linkID,
-			ExpectedMetadataRevision: fixture.expectedMetadataRevision,
+			ExpectedParseGeneration:  fixture.attempt.Generation,
+			ExpectedMetadataRevision: fixture.attempt.ExpectedMetadataRevision,
 			Title:                    &title,
 			Tags:                     []string{"generation"},
 			FetcherType:              &fetcherType,
@@ -548,10 +531,10 @@ func generationSiteParseParams(fixture savedGenerationFixture, validAggregate bo
 			Status:                   model.LinkStatusDone,
 		},
 		Classification: repository.UpdateLibraryClassificationParams{
-			ID:     fixture.linkID,
-			Kind:   model.LibraryKindSite,
-			Source: model.LibraryKindSourceAuto,
+			ID:   fixture.linkID,
+			Kind: model.LibraryKindSite,
 		},
+		ExpectedLibraryKind: &expectedKind,
 		Site: repository.AggregateSiteParams{
 			LinkID:        fixture.linkID,
 			IdentityKey:   identityKey,
@@ -576,37 +559,4 @@ func newGenerationSiteFixture(t *testing.T, repo *savedGenerationHarness, slug s
 		t.Fatalf("prepared site %s = revision %d/body %#v/kind %q, result %#v", slug, durable.revision, durable.body, durable.kind, result)
 	}
 	return fixture, result
-}
-
-func prepareGenerationHistoricalMigration(t *testing.T, repo *savedGenerationHarness, fixture savedGenerationFixture) repository.HistoricalMigrationAssessment {
-	t.Helper()
-	if _, err := repo.pool.Exec(t.Context(), `UPDATE links SET requested_library_kind='auto',requested_library_kind_source='auto' WHERE id=$1`, fixture.linkID); err != nil {
-		t.Fatalf("prepare historical migration auto ownership: %v", err)
-	}
-	if err := repo.UpdateLibraryClassification(t.Context(), repository.UpdateLibraryClassificationParams{
-		ID: fixture.linkID, Kind: model.LibraryKindReading, Source: model.LibraryKindSourceMigration,
-	}); err != nil {
-		t.Fatalf("prepare historical migration classification: %v", err)
-	}
-	candidates, err := repo.ListHistoricalMigrationCandidates(t.Context(), repository.HistoricalMigrationCursor{}, 100)
-	if err != nil {
-		t.Fatalf("ListHistoricalMigrationCandidates() error = %v", err)
-	}
-	var candidate *repository.HistoricalMigrationCandidate
-	for i := range candidates {
-		if candidates[i].ID == fixture.linkID {
-			candidate = &candidates[i]
-			break
-		}
-	}
-	if candidate == nil {
-		t.Fatalf("historical migration fixture %s was not listed", fixture.linkID)
-	}
-	return repository.HistoricalMigrationAssessment{
-		Candidate:     *candidate,
-		PredictedKind: model.LibraryKindSite,
-		Confidence:    0.99,
-		Reason:        "generation_matrix",
-		AutoMigrate:   true,
-	}
 }

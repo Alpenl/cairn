@@ -23,8 +23,6 @@ func TestClassifyErrorMapsEveryFailClosedSentinel(t *testing.T) {
 	}{
 		{name: "unknown target", err: fmt.Errorf("apply migrations: %w", migrate.ErrUnknownTarget), want: errorKindUnknownTarget},
 		{name: "ledger ahead", err: fmt.Errorf("wrapped: %w", migrate.ErrLedgerAhead), want: errorKindLedgerAhead},
-		{name: "target behind ledger", err: fmt.Errorf("wrapped: %w", migrate.ErrTargetBehindLedger), want: errorKindTargetBehindLedger},
-		{name: "manual step", err: fmt.Errorf("wrapped: %w", migrate.ErrManualStepInRange), want: errorKindManualStep},
 		{name: "ledger mismatch", err: fmt.Errorf("wrapped: %w", errLedgerMismatch), want: errorKindLedgerMismatch},
 		{name: "anything else", err: errors.New("connection refused"), want: errorKindFailed},
 	} {
@@ -43,7 +41,7 @@ func TestRequestedModeCoversEveryTargetForm(t *testing.T) {
 	for _, tt := range []struct{ target, want string }{
 		{target: "", want: "default"},
 		{target: migrate.FreshInstallTarget, want: "fresh"},
-		{target: migrate.ReaderTodoProjectionLedgerMigrationID, want: "target"},
+		{target: migrate.CurrentSchemaMigrationID, want: "target"},
 	} {
 		if got := requestedMode(tt.target); got != tt.want {
 			t.Fatalf("requestedMode(%q) = %q, want %q", tt.target, got, tt.want)
@@ -123,9 +121,9 @@ func TestFailureReportCarriesAStructuredError(t *testing.T) {
 		SchemaVersion: reportSchemaVersion,
 		OK:            false,
 		Mode:          "target",
-		Target:        "b671c9d2e411",
+		Target:        migrate.CurrentSchemaMigrationID,
 		Applied:       []string{},
-		Error:         &reportError{Kind: errorKindTargetBehindLedger, Message: "target is behind the ledger"},
+		Error:         &reportError{Kind: errorKindLedgerAhead, Message: "ledger shape is not accepted"},
 	}); err != nil {
 		t.Fatalf("writeReport() error = %v", err)
 	}
@@ -142,7 +140,7 @@ func TestFailureReportCarriesAStructuredError(t *testing.T) {
 	if decoded.OK {
 		t.Fatal("failure report claims ok=true")
 	}
-	if decoded.Error == nil || decoded.Error.Kind != errorKindTargetBehindLedger {
+	if decoded.Error == nil || decoded.Error.Kind != errorKindLedgerAhead {
 		t.Fatalf("failure report error = %+v", decoded.Error)
 	}
 }

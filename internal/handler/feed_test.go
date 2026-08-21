@@ -30,7 +30,7 @@ func (s *feedHandlerStub) ListItems(_ context.Context, filter service.FeedItemFi
 	return s.items, nil
 }
 
-func TestRegisterFeedRoutesMountsCanonicalAndV1SubscriptionLists(t *testing.T) {
+func TestRegisterFeedRoutesMountsCanonicalSubscriptionList(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	subscriptionID := uuid.New()
@@ -41,16 +41,15 @@ func TestRegisterFeedRoutesMountsCanonicalAndV1SubscriptionLists(t *testing.T) {
 	}}
 	router := gin.New()
 	RegisterFeedRoutes(router, stub)
-	for _, path := range []string{"/api/subscriptions", "/api/v1/subscriptions"} {
-		request := httptest.NewRequest(http.MethodGet, path, nil)
-		response := httptest.NewRecorder()
-		router.ServeHTTP(response, request)
-		if response.Code != http.StatusOK {
-			t.Fatalf("GET %s status = %d body=%s", path, response.Code, response.Body.String())
-		}
-		if !strings.Contains(response.Body.String(), subscriptionID.String()) || !strings.Contains(response.Body.String(), `"counts"`) {
-			t.Fatalf("GET %s body = %s", path, response.Body.String())
-		}
+	path := "/api/subscriptions"
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d body=%s", path, response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), subscriptionID.String()) || !strings.Contains(response.Body.String(), `"counts"`) {
+		t.Fatalf("GET %s body = %s", path, response.Body.String())
 	}
 }
 

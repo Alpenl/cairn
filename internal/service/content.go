@@ -21,19 +21,12 @@ import (
 // 写入/读取已保存原文。生产实现是 *repository.PGXLinkRepository。
 type ContentLinkStore interface {
 	GetParseInputByID(ctx context.Context, id uuid.UUID) (*repository.LinkParseInput, error)
-	// 两个写方法返回 (新的 content_revision, 是否写入成功, error)。代次要一路
+	// 写方法返回 (新的 content_revision, 是否写入成功, error)。代次要一路
 	// 交到响应里，客户端才不用等列表刷新就知道正文换了代。
 	UpdateContentIfCurrent(ctx context.Context, id uuid.UUID, expectedUpdatedAt time.Time, content model.SavedContent) (int64, bool, error)
-	ReplaceContentIfCurrent(ctx context.Context, id uuid.UUID, expectedUpdatedAt time.Time, content model.SavedContent) (int64, bool, error)
-	GetContent(ctx context.Context, id uuid.UUID) (*model.SavedContent, error)
-}
-
-type contentEditor interface {
-	EditContentIfRevision(ctx context.Context, id uuid.UUID, expectedRevision int64, content model.SavedContent) (int64, bool, error)
-}
-
-type revisionAwareContentReplacer interface {
 	ReplaceContentIfCurrentWithRevision(ctx context.Context, id uuid.UUID, expectedUpdatedAt time.Time, expectedContentRevision int64, content model.SavedContent) (int64, bool, error)
+	EditContentIfRevision(ctx context.Context, id uuid.UUID, expectedRevision int64, content model.SavedContent) (int64, bool, error)
+	GetContent(ctx context.Context, id uuid.UUID) (*model.SavedContent, error)
 }
 
 // ContentService implements original-content snapshots independently from
@@ -109,11 +102,7 @@ func (s *ContentService) Edit(ctx context.Context, linkID string, request dto.Co
 		return dto.LinkContentResponse{}, err
 	}
 
-	editor, ok := s.links.(contentEditor)
-	if !ok {
-		return dto.LinkContentResponse{}, httperr.New(http.StatusServiceUnavailable, "content editing is not configured")
-	}
-	revision, written, err := editor.EditContentIfRevision(ctx, id, request.ExpectedContentRevision, edited)
+	revision, written, err := s.links.EditContentIfRevision(ctx, id, request.ExpectedContentRevision, edited)
 	if err != nil {
 		return dto.LinkContentResponse{}, err
 	}
@@ -247,11 +236,7 @@ func (s *ContentService) persist(ctx context.Context, linkID string, replace boo
 		revision      int64
 	)
 	if replace {
-		if revisionAware, ok := s.links.(revisionAwareContentReplacer); ok {
-			revision, storedCurrent, err = revisionAware.ReplaceContentIfCurrentWithRevision(ctx, id, link.UpdatedAt, link.ContentRevision, content)
-		} else {
-			revision, storedCurrent, err = s.links.ReplaceContentIfCurrent(ctx, id, link.UpdatedAt, content)
-		}
+		revision, storedCurrent, err = s.links.ReplaceContentIfCurrentWithRevision(ctx, id, link.UpdatedAt, link.ContentRevision, content)
 	} else {
 		revision, storedCurrent, err = s.links.UpdateContentIfCurrent(ctx, id, link.UpdatedAt, content)
 	}

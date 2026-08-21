@@ -19,9 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/pgvector/pgvector-go"
 
-	"webtag/internal/alloc"
 	"webtag/internal/database"
 	"webtag/internal/model"
 	"webtag/internal/notetitle"
@@ -30,17 +28,16 @@ import (
 )
 
 // ReaderVNextStore is the persistence boundary for the personal Reader
-// surfaces. It is intentionally separate from LinkStore: notes, thoughts,
-// inbox, TODO, engagement and feed snapshots have different lifecycles and
-// should not make the existing link repository a second god interface.
+// surfaces. It is intentionally separate from the link repository so Reader-owned data
+// does not make the existing link repository a second god interface.
 type ReaderVNextStore interface {
 	AppendThoughtOps(context.Context, []model.ReaderThoughtOp) ([]model.ReaderThoughtAck, error)
 	ListThoughts(context.Context, string, string, int) ([]model.ReaderThought, string, error)
 	SearchThoughts(context.Context, string, string, int) ([]model.ReaderThoughtSearch, int, string, error)
 	ListThoughtsSince(context.Context, string, int) ([]model.ReaderThought, string, error)
 	ListThoughtHistory(context.Context, string, int) ([]model.ReaderThought, string, error)
+	ListThoughtConflicts(context.Context, string, int) ([]model.ReaderThoughtConflict, string, error)
 	GetThought(context.Context, string) (*model.ReaderThought, error)
-	ReattachThought(context.Context, model.ReaderThoughtReattachCommand) (*model.ReaderThought, error)
 	GetAIContext(context.Context, uuid.UUID) (*model.ReaderAIContext, error)
 	MarkThoughtHostTombstones(context.Context, string, string, string) error
 	CreateNote(context.Context, model.ReaderNote) (*model.ReaderNote, error)
@@ -50,52 +47,39 @@ type ReaderVNextStore interface {
 	SaveNoteDraft(context.Context, model.ReaderNoteDraftCommand) (*model.ReaderNote, error)
 	DiscardNoteDraft(context.Context, model.ReaderNoteDiscardDraftCommand) error
 	PublishNote(context.Context, model.ReaderNotePublishCommand) (*model.ReaderNote, error)
-	DeleteNote(context.Context, uuid.UUID) error
-	RestoreNote(context.Context, uuid.UUID) error
 	ListNoteHistory(context.Context, uuid.UUID, int) ([]model.ReaderNoteHistory, error)
 	RestoreNoteRevision(context.Context, model.ReaderNoteRestoreCommand) (*model.ReaderNote, error)
 	CreateInbox(context.Context, model.ReaderInbox) (*model.ReaderInbox, error)
 	ListInbox(context.Context, model.ReaderInboxPartition, string, int) ([]model.ReaderInboxListItem, int, int, string, error)
 	GetInbox(context.Context, uuid.UUID) (*model.ReaderInbox, error)
 	PatchInbox(context.Context, model.ReaderInboxPatch) (*model.ReaderInbox, error)
-	UpdateInboxStatus(context.Context, uuid.UUID, string) (*model.ReaderInbox, error)
+	DiscardInbox(context.Context, uuid.UUID) error
 	RestoreInbox(context.Context, uuid.UUID) error
-	ClaimExpiredInbox(context.Context, uuid.UUID, time.Time, time.Time, int) ([]model.ReaderInbox, error)
-	FinalizeExpiredInbox(context.Context, uuid.UUID, time.Time) (int64, error)
-	ConfirmInbox(context.Context, uuid.UUID) (uuid.UUID, error)
+	ConfirmInbox(context.Context, uuid.UUID, *int64) (uuid.UUID, error)
 	BulkConfirmInbox(context.Context, []model.ReaderInboxBulkConfirmation) ([]model.ReaderInboxBulkResult, error)
 	ConfirmAIProposals(context.Context, model.ReaderInboxPartition) (model.ReaderInboxAIProposalConfirmation, error)
-	BulkUpdateInboxStatus(context.Context, []uuid.UUID, string) ([]model.ReaderInboxBulkResult, error)
-	ResummarizeInbox(context.Context, uuid.UUID, uuid.UUID, string, []string, int64) error
-	BeginInboxResummarizeJob(context.Context, uuid.UUID, int64) (*model.ReaderInboxJob, bool, error)
-	GetInboxJob(context.Context, uuid.UUID) (*model.ReaderInboxJob, error)
-	ClaimInboxJob(context.Context, uuid.UUID) (*model.ReaderInboxJob, error)
-	RetryInboxJob(context.Context, uuid.UUID, string) error
-	FailInboxJob(context.Context, uuid.UUID, string) error
-	CompleteInboxJob(context.Context, uuid.UUID, string, []string) error
-	CreateCategory(context.Context, string) (*model.ReaderCategory, error)
-	ListCategories(context.Context) ([]model.ReaderCategory, error)
-	DeleteCategory(context.Context, uuid.UUID) error
-	SetCategoryMembership(context.Context, uuid.UUID, string, string, bool) error
+	BulkDiscardInbox(context.Context, []uuid.UUID) ([]model.ReaderInboxBulkResult, error)
+	ClaimInboxProposal(context.Context, uuid.UUID, int64) (*model.ReaderInbox, error)
+	RetryInboxProposal(context.Context, uuid.UUID, int64) error
+	FailInboxProposal(context.Context, uuid.UUID, int64) error
+	CompleteInboxProposal(context.Context, uuid.UUID, int64, string, []string) error
 	CreateTodo(context.Context, model.ReaderTodo) (*model.ReaderTodo, error)
-	UpsertTodoProjection(context.Context, model.ReaderTodo) (*model.ReaderTodo, error)
-	ReconcileTodoProjections(context.Context, []model.ReaderTodo) error
-	RepairTodoProjections(context.Context) (int, error)
 	ListTodos(context.Context, string, int) (model.ReaderTodoPage, error)
 	PatchTodo(context.Context, model.ReaderTodoPatch) (*model.ReaderTodo, error)
 	DeleteTodo(context.Context, uuid.UUID) error
 	GetEngagement(context.Context, uuid.UUID) (*model.ReaderEngagement, error)
 	PatchEngagement(context.Context, model.ReaderEngagementPatch) (*model.ReaderEngagement, error)
-	ListContinueReading(context.Context, int) ([]model.ReaderFeedItem, error)
+	LoadHomeAggregate(context.Context) (ReaderHomeAggregate, error)
 	HomeCounts(context.Context) (map[string]int, error)
-	ListFeed(context.Context, string, string, string, int) (*model.ReaderFeedPage, error)
+	ListFeedWithSources(context.Context, string, string, []string, int) (*model.ReaderFeedPage, error)
 	FeedbackFeed(context.Context, string, string) (model.ReaderFeedFeedback, error)
-	RelatedTags(context.Context, *uuid.UUID, int) ([]string, string, bool, error)
-	RefreshActivity(context.Context) error
+	RelatedTags(context.Context, *uuid.UUID, int) ([]string, error)
 	ListActivity(context.Context, model.ReaderActivityQuery) (model.ReaderActivityPage, error)
 	UpdateLinkMetadata(context.Context, model.ReaderLinkMetadataPatch) (model.ReaderLinkMetadataUpdate, error)
-	ListContentHistory(context.Context, uuid.UUID, int) ([]model.ReaderContentHistory, error)
-	RestoreContentHistory(context.Context, uuid.UUID, int64, int64) (int64, error)
+	SoftDeleteHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error)
+	RestoreHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error)
+	PurgeHost(context.Context, model.ReaderHostKind, uuid.UUID, uuid.UUID) error
+	ListTrash(context.Context, *model.ReaderHostKind, string, int) ([]model.ReaderTrashItem, int, string, error)
 }
 
 type PGXReaderVNextRepository struct {
@@ -107,21 +91,22 @@ func NewPGXReaderVNextRepository(db database.Querier) *PGXReaderVNextRepository 
 	return &PGXReaderVNextRepository{db: db}
 }
 
+func NewPGXReaderVNextRepositoryWithLinkLifecycle(
+	db database.Querier,
+	queue ReaderLinkLifecycleQueue,
+) *PGXReaderVNextRepository {
+	if queue == nil {
+		panic("repository: nil Reader Link lifecycle queue")
+	}
+	return &PGXReaderVNextRepository{db: db, linkLifecycleQueue: queue}
+}
+
 // ReaderLinkLifecycleQueue is the transaction-bound River port required when
 // Reader entry points trash or restore a Link. It stays narrow so the
 // repository does not depend on the worker package.
 type ReaderLinkLifecycleQueue interface {
-	EnqueueTx(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error
+	EnqueueTx(context.Context, pgx.Tx, model.ParseAttempt) error
 	CancelAllActiveTx(context.Context, pgx.Tx, uuid.UUID) error
-}
-
-// BindLinkLifecycleQueue completes production wiring after River has been
-// constructed. Application assembly calls this before any request is served.
-func (r *PGXReaderVNextRepository) BindLinkLifecycleQueue(queue ReaderLinkLifecycleQueue) {
-	if queue == nil {
-		panic("repository: nil Reader Link lifecycle queue")
-	}
-	r.linkLifecycleQueue = queue
 }
 
 var _ ReaderVNextStore = (*PGXReaderVNextRepository)(nil)
@@ -516,14 +501,10 @@ func scanReaderNote(row readerScanner) (*model.ReaderNote, error) {
 
 func scanReaderInbox(row readerScanner) (*model.ReaderInbox, error) {
 	var out model.ReaderInbox
-	var identityKey, title, summary, bodyDocument, bodyFormat pgtype.Text
-	var jobID pgtype.UUID
-	var expiresAt, expiredAt, deletedAt pgtype.Timestamptz
-	if err := row.Scan(&out.ID, &out.URL, &identityKey, &out.SourceKind, &title, &out.Body, &bodyDocument, &bodyFormat, &out.Note, &summary, &out.SuggestedTags, &out.ProposalSignals, &out.ProposalStatus, &out.Tags, &out.CategoryIDs, &out.Status, &out.MetadataRevision, &jobID, &expiresAt, &expiredAt, &deletedAt, &out.CreatedAt, &out.UpdatedAt); err != nil {
+	var title, summary, bodyDocument, bodyFormat pgtype.Text
+	var expiresAt, deletedAt pgtype.Timestamptz
+	if err := row.Scan(&out.ID, &out.URL, &out.IdentityKey, &out.SourceKind, &title, &out.Body, &bodyDocument, &bodyFormat, &out.Note, &summary, &out.SuggestedTags, &out.ProposalStatus, &out.Tags, &out.Status, &out.MetadataRevision, &expiresAt, &out.Expired, &deletedAt, &out.CreatedAt, &out.UpdatedAt); err != nil {
 		return nil, err
-	}
-	if identityKey.Valid {
-		out.IdentityKey = identityKey.String
 	}
 	if bodyDocument.Valid {
 		value := bodyDocument.String
@@ -543,25 +524,14 @@ func scanReaderInbox(row readerScanner) (*model.ReaderInbox, error) {
 		value := summary.String
 		out.Summary = &value
 	}
-	if jobID.Valid {
-		value := uuid.UUID(jobID.Bytes)
-		out.JobID = &value
-	}
 	if expiresAt.Valid {
 		value := expiresAt.Time
 		out.ExpiresAt = &value
-	}
-	if expiredAt.Valid {
-		value := expiredAt.Time
-		out.ExpiredAt = &value
 	}
 	if deletedAt.Valid {
 		value := deletedAt.Time
 		out.DeletedAt = &value
 	}
-	// Expiry is a materialized partition, not a client-clock calculation. A
-	// due row remains active until the expiry worker has recorded ExpiredAt.
-	out.Expired = out.ExpiredAt != nil
 	return &out, nil
 }
 
@@ -603,25 +573,6 @@ func scanReaderInboxListItem(row readerScanner) (*model.ReaderInboxListItem, err
 	return &out, nil
 }
 
-func scanReaderInboxJob(row readerScanner) (*model.ReaderInboxJob, error) {
-	var out model.ReaderInboxJob
-	if err := row.Scan(
-		&out.ID,
-		&out.InboxID,
-		&out.ExpectedMetadataRevision,
-		&out.Status,
-		&out.Attempts,
-		&out.ErrorMessage,
-		&out.CreatedAt,
-		&out.UpdatedAt,
-		&out.StartedAt,
-		&out.FinishedAt,
-	); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
 func scanReaderTodo(row readerScanner) (*model.ReaderTodo, error) {
 	var out model.ReaderTodo
 	var ref []byte
@@ -647,17 +598,15 @@ func scanReaderEngagement(row readerScanner) (*model.ReaderEngagement, error) {
 }
 
 const readerNoteColumns = `id, title, published_content, published_revision, draft_content, draft_revision, draft_updated_at, deleted_at, created_at, updated_at`
-const readerInboxColumns = `id, url, identity_key, source_kind, title, body, body_document, body_format, note, summary, suggested_tags, proposal_signals, proposal_status, tags, COALESCE((SELECT array_agg(category_id ORDER BY category_id) FROM reader_categorizables WHERE host_kind='inbox' AND host_id=reader_inbox.id::text),'{}'::uuid[]) AS category_ids, status, metadata_revision, job_id, expires_at, expired_at, deleted_at, created_at, updated_at`
-const readerInboxColumnsQualified = `inbox.id, inbox.url, inbox.identity_key, inbox.source_kind, inbox.title, inbox.body, inbox.body_document, inbox.body_format, inbox.note, inbox.summary, inbox.suggested_tags, inbox.proposal_signals, inbox.proposal_status, inbox.tags, COALESCE((SELECT array_agg(category_id ORDER BY category_id) FROM reader_categorizables WHERE host_kind='inbox' AND host_id=inbox.id::text),'{}'::uuid[]) AS category_ids, inbox.status, inbox.metadata_revision, inbox.job_id, inbox.expires_at, inbox.expired_at, inbox.deleted_at, inbox.created_at, inbox.updated_at`
-const readerInboxJobColumns = `id, inbox_id, expected_metadata_revision, status, attempts, error_message, created_at, updated_at, started_at, finished_at`
+const readerInboxColumns = `id, url, identity_key, source_kind, title, body, body_document, body_format, note, summary, suggested_tags, proposal_status, tags, status, metadata_revision, expires_at, (expires_at IS NOT NULL AND expires_at <= NOW()) AS expired, deleted_at, created_at, updated_at`
+const readerInboxColumnsQualified = `inbox.id, inbox.url, inbox.identity_key, inbox.source_kind, inbox.title, inbox.body, inbox.body_document, inbox.body_format, inbox.note, inbox.summary, inbox.suggested_tags, inbox.proposal_status, inbox.tags, inbox.status, inbox.metadata_revision, inbox.expires_at, (inbox.expires_at IS NOT NULL AND inbox.expires_at <= NOW()) AS expired, inbox.deleted_at, inbox.created_at, inbox.updated_at`
 
 // readerInboxListColumns is the queue projection. It never selects body, note,
-// proposal_signals, suggested_tags or the per-row category_ids subquery: the
-// card cannot render them, and selecting them made every Inbox open pay for a
-// multi-megabyte transfer plus one categorizables lookup per row. The preview
-// is cut inside PostgreSQL so the oversized column never leaves the server.
+// suggested_tags: the card cannot render them, and selecting them made every
+// Inbox open pay for a multi-megabyte transfer. The preview is cut inside
+// PostgreSQL so the oversized column never leaves the server.
 var readerInboxListColumns = fmt.Sprintf(
-	`id, url, source_kind, title, left(COALESCE(NULLIF(btrim(summary), ''), NULLIF(btrim(note), ''), body), %d) AS preview, tags, status, metadata_revision, (expired_at IS NOT NULL) AS expired, updated_at`,
+	`id, url, source_kind, title, left(COALESCE(NULLIF(btrim(summary), ''), NULLIF(btrim(note), ''), body), %d) AS preview, tags, status, metadata_revision, (expires_at IS NOT NULL AND expires_at <= NOW()) AS expired, updated_at`,
 	readerInboxPreviewSourceLimit,
 )
 
@@ -1608,7 +1557,7 @@ func (r *PGXReaderVNextRepository) ListThoughts(ctx context.Context, query, afte
 		return nil, "", fmt.Errorf("list thoughts: %w", err)
 	}
 	defer rows.Close()
-	items := make([]model.ReaderThought, 0, alloc.Hint(limit))
+	items := make([]model.ReaderThought, 0)
 	for rows.Next() {
 		item, err := scanReaderThought(rows)
 		if err != nil {
@@ -1693,7 +1642,7 @@ func parseThoughtSearchCursor(raw, query string) (time.Time, string, int64, time
 }
 
 func scanThoughtSearchRows(rows pgx.Rows, limit int, query string, cursorTotal int) ([]model.ReaderThoughtSearch, int, string, error) {
-	items := make([]model.ReaderThoughtSearch, 0, alloc.Hint(limit))
+	items := make([]model.ReaderThoughtSearch, 0)
 	total := cursorTotal
 	totalIsAuthoritative := cursorTotal >= 0
 	var snapshotSequence int64
@@ -1914,7 +1863,7 @@ func (r *PGXReaderVNextRepository) ListThoughtsSince(ctx context.Context, after 
 		return nil, "", fmt.Errorf("list thoughts since: %w", err)
 	}
 	defer rows.Close()
-	items := make([]model.ReaderThought, 0, alloc.Hint(limit))
+	items := make([]model.ReaderThought, 0)
 	for rows.Next() {
 		item, err := scanReaderThoughtSyncSnapshot(rows)
 		if err != nil {
@@ -1961,7 +1910,7 @@ func (r *PGXReaderVNextRepository) ListThoughtConflicts(ctx context.Context, aft
 		return nil, "", fmt.Errorf("list thought conflicts: %w", err)
 	}
 	defer rows.Close()
-	items := make([]model.ReaderThoughtConflict, 0, alloc.Hint(limit))
+	items := make([]model.ReaderThoughtConflict, 0)
 	for rows.Next() {
 		var item model.ReaderThoughtConflict
 		var loser, winner []byte
@@ -2010,7 +1959,7 @@ func (r *PGXReaderVNextRepository) ListThoughtHistory(ctx context.Context, after
 		return nil, "", fmt.Errorf("list thought history: %w", err)
 	}
 	defer rows.Close()
-	items := make([]model.ReaderThought, 0, alloc.Hint(limit))
+	items := make([]model.ReaderThought, 0)
 	for rows.Next() {
 		item, err := scanReaderThoughtHistorySnapshot(rows)
 		if err != nil {
@@ -2163,118 +2112,6 @@ func (r *PGXReaderVNextRepository) appendThoughtLifecycleOp(ctx context.Context,
 		}
 	}
 	return sequence, nil
-}
-
-//nolint:gocyclo // one transaction keeps lifecycle precedence, global lock order, both CAS checks, materialization, and tombstone clearing visible.
-func (r *PGXReaderVNextRepository) ReattachThought(ctx context.Context, command model.ReaderThoughtReattachCommand) (*model.ReaderThought, error) {
-	var out *model.ReaderThought
-	err := r.withTx(ctx, func(db database.Querier) error {
-		// Preserve lifecycle error precedence before touching the destination,
-		// then follow the global host -> Thought -> advisory lock order.
-		if err := readerReattachThoughtLifecycle(ctx, db, command.ThoughtID); err != nil {
-			return err
-		}
-		// Reattach shares the host -> Thought row -> advisory order used by
-		// AppendThoughtOps and every lifecycle-derived Thought writer.
-		hostRevision, err := readerReattachHost(ctx, db, command)
-		if err != nil {
-			return err
-		}
-		if command.ExpectedHostRevision != hostRevision {
-			return ErrRevisionConflict
-		}
-		item, err := scanReaderThought(db.QueryRow(ctx, `SELECT `+readerThoughtColumns+` FROM reader_thoughts WHERE id=$1 AND deleted=false FOR UPDATE`, command.ThoughtID))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("read thought for reattach: %w", err)
-		}
-		if err := readerReattachThoughtLifecycle(ctx, db, command.ThoughtID); err != nil {
-			return err
-		}
-		if command.ExpectedLastSequence != item.LastSequence {
-			return ErrRevisionConflict
-		}
-		var snapshot []byte
-		if err := db.QueryRow(ctx, `SELECT snapshot FROM reader_thought_tombstones WHERE thought_id=$1 FOR UPDATE`, command.ThoughtID).Scan(&snapshot); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("read thought reattach snapshot: %w", err)
-		}
-		if err := applyReaderThoughtReplaySnapshot(item, snapshot); err != nil {
-			return fmt.Errorf("decode thought reattach snapshot: %w", err)
-		}
-		hostBody, err := readerReattachHostBody(ctx, db, command.TargetHostKind, command.TargetHostID)
-		if err != nil {
-			return err
-		}
-		target, payload, err := readerReattachThoughtPayload(item, command, hostRevision, hostBody)
-		if err != nil {
-			return err
-		}
-		thoughtOp, sequence, duplicate, err := r.appendDerivedThoughtOp(ctx, db, model.ReaderThoughtOp{
-			OpID:          readerReattachThoughtOpID(command),
-			DeviceID:      "reader-lifecycle",
-			OperationKind: "update",
-			AnnotationID:  command.ThoughtID,
-			HostKind:      command.TargetHostKind,
-			HostID:        command.TargetHostID,
-			Target:        target,
-			Payload:       payload,
-		})
-		if err != nil {
-			return err
-		}
-		if !duplicate {
-			if err := r.materializeThought(ctx, db, thoughtOp, sequence); err != nil {
-				return err
-			}
-		}
-		if _, err := db.Exec(ctx, `DELETE FROM reader_thought_tombstones WHERE thought_id=$1`, command.ThoughtID); err != nil {
-			return fmt.Errorf("clear thought tombstone: %w", err)
-		}
-		out, err = scanReaderThought(db.QueryRow(ctx, `SELECT `+readerThoughtColumns+` FROM reader_thoughts WHERE id=$1`, command.ThoughtID))
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func readerReattachThoughtOpID(command model.ReaderThoughtReattachCommand) string {
-	seed := fmt.Sprintf(
-		"reader-thought-reattach:%s:%s:%s:%d:%d",
-		command.ThoughtID,
-		command.TargetHostKind,
-		command.TargetHostID,
-		command.ExpectedLastSequence,
-		command.ExpectedHostRevision,
-	)
-	return "reattach-" + uuid.NewSHA1(uuid.NameSpaceURL, []byte(seed)).String()
-}
-
-const readerReattachThoughtLifecycleSQL = `SELECT
-	EXISTS(SELECT 1 FROM reader_thoughts WHERE id=$1 AND deleted=false),
-	EXISTS(SELECT 1 FROM reader_thought_tombstones WHERE thought_id=$1)`
-
-// readerReattachThoughtLifecycle is called both before target locking, to keep
-// lifecycle errors ahead of target/CAS failures, and after the Thought row is
-// locked, to close the window where another reattach clears the tombstone.
-func readerReattachThoughtLifecycle(ctx context.Context, db database.Querier, thoughtID string) error {
-	var thoughtExists, tombstoneExists bool
-	if err := db.QueryRow(ctx, readerReattachThoughtLifecycleSQL, thoughtID).Scan(&thoughtExists, &tombstoneExists); err != nil {
-		return fmt.Errorf("read thought lifecycle: %w", err)
-	}
-	if !thoughtExists {
-		return ErrNotFound
-	}
-	if !tombstoneExists {
-		return ErrReaderThoughtReattachInvalidState
-	}
-	return nil
 }
 
 // readerReattachHost resolves and locks the target before the Thought row and
@@ -2553,7 +2390,7 @@ func (r *PGXReaderVNextRepository) ListNotes(ctx context.Context, after string, 
 		return nil, 0, "", fmt.Errorf("list notes: %w", err)
 	}
 	defer rows.Close()
-	items := make([]model.ReaderNote, 0, alloc.Hint(limit))
+	items := make([]model.ReaderNote, 0)
 	for rows.Next() {
 		item, err := scanReaderNote(rows)
 		if err != nil {
@@ -2596,7 +2433,7 @@ func (r *PGXReaderVNextRepository) SearchPublishedNotes(ctx context.Context, que
 		return nil, 0, fmt.Errorf("search published notes: %w", err)
 	}
 	defer rows.Close()
-	items := make([]model.ReaderNoteSearch, 0, alloc.Hint(limit))
+	items := make([]model.ReaderNoteSearch, 0)
 	total := 0
 	for rows.Next() {
 		var item model.ReaderNoteSearch
@@ -3305,16 +3142,6 @@ func readerReanchorOpsJSON(ops []json.RawMessage) ([]byte, error) {
 	return json.Marshal(encoded)
 }
 
-func (r *PGXReaderVNextRepository) DeleteNote(ctx context.Context, id uuid.UUID) error {
-	_, err := r.SoftDeleteHost(ctx, model.ReaderHostNote, id)
-	return err
-}
-
-func (r *PGXReaderVNextRepository) RestoreNote(ctx context.Context, id uuid.UUID) error {
-	_, err := r.RestoreHost(ctx, model.ReaderHostNote, id)
-	return err
-}
-
 func (r *PGXReaderVNextRepository) ListNoteHistory(ctx context.Context, noteID uuid.UUID, limit int) ([]model.ReaderNoteHistory, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
@@ -3324,7 +3151,7 @@ func (r *PGXReaderVNextRepository) ListNoteHistory(ctx context.Context, noteID u
 		return nil, fmt.Errorf("list note history: %w", err)
 	}
 	defer rows.Close()
-	out := make([]model.ReaderNoteHistory, 0, alloc.Hint(limit))
+	out := make([]model.ReaderNoteHistory, 0)
 	for rows.Next() {
 		var item model.ReaderNoteHistory
 		if err := rows.Scan(&item.ID, &item.NoteID, &item.Revision, &item.Title, &item.Content, &item.ReanchorOps, &item.CreatedAt); err != nil {
@@ -3440,11 +3267,11 @@ func (r *PGXReaderVNextRepository) CreateInboxTx(ctx context.Context, tx pgx.Tx,
 
 func (r *PGXReaderVNextRepository) createInboxOn(ctx context.Context, db database.Querier, item model.ReaderInbox) (*model.ReaderInbox, error) {
 	created, err := scanReaderInbox(db.QueryRow(ctx, `
-		INSERT INTO reader_inbox (url,identity_key,source_kind,title,body,body_document,body_format,note,summary,suggested_tags,proposal_signals,proposal_status,tags)
-		VALUES ($1,NULLIF($2,''),COALESCE(NULLIF($3,''),'url'),$4,$5,NULLIF($12::text,''),
-			CASE WHEN NULLIF($12::text,'') IS NULL THEN 'plain' ELSE COALESCE(NULLIF($13::text,''),'plain') END,
-			$6,$7,COALESCE($8::text[],'{}'::text[]),COALESCE($9::jsonb,'{}'::jsonb),COALESCE(NULLIF($10,''),'pending'),COALESCE($11::text[],'{}'::text[]))
-		RETURNING `+readerInboxColumns, item.URL, item.IdentityKey, item.SourceKind, item.Title, item.Body, item.Note, item.Summary, item.SuggestedTags, item.ProposalSignals, item.ProposalStatus, item.Tags, item.BodyDocument, string(item.BodyFormat)))
+		INSERT INTO reader_inbox (url,identity_key,source_kind,title,body,body_document,body_format,note,summary,suggested_tags,proposal_status,tags)
+		VALUES ($1,$2,COALESCE(NULLIF($3,''),'url'),$4,$5,NULLIF($11::text,''),
+			CASE WHEN NULLIF($11::text,'') IS NULL THEN 'plain' ELSE COALESCE(NULLIF($12::text,''),'plain') END,
+			$6,$7,COALESCE($8::text[],'{}'::text[]),COALESCE(NULLIF($9,''),'idle'),COALESCE($10::text[],'{}'::text[]))
+		RETURNING `+readerInboxColumns, item.URL, item.IdentityKey, item.SourceKind, item.Title, item.Body, item.Note, item.Summary, item.SuggestedTags, item.ProposalStatus, item.Tags, item.BodyDocument, string(item.BodyFormat)))
 	if err != nil {
 		return nil, fmt.Errorf("create inbox item: %w", err)
 	}
@@ -3469,9 +3296,9 @@ func (r *PGXReaderVNextRepository) ListInbox(ctx context.Context, partition mode
 	args := []any{}
 	sql := `SELECT ` + readerInboxListColumns + ` FROM reader_inbox WHERE status='pending' AND deleted_at IS NULL`
 	if partition == model.ReaderInboxPartitionActive {
-		sql += ` AND expired_at IS NULL`
+		sql += ` AND (expires_at IS NULL OR expires_at > NOW())`
 	} else {
-		sql += ` AND expired_at IS NOT NULL`
+		sql += ` AND expires_at IS NOT NULL AND expires_at <= NOW()`
 	}
 	if !at.IsZero() {
 		parsed, parseErr := uuid.Parse(id)
@@ -3488,7 +3315,7 @@ func (r *PGXReaderVNextRepository) ListInbox(ctx context.Context, partition mode
 		return nil, 0, 0, "", fmt.Errorf("list inbox: %w", err)
 	}
 	defer rows.Close()
-	items := make([]model.ReaderInboxListItem, 0, alloc.Hint(limit))
+	items := make([]model.ReaderInboxListItem, 0)
 	for rows.Next() {
 		item, err := scanReaderInboxListItem(rows)
 		if err != nil {
@@ -3502,8 +3329,8 @@ func (r *PGXReaderVNextRepository) ListInbox(ctx context.Context, partition mode
 	var activeCount, expiredCount int
 	if err := r.db.QueryRow(ctx, `
 		SELECT
-			count(*) FILTER (WHERE expired_at IS NULL)::int,
-			count(*) FILTER (WHERE expired_at IS NOT NULL)::int
+			count(*) FILTER (WHERE expires_at IS NULL OR expires_at > NOW())::int,
+			count(*) FILTER (WHERE expires_at IS NOT NULL AND expires_at <= NOW())::int
 		FROM reader_inbox
 		WHERE status='pending' AND deleted_at IS NULL`).Scan(&activeCount, &expiredCount); err != nil {
 		return nil, 0, 0, "", fmt.Errorf("count inbox partitions: %w", err)
@@ -3513,78 +3340,6 @@ func (r *PGXReaderVNextRepository) ListInbox(ctx context.Context, partition mode
 		return items, activeCount, expiredCount, readerCursor(last.UpdatedAt, last.ID.String()), nil
 	}
 	return items, activeCount, expiredCount, "", nil
-}
-
-// ClaimExpiredInbox leases a bounded batch of pending rows whose authoritative
-// expires_at deadline has passed. The row remains pending: expiry is a
-// partition, not a destructive lifecycle transition. SKIP LOCKED lets
-// concurrent River workers divide the batch without waiting on one another;
-// expiry_lease_until makes a crashed worker's claim recoverable.
-func (r *PGXReaderVNextRepository) ClaimExpiredInbox(ctx context.Context, leaseID uuid.UUID, now, leaseUntil time.Time, limit int) ([]model.ReaderInbox, error) {
-	if leaseID == uuid.Nil {
-		return nil, fmt.Errorf("claim expired inbox: lease id is required")
-	}
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
-	rows, err := r.db.Query(ctx, `
-		WITH candidates AS (
-			SELECT id
-			FROM reader_inbox
-			WHERE status='pending'
-				AND deleted_at IS NULL
-				AND expires_at IS NOT NULL
-				AND expires_at <= $1
-				AND expired_at IS NULL
-				AND (expiry_lease_until IS NULL OR expiry_lease_until <= $1)
-			ORDER BY expires_at ASC, id ASC
-			LIMIT $3
-			FOR UPDATE SKIP LOCKED
-		)
-		UPDATE reader_inbox AS inbox
-		SET expiry_lease_id=$2, expiry_lease_until=$4
-		FROM candidates
-		WHERE inbox.id=candidates.id
-		RETURNING `+readerInboxColumnsQualified, now, leaseID, limit, leaseUntil)
-	if err != nil {
-		return nil, fmt.Errorf("claim expired inbox: %w", err)
-	}
-	defer rows.Close()
-	items := make([]model.ReaderInbox, 0, alloc.Hint(limit))
-	for rows.Next() {
-		item, err := scanReaderInbox(rows)
-		if err != nil {
-			return nil, fmt.Errorf("claim expired inbox: scan: %w", err)
-		}
-		item.Expired = item.ExpiredAt != nil
-		items = append(items, *item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("claim expired inbox: rows: %w", err)
-	}
-	return items, nil
-}
-
-// FinalizeExpiredInbox records the materialized expired partition only for
-// rows still owned by this lease. A retry after a lease timeout is harmless:
-// the old owner no longer matches, while the next owner can finish the row.
-func (r *PGXReaderVNextRepository) FinalizeExpiredInbox(ctx context.Context, leaseID uuid.UUID, now time.Time) (int64, error) {
-	if leaseID == uuid.Nil {
-		return 0, fmt.Errorf("finalize expired inbox: lease id is required")
-	}
-	result, err := r.db.Exec(ctx, `
-		UPDATE reader_inbox
-		SET expired_at=$2, expiry_lease_id=NULL, expiry_lease_until=NULL
-		WHERE expiry_lease_id=$1
-			AND status='pending'
-			AND deleted_at IS NULL
-			AND expires_at IS NOT NULL
-			AND expires_at <= $2
-			AND expired_at IS NULL`, leaseID, now)
-	if err != nil {
-		return 0, fmt.Errorf("finalize expired inbox: %w", err)
-	}
-	return result.RowsAffected(), nil
 }
 
 func (r *PGXReaderVNextRepository) GetInbox(ctx context.Context, id uuid.UUID) (*model.ReaderInbox, error) {
@@ -3599,13 +3354,13 @@ func (r *PGXReaderVNextRepository) GetInbox(ctx context.Context, id uuid.UUID) (
 }
 
 // GetInboxByURL provides the identity-keyed idempotency read used by non-library capture
-// destinations. Discarded captures are intentionally excluded so a user can
+// destinations. Trashed captures are intentionally excluded so a user can
 // capture the same URL again after explicitly removing the old inbox item.
 func (r *PGXReaderVNextRepository) GetInboxByURL(ctx context.Context, identityURL string) (*model.ReaderInbox, error) {
 	item, err := scanReaderInbox(r.db.QueryRow(ctx, `
 		SELECT `+readerInboxColumns+`
 		FROM reader_inbox
-		WHERE (identity_key=$1 OR (identity_key IS NULL AND url=$1))
+		WHERE identity_key=$1
 			AND deleted_at IS NULL
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1`, identityURL))
@@ -3624,7 +3379,8 @@ func (r *PGXReaderVNextRepository) PatchInbox(ctx context.Context, patch model.R
 		SET title=COALESCE($1,title),body=COALESCE($2,body),
 			body_document=CASE WHEN $2::text IS NULL THEN body_document ELSE NULL END,
 			body_format=CASE WHEN $2::text IS NULL THEN body_format ELSE 'plain' END,
-			note=COALESCE($3,note),summary=COALESCE($4,summary),tags=COALESCE($5::text[],tags),metadata_revision=metadata_revision+1,updated_at=NOW()
+			note=COALESCE($3,note),summary=COALESCE($4,summary),tags=COALESCE($5::text[],tags),
+			proposal_status='idle',metadata_revision=metadata_revision+1,updated_at=NOW()
 		WHERE id=$6 AND status='pending' AND deleted_at IS NULL AND metadata_revision=$7
 		RETURNING `+readerInboxColumns, patch.Title, patch.Body, patch.Note, patch.Summary, patch.Tags, patch.ID, patch.ExpectedRevision))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -3636,23 +3392,16 @@ func (r *PGXReaderVNextRepository) PatchInbox(ctx context.Context, patch model.R
 	return item, nil
 }
 
-func (r *PGXReaderVNextRepository) UpdateInboxStatus(ctx context.Context, id uuid.UUID, status string) (*model.ReaderInbox, error) {
-	var item *model.ReaderInbox
-	err := r.withTx(ctx, func(db database.Querier) error {
-		var err error
-		item, err = r.updateInboxStatusOn(ctx, db, id, status)
-		return err
+func (r *PGXReaderVNextRepository) DiscardInbox(ctx context.Context, id uuid.UUID) error {
+	return r.withTx(ctx, func(db database.Querier) error {
+		return r.discardInboxOn(ctx, db, id)
 	})
-	if err != nil {
-		return nil, err
-	}
-	return item, nil
 }
 
-// RestoreInbox restores either a trashed Inbox row or the live row in the
-// expired partition. Expiry restoration is intentionally Inbox-specific: the
-// generic host lifecycle only knows deleted_at, while a user revival must
-// clear the materialized expiry marker and establish a new 30-day deadline.
+// RestoreInbox restores either a trashed Inbox row or a pending row whose
+// authoritative deadline has passed. Expiry restoration is Inbox-specific:
+// the generic host lifecycle only knows deleted_at, while a user revival must
+// establish a new 30-day deadline.
 // It does not touch content, category membership, thoughts, or AI proposal
 // fields. Retrying after the first successful restore is a no-op.
 func (r *PGXReaderVNextRepository) RestoreInbox(ctx context.Context, id uuid.UUID) error {
@@ -3670,25 +3419,21 @@ func (r *PGXReaderVNextRepository) RestoreInbox(ctx context.Context, id uuid.UUI
 		}
 
 		switch item.Status {
-		case "pending", "discarded", "confirmed":
+		case "pending", "confirmed":
 		default:
 			return ErrReaderInboxStateConflict
 		}
 		// A confirmed capture may be restored from Trash, but confirmation does
 		// not reopen its expired partition or change its saved-link ownership.
-		renewExpiry := item.Status != "confirmed" && item.ExpiredAt != nil
-		needsTrashRestore := item.DeletedAt != nil || item.Status == "discarded"
+		renewExpiry := item.Status == "pending" && item.Expired
+		needsTrashRestore := item.DeletedAt != nil
 		if !renewExpiry && !needsTrashRestore {
 			return nil
 		}
 		updated, err := scanReaderInbox(db.QueryRow(ctx, `
 			UPDATE reader_inbox
-			SET status=CASE WHEN status='discarded' THEN 'pending' ELSE status END,
-				deleted_at=NULL,
+			SET deleted_at=NULL,
 				expires_at=CASE WHEN $2 THEN NOW() + INTERVAL '30 days' ELSE expires_at END,
-				expired_at=CASE WHEN $2 THEN NULL ELSE expired_at END,
-				expiry_lease_id=NULL,
-				expiry_lease_until=NULL,
 				updated_at=NOW()
 			WHERE id=$1
 			RETURNING `+readerInboxColumns, id, renewExpiry))
@@ -3699,9 +3444,9 @@ func (r *PGXReaderVNextRepository) RestoreInbox(ctx context.Context, id uuid.UUI
 			return fmt.Errorf("restore inbox: %w", err)
 		}
 
-		// Expiry does not tombstone thoughts. Only a previous discarded/trash
-		// transition needs the normal host-lifecycle reattachment work.
-		if item.DeletedAt != nil || item.Status == "discarded" {
+		// Expiry does not tombstone thoughts. Only a previous trash transition
+		// needs the normal host-lifecycle reattachment work.
+		if item.DeletedAt != nil {
 			if err := r.restoreReaderHostThoughts(ctx, db, model.ReaderHostInbox, id, updated.Body, updated.MetadataRevision); err != nil {
 				return err
 			}
@@ -3710,76 +3455,32 @@ func (r *PGXReaderVNextRepository) RestoreInbox(ctx context.Context, id uuid.UUI
 	})
 }
 
-func (r *PGXReaderVNextRepository) updateInboxStatusOn(ctx context.Context, db database.Querier, id uuid.UUID, status string) (*model.ReaderInbox, error) {
-	if status != "pending" && status != "discarded" {
-		return nil, ErrReaderInboxStateConflict
-	}
+func (r *PGXReaderVNextRepository) discardInboxOn(ctx context.Context, db database.Querier, id uuid.UUID) error {
 	item, err := scanReaderInbox(db.QueryRow(ctx, `SELECT `+readerInboxColumns+` FROM reader_inbox WHERE id=$1 FOR UPDATE`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read inbox status: %w", err)
+		return fmt.Errorf("read inbox for discard: %w", err)
 	}
 	if item.Status != "pending" {
-		return nil, ErrReaderInboxStateConflict
+		return ErrReaderInboxStateConflict
 	}
-	if status == "discarded" {
-		if item.DeletedAt != nil {
-			item.Status = "discarded"
-			return item, nil
-		}
-		updated, err := scanReaderInbox(db.QueryRow(ctx, `
-			UPDATE reader_inbox
-			SET deleted_at=NOW(),expiry_lease_id=NULL,expiry_lease_until=NULL,updated_at=NOW()
-			WHERE id=$1 AND deleted_at IS NULL
-			RETURNING `+readerInboxColumns, id))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrRevisionConflict
-		}
-		if err != nil {
-			return nil, fmt.Errorf("discard inbox: %w", err)
-		}
-		if err := r.markThoughtHostTombstonesOn(ctx, db, "inbox", id.String(), readerHostTombstoneReason(model.ReaderHostInbox)); err != nil {
-			return nil, err
-		}
-		updated.Status = "discarded"
-		return updated, nil
+	if item.DeletedAt != nil {
+		return nil
 	}
-	if item.DeletedAt == nil {
-		return item, nil
+	if err := updateReaderHostDeletedAt(ctx, db, model.ReaderHostInbox, id, true); err != nil {
+		return err
 	}
-	updated, err := scanReaderInbox(db.QueryRow(ctx, `
-		UPDATE reader_inbox
-		SET deleted_at=NULL,updated_at=NOW()
-		WHERE id=$1 AND deleted_at IS NOT NULL
-		RETURNING `+readerInboxColumns, id))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrRevisionConflict
+	if err := r.markThoughtHostTombstonesOn(ctx, db, "inbox", id.String(), readerHostTombstoneReason(model.ReaderHostInbox)); err != nil {
+		return err
 	}
-	if err != nil {
-		return nil, fmt.Errorf("restore inbox: %w", err)
-	}
-	if err := r.restoreReaderHostThoughts(ctx, db, model.ReaderHostInbox, id, updated.Body, updated.MetadataRevision); err != nil {
-		return nil, err
-	}
-	return updated, nil
+	return nil
 }
 
-func (r *PGXReaderVNextRepository) ConfirmInbox(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
-	return r.confirmInbox(ctx, id, nil)
-}
-
-func (r *PGXReaderVNextRepository) ConfirmInboxCAS(ctx context.Context, id uuid.UUID, expectedRevision int64) (uuid.UUID, error) {
-	return r.confirmInbox(ctx, id, &expectedRevision)
-}
-
-func (r *PGXReaderVNextRepository) confirmInbox(ctx context.Context, id uuid.UUID, expectedRevision *int64) (uuid.UUID, error) {
+func (r *PGXReaderVNextRepository) ConfirmInbox(ctx context.Context, id uuid.UUID, expectedRevision *int64) (uuid.UUID, error) {
 	var linkID uuid.UUID
 	err := r.withTx(ctx, func(db database.Querier) error {
-		if err := prelockLibraryFeedRevisions(ctx, db); err != nil {
-			return err
-		}
 		result, err := r.confirmInboxOn(ctx, db, id, expectedRevision)
 		if err == nil && result.LinkID != nil {
 			linkID = *result.LinkID
@@ -3816,9 +3517,6 @@ func lockInboxForConfirmation(ctx context.Context, db database.Querier, id uuid.
 	if err != nil {
 		return nil, fmt.Errorf("read inbox for confirmation: %w", err)
 	}
-	if item.Status == "discarded" {
-		return nil, ErrReaderInboxStateConflict
-	}
 	if item.Status != "pending" && item.Status != "confirmed" {
 		return nil, ErrReaderInboxStateConflict
 	}
@@ -3831,16 +3529,10 @@ func lockInboxForConfirmation(ctx context.Context, db database.Querier, id uuid.
 	return item, nil
 }
 
-// inboxConfirmationIdentity re-derives legacy rows so confirmation cannot
-// create a second link for a URL already represented by the library.
 func inboxConfirmationIdentity(item model.ReaderInbox) (string, error) {
 	identityURL := strings.TrimSpace(item.IdentityKey)
 	if identityURL == "" {
-		var err error
-		identityURL, err = urlidentity.Normalize(item.URL)
-		if err != nil {
-			return "", fmt.Errorf("%w: inbox url %q has no http(s) identity", ErrReaderInboxStateConflict, item.URL)
-		}
+		return "", fmt.Errorf("%w: inbox identity is empty", ErrReaderInboxStateConflict)
 	}
 	return identityURL, nil
 }
@@ -3849,7 +3541,7 @@ func (r *PGXReaderVNextRepository) resolveInboxConfirmationLink(ctx context.Cont
 	if err := lockCanonicalLinkIdentity(ctx, db, identityURL); err != nil {
 		return nil, err
 	}
-	matched, err := findInboxSavedLink(ctx, db, identityURL)
+	matched, err := findCanonicalLink(ctx, db, identityURL)
 	if err != nil {
 		return nil, err
 	}
@@ -3863,7 +3555,7 @@ func (r *PGXReaderVNextRepository) resolveInboxConfirmationLink(ctx context.Cont
 			return nil, err
 		}
 	} else {
-		linkID = &matched.id
+		linkID = matched
 	}
 	if !inserted {
 		if _, err := r.restoreLinkLifecycleOn(ctx, db, *linkID); err != nil {
@@ -3885,10 +3577,7 @@ func (r *PGXReaderVNextRepository) resolveInboxConfirmationLink(ctx context.Cont
 
 func finalizeInboxConfirmation(ctx context.Context, db database.Querier, item model.ReaderInbox, linkID *uuid.UUID) error {
 	if item.Status == "pending" {
-		if err := migrateInboxCategoriesToLink(ctx, db, item.ID, *linkID); err != nil {
-			return err
-		}
-		if _, err := db.Exec(ctx, `UPDATE reader_inbox SET status='confirmed',expiry_lease_id=NULL,expiry_lease_until=NULL,updated_at=NOW() WHERE id=$1 AND status='pending' AND deleted_at IS NULL`, item.ID); err != nil {
+		if _, err := db.Exec(ctx, `UPDATE reader_inbox SET status='confirmed',updated_at=NOW() WHERE id=$1 AND status='pending' AND deleted_at IS NULL`, item.ID); err != nil {
 			return fmt.Errorf("confirm inbox: %w", err)
 		}
 	}
@@ -3924,38 +3613,12 @@ func mergeInboxDraftIntoLink(ctx context.Context, db database.Querier, item mode
 	return nil
 }
 
-func migrateInboxCategoriesToLink(ctx context.Context, db database.Querier, inboxID, linkID uuid.UUID) error {
-	// Remove only memberships already present on the destination before moving
-	// the remaining rows, preserving the join table's composite primary key.
-	if _, err := db.Exec(ctx, `
-		DELETE FROM reader_categorizables source
-		USING reader_categorizables destination
-		WHERE source.host_kind='inbox' AND source.host_id=$1
-			AND destination.category_id=source.category_id
-			AND destination.host_kind='link' AND destination.host_id=$2`, inboxID.String(), linkID.String()); err != nil {
-		return fmt.Errorf("deduplicate inbox categories: %w", err)
-	}
-	if _, err := db.Exec(ctx, `
-		UPDATE reader_categorizables
-		SET host_kind='link',host_id=$2
-		WHERE host_kind='inbox' AND host_id=$1`, inboxID.String(), linkID.String()); err != nil {
-		return fmt.Errorf("migrate inbox categories: %w", err)
-	}
-	return nil
-}
-
-// findInboxSavedLink resolves the canonical record for a normalized URL before
+// findCanonicalLink resolves the canonical record for a normalized URL before
 // falling back to the raw source_key/url match, so a confirmation reuses the
 // same row /api/links would have reused rather than inserting alongside it.
-var findInboxSavedLinkSQL = "SELECT id,deleted_at IS NOT NULL,feed_managed FROM links WHERE " +
+var findCanonicalLinkSQL = "SELECT id FROM links WHERE " +
 	"(" + canonicalLinkMatch("$1") + " OR source_key=$1 OR url=$1) ORDER BY " +
 	canonicalLinkMatch("$1") + " DESC, (source_key=$1) DESC, created_at ASC, id ASC LIMIT 1 FOR UPDATE"
-
-type inboxSavedLink struct {
-	id          uuid.UUID
-	trashed     bool
-	feedManaged bool
-}
 
 func lockCanonicalLinkIdentity(ctx context.Context, db database.Querier, identity string) error {
 	if _, err := db.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "canonical-link:"+identity); err != nil {
@@ -3964,16 +3627,16 @@ func lockCanonicalLinkIdentity(ctx context.Context, db database.Querier, identit
 	return nil
 }
 
-func findInboxSavedLink(ctx context.Context, db database.Querier, rawURL string) (*inboxSavedLink, error) {
-	var link inboxSavedLink
-	err := db.QueryRow(ctx, findInboxSavedLinkSQL, rawURL).Scan(&link.id, &link.trashed, &link.feedManaged)
+func findCanonicalLink(ctx context.Context, db database.Querier, rawURL string) (*uuid.UUID, error) {
+	var linkID uuid.UUID
+	err := db.QueryRow(ctx, findCanonicalLinkSQL, rawURL).Scan(&linkID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("find existing saved link: %w", err)
 	}
-	return &link, nil
+	return &linkID, nil
 }
 
 // insertInboxSavedLink materializes a confirmed Inbox capture as a Library
@@ -3989,22 +3652,22 @@ func insertInboxSavedLink(ctx context.Context, db database.Querier, item model.R
 		INSERT INTO links (
 			url,source_kind,source_key,input_title,input_text,title,summary,tags,status,
 			content,content_document,content_format,content_source,content_revision,
-			library_kind,library_kind_source,first_collected_at,created_at,updated_at)
+			library_kind,library_kind_locked,first_collected_at,created_at,updated_at)
 			VALUES ($1,$2,$3,$5,$4,$5,$6,COALESCE($7::text[],'{}'::text[]),'done',$4,
 				NULLIF($8::text,''),
 				CASE WHEN NULLIF($8::text,'') IS NULL THEN 'plain' ELSE COALESCE(NULLIF($9::text,''),'plain') END,
-				'user',1,'reading','user',NOW(),NOW(),NOW())
+				'user',1,'reading',true,NOW(),NOW(),NOW())
 			ON CONFLICT (source_key) DO NOTHING
 			RETURNING id`, item.URL, item.SourceKind, identityURL, item.Body, item.Title, item.Summary, item.Tags, item.BodyDocument, string(item.BodyFormat)).Scan(&linkID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		matched, findErr := findInboxSavedLink(ctx, db, identityURL)
+		matched, findErr := findCanonicalLink(ctx, db, identityURL)
 		if findErr != nil {
 			return nil, false, findErr
 		}
 		if matched == nil {
 			return nil, false, fmt.Errorf("confirm inbox conflict did not resolve canonical link")
 		}
-		return &matched.id, false, nil
+		return matched, false, nil
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("confirm inbox create link: %w", err)
@@ -4028,7 +3691,7 @@ func (r *PGXReaderVNextRepository) BulkConfirmInbox(ctx context.Context, confirm
 		}
 		expectedRevisions[confirmation.ID] = confirmation.ExpectedRevision
 	}
-	return r.bulkInboxTransition(ctx, ids, "confirmed", expectedRevisions)
+	return r.bulkConfirmInbox(ctx, ids, expectedRevisions)
 }
 
 const readerInboxAIProposalBatchSize = 100
@@ -4043,27 +3706,21 @@ func (r *PGXReaderVNextRepository) ConfirmAIProposals(ctx context.Context, parti
 
 	result := model.ReaderInboxAIProposalConfirmation{Items: make([]model.ReaderInboxBulkResult, 0, readerInboxAIProposalBatchSize)}
 	err := r.withTx(ctx, func(db database.Querier) error {
-		if err := prelockLibraryFeedRevisions(ctx, db); err != nil {
-			return err
-		}
-		partitionClause := `inbox.expired_at IS NULL`
+		partitionClause := `(inbox.expires_at IS NULL OR inbox.expires_at > NOW())`
 		if partition == model.ReaderInboxPartitionExpired {
-			partitionClause = `inbox.expired_at IS NOT NULL`
+			partitionClause = `inbox.expires_at IS NOT NULL AND inbox.expires_at <= NOW()`
 		}
 		rows, err := db.Query(ctx, `
 			SELECT `+readerInboxColumnsQualified+`
 			FROM reader_inbox inbox
-			JOIN reader_inbox_jobs job
-			  ON job.id=inbox.job_id AND job.inbox_id=inbox.id
 			WHERE inbox.status='pending'
 				AND inbox.deleted_at IS NULL
 				AND `+partitionClause+`
 				AND btrim(COALESCE(inbox.title,'')) <> ''
-				AND job.status='completed'
-				AND job.expected_metadata_revision=inbox.metadata_revision
+				AND inbox.proposal_status='completed'
 			ORDER BY inbox.created_at ASC,inbox.id ASC
 			LIMIT $1
-			FOR UPDATE OF inbox,job`, readerInboxAIProposalBatchSize)
+			FOR UPDATE OF inbox`, readerInboxAIProposalBatchSize)
 		if err != nil {
 			return fmt.Errorf("select AI-ready inbox proposals: %w", err)
 		}
@@ -4094,14 +3751,11 @@ func (r *PGXReaderVNextRepository) ConfirmAIProposals(ctx context.Context, parti
 		if err := db.QueryRow(ctx, `
 			SELECT count(*)::int
 			FROM reader_inbox inbox
-			JOIN reader_inbox_jobs job
-			  ON job.id=inbox.job_id AND job.inbox_id=inbox.id
 			WHERE inbox.status='pending'
 				AND inbox.deleted_at IS NULL
 				AND `+partitionClause+`
 				AND btrim(COALESCE(inbox.title,'')) <> ''
-				AND job.status='completed'
-				AND job.expected_metadata_revision=inbox.metadata_revision`).Scan(&remaining); err != nil {
+				AND inbox.proposal_status='completed'`).Scan(&remaining); err != nil {
 			return fmt.Errorf("count remaining AI-ready inbox proposals: %w", err)
 		}
 		result.RemainingCount = remaining
@@ -4113,23 +3767,9 @@ func (r *PGXReaderVNextRepository) ConfirmAIProposals(ctx context.Context, parti
 	return result, nil
 }
 
-func (r *PGXReaderVNextRepository) BulkUpdateInboxStatus(ctx context.Context, ids []uuid.UUID, status string) ([]model.ReaderInboxBulkResult, error) {
-	if status == "confirmed" {
-		confirmations := make([]model.ReaderInboxBulkConfirmation, 0, len(ids))
-		for _, id := range ids {
-			confirmations = append(confirmations, model.ReaderInboxBulkConfirmation{ID: id})
-		}
-		return r.BulkConfirmInbox(ctx, confirmations)
-	}
-	if status != "discarded" {
-		return nil, ErrReaderInboxStateConflict
-	}
-	return r.bulkInboxTransition(ctx, ids, status, nil)
-}
-
-func (r *PGXReaderVNextRepository) bulkInboxTransition(ctx context.Context, ids []uuid.UUID, status string, expectedRevisions map[uuid.UUID]*int64) ([]model.ReaderInboxBulkResult, error) {
-	if (status != "confirmed" && status != "discarded") || len(ids) == 0 || len(ids) > 100 {
-		return nil, ErrReaderInboxStateConflict
+func prepareInboxBatch(ids []uuid.UUID) ([]uuid.UUID, []uuid.UUID, error) {
+	if len(ids) == 0 || len(ids) > 100 {
+		return nil, nil, ErrReaderInboxStateConflict
 	}
 	ordered := append([]uuid.UUID(nil), ids...)
 	seen := make(map[uuid.UUID]struct{}, len(ordered))
@@ -4143,25 +3783,18 @@ func (r *PGXReaderVNextRepository) bulkInboxTransition(ctx context.Context, ids 
 	}
 	lockOrder := append([]uuid.UUID(nil), unique...)
 	sort.Slice(lockOrder, func(i, j int) bool { return lockOrder[i].String() < lockOrder[j].String() })
+	return unique, lockOrder, nil
+}
+
+func (r *PGXReaderVNextRepository) bulkConfirmInbox(ctx context.Context, ids []uuid.UUID, expectedRevisions map[uuid.UUID]*int64) ([]model.ReaderInboxBulkResult, error) {
+	unique, lockOrder, err := prepareInboxBatch(ids)
+	if err != nil {
+		return nil, err
+	}
 	byID := make(map[uuid.UUID]model.ReaderInboxBulkResult, len(unique))
-	err := r.withTx(ctx, func(db database.Querier) error {
-		if status == "confirmed" {
-			if err := prelockLibraryFeedRevisions(ctx, db); err != nil {
-				return err
-			}
-		}
+	err = r.withTx(ctx, func(db database.Querier) error {
 		for _, id := range lockOrder {
-			var result model.ReaderInboxBulkResult
-			var err error
-			if status == "confirmed" {
-				result, err = r.confirmInboxOn(ctx, db, id, expectedRevisions[id])
-			} else {
-				var item *model.ReaderInbox
-				item, err = r.updateInboxStatusOn(ctx, db, id, status)
-				if err == nil {
-					result = model.ReaderInboxBulkResult{ID: id, Status: item.Status}
-				}
-			}
+			result, err := r.confirmInboxOn(ctx, db, id, expectedRevisions[id])
 			if err != nil {
 				return err
 			}
@@ -4179,420 +3812,107 @@ func (r *PGXReaderVNextRepository) bulkInboxTransition(ctx context.Context, ids 
 	return results, nil
 }
 
-func (r *PGXReaderVNextRepository) BeginInboxResummarizeJob(ctx context.Context, inboxID uuid.UUID, expectedRevision int64) (*model.ReaderInboxJob, bool, error) {
-	var out *model.ReaderInboxJob
-	created := false
-	err := r.withTx(ctx, func(db database.Querier) error {
-		var err error
-		out, created, err = r.beginInboxResummarizeJobOn(ctx, db, inboxID, expectedRevision)
-		return err
-	})
+func (r *PGXReaderVNextRepository) BulkDiscardInbox(ctx context.Context, ids []uuid.UUID) ([]model.ReaderInboxBulkResult, error) {
+	unique, lockOrder, err := prepareInboxBatch(ids)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return out, created, nil
-}
-
-// BeginInboxResummarizeJobTx creates or reuses the proposal attempt without
-// opening a nested transaction. The durable command inserts the River row
-// before committing the caller-owned transaction.
-func (r *PGXReaderVNextRepository) BeginInboxResummarizeJobTx(ctx context.Context, tx pgx.Tx, inboxID uuid.UUID, expectedRevision int64) (*model.ReaderInboxJob, bool, error) {
-	return r.beginInboxResummarizeJobOn(ctx, tx, inboxID, expectedRevision)
-}
-
-// ReaderInboxDispatchOrphan is an active Inbox proposal attempt with no exact
-// active River job. It contains identities only; proposal content never enters
-// the reconciliation path.
-type ReaderInboxDispatchOrphan struct {
-	JobID                    uuid.UUID
-	InboxID                  uuid.UUID
-	ExpectedMetadataRevision int64
-	Status                   string
-}
-
-const claimInboxDispatchOrphansSQL = `
-	SELECT j.id,i.id,j.expected_metadata_revision,j.status
-	FROM reader_inbox_jobs AS j
-	JOIN reader_inbox AS i ON i.job_id=j.id AND j.inbox_id=i.id
-	WHERE i.status='pending'
-		AND i.deleted_at IS NULL
-		AND i.proposal_status IN ('pending','running')
-		AND j.status IN ('queued','running')
-		AND NOT EXISTS (
-			SELECT 1
-			FROM river_job AS active_job
-			WHERE active_job.kind=$1
-				AND active_job.args->>'job_id'=j.id::text
-				AND active_job.args->>'inbox_id'=i.id::text
-				AND active_job.args->>'expected_metadata_revision'=j.expected_metadata_revision::text
-				AND active_job.state IN ('available','pending','retryable','running','scheduled')
-		)
-	ORDER BY j.created_at,j.id
-	LIMIT $2
-	FOR UPDATE OF i,j SKIP LOCKED`
-
-const countInboxDispatchOrphansSQL = `
-	SELECT count(*)
-	FROM reader_inbox_jobs AS j
-	JOIN reader_inbox AS i ON i.job_id=j.id AND j.inbox_id=i.id
-	WHERE i.status='pending'
-		AND i.deleted_at IS NULL
-		AND i.proposal_status IN ('pending','running')
-		AND j.status IN ('queued','running')
-		AND NOT EXISTS (
-			SELECT 1
-			FROM river_job AS active_job
-			WHERE active_job.kind=$1
-				AND active_job.args->>'job_id'=j.id::text
-				AND active_job.args->>'inbox_id'=i.id::text
-				AND active_job.args->>'expected_metadata_revision'=j.expected_metadata_revision::text
-				AND active_job.state IN ('available','pending','retryable','running','scheduled')
-		)`
-
-// ClaimInboxDispatchOrphansTx locks one deterministic, bounded batch. SKIP
-// LOCKED lets replicas repair disjoint rows while the Inbox lock serializes
-// against edits and explicit resummarize requests.
-func (r *PGXReaderVNextRepository) ClaimInboxDispatchOrphansTx(ctx context.Context, tx pgx.Tx, riverKind string, limit int) ([]ReaderInboxDispatchOrphan, error) {
-	rows, err := tx.Query(ctx, claimInboxDispatchOrphansSQL, riverKind, limit)
-	if err != nil {
-		return nil, fmt.Errorf("claim inbox dispatch orphans: %w", err)
-	}
-	defer rows.Close()
-
-	orphans := make([]ReaderInboxDispatchOrphan, 0, limit)
-	for rows.Next() {
-		var orphan ReaderInboxDispatchOrphan
-		if err := rows.Scan(&orphan.JobID, &orphan.InboxID, &orphan.ExpectedMetadataRevision, &orphan.Status); err != nil {
-			return nil, fmt.Errorf("claim inbox dispatch orphans: scan: %w", err)
-		}
-		orphans = append(orphans, orphan)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("claim inbox dispatch orphans: rows: %w", err)
-	}
-	return orphans, nil
-}
-
-// ResetInboxDispatchOrphanTx makes a stranded running attempt runnable before
-// its replacement River row becomes visible in the same transaction.
-func (r *PGXReaderVNextRepository) ResetInboxDispatchOrphanTx(ctx context.Context, tx pgx.Tx, jobID uuid.UUID) error {
-	result, err := tx.Exec(ctx, `
-		UPDATE reader_inbox_jobs
-		SET status='queued',started_at=NULL,updated_at=NOW()
-		WHERE id=$1 AND status='running'`, jobID)
-	if err != nil {
-		return fmt.Errorf("reset inbox dispatch orphan: %w", err)
-	}
-	if result.RowsAffected() != 1 {
-		return fmt.Errorf("reset inbox dispatch orphan: job %s is no longer running", jobID)
-	}
-	return nil
-}
-
-// CountInboxDispatchOrphans returns only the aggregate backlog used by
-// observability; no Inbox payload or row identity leaves the repository.
-func (r *PGXReaderVNextRepository) CountInboxDispatchOrphans(ctx context.Context, riverKind string) (int64, error) {
-	var count int64
-	if err := r.db.QueryRow(ctx, countInboxDispatchOrphansSQL, riverKind).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count inbox dispatch orphans: %w", err)
-	}
-	return count, nil
-}
-
-func (r *PGXReaderVNextRepository) beginInboxResummarizeJobOn(ctx context.Context, db database.Querier, inboxID uuid.UUID, expectedRevision int64) (*model.ReaderInboxJob, bool, error) {
-	var currentRevision int64
-	var currentJobID *uuid.UUID
-	if err := db.QueryRow(ctx, `
-			SELECT metadata_revision,job_id
-			FROM reader_inbox
-			WHERE id=$1 AND status='pending' AND deleted_at IS NULL
-			FOR UPDATE`, inboxID).Scan(&currentRevision, &currentJobID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, false, ErrNotFound
-		}
-		return nil, false, fmt.Errorf("begin inbox job: lock inbox: %w", err)
-	}
-	if currentRevision != expectedRevision {
-		return nil, false, ErrRevisionConflict
-	}
-
-	if currentJobID != nil {
-		job, err := scanReaderInboxJob(db.QueryRow(ctx, `
-			SELECT `+readerInboxJobColumns+`
-			FROM reader_inbox_jobs
-			WHERE id=$1`, *currentJobID))
-		if err == nil && (job.Status == "queued" || job.Status == "running") {
-			return job, false, nil
-		}
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return nil, false, fmt.Errorf("begin inbox job: read existing job: %w", err)
-		}
-	}
-
-	jobID := uuid.New()
-	if _, err := db.Exec(ctx, `
-			INSERT INTO reader_inbox_jobs
-				(id,inbox_id,expected_metadata_revision,status)
-			VALUES ($1,$2,$3,'queued')`,
-		jobID, inboxID, expectedRevision); err != nil {
-		return nil, false, fmt.Errorf("begin inbox job: insert job: %w", err)
-	}
-	if _, err := db.Exec(ctx, `
-			UPDATE reader_inbox
-			SET job_id=$1,proposal_status='pending',updated_at=NOW()
-			WHERE id=$2 AND deleted_at IS NULL`, jobID, inboxID); err != nil {
-		return nil, false, fmt.Errorf("begin inbox job: link job: %w", err)
-	}
-	out, err := scanReaderInboxJob(db.QueryRow(ctx, `
-			SELECT `+readerInboxJobColumns+`
-			FROM reader_inbox_jobs
-			WHERE id=$1`, jobID))
-	if err != nil {
-		return nil, false, fmt.Errorf("begin inbox job: read inserted job: %w", err)
-	}
-	return out, true, nil
-}
-
-func (r *PGXReaderVNextRepository) GetInboxJob(ctx context.Context, jobID uuid.UUID) (*model.ReaderInboxJob, error) {
-	job, err := scanReaderInboxJob(r.db.QueryRow(ctx, `
-		SELECT `+readerInboxJobColumns+`
-		FROM reader_inbox_jobs
-		WHERE id=$1`, jobID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get inbox job: %w", err)
-	}
-	return job, nil
-}
-
-func (r *PGXReaderVNextRepository) ClaimInboxJob(ctx context.Context, jobID uuid.UUID) (*model.ReaderInboxJob, error) {
-	job, err := scanReaderInboxJob(r.db.QueryRow(ctx, `
-		UPDATE reader_inbox_jobs
-		SET status='running',attempts=attempts+1,started_at=NOW(),updated_at=NOW(),error_message=NULL
-		WHERE id=$1 AND status='queued'
-		RETURNING `+readerInboxJobColumns, jobID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		if _, lookupErr := r.GetInboxJob(ctx, jobID); errors.Is(lookupErr, ErrNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, ErrReaderInboxJobNotRunnable
-	}
-	if err != nil {
-		return nil, fmt.Errorf("claim inbox job: %w", err)
-	}
-	return job, nil
-}
-
-func (r *PGXReaderVNextRepository) RetryInboxJob(ctx context.Context, jobID uuid.UUID, message string) error {
-	result, err := r.db.Exec(ctx, `
-		UPDATE reader_inbox_jobs
-		SET status='queued',error_message=$2,started_at=NULL,updated_at=NOW()
-		WHERE id=$1 AND status='running'`, jobID, truncateReaderJobError(message))
-	if err != nil {
-		return fmt.Errorf("retry inbox job: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return ErrReaderInboxJobNotRunnable
-	}
-	return nil
-}
-
-func (r *PGXReaderVNextRepository) FailInboxJob(ctx context.Context, jobID uuid.UUID, message string) error {
-	result, err := r.db.Exec(ctx, `
-		UPDATE reader_inbox_jobs
-		SET status='failed',error_message=$2,finished_at=NOW(),updated_at=NOW()
-		WHERE id=$1 AND status IN ('queued','running')`, jobID, truncateReaderJobError(message))
-	if err != nil {
-		return fmt.Errorf("fail inbox job: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return ErrReaderInboxJobNotRunnable
-	}
-	return nil
-}
-
-func (r *PGXReaderVNextRepository) CompleteInboxJob(ctx context.Context, jobID uuid.UUID, summary string, suggestedTags []string) error {
-	return r.withTx(ctx, func(db database.Querier) error {
-		var inboxID uuid.UUID
-		var expectedRevision int64
-		var status string
-		if err := db.QueryRow(ctx, `
-			SELECT inbox_id,expected_metadata_revision,status
-			FROM reader_inbox_jobs
-			WHERE id=$1
-			FOR UPDATE`, jobID).Scan(&inboxID, &expectedRevision, &status); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
+	err = r.withTx(ctx, func(db database.Querier) error {
+		for _, id := range lockOrder {
+			if err := r.discardInboxOn(ctx, db, id); err != nil {
+				return err
 			}
-			return fmt.Errorf("complete inbox job: lock job: %w", err)
-		}
-		if status == "completed" {
-			return nil
-		}
-		if status != "running" {
-			return ErrReaderInboxJobNotRunnable
-		}
-		result, err := db.Exec(ctx, `
-			UPDATE reader_inbox
-			SET summary=$2,suggested_tags=COALESCE($3::text[],'{}'::text[]),proposal_status='completed',updated_at=NOW()
-			WHERE id=$1 AND status='pending' AND deleted_at IS NULL`,
-			inboxID, strings.TrimSpace(summary), suggestedTags)
-		if err != nil {
-			return fmt.Errorf("complete inbox job: update inbox: %w", err)
-		}
-		if result.RowsAffected() == 0 {
-			message := "inbox is no longer pending before job completed"
-			_, updateErr := db.Exec(ctx, `
-				UPDATE reader_inbox_jobs
-				SET status='failed',error_message=$2,finished_at=NOW(),updated_at=NOW()
-				WHERE id=$1`, jobID, message)
-			if updateErr != nil {
-				return fmt.Errorf("complete inbox job: record conflict: %w", updateErr)
-			}
-			return ErrRevisionConflict
-		}
-		if _, err := db.Exec(ctx, `
-			UPDATE reader_inbox_jobs
-			SET status='completed',error_message=NULL,finished_at=NOW(),updated_at=NOW()
-			WHERE id=$1`, jobID); err != nil {
-			return fmt.Errorf("complete inbox job: mark completed: %w", err)
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	results := make([]model.ReaderInboxBulkResult, 0, len(unique))
+	for _, id := range unique {
+		results = append(results, model.ReaderInboxBulkResult{ID: id, Status: "discarded"})
+	}
+	return results, nil
 }
 
-// ResummarizeInbox is retained for older repository-level tests and callers
-// that have not migrated to the durable job protocol. The ReaderVNextStore
-// interface and production service no longer expose this synchronous path.
-func (r *PGXReaderVNextRepository) ResummarizeInbox(ctx context.Context, inboxID, jobID uuid.UUID, summary string, suggestedTags []string, expectedRevision int64) error {
+// StartInboxProposalTx marks the exact draft revision as queued. The caller
+// inserts the River row in the same transaction, so there is no product/queue
+// commit gap and no orphan state to reconcile later.
+func (r *PGXReaderVNextRepository) StartInboxProposalTx(ctx context.Context, tx pgx.Tx, inboxID uuid.UUID, expectedRevision int64) (*model.ReaderInbox, error) {
+	item, err := scanReaderInbox(tx.QueryRow(ctx, `
+		UPDATE reader_inbox
+		SET proposal_status=CASE WHEN proposal_status='running' THEN 'running' ELSE 'pending' END,
+			updated_at=NOW()
+		WHERE id=$1 AND status='pending' AND deleted_at IS NULL AND metadata_revision=$2
+		RETURNING `+readerInboxColumns, inboxID, expectedRevision))
+	if errors.Is(err, pgx.ErrNoRows) {
+		var exists bool
+		if lookupErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM reader_inbox WHERE id=$1 AND deleted_at IS NULL)`, inboxID).Scan(&exists); lookupErr != nil {
+			return nil, fmt.Errorf("start inbox proposal: classify miss: %w", lookupErr)
+		}
+		if !exists {
+			return nil, ErrNotFound
+		}
+		return nil, ErrRevisionConflict
+	}
+	if err != nil {
+		return nil, fmt.Errorf("start inbox proposal: %w", err)
+	}
+	return item, nil
+}
+
+func (r *PGXReaderVNextRepository) ClaimInboxProposal(ctx context.Context, inboxID uuid.UUID, expectedRevision int64) (*model.ReaderInbox, error) {
+	item, err := scanReaderInbox(r.db.QueryRow(ctx, `
+		UPDATE reader_inbox
+		SET proposal_status='running',updated_at=NOW()
+		WHERE id=$1 AND metadata_revision=$2 AND status='pending' AND deleted_at IS NULL
+			AND proposal_status IN ('pending','running')
+		RETURNING `+readerInboxColumns, inboxID, expectedRevision))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrReaderInboxProposalNotRunnable
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claim inbox proposal: %w", err)
+	}
+	return item, nil
+}
+
+func (r *PGXReaderVNextRepository) RetryInboxProposal(ctx context.Context, inboxID uuid.UUID, expectedRevision int64) error {
+	return r.updateInboxProposalStatus(ctx, inboxID, expectedRevision, "running", "pending")
+}
+
+func (r *PGXReaderVNextRepository) FailInboxProposal(ctx context.Context, inboxID uuid.UUID, expectedRevision int64) error {
+	return r.updateInboxProposalStatus(ctx, inboxID, expectedRevision, "running", "failed")
+}
+
+func (r *PGXReaderVNextRepository) updateInboxProposalStatus(ctx context.Context, inboxID uuid.UUID, expectedRevision int64, from, to string) error {
 	result, err := r.db.Exec(ctx, `
 		UPDATE reader_inbox
-		SET summary=$1,suggested_tags=COALESCE($2::text[],'{}'::text[]),proposal_status='completed',job_id=$3,updated_at=NOW()
-		WHERE id=$4 AND status='pending' AND deleted_at IS NULL`,
-		summary, suggestedTags, jobID, inboxID)
+		SET proposal_status=$4,updated_at=NOW()
+		WHERE id=$1 AND metadata_revision=$2 AND status='pending' AND deleted_at IS NULL
+			AND proposal_status=$3`, inboxID, expectedRevision, from, to)
 	if err != nil {
-		return fmt.Errorf("resummarize inbox: %w", err)
+		return fmt.Errorf("update inbox proposal status: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return ErrRevisionConflict
+		return ErrReaderInboxProposalNotRunnable
 	}
 	return nil
 }
 
-func truncateReaderJobError(message string) string {
-	message = strings.TrimSpace(message)
-	if len(message) > 512 {
-		return message[:512]
-	}
-	return message
-}
-
-func (r *PGXReaderVNextRepository) CreateCategory(ctx context.Context, name string) (*model.ReaderCategory, error) {
-	var item model.ReaderCategory
-	err := r.db.QueryRow(ctx, `
-		INSERT INTO reader_categories (name) VALUES ($1)
-		ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name
-		RETURNING id,name,created_at`, strings.TrimSpace(name)).Scan(&item.ID, &item.Name, &item.CreatedAt)
+func (r *PGXReaderVNextRepository) CompleteInboxProposal(ctx context.Context, inboxID uuid.UUID, expectedRevision int64, summary string, suggestedTags []string) error {
+	result, err := r.db.Exec(ctx, `
+		UPDATE reader_inbox
+		SET summary=$3,suggested_tags=COALESCE($4::text[],'{}'::text[]),
+			proposal_status='completed',updated_at=NOW()
+		WHERE id=$1 AND metadata_revision=$2 AND status='pending' AND deleted_at IS NULL
+			AND proposal_status='running'`,
+		inboxID, expectedRevision, strings.TrimSpace(summary), suggestedTags)
 	if err != nil {
-		return nil, fmt.Errorf("create category: %w", err)
-	}
-	return &item, nil
-}
-
-func (r *PGXReaderVNextRepository) ListCategories(ctx context.Context) ([]model.ReaderCategory, error) {
-	rows, err := r.db.Query(ctx, `
-		SELECT c.id,c.name,c.created_at,count(rc.host_id)::int
-		FROM reader_categories c
-		LEFT JOIN reader_categorizables rc ON rc.category_id=c.id
-		GROUP BY c.id,c.name,c.created_at
-		ORDER BY c.name,c.id`)
-	if err != nil {
-		return nil, fmt.Errorf("list categories: %w", err)
-	}
-	defer rows.Close()
-	out := make([]model.ReaderCategory, 0, 32)
-	for rows.Next() {
-		var item model.ReaderCategory
-		if err := rows.Scan(&item.ID, &item.Name, &item.CreatedAt, &item.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, item)
-	}
-	return out, rows.Err()
-}
-
-func (r *PGXReaderVNextRepository) DeleteCategory(ctx context.Context, id uuid.UUID) error {
-	result, err := r.db.Exec(ctx, `DELETE FROM reader_categories WHERE id=$1`, id)
-	if err != nil {
-		return fmt.Errorf("delete category: %w", err)
+		return fmt.Errorf("complete inbox proposal: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-func (r *PGXReaderVNextRepository) SetCategoryMembership(ctx context.Context, categoryID uuid.UUID, hostKind, hostID string, present bool) error {
-	hostKind = strings.TrimSpace(hostKind)
-	hostID = strings.TrimSpace(hostID)
-	if !readerCategoryHostKind(hostKind) || hostID == "" {
-		return ErrInvalidReaderCategoryMembership
-	}
-	return r.withTx(ctx, func(db database.Querier) error {
-		var categoryExists bool
-		if err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM reader_categories WHERE id=$1)`, categoryID).Scan(&categoryExists); err != nil {
-			return fmt.Errorf("check category membership category: %w", err)
-		}
-		if !categoryExists {
-			return ErrNotFound
-		}
-		if present {
-			if err := readerCategoryHostExists(ctx, db, hostKind, hostID); err != nil {
-				return err
-			}
-			_, err := db.Exec(ctx, `
-				INSERT INTO reader_categorizables (category_id,host_kind,host_id)
-				VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, categoryID, hostKind, hostID)
-			return err
-		}
-		_, err := db.Exec(ctx, `DELETE FROM reader_categorizables WHERE category_id=$1 AND host_kind=$2 AND host_id=$3`, categoryID, hostKind, hostID)
-		return err
-	})
-}
-
-func readerCategoryHostKind(hostKind string) bool {
-	switch hostKind {
-	case "link", "note", "inbox":
-		return true
-	default:
-		return false
-	}
-}
-
-func readerCategoryHostExists(ctx context.Context, db database.Querier, hostKind, hostID string) error {
-	id, err := uuid.Parse(hostID)
-	if err != nil {
-		return ErrInvalidReaderCategoryMembership
-	}
-	var exists bool
-	var query string
-	switch hostKind {
-	case "link":
-		query = `SELECT EXISTS(SELECT 1 FROM links WHERE id=$1 AND deleted_at IS NULL)`
-	case "note":
-		query = `SELECT EXISTS(SELECT 1 FROM reader_notes WHERE id=$1 AND deleted_at IS NULL)`
-	case "inbox":
-		query = `SELECT EXISTS(SELECT 1 FROM reader_inbox WHERE id=$1 AND deleted_at IS NULL)`
-	default:
-		return ErrInvalidReaderCategoryMembership
-	}
-	if err := db.QueryRow(ctx, query, id).Scan(&exists); err != nil {
-		return fmt.Errorf("check category host: %w", err)
-	}
-	if !exists {
-		return ErrNotFound
+		return ErrReaderInboxProposalNotRunnable
 	}
 	return nil
 }
@@ -4606,19 +3926,6 @@ func (r *PGXReaderVNextRepository) CreateTodo(ctx context.Context, todo model.Re
 		return nil, fmt.Errorf("create todo: %w", err)
 	}
 	return created, nil
-}
-
-func (r *PGXReaderVNextRepository) UpsertTodoProjection(ctx context.Context, todo model.ReaderTodo) (*model.ReaderTodo, error) {
-	var out *model.ReaderTodo
-	err := r.withTx(ctx, func(db database.Querier) error {
-		var err error
-		out, err = r.upsertTodoProjection(ctx, db, todo)
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("upsert todo projection: %w", err)
-	}
-	return out, nil
 }
 
 func (r *PGXReaderVNextRepository) upsertTodoProjection(ctx context.Context, db database.Querier, todo model.ReaderTodo) (*model.ReaderTodo, error) {
@@ -4643,8 +3950,8 @@ func (r *PGXReaderVNextRepository) upsertTodoProjection(ctx context.Context, db 
 	if !errors.Is(lookupErr, pgx.ErrNoRows) {
 		return nil, lookupErr
 	}
-	// FOR UPDATE 锁不住还不存在的行：两个并发的纯读请求（…/home 与 …/todos 都会
-	// 同步投影）会同时走到这里各插一次，输家拿到 23505 并把一次 GET 变成 500。
+	// FOR UPDATE 锁不住还不存在的行：两个并发 host 写请求会同时走到这里各插一次，
+	// 输家会拿到 23505。
 	// ON CONFLICT 必须完整复述 idx_reader_todos_projection 的部分索引谓词才能被
 	// 推断，DO UPDATE 与上面的 UPDATE 分支保持同样的"host 权威"语义。
 	return scanReaderTodo(db.QueryRow(ctx, `
@@ -4657,25 +3964,6 @@ func (r *PGXReaderVNextRepository) upsertTodoProjection(ctx context.Context, db 
 				completed_at=CASE WHEN EXCLUDED.done THEN COALESCE(reader_todos.completed_at,NOW()) ELSE NULL END,
 				updated_at=NOW()
 			RETURNING `+readerTodoColumns, todo.Text, todo.DueAt, todo.Done, todo.OriginKind, todo.OriginHostKind, todo.OriginHostID, rawJSON(todo.OriginRef), todo.HostRevision, todo.CompletedAt))
-}
-
-func (r *PGXReaderVNextRepository) ReconcileTodoProjections(ctx context.Context, todos []model.ReaderTodo) error {
-	return r.withTx(ctx, func(db database.Querier) error {
-		return r.reconcileTodoProjectionsOn(ctx, db, todos)
-	})
-}
-
-// reconcileTodoProjectionsOn is the single reconcile body every caller shares,
-// so "a dismissed projection stays dismissed" is one rule rather than one rule
-// per entry point. Home used to run its own pass that read only the live rows;
-// without the soft-deleted keys it could not tell a tombstone from a missing
-// row and silently resurrected a projection the user had already dismissed.
-func (r *PGXReaderVNextRepository) reconcileTodoProjectionsOn(ctx context.Context, db database.Querier, todos []model.ReaderTodo) error {
-	existing, err := readerExistingTodoProjections(ctx, db)
-	if err != nil {
-		return err
-	}
-	return r.applyTodoProjectionsOn(ctx, db, todos, existing)
 }
 
 // refreshTodoProjections writes back every projection the authoritative host
@@ -4720,23 +4008,6 @@ type readerExistingTodoProjection struct {
 	hostID    *string
 	originRef []byte
 	deletedAt *time.Time
-}
-
-// readerExistingTodoProjections reads every projection key, including the
-// soft-deleted ones, inside the caller's transaction and with FOR UPDATE. The
-// reconcile pass needs the deleted keys as tombstones: without them a refresh
-// would silently recreate a projected TODO the user already dismissed.
-func readerExistingTodoProjections(ctx context.Context, db database.Querier) ([]readerExistingTodoProjection, error) {
-	rows, err := db.Query(ctx, `
-		SELECT id,origin_kind,origin_host_id,origin_ref,deleted_at
-		FROM reader_todos
-		WHERE origin_kind <> 'standalone'
-		ORDER BY id
-		FOR UPDATE`)
-	if err != nil {
-		return nil, fmt.Errorf("list existing todo projections: %w", err)
-	}
-	return scanReaderExistingTodoProjections(rows)
 }
 
 func scanReaderExistingTodoProjections(rows pgx.Rows) ([]readerExistingTodoProjection, error) {
@@ -5150,42 +4421,6 @@ func (r *PGXReaderVNextRepository) PatchEngagement(ctx context.Context, patch mo
 	return item, nil
 }
 
-func (r *PGXReaderVNextRepository) ListContinueReading(ctx context.Context, limit int) ([]model.ReaderFeedItem, error) {
-	if limit <= 0 || limit > 10 {
-		limit = 3
-	}
-	rows, err := r.db.Query(ctx, `
-		SELECT l.id,l.url,COALESCE(l.title,''),COALESCE(l.summary,''),
-			COALESCE(e.read,false),COALESCE(e.read_later,false),COALESCE(e.progress,0),
-			e.last_opened,l.created_at
-		FROM links l JOIN reader_engagement e ON e.link_id=l.id
-		WHERE l.status='done' AND l.library_kind='reading' AND l.deleted_at IS NULL
-			AND e.progress > 0 AND e.progress < 1 AND e.last_opened IS NOT NULL
-		ORDER BY e.last_opened DESC,e.updated_at DESC,l.id DESC LIMIT $1`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("list continue reading: %w", err)
-	}
-	defer rows.Close()
-	out := make([]model.ReaderFeedItem, 0, alloc.Hint(limit))
-	for rows.Next() {
-		var item model.ReaderFeedItem
-		var id uuid.UUID
-		var progress float32
-		var lastOpened time.Time
-		if err := rows.Scan(&id, &item.URL, &item.Title, &item.Summary, &item.Read, &item.ReadLater, &progress, &lastOpened, &item.CreatedAt); err != nil {
-			return nil, err
-		}
-		item.Key = "link:" + id.String()
-		item.Source = "reading"
-		item.LinkID = &id
-		item.ReasonCode = model.ReaderFeedReasonContinueReading
-		item.ReasonText = fmt.Sprintf("已读 %.0f%%，继续阅读", progress*100)
-		item.PublishedAt = &lastOpened
-		out = append(out, item)
-	}
-	return out, rows.Err()
-}
-
 func (r *PGXReaderVNextRepository) HomeCounts(ctx context.Context) (map[string]int, error) {
 	counts, err := homeCountsOn(ctx, r.db)
 	if err != nil {
@@ -5195,43 +4430,24 @@ func (r *PGXReaderVNextRepository) HomeCounts(ctx context.Context) (map[string]i
 }
 
 type readerFeedCursor struct {
-	SnapshotID    string
-	Offset        int
-	EventAt       time.Time
-	ResourceKey   string
-	Chronological bool
+	Mode        string
+	Sources     []string
+	Score       int
+	CreatedAt   time.Time
+	EventAt     time.Time
+	ResourceKey string
+	Key         string
 }
 
-type readerFeedChronologicalCursorWire struct {
-	Version     int    `json:"version"`
-	SnapshotID  string `json:"snapshot_id"`
-	EventAt     string `json:"event_at"`
-	ResourceKey string `json:"resource_key"`
-}
-
-// readerFeedSnapshotEnvelope keeps the immutable ordering separate from the
-// live resource/action identities. The database column predates source
-// filters, so the filter is stored in the JSON payload and participates in
-// cursor validation without requiring another migration.
-type readerFeedSnapshotEnvelope struct {
-	Version      int                       `json:"version"`
-	Mode         string                    `json:"mode"`
-	Sources      []string                  `json:"sources"`
-	Capabilities []string                  `json:"capabilities"`
-	Sections     []model.ReaderFeedSection `json:"sections"`
-	SourceMeta   []model.ReaderFeedSource  `json:"source_metadata"`
-	Items        []readerFeedSnapshotItem  `json:"items"`
-}
-
-type readerFeedSnapshotItem struct {
-	ItemType    string               `json:"item_type"`
-	Source      string               `json:"source"`
-	SectionID   string               `json:"section_id"`
-	ResourceKey string               `json:"resource_key"`
-	ActionKey   string               `json:"action_key"`
-	DedupeKey   string               `json:"dedupe_key"`
-	Actions     []string             `json:"actions"`
-	Item        model.ReaderFeedItem `json:"item"`
+type readerFeedCursorWire struct {
+	Version     int      `json:"version"`
+	Mode        string   `json:"mode"`
+	Sources     []string `json:"sources"`
+	Score       *int     `json:"score,omitempty"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+	EventAt     string   `json:"event_at,omitempty"`
+	ResourceKey string   `json:"resource_key,omitempty"`
+	Key         string   `json:"key"`
 }
 
 func normalizeRepositoryFeedSources(raw []string) ([]string, error) {
@@ -5269,9 +4485,6 @@ func normalizeRepositoryFeedSources(raw []string) ([]string, error) {
 }
 
 func sameRepositoryFeedSources(left, right []string) bool {
-	if len(left) == 0 && len(right) == 0 {
-		return true
-	}
 	if len(left) != len(right) {
 		return false
 	}
@@ -5287,548 +4500,6 @@ func hasRepositoryFeedSource(sources []string, source string) bool {
 	return len(sources) == 0 || slices.Contains(sources, source)
 }
 
-func readerFeedResourceKey(item model.ReaderFeedItem) string {
-	return item.ResourceIdentity()
-}
-
-var readerFeedSourceOrder = []string{"inbox", "reading", "subscription"}
-
-func readerFeedSourceLabel(source string) string {
-	switch source {
-	case "inbox":
-		return "收件箱"
-	case "reading":
-		return "收藏"
-	case "subscription":
-		return "订阅"
-	default:
-		return source
-	}
-}
-
-func readerFeedContainsSource(sources []string, source string) bool {
-	return len(sources) == 0 || slices.Contains(sources, source)
-}
-
-func appendReaderFeedCapability(values []string, value string) []string {
-	if slices.Contains(values, value) {
-		return values
-	}
-	return append(values, value)
-}
-
-func readerFeedMetadata(items []model.ReaderFeedItem, sources []string) ([]string, []model.ReaderFeedSection, []model.ReaderFeedSource) {
-	counts := make(map[string]int, len(readerFeedSourceOrder))
-	actions := make(map[string][]string, len(readerFeedSourceOrder))
-	for _, source := range readerFeedSourceOrder {
-		counts[source] = 0
-		actions[source] = []string{}
-	}
-	for _, item := range items {
-		item = decorateReaderFeedItem(item)
-		if _, known := counts[item.Source]; !known {
-			continue
-		}
-		counts[item.Source]++
-		for _, action := range item.Actions {
-			actions[item.Source] = appendReaderFeedCapability(actions[item.Source], action)
-		}
-	}
-
-	capabilities := []string{"snapshot", "cursor", "dedupe", "reason", "source_filter"}
-	for _, source := range readerFeedSourceOrder {
-		if !readerFeedContainsSource(sources, source) {
-			continue
-		}
-		if source == "inbox" {
-			capabilities = appendReaderFeedCapability(capabilities, "inbox_batch")
-		}
-		if counts[source] == 0 && len(actions[source]) == 0 {
-			probe := decorateReaderFeedItem(model.ReaderFeedItem{Source: source})
-			actions[source] = append(actions[source], probe.Actions...)
-		}
-		if len(actions[source]) > 0 {
-			capabilities = appendReaderFeedCapability(capabilities, "actions")
-		}
-	}
-	sections := make([]model.ReaderFeedSection, 0, len(readerFeedSourceOrder))
-	sourceMeta := make([]model.ReaderFeedSource, 0, len(readerFeedSourceOrder))
-	for _, source := range readerFeedSourceOrder {
-		if !readerFeedContainsSource(sources, source) {
-			continue
-		}
-		sectionActions := cloneReaderFeedStrings(actions[source])
-		sections = append(sections, model.ReaderFeedSection{
-			ID:           source,
-			Source:       source,
-			Label:        readerFeedSourceLabel(source),
-			Count:        counts[source],
-			Capabilities: sectionActions,
-		})
-		sourceMeta = append(sourceMeta, model.ReaderFeedSource{
-			ID:           source,
-			Label:        readerFeedSourceLabel(source),
-			Enabled:      true,
-			Count:        counts[source],
-			Capabilities: cloneReaderFeedStrings(sectionActions),
-		})
-	}
-	return capabilities, sections, sourceMeta
-}
-
-func decorateReaderFeedItem(item model.ReaderFeedItem) model.ReaderFeedItem {
-	if item.Key == "" {
-		item.Key = item.ActionIdentity()
-	}
-	if item.ResourceKey == "" {
-		item.ResourceKey = readerFeedResourceKey(item)
-	}
-	if item.ActionKey == "" {
-		item.ActionKey = item.Key
-	}
-	if item.DedupeKey == "" {
-		item.DedupeKey = item.DedupeIdentity()
-	}
-	if item.SectionID == "" {
-		item.SectionID = item.Source
-	}
-	if item.Actions == nil {
-		item.Actions = item.ActionCapabilities()
-	}
-	return item
-}
-
-func cloneReaderFeedStrings(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	cloned := make([]string, len(values))
-	copy(cloned, values)
-	return cloned
-}
-
-func marshalReaderFeedSnapshot(mode string, sources []string, items []model.ReaderFeedItem) ([]byte, error) {
-	normalizedSources, err := normalizeRepositoryFeedSources(sources)
-	if err != nil {
-		return nil, err
-	}
-	if normalizedSources == nil {
-		normalizedSources = []string{}
-	}
-	wireItems := make([]readerFeedSnapshotItem, 0, len(items))
-	decorated := make([]model.ReaderFeedItem, 0, len(items))
-	for _, rawItem := range items {
-		item, err := ensureReaderFeedItemScore(decorateReaderFeedItem(rawItem))
-		if err != nil {
-			return nil, err
-		}
-		decorated = append(decorated, item)
-		wireItems = append(wireItems, readerFeedSnapshotItem{
-			ItemType:    item.Source,
-			Source:      item.Source,
-			SectionID:   item.SectionID,
-			ResourceKey: item.ResourceKey,
-			ActionKey:   item.ActionKey,
-			DedupeKey:   item.DedupeKey,
-			Actions:     cloneReaderFeedStrings(item.Actions),
-			Item:        item,
-		})
-	}
-	capabilities, sections, sourceMeta := readerFeedMetadata(decorated, normalizedSources)
-	return json.Marshal(readerFeedSnapshotEnvelope{
-		Version:      2,
-		Mode:         mode,
-		Sources:      normalizedSources,
-		Capabilities: capabilities,
-		Sections:     sections,
-		SourceMeta:   sourceMeta,
-		Items:        wireItems,
-	})
-}
-
-func validateReaderFeedCapabilityList(values []string, field string) error {
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return fmt.Errorf("%w: feed %s contains an empty capability", ErrInvalidReaderCursor, field)
-		}
-		if _, ok := seen[value]; ok {
-			return fmt.Errorf("%w: feed %s contains duplicate capability %q", ErrInvalidReaderCursor, field, value)
-		}
-		seen[value] = struct{}{}
-	}
-	return nil
-}
-
-func validateReaderFeedSnapshotMetadata(snapshot readerFeedSnapshotEnvelope, sources []string) error {
-	if snapshot.Capabilities != nil {
-		if err := validateReaderFeedCapabilityList(snapshot.Capabilities, "capabilities"); err != nil {
-			return err
-		}
-	}
-	if snapshot.Sections != nil {
-		if err := validateReaderFeedSnapshotSections(snapshot.Sections, sources); err != nil {
-			return err
-		}
-	}
-	if snapshot.SourceMeta != nil {
-		if err := validateReaderFeedSnapshotSourceMeta(snapshot.SourceMeta, sources); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateReaderFeedSnapshotSections enforces that a restored snapshot's
-// sections form a usable index: one section per id and per source, every source
-// resolvable and inside the snapshot's own source filter. A snapshot that fails
-// this would render a feed with sections that address nothing.
-func validateReaderFeedSnapshotSections(sections []model.ReaderFeedSection, sources []string) error {
-	seenIDs := make(map[string]struct{}, len(sections))
-	seenSources := make(map[string]struct{}, len(sections))
-	for _, section := range sections {
-		id := strings.TrimSpace(section.ID)
-		if id == "" {
-			return fmt.Errorf("%w: feed section id is required", ErrInvalidReaderCursor)
-		}
-		source := readerFeedSnapshotItemSource(model.ReaderFeedItem{Source: section.Source})
-		if source == "" {
-			return fmt.Errorf("%w: invalid feed section source", ErrInvalidReaderCursor)
-		}
-		if len(sources) > 0 && !slices.Contains(sources, source) {
-			return fmt.Errorf("%w: feed section source is outside the snapshot filter", ErrInvalidReaderCursor)
-		}
-		if _, ok := seenIDs[id]; ok {
-			return fmt.Errorf("%w: duplicate feed section id", ErrInvalidReaderCursor)
-		}
-		if _, ok := seenSources[source]; ok {
-			return fmt.Errorf("%w: duplicate feed section source", ErrInvalidReaderCursor)
-		}
-		seenIDs[id] = struct{}{}
-		seenSources[source] = struct{}{}
-		if section.Count < 0 {
-			return fmt.Errorf("%w: feed section count cannot be negative", ErrInvalidReaderCursor)
-		}
-		if err := validateReaderFeedCapabilityList(section.Capabilities, "section capabilities"); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateReaderFeedSnapshotSourceMeta applies the same one-entry-per-source
-// rule to the per-source counters, so a restored snapshot cannot report two
-// conflicting counts for the same feed source.
-func validateReaderFeedSnapshotSourceMeta(sourceMetas []model.ReaderFeedSource, sources []string) error {
-	seen := make(map[string]struct{}, len(sourceMetas))
-	for _, sourceMeta := range sourceMetas {
-		source := readerFeedSnapshotItemSource(model.ReaderFeedItem{Source: sourceMeta.ID})
-		if source == "" {
-			return fmt.Errorf("%w: invalid feed source metadata id", ErrInvalidReaderCursor)
-		}
-		if len(sources) > 0 && !slices.Contains(sources, source) {
-			return fmt.Errorf("%w: feed source metadata is outside the snapshot filter", ErrInvalidReaderCursor)
-		}
-		if _, ok := seen[source]; ok {
-			return fmt.Errorf("%w: duplicate feed source metadata", ErrInvalidReaderCursor)
-		}
-		seen[source] = struct{}{}
-		if sourceMeta.Count < 0 {
-			return fmt.Errorf("%w: feed source count cannot be negative", ErrInvalidReaderCursor)
-		}
-		if err := validateReaderFeedCapabilityList(sourceMeta.Capabilities, "source capabilities"); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func readerFeedSnapshotItemSource(item model.ReaderFeedItem) string {
-	source := strings.ToLower(strings.TrimSpace(item.Source))
-	switch source {
-	case "saved":
-		return "reading"
-	case "pending":
-		return "inbox"
-	case "reading", "inbox", "subscription":
-		return source
-	}
-	if item.LinkID != nil {
-		return "reading"
-	}
-	if item.InboxID != nil {
-		return "inbox"
-	}
-	if item.FeedItemID != nil {
-		return "subscription"
-	}
-	kind, _, ok := strings.Cut(strings.TrimSpace(item.Key), ":")
-	if !ok {
-		return ""
-	}
-	switch strings.ToLower(kind) {
-	case "link", "reading", "saved":
-		return "reading"
-	case "inbox", "pending":
-		return "inbox"
-	case "subscription", "feed":
-		return "subscription"
-	default:
-		return ""
-	}
-}
-
-func readerFeedExpectedActionKey(item model.ReaderFeedItem, source string) string {
-	switch source {
-	case "reading":
-		if item.LinkID != nil {
-			return "link:" + item.LinkID.String()
-		}
-	case "inbox":
-		if item.InboxID != nil {
-			return "inbox:" + item.InboxID.String()
-		}
-	case "subscription":
-		if item.FeedItemID != nil {
-			return "subscription:" + item.FeedItemID.String()
-		}
-	}
-	return strings.TrimSpace(item.Key)
-}
-
-func readerFeedExpectedResourceKey(item model.ReaderFeedItem) string {
-	withoutWireIdentity := item
-	withoutWireIdentity.ResourceKey = ""
-	return withoutWireIdentity.ResourceIdentity()
-}
-
-func sameReaderFeedStringSlice(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
-// readerFeedSnapshotHasUnionFields reports whether the wire entry carries any
-// explicit union field. That distinction decides whether a missing actions
-// field means "unknown, infer it" or "explicitly empty".
-func readerFeedSnapshotHasUnionFields(wireItem readerFeedSnapshotItem) bool {
-	return wireItem.ItemType != "" || wireItem.Source != "" || wireItem.SectionID != "" || wireItem.DedupeKey != "" || wireItem.Actions != nil
-}
-
-// resolveReaderFeedSnapshotSource reconciles the union-level and item-level
-// source metadata and returns the agreed source.
-func resolveReaderFeedSnapshotSource(wireItem readerFeedSnapshotItem) (model.ReaderFeedItem, string, error) {
-	item := wireItem.Item
-	wireSource := readerFeedSnapshotItemSource(model.ReaderFeedItem{Source: wireItem.Source})
-	itemSource := readerFeedSnapshotItemSource(item)
-	if wireItem.Source != "" && wireSource == "" {
-		return model.ReaderFeedItem{}, "", fmt.Errorf("%w: invalid feed item source", ErrInvalidReaderCursor)
-	}
-	if wireSource != "" && itemSource != "" && wireSource != itemSource {
-		return model.ReaderFeedItem{}, "", fmt.Errorf("%w: feed item source metadata is inconsistent", ErrInvalidReaderCursor)
-	}
-	source := wireSource
-	if source == "" {
-		source = itemSource
-	}
-	if source != "" {
-		if item.Source == "" || readerFeedSnapshotItemSource(item) != source {
-			item.Source = source
-		}
-	}
-	if wireItem.ItemType != "" && readerFeedSnapshotItemSource(model.ReaderFeedItem{Source: wireItem.ItemType}) != source {
-		return model.ReaderFeedItem{}, "", fmt.Errorf("%w: feed item union type is inconsistent", ErrInvalidReaderCursor)
-	}
-	return item, source, nil
-}
-
-// mergeReaderFeedSnapshotResourceKey folds the wire resource key into the item
-// after proving it agrees with both the stored and the derivable identity.
-func mergeReaderFeedSnapshotResourceKey(item model.ReaderFeedItem, wireItem readerFeedSnapshotItem) (model.ReaderFeedItem, error) {
-	if wireItem.ResourceKey == "" {
-		return item, nil
-	}
-	if item.ResourceKey != "" && item.ResourceKey != wireItem.ResourceKey {
-		return model.ReaderFeedItem{}, fmt.Errorf("%w: feed snapshot resource identity is inconsistent", ErrInvalidReaderCursor)
-	}
-	if expected := readerFeedExpectedResourceKey(item); expected != "" && expected != wireItem.ResourceKey {
-		return model.ReaderFeedItem{}, fmt.Errorf("%w: feed snapshot resource identity is inconsistent", ErrInvalidReaderCursor)
-	}
-	item.ResourceKey = wireItem.ResourceKey
-	return item, nil
-}
-
-// mergeReaderFeedSnapshotActionKey folds the wire action key into the item and
-// seeds the addressable key when the item did not carry one.
-func mergeReaderFeedSnapshotActionKey(item model.ReaderFeedItem, wireItem readerFeedSnapshotItem) (model.ReaderFeedItem, error) {
-	if wireItem.ActionKey == "" {
-		return item, nil
-	}
-	if item.ActionKey != "" && item.ActionKey != wireItem.ActionKey {
-		return model.ReaderFeedItem{}, fmt.Errorf("%w: feed snapshot action identity is inconsistent", ErrInvalidReaderCursor)
-	}
-	if item.Key != "" && item.Key != wireItem.ActionKey {
-		return model.ReaderFeedItem{}, fmt.Errorf("%w: feed snapshot action identity is inconsistent", ErrInvalidReaderCursor)
-	}
-	item.ActionKey = wireItem.ActionKey
-	if item.Key == "" {
-		item.Key = wireItem.ActionKey
-	}
-	return item, nil
-}
-
-// resolveReaderFeedSnapshotKey settles the addressable key, falling back
-// through the action and resource identities before failing closed.
-func resolveReaderFeedSnapshotKey(item model.ReaderFeedItem, source string, explicitUnion bool) (model.ReaderFeedItem, error) {
-	if item.Key == "" {
-		item.Key = item.ActionKey
-	}
-	if item.Key == "" {
-		item.Key = item.ResourceKey
-	}
-	if item.Key == "" {
-		return model.ReaderFeedItem{}, fmt.Errorf("%w: feed snapshot action identity is missing", ErrInvalidReaderCursor)
-	}
-	if explicitUnion {
-		expectedAction := readerFeedExpectedActionKey(item, source)
-		if expectedAction != "" && expectedAction != item.Key {
-			return model.ReaderFeedItem{}, fmt.Errorf("%w: feed item action identity is inconsistent", ErrInvalidReaderCursor)
-		}
-	}
-	return item, nil
-}
-
-// mergeReaderFeedSnapshotMetadata folds the remaining union metadata (dedupe,
-// section, actions) into the item.
-func mergeReaderFeedSnapshotMetadata(item model.ReaderFeedItem, wireItem readerFeedSnapshotItem, explicitUnion bool) (model.ReaderFeedItem, error) {
-	if wireItem.DedupeKey != "" {
-		if item.DedupeKey != "" && item.DedupeKey != wireItem.DedupeKey {
-			return model.ReaderFeedItem{}, fmt.Errorf("%w: feed snapshot dedupe identity is inconsistent", ErrInvalidReaderCursor)
-		}
-		item.DedupeKey = wireItem.DedupeKey
-	}
-	if wireItem.SectionID != "" {
-		if item.SectionID != "" && item.SectionID != wireItem.SectionID {
-			return model.ReaderFeedItem{}, fmt.Errorf("%w: feed snapshot section identity is inconsistent", ErrInvalidReaderCursor)
-		}
-		item.SectionID = wireItem.SectionID
-	}
-	if wireItem.Actions != nil {
-		if item.Actions != nil && !sameReaderFeedStringSlice(item.Actions, wireItem.Actions) {
-			return model.ReaderFeedItem{}, fmt.Errorf("%w: feed snapshot action capabilities are inconsistent", ErrInvalidReaderCursor)
-		}
-		item.Actions = cloneReaderFeedStrings(wireItem.Actions)
-	} else if explicitUnion {
-		// A new union entry without an actions field is explicitly disabled;
-		// do not infer actions from its source during recovery.
-		item.Actions = []string{}
-	}
-	return item, nil
-}
-
-// verifyReaderFeedSnapshotIdentity re-checks the wire identities after
-// decoration, which is allowed to derive fields the wire entry also pinned.
-func verifyReaderFeedSnapshotIdentity(item model.ReaderFeedItem, wireItem readerFeedSnapshotItem) error {
-	if wireItem.ResourceKey != "" && item.ResourceKey != wireItem.ResourceKey {
-		return fmt.Errorf("%w: feed snapshot resource identity is inconsistent", ErrInvalidReaderCursor)
-	}
-	if wireItem.ActionKey != "" && item.ActionKey != wireItem.ActionKey {
-		return fmt.Errorf("%w: feed snapshot action identity is inconsistent", ErrInvalidReaderCursor)
-	}
-	if wireItem.DedupeKey != "" && item.DedupeKey != wireItem.DedupeKey {
-		return fmt.Errorf("%w: feed snapshot dedupe identity is inconsistent", ErrInvalidReaderCursor)
-	}
-	if wireItem.SectionID != "" && item.SectionID != wireItem.SectionID {
-		return fmt.Errorf("%w: feed snapshot section identity is inconsistent", ErrInvalidReaderCursor)
-	}
-	return nil
-}
-
-func decodeReaderFeedSnapshotItem(wireItem readerFeedSnapshotItem) (model.ReaderFeedItem, error) {
-	explicitUnion := readerFeedSnapshotHasUnionFields(wireItem)
-	item, source, err := resolveReaderFeedSnapshotSource(wireItem)
-	if err != nil {
-		return model.ReaderFeedItem{}, err
-	}
-	if item, err = mergeReaderFeedSnapshotResourceKey(item, wireItem); err != nil {
-		return model.ReaderFeedItem{}, err
-	}
-	if item, err = mergeReaderFeedSnapshotActionKey(item, wireItem); err != nil {
-		return model.ReaderFeedItem{}, err
-	}
-	if item, err = resolveReaderFeedSnapshotKey(item, source, explicitUnion); err != nil {
-		return model.ReaderFeedItem{}, err
-	}
-	if item, err = mergeReaderFeedSnapshotMetadata(item, wireItem, explicitUnion); err != nil {
-		return model.ReaderFeedItem{}, err
-	}
-	item = decorateReaderFeedItem(item)
-	if err := verifyReaderFeedSnapshotIdentity(item, wireItem); err != nil {
-		return model.ReaderFeedItem{}, err
-	}
-	return item, nil
-}
-
-func unmarshalReaderFeedSnapshotDetails(raw []byte) (mode string, sources []string, items []model.ReaderFeedItem, capabilities []string, sections []model.ReaderFeedSection, sourceMeta []model.ReaderFeedSource, envelope bool, err error) {
-	trimmed := strings.TrimSpace(string(raw))
-	if strings.HasPrefix(trimmed, "{") {
-		var snapshot readerFeedSnapshotEnvelope
-		if err := json.Unmarshal(raw, &snapshot); err != nil {
-			return "", nil, nil, nil, nil, nil, true, fmt.Errorf("%w: invalid feed snapshot payload", ErrInvalidReaderCursor)
-		}
-		if snapshot.Version != 1 && snapshot.Version != 2 {
-			return "", nil, nil, nil, nil, nil, true, fmt.Errorf("%w: unsupported feed snapshot version", ErrInvalidReaderCursor)
-		}
-		sources, err := normalizeRepositoryFeedSources(snapshot.Sources)
-		if err != nil {
-			return "", nil, nil, nil, nil, nil, true, err
-		}
-		if err := validateReaderFeedSnapshotMetadata(snapshot, sources); err != nil {
-			return "", nil, nil, nil, nil, nil, true, err
-		}
-		items = make([]model.ReaderFeedItem, 0, len(snapshot.Items))
-		for _, wireItem := range snapshot.Items {
-			item, itemErr := decodeReaderFeedSnapshotItem(wireItem)
-			if itemErr != nil {
-				return "", nil, nil, nil, nil, nil, true, itemErr
-			}
-			if snapshot.Version == 1 {
-				item, itemErr = scoreReaderFeedItem(item)
-			} else {
-				itemErr = validateReaderFeedItemScore(item)
-			}
-			if itemErr != nil {
-				return "", nil, nil, nil, nil, nil, true, itemErr
-			}
-			items = append(items, item)
-		}
-		return snapshot.Mode, sources, items, snapshot.Capabilities, snapshot.Sections, snapshot.SourceMeta, true, nil
-	}
-
-	// Snapshots created before the envelope was introduced stored the model
-	// slice directly. They remain readable for the default, unfiltered path.
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return "", nil, nil, nil, nil, nil, false, fmt.Errorf("%w: invalid legacy feed snapshot payload", ErrInvalidReaderCursor)
-	}
-	items, err = scoreReaderFeedItems(items)
-	if err != nil {
-		return "", nil, nil, nil, nil, nil, false, err
-	}
-	return "", nil, items, nil, nil, nil, false, nil
-}
-
-func unmarshalReaderFeedSnapshot(raw []byte) (mode string, sources []string, items []model.ReaderFeedItem, envelope bool, err error) {
-	mode, sources, items, _, _, _, envelope, err = unmarshalReaderFeedSnapshotDetails(raw)
-	return mode, sources, items, envelope, err
-}
-
 func feedCursor(raw string) (readerFeedCursor, error) {
 	if strings.TrimSpace(raw) == "" {
 		return readerFeedCursor{}, nil
@@ -5837,65 +4508,60 @@ func feedCursor(raw string) (readerFeedCursor, error) {
 	if err != nil {
 		return readerFeedCursor{}, fmt.Errorf("%w: invalid feed cursor", ErrInvalidReaderCursor)
 	}
-	value := string(decoded)
-	if strings.HasPrefix(value, "{") {
-		var wire readerFeedChronologicalCursorWire
-		if err := json.Unmarshal(decoded, &wire); err != nil {
-			return readerFeedCursor{}, fmt.Errorf("%w: invalid chronological feed cursor", ErrInvalidReaderCursor)
-		}
-		if wire.Version != 1 {
-			return readerFeedCursor{}, fmt.Errorf("%w: unsupported chronological feed cursor version", ErrInvalidReaderCursor)
-		}
-		if _, err := uuid.Parse(wire.SnapshotID); err != nil {
-			return readerFeedCursor{}, fmt.Errorf("%w: invalid feed snapshot cursor", ErrInvalidReaderCursor)
-		}
-		eventAt, err := time.Parse(time.RFC3339Nano, wire.EventAt)
-		if err != nil || strings.TrimSpace(wire.ResourceKey) == "" {
-			return readerFeedCursor{}, fmt.Errorf("%w: invalid chronological feed tuple", ErrInvalidReaderCursor)
-		}
-		return readerFeedCursor{
-			SnapshotID:    wire.SnapshotID,
-			EventAt:       eventAt,
-			ResourceKey:   wire.ResourceKey,
-			Chronological: true,
-		}, nil
-	}
-	parts := strings.Split(value, ":")
-	var snapshotID string
-	var offsetRaw string
-	switch {
-	case len(parts) == 3 && parts[0] == "snapshot":
-		snapshotID = parts[1]
-		offsetRaw = parts[2]
-		if _, err := uuid.Parse(snapshotID); err != nil {
-			return readerFeedCursor{}, fmt.Errorf("%w: invalid feed snapshot cursor", ErrInvalidReaderCursor)
-		}
-	default:
+	var wire readerFeedCursorWire
+	if err := json.Unmarshal(decoded, &wire); err != nil || wire.Version != 1 {
 		return readerFeedCursor{}, fmt.Errorf("%w: invalid feed cursor", ErrInvalidReaderCursor)
 	}
-	offset, err := strconv.Atoi(offsetRaw)
-	if err != nil || offset < 0 {
-		return readerFeedCursor{}, fmt.Errorf("%w: invalid feed cursor", ErrInvalidReaderCursor)
+	if wire.Mode != "recommended" && wire.Mode != "chronological" {
+		return readerFeedCursor{}, fmt.Errorf("%w: invalid feed cursor mode", ErrInvalidReaderCursor)
 	}
-	return readerFeedCursor{SnapshotID: snapshotID, Offset: offset}, nil
+	sources, err := normalizeRepositoryFeedSources(wire.Sources)
+	if err != nil || !sameRepositoryFeedSources(sources, wire.Sources) {
+		return readerFeedCursor{}, fmt.Errorf("%w: invalid feed cursor sources", ErrInvalidReaderCursor)
+	}
+	if strings.TrimSpace(wire.Key) == "" || strings.TrimSpace(wire.Key) != wire.Key {
+		return readerFeedCursor{}, fmt.Errorf("%w: invalid feed cursor key", ErrInvalidReaderCursor)
+	}
+	cursor := readerFeedCursor{Mode: wire.Mode, Sources: sources, Key: wire.Key}
+	return feedCursorPosition(wire, cursor)
 }
 
-func makeFeedCursor(snapshotID string, offset int) string {
-	if snapshotID == "" {
-		return ""
+func feedCursorPosition(wire readerFeedCursorWire, cursor readerFeedCursor) (readerFeedCursor, error) {
+	if wire.Mode == "recommended" {
+		if wire.Score == nil {
+			return readerFeedCursor{}, fmt.Errorf("%w: invalid recommended feed cursor", ErrInvalidReaderCursor)
+		}
+		createdAt, err := time.Parse(time.RFC3339Nano, wire.CreatedAt)
+		if err != nil {
+			return readerFeedCursor{}, fmt.Errorf("%w: invalid recommended feed cursor", ErrInvalidReaderCursor)
+		}
+		cursor.Score = *wire.Score
+		cursor.CreatedAt = createdAt
+		return cursor, nil
 	}
-	return base64.RawURLEncoding.EncodeToString([]byte("snapshot:" + snapshotID + ":" + strconv.Itoa(offset)))
+	eventAt, err := time.Parse(time.RFC3339Nano, wire.EventAt)
+	if err != nil || strings.TrimSpace(wire.ResourceKey) == "" {
+		return readerFeedCursor{}, fmt.Errorf("%w: invalid chronological feed cursor", ErrInvalidReaderCursor)
+	}
+	cursor.EventAt = eventAt
+	cursor.ResourceKey = wire.ResourceKey
+	return cursor, nil
 }
 
-func makeChronologicalFeedCursor(snapshotID string, item model.ReaderFeedItem) string {
-	if snapshotID == "" {
-		return ""
+func makeFeedCursor(mode string, sources []string, item model.ReaderFeedItem) string {
+	wire := readerFeedCursorWire{
+		Version: 1,
+		Mode:    mode,
+		Sources: append([]string{}, sources...),
+		Key:     item.Key,
 	}
-	wire := readerFeedChronologicalCursorWire{
-		Version:     1,
-		SnapshotID:  snapshotID,
-		EventAt:     item.VisibleEventAt().Format(time.RFC3339Nano),
-		ResourceKey: item.ResourceIdentity(),
+	if mode == "chronological" {
+		wire.EventAt = item.VisibleEventAt().Format(time.RFC3339Nano)
+		wire.ResourceKey = item.ResourceIdentity()
+	} else {
+		score := item.Score
+		wire.Score = &score
+		wire.CreatedAt = item.CreatedAt.Format(time.RFC3339Nano)
 	}
 	raw, err := json.Marshal(wire)
 	if err != nil {
@@ -5904,42 +4570,8 @@ func makeChronologicalFeedCursor(snapshotID string, item model.ReaderFeedItem) s
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
-func (r *PGXReaderVNextRepository) ListFeed(ctx context.Context, mode, snapshotID, after string, limit int) (*model.ReaderFeedPage, error) {
-	return r.ListFeedWithSources(ctx, mode, snapshotID, after, nil, limit)
-}
-
-// readerFeedSnapshotState is the materialised feed a page is cut from,
-// regardless of whether it was just built or re-read from an earlier request.
-type readerFeedSnapshotState struct {
-	SnapshotID   string
-	Mode         string
-	Items        []model.ReaderFeedItem
-	Capabilities []string
-	Sections     []model.ReaderFeedSection
-	Sources      []model.ReaderFeedSource
-}
-
-// fillReaderFeedMetadata derives whichever metadata facets the stored snapshot
-// predates. Facets already present are returned untouched.
-func fillReaderFeedMetadata(items []model.ReaderFeedItem, storedSources, capabilities []string, sections []model.ReaderFeedSection, sourceMeta []model.ReaderFeedSource) ([]string, []model.ReaderFeedSection, []model.ReaderFeedSource) {
-	if capabilities != nil && sections != nil && sourceMeta != nil {
-		return capabilities, sections, sourceMeta
-	}
-	derivedCapabilities, derivedSections, derivedSourceMeta := readerFeedMetadata(items, storedSources)
-	if capabilities == nil {
-		capabilities = derivedCapabilities
-	}
-	if sections == nil {
-		sections = derivedSections
-	}
-	if sourceMeta == nil {
-		sourceMeta = derivedSourceMeta
-	}
-	return capabilities, sections, sourceMeta
-}
-
-// sortReaderFeedItems orders a freshly built feed in place. Both orderings end
-// on the key so equal scores and timestamps still page deterministically.
+// sortReaderFeedItems orders the live merged set by the exact tuple encoded in
+// its cursor. Key is the final tie-breaker in both modes.
 func sortReaderFeedItems(items []model.ReaderFeedItem, mode string) {
 	if mode == "chronological" {
 		sort.SliceStable(items, func(i, j int) bool {
@@ -5947,14 +4579,17 @@ func sortReaderFeedItems(items []model.ReaderFeedItem, mode string) {
 			if !leftEventAt.Equal(rightEventAt) {
 				return leftEventAt.After(rightEventAt)
 			}
-			return items[i].ResourceIdentity() < items[j].ResourceIdentity()
+			leftResource, rightResource := items[i].ResourceIdentity(), items[j].ResourceIdentity()
+			if leftResource != rightResource {
+				return leftResource < rightResource
+			}
+			return items[i].Key < items[j].Key
 		})
 		return
 	}
 	sort.SliceStable(items, func(i, j int) bool {
-		left, right := items[i].Score, items[j].Score
-		if left != right {
-			return left > right
+		if items[i].Score != items[j].Score {
+			return items[i].Score > items[j].Score
 		}
 		if !items[i].CreatedAt.Equal(items[j].CreatedAt) {
 			return items[i].CreatedAt.After(items[j].CreatedAt)
@@ -5963,181 +4598,54 @@ func sortReaderFeedItems(items []model.ReaderFeedItem, mode string) {
 	})
 }
 
-// loadReaderFeedSnapshot re-reads a stored snapshot and proves the current
-// request still matches the parameters the snapshot was built with; a changed
-// mode or source filter must not silently page over a stale feed.
-func (r *PGXReaderVNextRepository) loadReaderFeedSnapshot(ctx context.Context, snapshotID, mode string, normalizedSources []string) (readerFeedSnapshotState, error) {
-	snapshot, err := uuid.Parse(snapshotID)
-	if err != nil {
-		return readerFeedSnapshotState{}, fmt.Errorf("%w: invalid feed snapshot", ErrInvalidReaderCursor)
-	}
-	var storedMode string
-	var raw []byte
-	if err := r.db.QueryRow(ctx, `SELECT mode,items FROM reader_feed_snapshots WHERE id=$1 AND created_at > NOW() - INTERVAL '24 hours'`, snapshot).Scan(&storedMode, &raw); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return readerFeedSnapshotState{}, ErrNotFound
+func readerFeedItemAfterCursor(item model.ReaderFeedItem, cursor readerFeedCursor) bool {
+	if cursor.Mode == "chronological" {
+		eventAt := item.VisibleEventAt()
+		if !eventAt.Equal(cursor.EventAt) {
+			return eventAt.Before(cursor.EventAt)
 		}
-		return readerFeedSnapshotState{}, fmt.Errorf("read feed snapshot: %w", err)
+		resourceKey := item.ResourceIdentity()
+		if resourceKey != cursor.ResourceKey {
+			return resourceKey > cursor.ResourceKey
+		}
+		return item.Key > cursor.Key
 	}
-	storedSnapshotMode, storedSources, items, capabilities, sections, sourceMeta, isEnvelope, decodeErr := unmarshalReaderFeedSnapshotDetails(raw)
-	if decodeErr != nil {
-		return readerFeedSnapshotState{}, decodeErr
+	if item.Score != cursor.Score {
+		return item.Score < cursor.Score
 	}
-	if storedSnapshotMode != "" && storedSnapshotMode != storedMode {
-		return readerFeedSnapshotState{}, fmt.Errorf("%w: feed snapshot mode is inconsistent", ErrInvalidReaderCursor)
+	if !item.CreatedAt.Equal(cursor.CreatedAt) {
+		return item.CreatedAt.Before(cursor.CreatedAt)
 	}
-	if !isEnvelope && len(normalizedSources) > 0 {
-		return readerFeedSnapshotState{}, fmt.Errorf("%w: legacy feed snapshot has no source identity", ErrInvalidReaderCursor)
-	}
-	capabilities, sections, sourceMeta = fillReaderFeedMetadata(items, storedSources, capabilities, sections, sourceMeta)
-	if !sameRepositoryFeedSources(normalizedSources, storedSources) {
-		return readerFeedSnapshotState{}, fmt.Errorf("%w: feed source filter changed during snapshot", ErrInvalidReaderCursor)
-	}
-	if mode != "" && modeOrDefault(mode) != storedMode {
-		return readerFeedSnapshotState{}, fmt.Errorf("%w: feed mode changed during snapshot", ErrInvalidReaderCursor)
-	}
-	return readerFeedSnapshotState{
-		SnapshotID:   snapshotID,
-		Mode:         storedMode,
-		Items:        items,
-		Capabilities: capabilities,
-		Sections:     sections,
-		Sources:      sourceMeta,
-	}, nil
+	return item.Key > cursor.Key
 }
 
-// readerFeedSnapshotSweepBatch caps how many expired snapshots one feed request
-// may reclaim. A snapshot row carries a whole materialised feed (up to 2200
-// items of JSONB), so an unbounded DELETE could hold a long transaction on the
-// read path after an outage-induced backlog. One bounded batch per created
-// snapshot converges on its own: snapshots are only produced by the same call
-// that runs the sweep, so the sweep rate always matches the creation rate.
-const readerFeedSnapshotSweepBatch = 200
-
-// createReaderFeedSnapshotSQL persists the new snapshot and, in the same round
-// trip, reclaims one bounded batch of snapshots that loadReaderFeedSnapshot can
-// no longer accept.
-//
-// `created_at <= NOW() - INTERVAL '24 hours'` is the exact complement of the
-// reader's `created_at > NOW() - INTERVAL '24 hours'`, so a cursor that is still
-// valid can never be swept and an expired cursor keeps failing with ErrNotFound
-// exactly as it does today — the 24 hour contract is unchanged, only the dead
-// rows stop accumulating.
-//
-// The ORDER BY + LIMIT feeds idx_reader_feed_snapshots_expiry (btree created_at)
-// so the batch is picked without scanning the table. SKIP LOCKED keeps two
-// concurrent feed requests from queueing on the same rows: the loser simply
-// takes the next batch instead of blocking a user-facing read.
-//
-// `id = ANY(ARRAY(...))` rather than `id IN (SELECT ...)`: the array form
-// collapses the batch into an InitPlan constant, which the planner resolves
-// against the primary key. `IN (SELECT ...)` measurably plans as a hash semi
-// join over a *sequential* scan of the whole snapshot table — the exact
-// table-size-proportional read this sweep exists to remove, and it would come
-// back precisely after the backlog that makes the sweep matter.
-const createReaderFeedSnapshotSQL = `WITH expired AS (
-	SELECT id FROM reader_feed_snapshots
-	WHERE created_at <= NOW() - INTERVAL '24 hours'
-	ORDER BY created_at
-	LIMIT $3
-	FOR UPDATE SKIP LOCKED
-), swept AS (
-	DELETE FROM reader_feed_snapshots WHERE id = ANY(ARRAY(SELECT id FROM expired))
-)
-INSERT INTO reader_feed_snapshots (mode,items) VALUES ($1,$2::jsonb) RETURNING id`
-
-// createReaderFeedSnapshot builds, orders and persists a new feed so that
-// subsequent pages read a frozen ordering instead of re-ranking live data.
-func (r *PGXReaderVNextRepository) createReaderFeedSnapshot(ctx context.Context, mode string, normalizedSources []string) (readerFeedSnapshotState, error) {
-	items, err := r.buildFeedItemsForMode(ctx, modeOrDefault(mode), normalizedSources)
-	if err != nil {
-		return readerFeedSnapshotState{}, err
+func readerFeedPage(items []model.ReaderFeedItem, mode string, sources []string, cursor readerFeedCursor, limit int) *model.ReaderFeedPage {
+	start := 0
+	if cursor.Mode != "" {
+		start = sort.Search(len(items), func(index int) bool {
+			return readerFeedItemAfterCursor(items[index], cursor)
+		})
 	}
-	items, err = scoreReaderFeedItems(items)
-	if err != nil {
-		return readerFeedSnapshotState{}, err
-	}
-	sortReaderFeedItems(items, mode)
-	raw, err := marshalReaderFeedSnapshot(modeOrDefault(mode), normalizedSources, items)
-	if err != nil {
-		return readerFeedSnapshotState{}, err
-	}
-	var snapshot uuid.UUID
-	if err := r.db.QueryRow(ctx, createReaderFeedSnapshotSQL, modeOrDefault(mode), raw, readerFeedSnapshotSweepBatch).Scan(&snapshot); err != nil {
-		return readerFeedSnapshotState{}, fmt.Errorf("create feed snapshot: %w", err)
-	}
-	capabilities, sections, sourceMeta := readerFeedMetadata(items, normalizedSources)
-	return readerFeedSnapshotState{
-		SnapshotID:   snapshot.String(),
-		Mode:         modeOrDefault(mode),
-		Items:        items,
-		Capabilities: capabilities,
-		Sections:     sections,
-		Sources:      sourceMeta,
-	}, nil
-}
-
-// chronologicalReaderFeedOffset resolves an immutable tuple cursor against
-// the snapshot. Matching both fields prevents equal-time rows from being
-// skipped or repeated when a page boundary falls inside a timestamp group.
-func chronologicalReaderFeedOffset(items []model.ReaderFeedItem, cursor readerFeedCursor) (int, error) {
-	// 只消费第一个匹配项，而不是消费所有同元组的行。
-	// (VisibleEventAt, ResourceIdentity) 在快照内并不保证唯一：去重键用的是 URL
-	// （DedupeIdentity），而 ResourceIdentity 会收敛成 link:<id>，同一篇文章出现在
-	// 两个订阅源、原始 URL 不同却归一到同一个 link 且 published_at 相同时，元组就
-	// 会重复。原先"跳过全部匹配"会在页边界落到第一条时把后续同元组项整条吞掉；
-	// 只消费一条，最坏情况是某条重复出现，绝不会静默丢失。
-	for index, item := range items {
-		if item.VisibleEventAt().Equal(cursor.EventAt) && item.ResourceIdentity() == cursor.ResourceKey {
-			return index + 1, nil
-		}
-	}
-	return 0, fmt.Errorf("%w: chronological feed tuple is outside snapshot", ErrInvalidReaderCursor)
-}
-
-// readerFeedPage cuts one page out of a materialised snapshot.
-func readerFeedPage(state readerFeedSnapshotState, cursor readerFeedCursor, limit int) (*model.ReaderFeedPage, error) {
-	offset := cursor.Offset
-	if cursor.Chronological {
-		if state.Mode != "chronological" {
-			return nil, fmt.Errorf("%w: chronological cursor cannot page a recommended snapshot", ErrInvalidReaderCursor)
-		}
-		var err error
-		offset, err = chronologicalReaderFeedOffset(state.Items, cursor)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if offset > len(state.Items) {
-		return nil, fmt.Errorf("%w: feed cursor offset is outside snapshot", ErrInvalidReaderCursor)
-	}
-	end := offset + limit
-	if end > len(state.Items) {
-		end = len(state.Items)
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
 	}
 	next := ""
-	if end < len(state.Items) {
-		if state.Mode == "chronological" {
-			next = makeChronologicalFeedCursor(state.SnapshotID, state.Items[end-1])
-		} else {
-			next = makeFeedCursor(state.SnapshotID, end)
-		}
+	if end < len(items) {
+		next = makeFeedCursor(mode, sources, items[end-1])
 	}
 	return &model.ReaderFeedPage{
-		Items:        append([]model.ReaderFeedItem(nil), state.Items[offset:end]...),
-		NextCursor:   next,
-		SnapshotID:   state.SnapshotID,
-		Mode:         state.Mode,
-		Capabilities: state.Capabilities,
-		Sections:     state.Sections,
-		Sources:      state.Sources,
-	}, nil
+		Items:      append([]model.ReaderFeedItem(nil), items[start:end]...),
+		NextCursor: next,
+		Mode:       mode,
+	}
 }
 
-func (r *PGXReaderVNextRepository) ListFeedWithSources(ctx context.Context, mode, snapshotID, after string, sources []string, limit int) (*model.ReaderFeedPage, error) {
+func (r *PGXReaderVNextRepository) ListFeedWithSources(ctx context.Context, mode, after string, sources []string, limit int) (*model.ReaderFeedPage, error) {
 	if mode != "" && mode != "recommended" && mode != "chronological" {
 		return nil, fmt.Errorf("%w: invalid feed mode", ErrInvalidReaderCursor)
 	}
+	mode = modeOrDefault(mode)
 	normalizedSources, err := normalizeRepositoryFeedSources(sources)
 	if err != nil {
 		return nil, err
@@ -6149,25 +4657,16 @@ func (r *PGXReaderVNextRepository) ListFeedWithSources(ctx context.Context, mode
 	if err != nil {
 		return nil, err
 	}
-	if cursor.SnapshotID != "" && snapshotID == "" {
-		return nil, fmt.Errorf("%w: snapshot id is required by feed cursor", ErrInvalidReaderCursor)
+	if cursor.Mode != "" && (cursor.Mode != mode || !sameRepositoryFeedSources(cursor.Sources, normalizedSources)) {
+		return nil, fmt.Errorf("%w: feed cursor parameters changed", ErrInvalidReaderCursor)
 	}
-	if cursor.SnapshotID != "" && cursor.SnapshotID != snapshotID {
-		return nil, fmt.Errorf("%w: feed cursor belongs to another snapshot", ErrInvalidReaderCursor)
-	}
-	var state readerFeedSnapshotState
-	if snapshotID != "" {
-		state, err = r.loadReaderFeedSnapshot(ctx, snapshotID, mode, normalizedSources)
-	} else {
-		state, err = r.createReaderFeedSnapshot(ctx, mode, normalizedSources)
-	}
+	items, err := r.buildFeedItemsForMode(ctx, mode, normalizedSources)
 	if err != nil {
 		return nil, err
 	}
-	if state.Mode == "" {
-		state.Mode = modeOrDefault(mode)
-	}
-	return readerFeedPage(state, cursor, limit)
+	items = scoreReaderFeedItems(items)
+	sortReaderFeedItems(items, mode)
+	return readerFeedPage(items, mode, normalizedSources, cursor, limit), nil
 }
 
 func modeOrDefault(mode string) string {
@@ -6175,10 +4674,6 @@ func modeOrDefault(mode string) string {
 		return "chronological"
 	}
 	return "recommended"
-}
-
-func (r *PGXReaderVNextRepository) buildFeedItems(ctx context.Context, sourceFilters ...[]string) ([]model.ReaderFeedItem, error) {
-	return r.buildFeedItemsForMode(ctx, "recommended", sourceFilters...)
 }
 
 func (r *PGXReaderVNextRepository) buildFeedItemsForMode(ctx context.Context, mode string, sourceFilters ...[]string) ([]model.ReaderFeedItem, error) {
@@ -6209,12 +4704,11 @@ func (r *PGXReaderVNextRepository) buildFeedItemsForMode(ctx context.Context, mo
 		}
 		items = appended
 	}
-	// A URL may be present both in the saved library and in RSS. Keep the
-	// saved link as the canonical item so one snapshot never shows a duplicate.
+	// A URL may be present both in the saved library and in RSS. Keep the first
+	// source in the merge order, so Reading remains the canonical card.
 	seenItems := make(map[string]struct{}, len(items))
 	out := make([]model.ReaderFeedItem, 0, len(items))
-	for _, rawItem := range items {
-		item := decorateReaderFeedItem(rawItem)
+	for _, item := range items {
 		dedupeKey := item.DedupeIdentity()
 		if dedupeKey != "" {
 			if _, ok := seenItems[dedupeKey]; ok {
@@ -6227,9 +4721,8 @@ func (r *PGXReaderVNextRepository) buildFeedItemsForMode(ctx context.Context, mo
 	return out, nil
 }
 
-// appendReadingFeedItems collects the saved-library slice of the feed. Rows the
-// user hid or marked uninteresting are filtered in SQL, so a hidden link never
-// reaches ranking or dedupe.
+// appendReadingFeedItems collects the saved-library slice of the feed. Hidden
+// rows are filtered in SQL before ranking and dedupe.
 func (r *PGXReaderVNextRepository) appendReadingFeedItems(ctx context.Context, items []model.ReaderFeedItem, chronological bool) ([]model.ReaderFeedItem, error) {
 	orderBy := "l.created_at DESC,l.id DESC"
 	if chronological {
@@ -6239,8 +4732,8 @@ func (r *PGXReaderVNextRepository) appendReadingFeedItems(ctx context.Context, i
 		SELECT l.id,l.url,COALESCE(l.title,''),COALESCE(l.summary,''),l.created_at,
 			COALESCE(e.read,false),COALESCE(e.read_later,false)
 		FROM links l LEFT JOIN reader_engagement e ON e.link_id=l.id
-		LEFT JOIN reader_feed_feedback f ON f.item_key='link:'||l.id::text
-		WHERE l.status='done' AND l.deleted_at IS NULL AND COALESCE(l.library_kind,'reading')='reading' AND COALESCE(f.action,'') NOT IN ('hide','not_interested')
+		LEFT JOIN reader_feed_hides hidden ON hidden.item_key='link:'||l.id::text
+		WHERE l.status='done' AND l.deleted_at IS NULL AND COALESCE(l.library_kind,'reading')='reading' AND hidden.item_key IS NULL
 		ORDER BY `+orderBy+` LIMIT 1000`)
 	if err != nil {
 		return nil, fmt.Errorf("feed links: %w", err)
@@ -6275,8 +4768,10 @@ func (r *PGXReaderVNextRepository) appendInboxFeedItems(ctx context.Context, ite
 	rows, err := r.db.Query(ctx, `
 		SELECT inbox.id,inbox.url,COALESCE(inbox.title,''),COALESCE(inbox.summary,''),inbox.created_at
 		FROM reader_inbox inbox
-		LEFT JOIN reader_feed_feedback f ON f.item_key='inbox:'||inbox.id::text
-		WHERE inbox.status='pending' AND inbox.deleted_at IS NULL AND inbox.expired_at IS NULL AND COALESCE(f.action,'') NOT IN ('hide','not_interested')
+		LEFT JOIN reader_feed_hides hidden ON hidden.item_key='inbox:'||inbox.id::text
+		WHERE inbox.status='pending' AND inbox.deleted_at IS NULL
+			AND (inbox.expires_at IS NULL OR inbox.expires_at > NOW())
+			AND hidden.item_key IS NULL
 		ORDER BY `+orderBy+` LIMIT 200`)
 	if err != nil {
 		return nil, fmt.Errorf("feed inbox: %w", err)
@@ -6311,9 +4806,9 @@ func (r *PGXReaderVNextRepository) appendSubscriptionFeedItems(ctx context.Conte
 	rows, err := r.db.Query(ctx, `
 		SELECT fi.id,COALESCE(fs.link_id,fi.link_id),fi.url,COALESCE(fi.title,''),COALESCE(fi.summary,''),fi.published_at,
 			(fi.read_at IS NOT NULL),fi.read_later,(fs.feed_item_id IS NOT NULL),fi.created_at
-		FROM feed_items fi LEFT JOIN reader_feed_feedback f ON f.item_key='subscription:'||fi.id::text
+		FROM feed_items fi LEFT JOIN reader_feed_hides hidden ON hidden.item_key='subscription:'||fi.id::text
 		LEFT JOIN reader_feed_saves fs ON fs.feed_item_id=fi.id
-		WHERE COALESCE(f.action,'') NOT IN ('hide','not_interested')
+		WHERE hidden.item_key IS NULL
 		ORDER BY `+orderBy+` LIMIT 1000`)
 	if err != nil {
 		return nil, fmt.Errorf("feed subscription items: %w", err)
@@ -6357,32 +4852,31 @@ func (r *PGXReaderVNextRepository) FeedbackFeed(ctx context.Context, itemKey, ac
 		return model.ReaderFeedFeedback{}, err
 	}
 
-	result := model.ReaderFeedFeedback{ItemKey: itemKey, Action: action, Saved: action == "save"}
+	result := model.ReaderFeedFeedback{ItemKey: itemKey, Action: action}
 	err = r.withTx(ctx, func(tx database.Querier) error {
-		if err := prelockReaderFeedFeedbackRevisions(
-			ctx, tx, kind, action,
-		); err != nil {
-			return err
-		}
 		if err := ensureReaderFeedItem(ctx, tx, kind, id); err != nil {
 			return err
 		}
 		if action == "save" && kind == "subscription" {
-			association, err := r.saveSubscriptionFeedItem(ctx, tx, id)
+			linkID, err := r.saveSubscriptionFeedItem(ctx, tx, id)
 			if err != nil {
 				return err
 			}
-			result.Association = association
+			result.LinkID = &linkID
 		}
 		if action == "unsave" && kind == "subscription" {
-			association, err := r.unsaveSubscriptionFeedItem(ctx, tx, id)
+			linkID, err := r.unsaveSubscriptionFeedItem(ctx, tx, id)
 			if err != nil {
 				return err
 			}
-			result.Association = association
+			result.LinkID = linkID
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO reader_feed_feedback (item_key,action) VALUES ($1,$2) ON CONFLICT (item_key) DO UPDATE SET action=EXCLUDED.action,created_at=NOW()`, itemKey, action); err != nil {
-			return fmt.Errorf("write reader feed feedback: %w", err)
+		if action == "hide" {
+			if _, err := tx.Exec(ctx, `INSERT INTO reader_feed_hides (item_key) VALUES ($1) ON CONFLICT (item_key) DO UPDATE SET created_at=NOW()`, itemKey); err != nil {
+				return fmt.Errorf("hide reader feed item: %w", err)
+			}
+		} else if _, err := tx.Exec(ctx, `DELETE FROM reader_feed_hides WHERE item_key=$1`, itemKey); err != nil {
+			return fmt.Errorf("clear reader feed hide: %w", err)
 		}
 		return nil
 	})
@@ -6393,111 +4887,101 @@ func (r *PGXReaderVNextRepository) FeedbackFeed(ctx context.Context, itemKey, ac
 }
 
 // saveSubscriptionFeedItem atomically reuses the canonical URL identity or
-// creates one reading link, then records the ownership-bearing association.
-func (r *PGXReaderVNextRepository) saveSubscriptionFeedItem(ctx context.Context, db database.Querier, feedItemID uuid.UUID) (*model.ReaderFeedSaveAssociation, error) {
+// creates one Feed-managed reading link, then records the save association.
+func (r *PGXReaderVNextRepository) saveSubscriptionFeedItem(ctx context.Context, db database.Querier, feedItemID uuid.UUID) (uuid.UUID, error) {
 	var url, title, summary string
 	if err := db.QueryRow(ctx, `SELECT url,COALESCE(title,''),COALESCE(summary,'') FROM feed_items WHERE id=$1 FOR UPDATE`, feedItemID).Scan(&url, &title, &summary); err != nil {
-		return nil, ErrNotFound
+		return uuid.Nil, ErrNotFound
 	}
 	identity, err := urlidentity.Normalize(url)
 	if err != nil {
-		return nil, ErrInvalidReaderFeedItem
+		return uuid.Nil, ErrInvalidReaderFeedItem
 	}
 	// All writers that create a link for this canonical identity share this
 	// transaction lock, including distinct feed items saved concurrently.
 	if err := lockCanonicalLinkIdentity(ctx, db, identity); err != nil {
-		return nil, err
+		return uuid.Nil, err
 	}
-	var existing model.ReaderFeedSaveAssociation
-	err = db.QueryRow(ctx, `SELECT feed_item_id,link_id,created_link FROM reader_feed_saves WHERE feed_item_id=$1`, feedItemID).Scan(&existing.FeedItemID, &existing.LinkID, &existing.CreatedLink)
+	var existingLinkID uuid.UUID
+	err = db.QueryRow(ctx, `SELECT link_id FROM reader_feed_saves WHERE feed_item_id=$1`, feedItemID).Scan(&existingLinkID)
 	if err == nil {
-		if _, err := r.restoreLinkLifecycleOn(ctx, db, existing.LinkID); err != nil {
-			return nil, err
+		if _, err := r.restoreLinkLifecycleOn(ctx, db, existingLinkID); err != nil {
+			return uuid.Nil, err
 		}
 		// The association may have disappeared while this save waited for the
 		// common Link lock behind a concurrent unsave.
-		err = db.QueryRow(ctx, `SELECT feed_item_id,link_id,created_link FROM reader_feed_saves WHERE feed_item_id=$1`, feedItemID).Scan(&existing.FeedItemID, &existing.LinkID, &existing.CreatedLink)
+		err = db.QueryRow(ctx, `SELECT link_id FROM reader_feed_saves WHERE feed_item_id=$1`, feedItemID).Scan(&existingLinkID)
 		if err == nil {
-			return &existing, nil
+			return existingLinkID, nil
 		}
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("read feed save association: %w", err)
+		return uuid.Nil, fmt.Errorf("read feed save association: %w", err)
 	}
-	matched, err := findInboxSavedLink(ctx, db, identity)
+	matched, err := findCanonicalLink(ctx, db, identity)
 	if err != nil {
-		return nil, err
+		return uuid.Nil, err
 	}
-	created := matched == nil
-	var linkID *uuid.UUID
-	if created {
-		var id uuid.UUID
-		err = db.QueryRow(ctx, `INSERT INTO links (url,source_kind,source_key,input_title,title,summary,tags,status,content,content_document,content_format,content_source,content_revision,library_kind,library_kind_source,feed_managed,first_collected_at,created_at,updated_at) VALUES ($1,'subscription',$2,$3,$3,$4,'{}','done','',NULL,'markdown','user',1,'reading','user',true,NOW(),NOW(),NOW()) RETURNING id`, url, identity, title, summary).Scan(&id)
+	var linkID uuid.UUID
+	if matched == nil {
+		err = db.QueryRow(ctx, `INSERT INTO links (url,source_kind,source_key,input_title,title,summary,tags,status,content,content_document,content_format,content_source,content_revision,library_kind,library_kind_locked,feed_managed,first_collected_at,created_at,updated_at) VALUES ($1,'subscription',$2,$3,$3,$4,'{}','done','',NULL,'markdown','user',1,'reading',true,true,NOW(),NOW(),NOW()) RETURNING id`, url, identity, title, summary).Scan(&linkID)
 		if err != nil {
-			return nil, fmt.Errorf("create subscription saved link: %w", err)
+			return uuid.Nil, fmt.Errorf("create subscription saved link: %w", err)
 		}
-		linkID = &id
 	} else {
-		linkID = &matched.id
-		if _, err := r.restoreLinkLifecycleOn(ctx, db, matched.id); err != nil {
-			return nil, err
+		linkID = *matched
+		if _, err := r.restoreLinkLifecycleOn(ctx, db, linkID); err != nil {
+			return uuid.Nil, err
 		}
 	}
-	var association model.ReaderFeedSaveAssociation
-	err = db.QueryRow(ctx, `INSERT INTO reader_feed_saves (feed_item_id,link_id,created_link) VALUES ($1,$2,$3) ON CONFLICT (feed_item_id) DO UPDATE SET link_id=reader_feed_saves.link_id RETURNING feed_item_id,link_id,created_link`, feedItemID, *linkID, created).Scan(&association.FeedItemID, &association.LinkID, &association.CreatedLink)
-	if err != nil {
-		return nil, fmt.Errorf("write feed save association: %w", err)
+	if _, err := db.Exec(ctx, `INSERT INTO reader_feed_saves (feed_item_id,link_id) VALUES ($1,$2)`, feedItemID, linkID); err != nil {
+		return uuid.Nil, fmt.Errorf("write feed save association: %w", err)
 	}
-	// 回填 feed_items.link_id：保留策略 trimOrdinaryFeedItems 只删 link_id IS NULL
-	// 的普通项，不回填的话一条"已保存且已读"的 item 会被当成普通项裁掉，
-	// reader_feed_saves 随外键级联消失，Link 就变成 feed_managed=true 却没有任何
-	// save 的孤儿——用户保存的正文会被后续生命周期修复当作孤儿清理掉。
-	if _, err := db.Exec(ctx, `UPDATE feed_items SET link_id=$2, updated_at=now() WHERE id=$1 AND link_id IS DISTINCT FROM $2`,
-		feedItemID, association.LinkID); err != nil {
-		return nil, fmt.Errorf("associate saved feed item link: %w", err)
-	}
-	return &association, nil
+	return linkID, nil
 }
 
-func (r *PGXReaderVNextRepository) unsaveSubscriptionFeedItem(ctx context.Context, db database.Querier, feedItemID uuid.UUID) (*model.ReaderFeedSaveAssociation, error) {
-	association := &model.ReaderFeedSaveAssociation{FeedItemID: feedItemID}
-	err := db.QueryRow(ctx, `SELECT link_id,created_link FROM reader_feed_saves WHERE feed_item_id=$1`, feedItemID).Scan(&association.LinkID, &association.CreatedLink)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
+func (r *PGXReaderVNextRepository) unsaveSubscriptionFeedItem(ctx context.Context, db database.Querier, feedItemID uuid.UUID) (*uuid.UUID, error) {
+	var savedLink, analyzedLink pgtype.UUID
+	err := db.QueryRow(ctx, `SELECT save.link_id,item.link_id
+		FROM feed_items item LEFT JOIN reader_feed_saves save ON save.feed_item_id=item.id
+		WHERE item.id=$1`, feedItemID).Scan(&savedLink, &analyzedLink)
 	if err != nil {
 		return nil, err
 	}
+	var visibleLinkID *uuid.UUID
+	if analyzedLink.Valid {
+		value := uuid.UUID(analyzedLink.Bytes)
+		visibleLinkID = &value
+	}
+	if !savedLink.Valid {
+		return visibleLinkID, nil
+	}
+	linkID := uuid.UUID(savedLink.Bytes)
 	var (
 		feedManaged bool
 		linkStatus  model.LinkStatus
 	)
-	if err := db.QueryRow(ctx, `SELECT feed_managed,status FROM links WHERE id=$1 FOR UPDATE`, association.LinkID).Scan(&feedManaged, &linkStatus); err != nil {
+	if err := db.QueryRow(ctx, `SELECT feed_managed,status FROM links WHERE id=$1 FOR UPDATE`, linkID).Scan(&feedManaged, &linkStatus); err != nil {
 		return nil, fmt.Errorf("lock feed save link: %w", err)
 	}
-	tag, err := db.Exec(ctx, `DELETE FROM reader_feed_saves WHERE feed_item_id=$1 AND link_id=$2`, feedItemID, association.LinkID)
+	tag, err := db.Exec(ctx, `DELETE FROM reader_feed_saves WHERE feed_item_id=$1 AND link_id=$2`, feedItemID, linkID)
 	if err != nil {
 		return nil, fmt.Errorf("delete feed save association: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return nil, nil
 	}
-	// 与保存路径对称地摘掉关联：留着 link_id 会让这条 item 永久豁免保留策略。
-	if _, err := db.Exec(ctx, `UPDATE feed_items SET link_id=NULL, updated_at=now() WHERE id=$1 AND link_id=$2`,
-		feedItemID, association.LinkID); err != nil {
-		return nil, fmt.Errorf("clear unsaved feed item link: %w", err)
-	}
 	var remaining bool
-	if err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM reader_feed_saves WHERE link_id=$1)`, association.LinkID).Scan(&remaining); err != nil {
+	if err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM reader_feed_saves WHERE link_id=$1)`, linkID).Scan(&remaining); err != nil {
 		return nil, err
 	}
 	if !remaining && feedManaged {
-		err = r.trashUnclaimedFeedManagedLinkOn(ctx, db, association.LinkID, linkStatus)
+		err = r.trashUnclaimedFeedManagedLinkOn(ctx, db, linkID, linkStatus)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return association, nil
+	return visibleLinkID, nil
 }
 
 func (r *PGXReaderVNextRepository) trashUnclaimedFeedManagedLinkOn(
@@ -6524,8 +5008,8 @@ func (r *PGXReaderVNextRepository) trashUnclaimedFeedManagedLinkOn(
 
 // parseReaderFeedItemKey splits a "<kind>:<uuid>" feed key. The key is required
 // to round-trip byte for byte, because it doubles as the primary key of the
-// feedback table: two spellings of the same uuid would otherwise store two
-// competing feedback rows for one item.
+// hide table: two spellings of the same UUID would otherwise hide different
+// logical items.
 func parseReaderFeedItemKey(itemKey string) (string, uuid.UUID, error) {
 	kind, rawID, ok := strings.Cut(itemKey, ":")
 	if !ok || strings.TrimSpace(rawID) == "" {
@@ -6545,13 +5029,13 @@ func parseReaderFeedItemKey(itemKey string) (string, uuid.UUID, error) {
 }
 
 // validateReaderFeedAction rejects actions the target kind cannot carry. Only
-// hide/not_interested apply to inbox items: read-later state lives on links and
-// feed items, and an unconfirmed capture has nowhere to store it.
+// Only subscription items can be saved. Hide is the single persisted negative
+// action for every Feed source.
 func validateReaderFeedAction(kind, action string) error {
-	if action != "save" && action != "unsave" && action != "hide" && action != "not_interested" {
+	if action != "save" && action != "unsave" && action != "hide" {
 		return ErrInvalidReaderFeedItem
 	}
-	if (action == "save" || action == "unsave") && kind == "inbox" {
+	if (action == "save" || action == "unsave") && kind != "subscription" {
 		return ErrInvalidReaderFeedItem
 	}
 	return nil
@@ -6579,91 +5063,25 @@ func ensureReaderFeedItem(ctx context.Context, db database.Querier, kind string,
 	return nil
 }
 
-func (r *PGXReaderVNextRepository) RelatedTags(ctx context.Context, linkID *uuid.UUID, limit int) ([]string, string, bool, error) {
+func (r *PGXReaderVNextRepository) RelatedTags(ctx context.Context, linkID *uuid.UUID, limit int) ([]string, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 12
 	}
 	var tags []string
 	if linkID != nil {
-		var vector pgvector.Vector
-		var modelName string
-		semanticReady := false
-		if err := r.db.QueryRow(ctx, `SELECT embedding,embedding_model,COALESCE(tags,'{}') FROM links WHERE id=$1 AND status='done' AND deleted_at IS NULL AND embedding IS NOT NULL AND embedding_model IS NOT NULL`, *linkID).Scan(&vector, &modelName, &tags); err == nil {
-			modelName = strings.TrimSpace(modelName)
-			semanticReady = len(vector.Slice()) > 0 && strings.TrimSpace(modelName) != ""
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			// A missing vector extension/model or a provider backfill race should
-			// degrade to the deterministic installation-level path below.
-			semanticReady = false
-		}
-		if !semanticReady {
-			if err := r.db.QueryRow(ctx, `SELECT COALESCE(tags,'{}') FROM links WHERE id=$1 AND status='done' AND deleted_at IS NULL`, *linkID).Scan(&tags); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return nil, "", true, ErrNotFound
-				}
-				return nil, "", true, fmt.Errorf("read related tag source: %w", err)
+		if err := r.db.QueryRow(ctx, `SELECT COALESCE(tags,'{}') FROM links WHERE id=$1 AND status='done' AND deleted_at IS NULL`, *linkID).Scan(&tags); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrNotFound
 			}
-		} else if out, ok := r.semanticRelatedTags(ctx, *linkID, vector, modelName, tags, limit); ok {
-			return out, "semantic-v1:" + strings.TrimSpace(modelName), false, nil
-		}
-		// Semantic query failures intentionally fall back to cooccurrence;
-		// the response advertises degraded=true instead of failing Home/Feed.
-		if len(tags) == 0 {
-			return []string{}, "cooccurrence-v1", true, nil
+			return nil, fmt.Errorf("read related tag source: %w", err)
 		}
 	}
 	return r.cooccurrenceRelatedTags(ctx, tags, limit)
 }
 
-// semanticRelatedTags ranks tags by embedding proximity to the seed link. It
-// reports failure as !ok rather than an error: every failure mode here (missing
-// vector extension, model mismatch, backfill race) must degrade to the
-// cooccurrence path instead of failing the Home/Feed request.
-func (r *PGXReaderVNextRepository) semanticRelatedTags(ctx context.Context, linkID uuid.UUID, vector pgvector.Vector, modelName string, tags []string, limit int) ([]string, bool) {
-	rows, queryErr := r.db.Query(ctx, `
-				WITH nearest AS (
-					SELECT l.tags, l.embedding <=> $1 AS distance
-					FROM links l
-					WHERE l.status='done' AND l.deleted_at IS NULL AND l.embedding IS NOT NULL
-						AND l.embedding_model=$2 AND l.id<>$3
-					ORDER BY l.embedding <=> $1, l.id
-					LIMIT 40
-				)
-				SELECT candidate, SUM(1.0/(1.0+distance)) AS score, COUNT(*) AS uses
-				FROM nearest, unnest(nearest.tags) AS candidate
-				WHERE candidate <> ALL($4::text[])
-				GROUP BY candidate
-				ORDER BY score DESC, uses DESC, candidate
-				LIMIT $5`, pgvector.NewVector(vector.Slice()), modelName, linkID, tags, limit)
-	if queryErr != nil {
-		return nil, false
-	}
-	out := make([]string, 0, alloc.Hint(limit))
-	for rows.Next() {
-		var tag string
-		var score float64
-		var uses int
-		if err := rows.Scan(&tag, &score, &uses); err != nil {
-			rows.Close()
-			queryErr = err
-			break
-		}
-		out = append(out, tag)
-	}
-	if queryErr == nil {
-		queryErr = rows.Err()
-	}
-	rows.Close()
-	if queryErr != nil {
-		return nil, false
-	}
-	return out, true
-}
-
-// cooccurrenceRelatedTags is the deterministic fallback: tags that co-occur with
-// the seed tags, or the installation's most-used tags when there is no seed. It always
-// reports degraded=true so callers can tell it apart from a semantic answer.
-func (r *PGXReaderVNextRepository) cooccurrenceRelatedTags(ctx context.Context, tags []string, limit int) ([]string, string, bool, error) {
+// cooccurrenceRelatedTags returns tags that co-occur with the seed tags, or the
+// installation's most-used tags when there is no seed.
+func (r *PGXReaderVNextRepository) cooccurrenceRelatedTags(ctx context.Context, tags []string, limit int) ([]string, error) {
 	var rows pgx.Rows
 	var err error
 	if len(tags) > 0 {
@@ -6684,115 +5102,41 @@ func (r *PGXReaderVNextRepository) cooccurrenceRelatedTags(ctx context.Context, 
 		rows, err = r.db.Query(ctx, `SELECT tag FROM (SELECT unnest(tags) AS tag,count(*) AS uses FROM links WHERE status='done' AND deleted_at IS NULL AND tags IS NOT NULL GROUP BY tag ORDER BY uses DESC,tag LIMIT $1) related`, limit)
 	}
 	if err != nil {
-		return nil, "", true, fmt.Errorf("related tags: %w", err)
+		return nil, fmt.Errorf("related tags: %w", err)
 	}
 	defer rows.Close()
-	out := make([]string, 0, alloc.Hint(limit))
+	out := make([]string, 0)
 	for rows.Next() {
 		var tag string
 		if err := rows.Scan(&tag); err != nil {
-			return nil, "", true, err
+			return nil, err
 		}
 		out = append(out, tag)
 	}
-	return out, "cooccurrence-v1", true, rows.Err()
-}
-
-func (r *PGXReaderVNextRepository) RefreshActivity(ctx context.Context) error {
-	return r.withTx(ctx, func(tx database.Querier) error {
-		if err := lockReaderActivity(ctx, tx); err != nil {
-			return err
-		}
-		return r.refreshActivity(ctx, tx)
-	})
-}
-
-// lockReaderActivity serializes installation-level snapshot-derived activity rebuilds
-// with a metadata CAS that changes its tag source. Callers acquire it before
-// they read or mutate links, then retain it through the activity writes.
-func lockReaderActivity(ctx context.Context, db database.Querier) error {
-	// The activity projection is rebuilt from one statement snapshot. Without
-	// serializing rebuilds with a metadata-tag replacement, an older refresh can
-	// take its snapshot before the CAS commits, then insert its stale tags after
-	// the CAS transaction has removed them. The transaction-scoped advisory lock
-	// uses one fixed installation-level key, and every caller follows the same
-	// fence.
-	if _, err := db.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('reader-activity',0))`); err != nil {
-		return fmt.Errorf("lock reader activity refresh: %w", err)
-	}
-	return nil
-}
-
-// refreshActivity updates both activity tables through the supplied query
-// boundary. Callers hold the installation activity fence for the lifetime of the
-// surrounding transaction.
-func (r *PGXReaderVNextRepository) refreshActivity(ctx context.Context, db database.Querier) error {
-	// Collection activity is based on the collection event timestamps, not
-	// metadata edits or projection refreshes that happen to bump updated_at.
-	// The upsert and stale-row delete share one transaction so a reader never
-	// observes a half-refreshed tag/domain projection.
-	if _, err := db.Exec(ctx, `
-			WITH current AS (
-				SELECT source.tag,
-					MAX(source.event_at) AS last_at,
-					(array_agg(source.id ORDER BY source.event_at DESC,source.id DESC))[1] AS last_link_id
-				FROM (
-					SELECT l.id,
-						GREATEST(l.created_at,l.first_collected_at,l.last_recollected_at) AS event_at,
-						unnest(l.tags) AS tag
-					FROM links l
-					WHERE l.library_kind='reading' AND l.status='done'
-						AND l.deleted_at IS NULL AND l.tags IS NOT NULL
-				) source
-				GROUP BY source.tag
-			), upsert AS (
-				INSERT INTO reader_tag_activity (tag,last_at,last_link_id)
-				SELECT tag,last_at,last_link_id FROM current
-				ON CONFLICT (tag) DO UPDATE
-				SET last_at=EXCLUDED.last_at,last_link_id=EXCLUDED.last_link_id
-				RETURNING 1
-			)
-			DELETE FROM reader_tag_activity activity
-			WHERE NOT EXISTS (SELECT 1 FROM current WHERE current.tag=activity.tag)`); err != nil {
-		return fmt.Errorf("refresh tag activity: %w", err)
-	}
-	if _, err := db.Exec(ctx, `
-			WITH current AS (
-				SELECT source.domain,
-					MAX(source.event_at) AS last_at,
-					(array_agg(source.id ORDER BY source.event_at DESC,source.id DESC))[1] AS last_link_id
-				FROM (
-					SELECT l.id,
-						GREATEST(l.created_at,l.first_collected_at,l.last_recollected_at) AS event_at,
-						l.domain
-					FROM links l
-					WHERE l.library_kind='reading' AND l.status='done'
-						AND l.deleted_at IS NULL AND l.domain IS NOT NULL AND l.domain <> ''
-				) source
-				GROUP BY source.domain
-			), upsert AS (
-				INSERT INTO reader_domain_activity (domain,last_at,last_link_id)
-				SELECT domain,last_at,last_link_id FROM current
-				ON CONFLICT (domain) DO UPDATE
-				SET last_at=EXCLUDED.last_at,last_link_id=EXCLUDED.last_link_id
-				RETURNING 1
-			)
-			DELETE FROM reader_domain_activity activity
-			WHERE NOT EXISTS (SELECT 1 FROM current WHERE current.domain=activity.domain)`); err != nil {
-		return fmt.Errorf("refresh domain activity: %w", err)
-	}
-	return nil
+	return out, rows.Err()
 }
 
 const (
 	readerTagActivityRows = `
-		SELECT 'tag'::text AS kind, tag AS activity_key, last_at,
-			lower(btrim(tag)) AS normalized_key
-		FROM reader_tag_activity`
+		SELECT 'tag'::text AS kind, source.tag AS activity_key,
+			MAX(source.event_at) AS last_at,
+			lower(btrim(source.tag)) AS normalized_key
+		FROM (
+			SELECT GREATEST(l.created_at,l.first_collected_at,l.last_recollected_at) AS event_at,
+				unnest(l.tags) AS tag
+			FROM links l
+			WHERE l.library_kind='reading' AND l.status='done'
+				AND l.deleted_at IS NULL AND l.tags IS NOT NULL
+		) source
+		GROUP BY source.tag`
 	readerDomainActivityRows = `
-		SELECT 'domain'::text AS kind, domain AS activity_key, last_at,
-			lower(btrim(domain)) AS normalized_key
-		FROM reader_domain_activity`
+		SELECT 'domain'::text AS kind, l.domain AS activity_key,
+			MAX(GREATEST(l.created_at,l.first_collected_at,l.last_recollected_at)) AS last_at,
+			lower(btrim(l.domain)) AS normalized_key
+		FROM links l
+		WHERE l.library_kind='reading' AND l.status='done'
+			AND l.deleted_at IS NULL AND l.domain IS NOT NULL AND l.domain <> ''
+		GROUP BY l.domain`
 )
 
 func readerActivityRows(kind string) (string, error) {
@@ -6844,7 +5188,7 @@ func (r *PGXReaderVNextRepository) ListActivity(ctx context.Context, query model
 		return model.ReaderActivityPage{}, err
 	}
 	defer rows.Close()
-	items := make([]model.ReaderActivity, 0, alloc.Hint(query.Limit+1))
+	items := make([]model.ReaderActivity, 0)
 	for rows.Next() {
 		var item model.ReaderActivity
 		if err := rows.Scan(&item.Kind, &item.Key, &item.LastAt, &item.NormalizedKey); err != nil {
@@ -6874,9 +5218,6 @@ func (r *PGXReaderVNextRepository) UpdateLinkMetadata(ctx context.Context, patch
 }
 
 func (r *PGXReaderVNextRepository) updateLinkMetadata(ctx context.Context, tx database.Querier, patch model.ReaderLinkMetadataPatch, result *model.ReaderLinkMetadataUpdate) error {
-	if err := lockReaderActivity(ctx, tx); err != nil {
-		return err
-	}
 	var (
 		found        bool
 		changed      bool
@@ -6921,244 +5262,5 @@ func (r *PGXReaderVNextRepository) updateLinkMetadata(ctx context.Context, tx da
 	if !found || tupleChanged && !changed {
 		return ErrRevisionConflict
 	}
-	if !changed || !result.TagsChanged {
-		return nil
-	}
-	if err := clearLinkMetadataConcepts(ctx, tx, patch.LinkID); err != nil {
-		return err
-	}
-	return r.refreshActivity(ctx, tx)
-}
-
-// clearLinkMetadataConcepts removes parse-derived display projections after a
-// complete metadata replacement and repairs the remaining surface-name votes.
-func clearLinkMetadataConcepts(ctx context.Context, tx database.Querier, linkID uuid.UUID) error {
-	rows, err := tx.Query(ctx, `DELETE FROM link_concept WHERE link_id=$1 RETURNING concept_id`, linkID)
-	if err != nil {
-		return fmt.Errorf("clear link metadata concepts: %w", err)
-	}
-	removedConcepts := make([]uuid.UUID, 0)
-	seenConcepts := make(map[uuid.UUID]struct{})
-	for rows.Next() {
-		var conceptID uuid.UUID
-		if err := rows.Scan(&conceptID); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan cleared link metadata concept: %w", err)
-		}
-		if _, seen := seenConcepts[conceptID]; seen {
-			continue
-		}
-		seenConcepts[conceptID] = struct{}{}
-		removedConcepts = append(removedConcepts, conceptID)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("iterate cleared link metadata concepts: %w", err)
-	}
-	rows.Close()
-	return recalculateRemovedLinkConceptDisplayNames(ctx, tx, removedConcepts)
-}
-
-// recalculateRemovedLinkConceptDisplayNames restores the canonical display
-// name for concepts whose link_concept vote changed in a metadata
-// transaction. It deliberately mirrors the batch resolver's no-clear policy:
-// a concept with no remaining attachment keeps its previous display name, but
-// every concept with a remaining local vote reflects that vote before the
-// metadata response commits.
-func recalculateRemovedLinkConceptDisplayNames(ctx context.Context, db database.Querier, conceptIDs []uuid.UUID) error {
-	if len(conceptIDs) == 0 {
-		return nil
-	}
-	if _, err := db.Exec(ctx, `
-		UPDATE concept c
-		SET display_name = winners.surface_tag,
-			updated_at = NOW()
-		FROM (
-			SELECT DISTINCT ON (concept_id) concept_id, surface_tag
-			FROM (
-				SELECT concept_id, surface_tag, count(*) AS uses
-				FROM link_concept
-				WHERE concept_id = ANY($1)
-				GROUP BY concept_id, surface_tag
-			) counts
-			ORDER BY concept_id, uses DESC, surface_tag ASC
-		) winners
-		WHERE c.id = winners.concept_id`, conceptIDs); err != nil {
-		return fmt.Errorf("recalculate metadata concept display names: %w", err)
-	}
 	return nil
-}
-
-func (r *PGXReaderVNextRepository) ListContentHistory(ctx context.Context, linkID uuid.UUID, limit int) ([]model.ReaderContentHistory, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 50
-	}
-	rows, err := r.db.Query(ctx, `SELECT id,link_id,revision,content,content_document,content_format,content_source,created_at FROM reader_content_history WHERE link_id=$1 ORDER BY revision DESC LIMIT $2`, linkID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]model.ReaderContentHistory, 0, alloc.Hint(limit))
-	for rows.Next() {
-		var item model.ReaderContentHistory
-		if err := rows.Scan(&item.ID, &item.LinkID, &item.Revision, &item.Content, &item.ContentDocument, &item.ContentFormat, &item.ContentSource, &item.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, item)
-	}
-	return out, rows.Err()
-}
-
-// reanchorRestoredLinkThoughts only changes live saved-content thoughts that
-// were explicitly anchored to the revision observed by RestoreContentHistory.
-// Other targets, old anchors, and every existing tombstone retain their
-// historical state; content restore is not an implicit lifecycle restore.
-func (r *PGXReaderVNextRepository) reanchorRestoredLinkThoughts(
-	ctx context.Context,
-	db database.Querier,
-	linkID uuid.UUID,
-	observedRevision, restoredRevision int64,
-	content string,
-) error {
-	rows, err := db.Query(ctx, `SELECT `+readerThoughtColumns+`
-		FROM reader_thoughts
-		LEFT JOIN reader_thought_tombstones tombstone ON tombstone.thought_id=reader_thoughts.id
-		WHERE reader_thoughts.host_kind=$1
-		  AND reader_thoughts.host_id=$2
-		  AND reader_thoughts.deleted=false
-		  AND tombstone.thought_id IS NULL
-		  AND reader_thoughts.target->>'kind'='saved-content'
-		  AND reader_thoughts.target->>'host_id'=$2
-		  AND jsonb_typeof(reader_thoughts.target->'version'->'content_revision')='number'
-		  AND reader_thoughts.target #>> '{version,content_revision}'=$3
-		ORDER BY id
-		FOR UPDATE OF reader_thoughts`, "link", linkID.String(), strconv.FormatInt(observedRevision, 10))
-	if err != nil {
-		return fmt.Errorf("list thoughts for content restore: %w", err)
-	}
-	thoughts := make([]model.ReaderThought, 0)
-	for rows.Next() {
-		item, err := scanReaderThought(rows)
-		if err != nil {
-			rows.Close()
-			return fmt.Errorf("scan thought for content restore: %w", err)
-		}
-		thoughts = append(thoughts, *item)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read thoughts for content restore: %w", err)
-	}
-
-	for _, item := range thoughts {
-		if !isCurrentSavedContentRestoreThought(item, linkID, observedRevision) {
-			continue
-		}
-		quote, _, err := readerReanchorQuoteForContent(content, item.Quote)
-		if err != nil {
-			if err := r.markThoughtTombstoneOn(ctx, db, item.ID, "content_restored"); err != nil {
-				return err
-			}
-			continue
-		}
-		target, err := rewriteReaderThoughtTargetHost(item.Target, linkID.String(), "link", restoredRevision)
-		if err != nil {
-			if err := r.markThoughtTombstoneOn(ctx, db, item.ID, "content_restored"); err != nil {
-				return err
-			}
-			continue
-		}
-		payload, err := json.Marshal(struct {
-			Body   string          `json:"body"`
-			Quote  json.RawMessage `json:"quote"`
-			Source string          `json:"source"`
-			LinkID string          `json:"link_id,omitempty"`
-		}{Body: item.Body, Quote: quote, Source: item.Source, LinkID: linkID.String()})
-		if err != nil {
-			return fmt.Errorf("encode content restore thought: %w", err)
-		}
-		opID := "content-restore-" + linkID.String() + "-" + strconv.FormatInt(restoredRevision, 10) + "-" + item.ID
-		thoughtOp, sequence, duplicate, err := r.appendDerivedThoughtOp(ctx, db, model.ReaderThoughtOp{
-			OpID:          opID,
-			DeviceID:      "reader-content-restore",
-			OperationKind: "update",
-			AnnotationID:  item.ID,
-			HostKind:      "link",
-			HostID:        linkID.String(),
-			Target:        target,
-			Payload:       payload,
-		})
-		if err != nil {
-			return fmt.Errorf("append content restore thought: %w", err)
-		}
-		if !duplicate {
-			if err := r.materializeThought(ctx, db, thoughtOp, sequence); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// isCurrentSavedContentRestoreThought repeats the SQL eligibility gate as a
-// defensive check before a server-derived operation is appended. This keeps a
-// malformed legacy target from being rewritten should it ever bypass the query
-// predicate through a future query change.
-func isCurrentSavedContentRestoreThought(item model.ReaderThought, linkID uuid.UUID, observedRevision int64) bool {
-	if item.Deleted || item.HostKind != "link" || item.HostID != linkID.String() {
-		return false
-	}
-	var target struct {
-		Kind    string `json:"kind"`
-		HostID  string `json:"host_id"`
-		Version struct {
-			ContentRevision *int64 `json:"content_revision"`
-		} `json:"version"`
-	}
-	if err := json.Unmarshal(item.Target, &target); err != nil {
-		return false
-	}
-	return target.Kind == "saved-content" &&
-		target.HostID == linkID.String() &&
-		target.Version.ContentRevision != nil &&
-		*target.Version.ContentRevision == observedRevision
-}
-
-func (r *PGXReaderVNextRepository) RestoreContentHistory(ctx context.Context, linkID uuid.UUID, historyID, expectedRevision int64) (int64, error) {
-	var revision int64
-	err := r.withTx(ctx, func(db database.Querier) error {
-		var restoredContent string
-		err := db.QueryRow(ctx, `
-			UPDATE links l SET
-				content=h.content,content_document=h.content_document,content_format=h.content_format,
-				content_source='user',content_revision=l.content_revision+1,
-				embedding=NULL,embedding_model=NULL,updated_at=NOW()
-			FROM reader_content_history h
-			WHERE h.link_id=$1 AND h.id=$2 AND l.id=$1 AND l.deleted_at IS NULL AND l.content_revision=$3
-			RETURNING l.content_revision,COALESCE(l.content_document,l.content,'')`, linkID, historyID, expectedRevision).Scan(&revision, &restoredContent)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrRevisionConflict
-		}
-		if err != nil {
-			return fmt.Errorf("restore content history: %w", err)
-		}
-		// Translation source identity is immutable. Advancing content_revision makes
-		// saved-content rows from prior revisions stale without destroying their
-		// historical results or their in-flight attempt identity.
-		if err := r.reanchorRestoredLinkThoughts(ctx, db, linkID, expectedRevision, revision, restoredContent); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return revision, nil
-}
-
-func prelockReaderFeedFeedbackRevisions(ctx context.Context, db database.Querier, kind, action string) error {
-	if kind != "subscription" || (action != "save" && action != "unsave") {
-		return nil
-	}
-	return prelockLibraryFeedRevisions(ctx, db)
 }

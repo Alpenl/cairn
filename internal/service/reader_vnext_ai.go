@@ -22,10 +22,6 @@ const readerAIContextTruncatedMarker = "\n[Reader AI context truncated]"
 
 var errReaderAIEmptyResponse = errors.New("reader AI provider returned an empty response")
 
-type readerAICapability interface {
-	Available() bool
-}
-
 // readerAIStatusError keeps the public error classification and the original
 // cause together. The cause is available to errors.Is in service tests and
 // observability code, while Error() and the HTTP carrier never expose provider
@@ -72,7 +68,7 @@ func (e *readerAIStatusError) HTTPErrorCode() string {
 
 // mapReaderAIError converts provider and request-lifecycle failures into a
 // stable client classification without copying the upstream error text. An
-// existing HTTP carrier, such as rate_limit_exceeded or reader_not_found, remains
+// existing HTTP carrier, such as cooldown_active or reader_not_found, remains
 // authoritative and is not reclassified.
 func mapReaderAIError(err error) error {
 	if err == nil {

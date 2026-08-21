@@ -6,7 +6,6 @@ import (
 
 	"webtag/internal/dto"
 	"webtag/internal/model"
-	"webtag/internal/repository"
 )
 
 // IngestService owns the multimodal /api/ingest entrypoint. Wave 12.3
@@ -81,33 +80,16 @@ func optionalTextEqual(left, right *string) bool {
 	return leftValue == rightValue
 }
 
-// NewIngestService takes the same repository / queue dependencies
-// SubmitService uses; production wires both services from the same reader,
-// durable command adapter, job store, and locker. Tests use an in-memory
-// adapter at that same seam.
-//
-// Boot wiring should call NewLinkServices instead so SubmitService and
-// IngestService share a single *linkSubmitter core (Wave 13 M-1). This
-// constructor stays as a thin wrapper because submit_helpers_test.go and a
-// few other tests build IngestService in isolation.
-func NewIngestService(reader linkSubmissionReader, jobs repository.JobStore, commands LinkSubmissionCommands, locker URLLocker) *IngestService {
-	_, ingest := NewLinkServices(reader, jobs, commands, locker, SubmitServiceOptions{})
-	return ingest
-}
-
 // Ingest 处理一次多模态入库请求：先把 IngestRequest 规范化为统一的内部结构，
 // 然后按 source_key（必要时再用真实 URL）去重判断是新建还是命中已有链接，
 // 整个查询 + 写入过程被 URL/source_key 互斥锁串行化，避免同一来源并发产生两条记录。
 func (s *IngestService) Ingest(ctx context.Context, req dto.IngestRequest) (dto.SubmitResponse, error) {
-	normalized, err := normalizeIngestRequest(req, s.core.defaultCaptureDestination())
+	normalized, err := normalizeIngestRequest(req, captureDestinationInbox)
 	if err != nil {
 		return dto.SubmitResponse{}, err
 	}
 	params, err := normalized.toLinkCapture()
 	if err != nil {
-		return dto.SubmitResponse{}, err
-	}
-	if err := requireSiteLibraryWrite(params.RequestedLibraryKind, s.core.disableSiteLibraryWrite); err != nil {
 		return dto.SubmitResponse{}, err
 	}
 	lockKey := normalized.lockURL
@@ -135,7 +117,7 @@ func (s *IngestService) Ingest(ctx context.Context, req dto.IngestRequest) (dto.
 			return err
 		}
 		link := submitCandidateFromParseInput(projection)
-		if normalized.sourceKind == "url" && link.Status != model.LinkStatusSkeleton {
+		if normalized.sourceKind == "url" {
 			// URL-only ingest carries no capture revision, so it must never replace
 			// persisted browser/multimodal input. It still goes through the shared
 			// existing-row reconciliation so a concrete partition selection can be

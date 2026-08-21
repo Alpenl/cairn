@@ -5,16 +5,11 @@
 // # Environment
 //
 //	DATABASE_URL                  required.
-//	MIGRATION_TARGET              ""    default release-gated run (stops before
-//	                                    the first pending manual step);
-//	                              fresh  compatibility alias for an empty
-//	                                    database, same plan as "";
-//	                              <id>   exact step ID — migrate through that
-//	                                    step and not one step further.
-//	MIGRATION_ALLOW_MANUAL        "true" lets an exact-target run cross a
-//	                                    release-gated manual step. This is the
-//	                                    human operator's approval; the deploy
-//	                                    helper must never set it.
+//	MIGRATION_TARGET              ""    install or upgrade to the current head;
+//	                              fresh  require an empty application ledger;
+//	                              <id>   require the exact current schema ID.
+//	MIGRATION_ALLOW_MANUAL        retained only in report schema version 1;
+//	                                    it no longer changes execution.
 //	MIGRATION_RIVER_LEDGER_TARGET the River ledger version the release manifest
 //	                                    declares. Defaults to this binary's
 //	                                    River bundle head.
@@ -23,7 +18,6 @@
 // # Flags
 //
 //	--version                 print identity and exit.
-//	--repair-reader-todos     rebuild every TODO projection; runs no migration.
 //	--report-json             emit exactly one JSON object on stdout and route
 //	                          all human text to stderr.
 //	--plan-json               answer whether MIGRATION_TARGET is eligible for a
@@ -47,18 +41,15 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"webtag/internal/buildinfo"
 	"webtag/internal/database"
 	"webtag/internal/migrate"
-	"webtag/internal/repository"
 )
 
 func main() {
@@ -66,11 +57,6 @@ func main() {
 		log.Fatal(err)
 	}
 }
-
-// repairTodoProjectionsFlag is the explicit operator entry point for TODO
-// projection drift. Drift repair is deliberately not reachable from any HTTP
-// read: rebuilding the whole installation is what the read path stopped doing.
-const repairTodoProjectionsFlag = "--repair-reader-todos"
 
 // reportJSONFlag switches stdout to a single machine-readable object. The
 // deploy helper consumes that object; see migrationReport for the contract.
@@ -108,10 +94,6 @@ func hasFlag(args []string, flag string) bool {
 	return false
 }
 
-func wantsTodoProjectionRepair(args []string) bool {
-	return hasFlag(args, repairTodoProjectionsFlag)
-}
-
 func wantsJSONReport(args []string) bool {
 	return hasFlag(args, reportJSONFlag) || strings.EqualFold(strings.TrimSpace(os.Getenv("MIGRATION_REPORT_JSON")), "true")
 }
@@ -132,8 +114,11 @@ type migrationReport struct {
 	ToolCommit    string `json:"tool_commit"`
 	OK            bool   `json:"ok"`
 
-	Mode            string   `json:"mode"`
-	Target          string   `json:"target"`
+	Mode   string `json:"mode"`
+	Target string `json:"target"`
+	// These two fields remain required by report schema version 1. The
+	// single-head runner has no manual-gate execution mode, so AllowManual is
+	// informational and StoppedAtManual is always empty.
 	AllowManual     bool     `json:"allow_manual"`
 	StartVersion    string   `json:"start_version"`
 	EndVersion      string   `json:"end_version"`
@@ -155,16 +140,7 @@ type migrationReport struct {
 	// declared targets after the run. A run whose ledgers do not reconcile
 	// fails closed.
 	Ledgers *migrate.LedgerReconciliation `json:"ledgers,omitempty"`
-	// TodoProjectionBackfill reports the one-shot Reader TODO backfill.
-	TodoProjectionBackfill *todoBackfillReport `json:"todo_projection_backfill,omitempty"`
-
-	Error *reportError `json:"error,omitempty"`
-}
-
-type todoBackfillReport struct {
-	AlreadyComplete bool   `json:"already_complete"`
-	ProjectedCount  int    `json:"projected_count"`
-	CompletedAt     string `json:"completed_at,omitempty"`
+	Error   *reportError                  `json:"error,omitempty"`
 }
 
 // reportError gives the helper a stable discriminator for the HOLD reasons the
@@ -176,12 +152,10 @@ type reportError struct {
 
 // Stable error kinds. Anything unclassified is "failed".
 const (
-	errorKindUnknownTarget      = "unknown_target"
-	errorKindLedgerAhead        = "ledger_ahead"
-	errorKindTargetBehindLedger = "target_behind_ledger"
-	errorKindManualStep         = "manual_step_in_range"
-	errorKindLedgerMismatch     = "ledger_mismatch"
-	errorKindFailed             = "failed"
+	errorKindUnknownTarget  = "unknown_target"
+	errorKindLedgerAhead    = "ledger_ahead"
+	errorKindLedgerMismatch = "ledger_mismatch"
+	errorKindFailed         = "failed"
 )
 
 func classifyError(err error) string {
@@ -190,10 +164,6 @@ func classifyError(err error) string {
 		return errorKindUnknownTarget
 	case errors.Is(err, migrate.ErrLedgerAhead):
 		return errorKindLedgerAhead
-	case errors.Is(err, migrate.ErrTargetBehindLedger):
-		return errorKindTargetBehindLedger
-	case errors.Is(err, migrate.ErrManualStepInRange):
-		return errorKindManualStep
 	case errors.Is(err, errLedgerMismatch):
 		return errorKindLedgerMismatch
 	default:
@@ -221,10 +191,6 @@ func run(stdout, stderr io.Writer, args []string) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer pool.Close()
-
-	if wantsTodoProjectionRepair(args) {
-		return repairReaderTodoProjections(ctx, stdout, pool)
-	}
 
 	// --plan-json always speaks JSON: a plan nobody can parse is not a plan.
 	jsonReport := wantsJSONReport(args) || wantsPlanOnly(args)
@@ -268,7 +234,7 @@ func writeReport(stdout io.Writer, report migrationReport) error {
 // report, including on the failure paths.
 func migrateAndVerify(ctx context.Context, human io.Writer, pool *pgxpool.Pool) (migrationReport, error) {
 	target := strings.TrimSpace(os.Getenv("MIGRATION_TARGET"))
-	allowManual := strings.EqualFold(strings.TrimSpace(os.Getenv("MIGRATION_ALLOW_MANUAL")), "true")
+	legacyAllowManual := strings.EqualFold(strings.TrimSpace(os.Getenv("MIGRATION_ALLOW_MANUAL")), "true")
 
 	exactTarget := target != "" && target != migrate.FreshInstallTarget
 	report := migrationReport{
@@ -277,7 +243,7 @@ func migrateAndVerify(ctx context.Context, human io.Writer, pool *pgxpool.Pool) 
 		ToolVersion:   buildinfo.Version,
 		ToolCommit:    buildinfo.Commit,
 		Mode:          requestedMode(target),
-		AllowManual:   allowManual,
+		AllowManual:   legacyAllowManual,
 		Applied:       []string{},
 	}
 	if exactTarget {
@@ -289,11 +255,10 @@ func migrateAndVerify(ctx context.Context, human io.Writer, pool *pgxpool.Pool) 
 		report.OnlineUpdate = preRunOnlineUpdatePlan(ctx, pool, target)
 	}
 
-	result, err := migrate.Run(ctx, pool, migrate.RunRequest{Target: target, AllowManual: allowManual})
+	result, err := migrate.Run(ctx, pool, migrate.RunRequest{Target: target})
 	report.StartVersion = result.StartVersion
 	report.EndVersion = result.EndVersion
 	report.AlreadyAtTarget = result.AlreadyAtTarget
-	report.StoppedAtManual = result.StoppedAtManual
 	if result.Applied != nil {
 		report.Applied = result.Applied
 	}
@@ -321,23 +286,6 @@ func migrateAndVerify(ctx context.Context, human io.Writer, pool *pgxpool.Pool) 
 		return report, joined
 	}
 
-	// The backfill writes to the ledger table a tail step creates, so an exact
-	// target that stops short of that step must skip it rather than fail on a
-	// missing relation. Deciding from the reconciled ledger keeps the rule
-	// tied to what the database actually holds.
-	if !slices.Contains(reconciliation.Schema.Applied, migrate.ReaderTodoProjectionLedgerMigrationID) {
-		writeLine(human, "migrate: skipping reader TODO projection backfill; %s is not applied at this target\n",
-			migrate.ReaderTodoProjectionLedgerMigrationID)
-		report.OK = true
-		return report, nil
-	}
-
-	backfill, err := backfillTodoProjections(ctx, human, pool)
-	if err != nil {
-		report.Error = &reportError{Kind: errorKindFailed, Message: err.Error()}
-		return report, err
-	}
-	report.TodoProjectionBackfill = &backfill
 	report.OK = true
 	return report, nil
 }
@@ -480,9 +428,6 @@ func writeHumanRunSummary(human io.Writer, report migrationReport) {
 	} else {
 		writeLine(human, "migrate: applied %d step(s): %s\n", len(report.Applied), strings.Join(report.Applied, ", "))
 	}
-	if report.StoppedAtManual != "" {
-		writeLine(human, "migrate: stopped before pending manual step %s\n", report.StoppedAtManual)
-	}
 	if report.Error != nil {
 		writeLine(human, "migrate: FAILED (%s) %s\n", report.Error.Kind, report.Error.Message)
 	}
@@ -512,40 +457,4 @@ func orNone(value string) string {
 		return "(none)"
 	}
 	return value
-}
-
-// backfillTodoProjections runs the one-shot TODO projection backfill after the
-// schema is in place. It lives in the deploy-time migrate command rather than
-// in the server because it must finish before the Reader starts serving TODO
-// reads from the projection alone. A repeated deploy is a no-op: the backfill
-// records completion in its own ledger and reports the earlier run.
-func backfillTodoProjections(ctx context.Context, human io.Writer, pool *pgxpool.Pool) (todoBackfillReport, error) {
-	result, err := repository.NewPGXReaderVNextRepository(pool).BackfillTodoProjections(ctx)
-	if err != nil {
-		return todoBackfillReport{}, fmt.Errorf("backfill reader TODO projections: %w", err)
-	}
-	report := todoBackfillReport{
-		AlreadyComplete: result.AlreadyComplete,
-		ProjectedCount:  result.ProjectedCount,
-	}
-	if result.AlreadyComplete {
-		report.CompletedAt = result.CompletedAt.UTC().Format(time.RFC3339)
-		writeLine(human, "reader TODO projection backfill already completed at %s (%d projections)\n",
-			report.CompletedAt, result.ProjectedCount)
-		return report, nil
-	}
-	writeLine(human, "reader TODO projection backfill completed (%d projections)\n", result.ProjectedCount)
-	return report, nil
-}
-
-// repairReaderTodoProjections rebuilds every TODO projection from its sources.
-// It skips migrations entirely because it is a data repair an operator reaches
-// for after drift, not part of a deploy.
-func repairReaderTodoProjections(ctx context.Context, stdout io.Writer, pool *pgxpool.Pool) error {
-	projected, err := repository.NewPGXReaderVNextRepository(pool).RepairTodoProjections(ctx)
-	if err != nil {
-		return fmt.Errorf("repair reader TODO projections: %w", err)
-	}
-	_, err = fmt.Fprintf(stdout, "reader TODO projection repair rebuilt %d projections\n", projected)
-	return err
 }

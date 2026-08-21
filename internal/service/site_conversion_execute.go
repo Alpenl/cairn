@@ -11,33 +11,22 @@ import (
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
-	"webtag/internal/observability"
 	"webtag/internal/repository"
 )
 
 // ConversionExecuteService validates the preview token and delegates every
 // state change to one repository transaction. It does not issue an AI call.
 type ConversionExecuteService struct {
-	links                   repository.LinkLifecycleReader
-	commands                LinkConversionCommands
-	metrics                 *observability.Metrics
-	disableSiteLibraryWrite bool
+	links    repository.LinkLifecycleReader
+	commands LinkConversionCommands
 }
 
-// ConversionExecuteServiceOptions keeps the rollout gate at the mutation
-// boundary. Existing sites may still convert back to reading while site writes
-// are disabled, but no conversion may create a new Site or SiteEntry.
-type ConversionExecuteServiceOptions struct {
-	Links                   repository.LinkLifecycleReader
-	Commands                LinkConversionCommands
-	Metrics                 *observability.Metrics
-	DisableSiteLibraryWrite bool
-}
-
-func NewConversionExecuteServiceWithOptions(options ConversionExecuteServiceOptions) *ConversionExecuteService {
+func NewConversionExecuteService(links repository.LinkLifecycleReader, commands LinkConversionCommands) *ConversionExecuteService {
+	if links == nil || commands == nil {
+		panic("service.NewConversionExecuteService: links and commands are required")
+	}
 	return &ConversionExecuteService{
-		links: options.Links, commands: options.Commands, metrics: options.Metrics,
-		disableSiteLibraryWrite: options.DisableSiteLibraryWrite,
+		links: links, commands: commands,
 	}
 }
 
@@ -59,11 +48,6 @@ func (s *ConversionExecuteService) Execute(ctx context.Context, rawLinkID string
 	target := model.LibraryKind(strings.TrimSpace(request.TargetKind))
 	if target != model.LibraryKindReading && target != model.LibraryKindSite {
 		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidRequestedLibraryKind, "target_kind must be reading or site")
-	}
-	if target == model.LibraryKindSite {
-		if err := requireSiteLibraryWrite(model.RequestedLibraryKindSite, s.disableSiteLibraryWrite); err != nil {
-			return dto.ConversionExecuteResponse{}, err
-		}
 	}
 	if target == *link.LibraryKind {
 		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeConversionTargetUnchanged, "conversion target is unchanged")
@@ -92,49 +76,15 @@ func (s *ConversionExecuteService) Execute(ctx context.Context, rawLinkID string
 		return dto.ConversionExecuteResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeRevisionConflict, "target site revision is required")
 	}
 
-	if s.commands == nil {
-		return dto.ConversionExecuteResponse{}, errors.New("convert link: durable commands are not configured")
-	}
 	result, err := s.commands.ConvertLink(ctx, ConvertLinkCommand{
 		LinkID: id, TargetKind: target, ExpectedContentRevision: request.ExpectedContentRevision,
 		TargetSiteID: targetSiteID, ExpectedSiteRevision: request.ExpectedSiteRevision,
 		PreservedUserNote: trimOptional(request.PreservedUserNote),
 	})
 	if err != nil {
-		s.recordConversion(*link.LibraryKind, target, conversionMetricResult(err))
 		return dto.ConversionExecuteResponse{}, mapConversionError(err)
 	}
-	s.recordConversion(*link.LibraryKind, target, "success")
-	s.recordClassificationCorrection(link, target)
 	return conversionResultDTO(result), nil
-}
-
-func (s *ConversionExecuteService) recordConversion(from, to model.LibraryKind, result string) {
-	if s != nil && s.metrics != nil && s.metrics.SiteConversionTotal != nil {
-		s.metrics.SiteConversionTotal.WithLabelValues(string(from), string(to), result).Inc()
-	}
-}
-
-// recordClassificationCorrection intentionally uses the pre-conversion Link:
-// ConvertLink changes the source to user, while the quality signal is whether a
-// user corrected the original automatic decision. Classification reason stays
-// out of labels; only the fixed personal-rule predicate is exposed.
-func (s *ConversionExecuteService) recordClassificationCorrection(link *repository.LinkLifecycleProjection, to model.LibraryKind) {
-	if s == nil || s.metrics == nil || s.metrics.LibraryClassificationCorrectionTotal == nil || link == nil || link.LibraryKind == nil || link.LibraryKindSource == nil || *link.LibraryKindSource != model.LibraryKindSourceAuto {
-		return
-	}
-	hadRule := "false"
-	if link.ClassificationReason != nil && strings.HasPrefix(*link.ClassificationReason, "personal_rule_") {
-		hadRule = "true"
-	}
-	s.metrics.LibraryClassificationCorrectionTotal.WithLabelValues(string(*link.LibraryKind), string(to), hadRule).Inc()
-}
-
-func conversionMetricResult(err error) string {
-	if errors.Is(err, repository.ErrRevisionConflict) {
-		return "conflict"
-	}
-	return "error"
 }
 
 func trimOptional(value *string) *string {
@@ -173,9 +123,6 @@ func conversionResultDTO(result ConvertLinkResult) dto.ConversionExecuteResponse
 		}
 	} else {
 		out.ReaderTarget = dto.ReaderTarget{View: "processing", LinkID: result.LinkID.String()}
-		if result.ParseJobID != nil {
-			out.ParseJobID = result.ParseJobID.String()
-		}
 	}
 	return out
 }

@@ -18,7 +18,6 @@ import (
 	"webtag/internal/handler"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
-	"webtag/internal/readertext"
 	"webtag/internal/repository"
 	readerservice "webtag/internal/service"
 )
@@ -186,26 +185,9 @@ func TestReaderTodoHostRevisionPostgresContract(t *testing.T) {
 		t.Fatalf("omitted standalone revision PatchTodo = %#v, want mutable update", updatedStandalone)
 	}
 
-	note := seedReaderVNextNote(t, pool, "Projected TODO host", "- [ ] projected task")
-	blocks := readertext.List(note.PublishedContent)
-	if len(blocks) != 1 {
-		t.Fatalf("readertext.List(%q) = %#v, want one checklist block", note.PublishedContent, blocks)
-	}
-	hostKind, hostID := "note", note.ID.String()
-	originRef := readerVNextJSON(t, map[string]any{
-		"block_ref":  blocks[0].BlockRef,
-		"text":       blocks[0].Text,
-		"occurrence": blocks[0].Occurrence,
-	})
-	if err := reader.ReconcileTodoProjections(ctx, []model.ReaderTodo{{
-		Text:           blocks[0].Text,
-		OriginKind:     "note",
-		OriginHostKind: &hostKind,
-		OriginHostID:   &hostID,
-		OriginRef:      originRef,
-		HostRevision:   note.PublishedRevision,
-	}}); err != nil {
-		t.Fatalf("ReconcileTodoProjections: %v", err)
+	note, err := reader.CreateNote(ctx, model.ReaderNote{Title: "Projected TODO host", PublishedContent: "- [ ] projected task"})
+	if err != nil {
+		t.Fatalf("CreateNote: %v", err)
 	}
 	todos, err := reader.ListTodos(ctx, "", 200)
 	if err != nil {

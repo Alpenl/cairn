@@ -11,7 +11,6 @@ import (
 
 	"webtag/internal/model"
 	"webtag/internal/repository"
-	readerservice "webtag/internal/service"
 )
 
 type readerTodoProjectionFact struct {
@@ -25,9 +24,7 @@ type readerTodoProjectionFact struct {
 }
 
 // readReaderTodoProjectionFacts reads every projection row, tombstones
-// included, reduced to the fields a reconcile would recompute. Volatile
-// columns are excluded on purpose: a repair rewrites updated_at even when it
-// changes nothing, and that is not drift.
+// included, reduced to the fields maintained by host writes.
 func readReaderTodoProjectionFacts(t *testing.T, pool *pgxpool.Pool) []readerTodoProjectionFact {
 	t.Helper()
 	rows, err := pool.Query(t.Context(), `
@@ -69,24 +66,6 @@ func liveReaderTodoTexts(facts []readerTodoProjectionFact) []string {
 	return out
 }
 
-// assertProjectionsNeedNoRepair is the write-time maintenance contract stated
-// as an executable claim: once a command commits, running the whole-installation
-// repair must find nothing to change. A write path that forgot to maintain its
-// host shows up here as a diff, which is why every step of the lifecycle below
-// calls it instead of asserting only the rows it expects.
-func assertProjectionsNeedNoRepair(t *testing.T, pool *pgxpool.Pool, service *readerservice.ReaderVNextService, label string) []readerTodoProjectionFact {
-	t.Helper()
-	before := readReaderTodoProjectionFacts(t, pool)
-	if _, err := service.RepairProjectedTodos(t.Context()); err != nil {
-		t.Fatalf("%s: repair projections: %v", label, err)
-	}
-	after := readReaderTodoProjectionFacts(t, pool)
-	if !reflect.DeepEqual(before, after) {
-		t.Fatalf("%s left the projection out of date\n before=%#v\n  after=%#v", label, before, after)
-	}
-	return after
-}
-
 func assertLiveTodoTexts(t *testing.T, facts []readerTodoProjectionFact, label string, want ...string) {
 	t.Helper()
 	got := liveReaderTodoTexts(facts)
@@ -107,13 +86,12 @@ func TestReaderNoteTodoProjectionIsMaintainedOnWrite(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	reader := repository.NewPGXReaderVNextRepository(pool)
-	service := readerservice.NewReaderVNextService(reader, nil)
 
 	note, err := reader.CreateNote(ctx, model.ReaderNote{Title: "Write-path note", PublishedContent: "- [ ] alpha"})
 	if err != nil {
 		t.Fatalf("CreateNote: %v", err)
 	}
-	facts := assertProjectionsNeedNoRepair(t, pool, service, "create note")
+	facts := readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "create note", "alpha")
 
 	if _, err := reader.SaveNoteDraft(ctx, model.ReaderNoteDraftCommand{
@@ -121,7 +99,7 @@ func TestReaderNoteTodoProjectionIsMaintainedOnWrite(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveNoteDraft: %v", err)
 	}
-	facts = assertProjectionsNeedNoRepair(t, pool, service, "save draft")
+	facts = readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "save draft", "alpha")
 
 	published, err := reader.PublishNote(ctx, model.ReaderNotePublishCommand{
@@ -130,7 +108,7 @@ func TestReaderNoteTodoProjectionIsMaintainedOnWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishNote: %v", err)
 	}
-	facts = assertProjectionsNeedNoRepair(t, pool, service, "publish note")
+	facts = readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "publish note", "alpha", "beta")
 
 	todo := findLiveProjectedTodo(t, pool, "note", note.ID.String(), "beta")
@@ -143,7 +121,7 @@ func TestReaderNoteTodoProjectionIsMaintainedOnWrite(t *testing.T) {
 	if !ticked.Done {
 		t.Fatalf("PatchTodo() = %#v, want done", ticked)
 	}
-	facts = assertProjectionsNeedNoRepair(t, pool, service, "tick checkbox")
+	facts = readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "tick checkbox", "alpha", "beta")
 	assertProjectedTodoDone(t, facts, "tick checkbox", "beta", true)
 
@@ -157,23 +135,21 @@ func TestReaderNoteTodoProjectionIsMaintainedOnWrite(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RestoreNoteRevision: %v", err)
 	}
-	facts = assertProjectionsNeedNoRepair(t, pool, service, "restore revision")
+	facts = readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "restore revision", "alpha", "beta")
 	assertProjectedTodoDone(t, facts, "restore revision", "beta", false)
 
-	if err := reader.DeleteNote(ctx, note.ID); err != nil {
-		t.Fatalf("DeleteNote: %v", err)
+	if _, err := reader.SoftDeleteHost(ctx, model.ReaderHostNote, note.ID); err != nil {
+		t.Fatalf("SoftDeleteHost(note): %v", err)
 	}
-	facts = assertProjectionsNeedNoRepair(t, pool, service, "delete note")
+	facts = readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "delete note")
 
-	// Restoring the note restores the source, not the dismissed projections:
-	// a soft-deleted projection is a tombstone for every path, and the repair
-	// agrees, which is exactly what assertProjectionsNeedNoRepair checks.
-	if err := reader.RestoreNote(ctx, note.ID); err != nil {
-		t.Fatalf("RestoreNote: %v", err)
+	// Restoring the note restores the source, not its dismissed projections.
+	if _, err := reader.RestoreHost(ctx, model.ReaderHostNote, note.ID); err != nil {
+		t.Fatalf("RestoreHost(note): %v", err)
 	}
-	facts = assertProjectionsNeedNoRepair(t, pool, service, "restore note")
+	facts = readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "restore note")
 }
 
@@ -184,23 +160,22 @@ func TestReaderThoughtTodoProjectionIsMaintainedOnWrite(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	reader := repository.NewPGXReaderVNextRepository(pool)
-	service := readerservice.NewReaderVNextService(reader, nil)
 	links := repository.NewPGXLinkRepository(pool)
 
 	linkID := seedReaderVNextSavedLink(t, pool, "https://todo.example/"+uuid.NewString(), "Write-path link", "body", "summary")
 	thoughtID := "thought-todo-" + uuid.NewString()
 	appendThoughtWithBody(t, ctx, reader, thoughtID, linkID, 1, "- [ ] read the paper")
-	facts := assertProjectionsNeedNoRepair(t, pool, service, "create thought")
+	facts := readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "create thought", "read the paper")
 
 	appendThoughtWithBody(t, ctx, reader, thoughtID, linkID, 2, "- [ ] read the paper\n- [ ] write the notes")
-	facts = assertProjectionsNeedNoRepair(t, pool, service, "update thought")
+	facts = readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "update thought", "read the paper", "write the notes")
 
 	if err := links.DeleteLifecycle(ctx, linkID); err != nil {
 		t.Fatalf("DeleteLifecycle: %v", err)
 	}
-	facts = assertProjectionsNeedNoRepair(t, pool, service, "delete link host")
+	facts = readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "delete link host")
 }
 
@@ -211,12 +186,11 @@ func TestReaderThoughtDeleteRetiresTodoProjectionOnWrite(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	reader := repository.NewPGXReaderVNextRepository(pool)
-	service := readerservice.NewReaderVNextService(reader, nil)
 
 	linkID := seedReaderVNextSavedLink(t, pool, "https://todo.example/"+uuid.NewString(), "Deleted thought link", "body", "summary")
 	thoughtID := "thought-todo-" + uuid.NewString()
 	appendThoughtWithBody(t, ctx, reader, thoughtID, linkID, 1, "- [ ] disappear with me")
-	facts := assertProjectionsNeedNoRepair(t, pool, service, "create thought")
+	facts := readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "create thought", "disappear with me")
 
 	if _, err := reader.AppendThoughtOps(ctx, []model.ReaderThoughtOp{{
@@ -232,7 +206,7 @@ func TestReaderThoughtDeleteRetiresTodoProjectionOnWrite(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("delete thought: %v", err)
 	}
-	facts = assertProjectionsNeedNoRepair(t, pool, service, "delete thought")
+	facts = readReaderTodoProjectionFacts(t, pool)
 	assertLiveTodoTexts(t, facts, "delete thought")
 }
 

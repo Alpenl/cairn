@@ -25,8 +25,8 @@ const sourceText = "hello"
 
 // TestSchedulePending_StalledInFlightRowIsRescheduled 是 HIGH-1 的持久层回归。
 //
-// 卡死场景：River 判 discard 后 RecordDiscard 失败，行永久停在 processing。
-// 若 ON CONFLICT 谓词不含停滞分支，upsert 影响 0 行，调用方落回
+// 卡死场景：进程在上游调用后硬退出，River 最终放弃该 attempt，而产品行仍停在
+// processing。若 ON CONFLICT 谓词不含停滞分支，upsert 影响 0 行，调用方落回
 // findTranslationByIdentity 拿到同一条卡死行、scheduled=false、不入队——用户
 // 无论重试多少次都看到「翻译中」。
 func TestSchedulePending_StalledInFlightRowIsRescheduled(t *testing.T) {
@@ -36,7 +36,7 @@ func TestSchedulePending_StalledInFlightRowIsRescheduled(t *testing.T) {
 	queue := newRiverQueue(t, pool, newRecordingProcessor(pool))
 	ctx := t.Context()
 
-	link, _, err := linkRepo.SubmitNew(ctx, repository.CreateLinkParams{
+	link, err := linkRepo.Create(ctx, repository.CreateLinkParams{
 		URL:        "https://example.com/stalled-translation",
 		SourceKind: "url",
 		SourceKey:  "src-stalled-tr",
@@ -47,17 +47,16 @@ func TestSchedulePending_StalledInFlightRowIsRescheduled(t *testing.T) {
 	}
 
 	params := repository.UpsertTranslationParams{
-		LinkID:                  link.ID,
-		Scope:                   model.TranslationScopeSelection,
-		BlockKey:                "summary",
-		StartOffset:             0,
-		EndOffset:               5,
-		SourceText:              sourceText,
-		SourceFormat:            model.TranslationFormatPlain,
-		TargetLanguage:          model.TranslationTargetChinese,
-		SourceHash:              fmt.Sprintf("%x", sha256.Sum256([]byte(sourceText))),
-		AllowExistingReschedule: true,
-		StallAfter:              time.Hour,
+		LinkID:         link.ID,
+		Scope:          model.TranslationScopeSelection,
+		BlockKey:       "summary",
+		StartOffset:    0,
+		EndOffset:      5,
+		SourceText:     sourceText,
+		SourceFormat:   model.TranslationFormatPlain,
+		TargetLanguage: model.TranslationTargetChinese,
+		SourceHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(sourceText))),
+		StallAfter:     time.Hour,
 	}
 
 	// 首次排期：全新插入。
@@ -112,10 +111,10 @@ func TestSchedulePending_StalledInFlightRowIsRescheduled(t *testing.T) {
 	if err := pool.QueryRow(ctx,
 		`SELECT COUNT(*), COALESCE(MIN(id), 0)
 		 FROM river_job
-		 WHERE kind IN ('translate_link_content', 'translate_link_v2')
-		   AND args->>'translation_id' = $1
+		 WHERE kind = $1
+		   AND args->>'translation_id' = $2
 		   AND state IN ('available', 'pending', 'retryable', 'running', 'scheduled')`,
-		again.ID.String(),
+		model.TranslationJobKind, again.ID.String(),
 	).Scan(&activeCount, &activeJobID); err != nil {
 		t.Fatalf("读取 active River attempts: %v", err)
 	}
@@ -134,7 +133,7 @@ func TestSchedulePending_FreshInFlightRowIsNotRescheduled(t *testing.T) {
 	queue := newRiverQueue(t, pool, newRecordingProcessor(pool))
 	ctx := t.Context()
 
-	link, _, err := linkRepo.SubmitNew(ctx, repository.CreateLinkParams{
+	link, err := linkRepo.Create(ctx, repository.CreateLinkParams{
 		URL:        "https://example.com/fresh-translation",
 		SourceKind: "url",
 		SourceKey:  "src-fresh-tr",
@@ -145,17 +144,16 @@ func TestSchedulePending_FreshInFlightRowIsNotRescheduled(t *testing.T) {
 	}
 
 	params := repository.UpsertTranslationParams{
-		LinkID:                  link.ID,
-		Scope:                   model.TranslationScopeSelection,
-		BlockKey:                "summary",
-		StartOffset:             0,
-		EndOffset:               5,
-		SourceText:              sourceText,
-		SourceFormat:            model.TranslationFormatPlain,
-		TargetLanguage:          model.TranslationTargetChinese,
-		SourceHash:              fmt.Sprintf("%x", sha256.Sum256([]byte(sourceText))),
-		AllowExistingReschedule: true,
-		StallAfter:              time.Hour,
+		LinkID:         link.ID,
+		Scope:          model.TranslationScopeSelection,
+		BlockKey:       "summary",
+		StartOffset:    0,
+		EndOffset:      5,
+		SourceText:     sourceText,
+		SourceFormat:   model.TranslationFormatPlain,
+		TargetLanguage: model.TranslationTargetChinese,
+		SourceHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(sourceText))),
+		StallAfter:     time.Hour,
 	}
 
 	first, _, err := translations.SchedulePending(ctx, params, queue.EnqueueTranslationTx)

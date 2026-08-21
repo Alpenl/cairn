@@ -348,7 +348,6 @@ class ShareSubmissionCoordinator(
                 plan.error?.errorCode,
                 plan.error?.httpStatus,
                 null,
-                null,
                 activation,
                 now,
             ) == SubmitCommitOutcome.APPLIED
@@ -386,7 +385,6 @@ class ShareSubmissionCoordinator(
                             plan.error?.errorCode,
                             plan.error?.httpStatus,
                             null,
-                            null,
                             activation,
                             now,
                         )
@@ -399,7 +397,6 @@ class ShareSubmissionCoordinator(
                     val recent = RecentResult(
                         url = url,
                         linkId = response.linkId,
-                        jobId = response.jobId,
                         status = response.status,
                         createdAt = now,
                         identity = QueueIdentity(identity.origin, identity.clientDataNamespace),
@@ -419,7 +416,6 @@ class ShareSubmissionCoordinator(
                                 entry.attemptCount + 1,
                                 null,
                                 ErrorKind.LOCAL_DATA_UNREADABLE,
-                                null,
                                 null,
                                 null,
                                 null,
@@ -457,7 +453,6 @@ class ShareSubmissionCoordinator(
                         failure.kind,
                         failure.errorCode,
                         failure.statusCode,
-                        null,
                         null,
                         activation,
                         now,

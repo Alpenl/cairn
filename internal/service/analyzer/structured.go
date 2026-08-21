@@ -37,25 +37,6 @@ const structuredOutputSchemaName = "content_analysis"
 // demoteStructuredOutput turns into a one-time fallback rather than an
 // outage, so a stricter-than-documented upstream degrades instead of failing.
 
-// plainAnalysisSchema pins the bare {title, summary, tags} contract from
-// outputContract. Reached only when RequestedLibraryKind is empty, which no
-// production caller currently does — pipeline.go always resolves a kind, even
-// if only "auto". Kept because outputContract is still the base prompt every
-// path builds on, so a future caller that skips the v2 append lands here
-// rather than silently losing schema enforcement.
-func plainAnalysisSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"title":   map[string]any{"type": "string"},
-			"summary": map[string]any{"type": "string"},
-			"tags":    stringArraySchema(),
-		},
-		"required":             []any{"title", "summary", "tags"},
-		"additionalProperties": false,
-	}
-}
-
 // librarySchema pins the v2 discriminated union from libraryOutputContract —
 // the shape every production analysis actually returns, since
 // requestedKindForLink resolves to "auto" / "reading" / "site" and
@@ -119,25 +100,13 @@ func librarySchema(requested model.RequestedLibraryKind) map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"schema_version": map[string]any{"type": "integer", "enum": []any{2}},
-			"library_kind":   map[string]any{"type": "string", "enum": kinds},
-			// Deliberately unconstrained beyond type. validateLibraryAnalysis-
-			// Response already rejects confidence outside [0,1], reason above
-			// 128 runes and explanation above 500, so a schema-side bound buys
-			// no new guarantee — and numeric/length constraints are both the
-			// first thing OpenAI-compatible gateways drop from their JSON
-			// Schema subset and unsupported for fine-tuned models even
-			// upstream. Zero benefit against real portability cost.
-			"classification_confidence":  map[string]any{"type": "number"},
-			"classification_reason":      map[string]any{"type": "string"},
-			"classification_explanation": map[string]any{"type": "string"},
-			"reading_profile":            readingProfile,
-			"site_profile":               siteProfile,
+			"schema_version":  map[string]any{"type": "integer", "enum": []any{2}},
+			"library_kind":    map[string]any{"type": "string", "enum": kinds},
+			"reading_profile": readingProfile,
+			"site_profile":    siteProfile,
 		},
 		"required": []any{
-			"schema_version", "library_kind",
-			"classification_confidence", "classification_reason", "classification_explanation",
-			"reading_profile", "site_profile",
+			"schema_version", "library_kind", "reading_profile", "site_profile",
 		},
 		"additionalProperties": false,
 	}
@@ -159,16 +128,12 @@ func (a *OpenAIAnalyzer) analysisResponseFormat(req AnalyzeRequest) map[string]a
 	if !a.wantsStructuredOutput(req) {
 		return nil
 	}
-	schema := plainAnalysisSchema()
-	if req.RequestedLibraryKind != "" {
-		schema = librarySchema(req.RequestedLibraryKind)
-	}
 	return map[string]any{
 		"type": "json_schema",
 		"json_schema": map[string]any{
 			"name":   structuredOutputSchemaName,
 			"strict": true,
-			"schema": schema,
+			"schema": librarySchema(req.RequestedLibraryKind),
 		},
 	}
 }
@@ -184,15 +149,12 @@ func (a *OpenAIAnalyzer) analysisResponseFormat(req AnalyzeRequest) map[string]a
 //   - SystemPromptOverride is the eval path: the experiment owns the output
 //     shape, so pinning it here would silently invalidate the experiment.
 //
-// RequestedLibraryKind is NOT an exclusion — it selects which schema to send.
-// It used to be one, which made this whole feature dead code, because every
-// production request carries a kind (pipeline.go resolves "auto" when the
-// link has none).
+// RequestedLibraryKind selects which library_kind values the schema accepts.
 //
 // The sticky runtime flag is checked first so a gateway that rejected the
 // block once stops receiving it for the rest of the process lifetime.
 func (a *OpenAIAnalyzer) wantsStructuredOutput(req AnalyzeRequest) bool {
-	if a.disableStructuredOutput || a.structuredUnsupported.Load() {
+	if a.structuredUnsupported.Load() {
 		return false
 	}
 	if req.URLDirect {
@@ -224,8 +186,7 @@ func (a *OpenAIAnalyzer) wantsStructuredOutput(req AnalyzeRequest) bool {
 //     this is the behaviour that shipped before this feature existed.
 //   - NOT demoting when we should have costs every link. A 400 is
 //     non-retryable, so each parse fails at the first attempt and the whole
-//     site stops tagging until an operator sets
-//     AI_DISABLE_STRUCTURED_OUTPUT by hand.
+//     site stops tagging until the process is fixed or restarted.
 //
 // So the rule biases toward demoting, bounded by structuredProven: until a
 // structured request has actually succeeded once, ANY 400/422 demotes,
@@ -262,7 +223,6 @@ func (a *OpenAIAnalyzer) demoteStructuredOutput(payload map[string]any, err erro
 			// an explicit rejection — the distinction an operator needs to
 			// tell "this gateway lacks structured outputs" from "we guessed".
 			"named", callErr.schemaRejected,
-			"escape_hatch", "AI_DISABLE_STRUCTURED_OUTPUT",
 		)
 	}
 	a.structuredUnsupported.Store(true)

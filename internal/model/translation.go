@@ -31,84 +31,10 @@ const (
 
 const TranslationTargetChinese = "zh-CN"
 
-const (
-	// TranslationJobKindLegacy is the pre-RF6A River kind retained only for
-	// compat/drain processing during the rolling protocol cutover.
-	TranslationJobKindLegacy = "translate_link_content"
-	// TranslationJobKindV2 is the strict current-attempt River protocol.
-	TranslationJobKindV2 = "translate_link_v2"
-)
-
-// TranslationJobsRolloutStage coordinates old and v2 River workers with the
-// API scheduling gate during a rolling deployment.
-type TranslationJobsRolloutStage string
-
-const (
-	TranslationJobsRolloutCompatV1 TranslationJobsRolloutStage = "compat-v1"
-	TranslationJobsRolloutDrainV1  TranslationJobsRolloutStage = "drain-v1"
-	TranslationJobsRolloutStrictV2 TranslationJobsRolloutStage = "strict-v2"
-)
-
-// TranslationJobScheduleProtocol is the durable River wire format selected by
-// a rollout policy. Callers derive it from TranslationJobsRolloutStage rather
-// than accepting it as independent configuration.
-type TranslationJobScheduleProtocol string
-
-const (
-	TranslationJobScheduleLegacy TranslationJobScheduleProtocol = "legacy"
-	TranslationJobSchedulePaused TranslationJobScheduleProtocol = "paused"
-	TranslationJobScheduleV2     TranslationJobScheduleProtocol = "v2"
-)
-
-// TranslationJobsPolicy is the authoritative worker-registration and
-// scheduling behavior for one rolling-deployment stage.
-type TranslationJobsPolicy struct {
-	RegisterLegacyWorker    bool
-	RegisterV2Worker        bool
-	ScheduleProtocol        TranslationJobScheduleProtocol
-	AllowExistingReschedule bool
-}
-
-// Valid reports whether the stage has a defined worker and scheduling policy.
-func (s TranslationJobsRolloutStage) Valid() bool {
-	_, ok := s.jobPolicy()
-	return ok
-}
-
-// JobPolicy returns the stage's authoritative rollout behavior. Unknown stages
-// fail closed by pausing scheduling and registering no translation workers.
-func (s TranslationJobsRolloutStage) JobPolicy() TranslationJobsPolicy {
-	policy, ok := s.jobPolicy()
-	if !ok {
-		return TranslationJobsPolicy{ScheduleProtocol: TranslationJobSchedulePaused}
-	}
-	return policy
-}
-
-func (s TranslationJobsRolloutStage) jobPolicy() (TranslationJobsPolicy, bool) {
-	switch s {
-	case TranslationJobsRolloutCompatV1:
-		return TranslationJobsPolicy{
-			RegisterLegacyWorker: true,
-			RegisterV2Worker:     true,
-			ScheduleProtocol:     TranslationJobScheduleLegacy,
-		}, true
-	case TranslationJobsRolloutDrainV1:
-		return TranslationJobsPolicy{
-			RegisterLegacyWorker: true,
-			RegisterV2Worker:     true,
-			ScheduleProtocol:     TranslationJobSchedulePaused,
-		}, true
-	case TranslationJobsRolloutStrictV2:
-		return TranslationJobsPolicy{
-			RegisterV2Worker:        true,
-			ScheduleProtocol:        TranslationJobScheduleV2,
-			AllowExistingReschedule: true,
-		}, true
-	default:
-		return TranslationJobsPolicy{}, false
-	}
-}
+// TranslationJobKind is the current durable River wire protocol. The stored
+// kind keeps its v2 suffix because changing a River kind would itself require
+// another runtime branch.
+const TranslationJobKind = "translate_link_v2"
 
 type LinkTranslation struct {
 	ID             uuid.UUID
@@ -123,8 +49,7 @@ type LinkTranslation struct {
 	TargetLanguage string
 	SourceHash     string
 	// SourceContentRevision is the saved-content generation this translation
-	// belongs to. Nil is reserved for summary identities, historical retired
-	// deep-research rows, and compatibility-window legacy-unverified rows.
+	// belongs to. Nil is reserved for current summary identities.
 	SourceContentRevision *int64
 	Status                TranslationStatus
 	Model                 *string
@@ -147,8 +72,7 @@ type LinkTranslation struct {
 
 // TranslationList is the source-aware read result for one link. The current
 // saved-content generation and summary CAS hash are carried independently from
-// Items so an empty or entirely legacy-unverified list still has authoritative
-// identities for both source domains.
+// Items so an empty list still has authoritative identities for both domains.
 type TranslationList struct {
 	CurrentContentRevision   int64
 	CurrentSummarySourceHash *string
@@ -165,41 +89,6 @@ type TranslationAttempt struct {
 	SourceHash            string
 	SourceContentRevision *int64
 }
-
-// TranslationAttemptRejectionReason is the closed set of observable reasons
-// why a River row may not project state into a translation product row.
-type TranslationAttemptRejectionReason string
-
-const (
-	TranslationAttemptRejectionInvalidIdentity          TranslationAttemptRejectionReason = "invalid_identity"
-	TranslationAttemptRejectionTranslationNotFound      TranslationAttemptRejectionReason = "translation_not_found"
-	TranslationAttemptRejectionAmbiguousCandidates      TranslationAttemptRejectionReason = "ambiguous_candidates"
-	TranslationAttemptRejectionNotCurrent               TranslationAttemptRejectionReason = "not_current"
-	TranslationAttemptRejectionGenerationMismatch       TranslationAttemptRejectionReason = "generation_mismatch"
-	TranslationAttemptRejectionExplicitRecoveryRequired TranslationAttemptRejectionReason = "explicit_recovery_required"
-	TranslationAttemptRejectionSourceStatusMismatch     TranslationAttemptRejectionReason = "source_status_mismatch"
-	TranslationAttemptRejectionInvalidGeneration        TranslationAttemptRejectionReason = "invalid_generation"
-	TranslationAttemptRejectionIdentityMismatch         TranslationAttemptRejectionReason = "identity_mismatch"
-	TranslationAttemptRejectionInvalidRiverJobID        TranslationAttemptRejectionReason = "invalid_river_job_id"
-	TranslationAttemptRejectionKindMismatch             TranslationAttemptRejectionReason = "kind_mismatch"
-	TranslationAttemptRejectionMalformedArgs            TranslationAttemptRejectionReason = "malformed_args"
-	TranslationAttemptRejectionMissingTranslationID     TranslationAttemptRejectionReason = "missing_translation_id"
-	TranslationAttemptRejectionInvalidAttemptGeneration TranslationAttemptRejectionReason = "invalid_attempt_generation"
-)
-
-// String returns the stable value used in structured rejection logs.
-func (r TranslationAttemptRejectionReason) String() string { return string(r) }
-
-// TranslationAttemptResolution is the proof result shared by repositories,
-// workers, terminal handlers, logs, and tests. Rejection is empty only when
-// Attempt contains the exact current owner allowed to project state.
-type TranslationAttemptResolution struct {
-	Attempt   TranslationAttempt
-	Rejection TranslationAttemptRejectionReason
-}
-
-// Rejected reports whether proof denied this River attempt.
-func (r TranslationAttemptResolution) Rejected() bool { return r.Rejection != "" }
 
 // TranslationAttemptSeed is the immutable product, attempt, and source identity
 // known before the River row is inserted. The scheduler returns the River ID
@@ -229,12 +118,10 @@ type TranslationRequest struct {
 	EndOffset   int
 	SourceText  string
 	// ExpectedContentRevision identifies the saved-content generation the
-	// caller observed. Nil is intentionally distinct from zero so requests
-	// from clients in the compatibility window remain legacy-unverified.
+	// caller observed. It is required for saved-content translations.
 	ExpectedContentRevision *int64
 	// ExpectedSourceHash identifies the summary source block, which does not
-	// share the saved-content generation lifecycle. Retired deep-research
-	// blocks remain readable as history but cannot be scheduled.
+	// share the saved-content generation lifecycle.
 	ExpectedSourceHash *string
 	Force              bool
 }

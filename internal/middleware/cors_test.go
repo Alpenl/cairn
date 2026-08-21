@@ -37,7 +37,7 @@ func preflight(r *gin.Engine, origin string) *httptest.ResponseRecorder {
 //
 // PUT / PATCH 此前就不在列表里：/api/feed-items/{id}/state、
 // /api/subscriptions/{id}、/api/links/{id}/content 是 PUT；/api/sites/{id}、
-// /api/library-classification-rules/{id} 是 PATCH。跨源改站点、标记已读的
+// 跨源改站点、标记已读的接口包含 PATCH。该方法必须出现在 CORS 允许列表中。
 // 预检一律失败。
 func TestCORSAllowsEveryMethodTheAPIUses(t *testing.T) {
 	rec := preflight(corsRouter([]string{"https://reader.example"}), "https://reader.example")
@@ -59,7 +59,6 @@ func TestCORSAllowsEveryHeaderClientsSend(t *testing.T) {
 		{"Content-Type", "JSON 请求体"},
 		{"Authorization", "Bearer 鉴权"},
 		{"If-Match", "站点管理的乐观锁"},
-		{"If-None-Match", "条件 GET 的缓存校验器"},
 		{"Idempotency-Key", "写类请求的重放保护"},
 		{"X-Request-ID", "请求追踪"},
 		// 刻意写字面量而不是 session.HeaderName：后者会让断言变成「同一个常量
@@ -106,7 +105,7 @@ func TestCORSPreflightHeaderTokensAreCaseInsensitive(t *testing.T) {
 	req := httptest.NewRequest(http.MethodOptions, "/api/links", nil)
 	req.Header.Set("Origin", "https://reader.example")
 	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
-	req.Header.Set("Access-Control-Request-Headers", "if-none-match, x-webtag-session")
+	req.Header.Set("Access-Control-Request-Headers", "if-match, x-webtag-session")
 	rec := httptest.NewRecorder()
 	corsRouter([]string{"https://reader.example"}).ServeHTTP(rec, req)
 
@@ -114,69 +113,10 @@ func TestCORSPreflightHeaderTokensAreCaseInsensitive(t *testing.T) {
 		t.Fatalf("preflight status = %d, want 204", rec.Code)
 	}
 	allowed := strings.ToLower(rec.Header().Get("Access-Control-Allow-Headers"))
-	for _, token := range []string{"if-none-match", "x-webtag-session"} {
+	for _, token := range []string{"if-match", "x-webtag-session"} {
 		if !strings.Contains(allowed, token) {
 			t.Fatalf("Access-Control-Allow-Headers = %q, missing %s", allowed, token)
 		}
-	}
-}
-
-func TestCORSExposesETagAcrossConditionalGetRoundTrip(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	revisions := &stubRevisions{revision: 7}
-	router := gin.New()
-	router.Use(CORS([]string{"https://reader.example"}))
-	router.Use(withConditionalTestIdentity)
-	router.Use(ConditionalGet(revisions, testConditionalPolicy(true, "/api/links")))
-	var handlerCalls int
-	router.GET("/api/links", func(c *gin.Context) {
-		handlerCalls++
-		CacheableJSON(c, http.StatusOK, gin.H{"items": []string{"a"}})
-	})
-
-	send := func(ifNoneMatch string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "/api/links", nil)
-		req.Header.Set("Origin", "https://reader.example")
-		if ifNoneMatch != "" {
-			req.Header.Set("If-None-Match", ifNoneMatch)
-		}
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-		return rec
-	}
-
-	first := send("")
-	if first.Code != http.StatusOK {
-		t.Fatalf("first status = %d, want 200", first.Code)
-	}
-	etag := first.Header().Get("ETag")
-	if etag == "" {
-		t.Fatal("first cross-origin response did not publish ETag")
-	}
-	for name, want := range map[string]string{
-		"Access-Control-Allow-Origin":      "https://reader.example",
-		"Access-Control-Allow-Credentials": "true",
-	} {
-		if got := first.Header().Get(name); got != want {
-			t.Fatalf("%s = %q, want %q", name, got, want)
-		}
-	}
-	if exposed := strings.ToLower(first.Header().Get("Access-Control-Expose-Headers")); !strings.Contains(exposed, "etag") {
-		t.Fatalf("Access-Control-Expose-Headers = %q, missing ETag", exposed)
-	}
-
-	second := send(etag)
-	if second.Code != http.StatusNotModified {
-		t.Fatalf("conditional status = %d, want 304", second.Code)
-	}
-	if second.Header().Get("ETag") != etag {
-		t.Fatalf("304 ETag = %q, want %q", second.Header().Get("ETag"), etag)
-	}
-	if exposed := strings.ToLower(second.Header().Get("Access-Control-Expose-Headers")); !strings.Contains(exposed, "etag") {
-		t.Fatalf("304 Access-Control-Expose-Headers = %q, missing ETag", exposed)
-	}
-	if handlerCalls != 1 {
-		t.Fatalf("handler calls = %d, want 1; conditional request should use cached representation", handlerCalls)
 	}
 }
 

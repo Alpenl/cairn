@@ -30,7 +30,6 @@ func resolveReaderAssets() fs.FS {
 	sub, err := fs.Sub(readerFS, "assets/reader")
 	if err != nil {
 		// 嵌入指令保证 assets/reader 在编译期存在，走到这里意味着二进制损坏。
-		// 与 static.go 的 mustSubAssets 同样 fail-fast。
 		panic("internal/app: 内嵌 assets/reader 子树缺失，构建产物已损坏: " + err.Error())
 	}
 	return sub
@@ -58,8 +57,7 @@ a{color:#b5502f}
 <p>后端已就绪，但这个二进制没有内嵌 Reader 前端产物。</p>
 <p>从源码构建完整二进制时，运行：</p>
 <pre>make build-full     # 构建 Reader，注入静态产物，再编译后端</pre>
-<p>后端 API 不受影响，可继续使用：<a href="/docs">API 文档</a> ·
-<a href="/openapi.json">openapi.json</a> · <a href="/health">/health</a></p>
+<p>后端 API 不受影响，可通过 <a href="/health">/health</a> 检查运行状态。</p>
 </main></body></html>`
 
 // registerReaderRoutes 把 Reader 挂到 /reader/ 下，并让站点根跳转过去。

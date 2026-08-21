@@ -16,10 +16,6 @@ func (s *SubmitService) Submit(ctx context.Context, req dto.LinkCreateRequest) (
 	if err != nil {
 		return dto.SubmitResponse{}, err
 	}
-	parseDepth, err := dto.NormalizeParseDepth(req.ParseDepth)
-	if err != nil {
-		return dto.SubmitResponse{}, err
-	}
 	if err := validateLinkDescription(req.Description); err != nil {
 		return dto.SubmitResponse{}, err
 	}
@@ -27,23 +23,19 @@ func (s *SubmitService) Submit(ctx context.Context, req dto.LinkCreateRequest) (
 	if err != nil {
 		return dto.SubmitResponse{}, err
 	}
-	if err := requireSiteLibraryWrite(requestedKind, s.core.disableSiteLibraryWrite); err != nil {
-		return dto.SubmitResponse{}, err
-	}
-	intent := resolveRequestedLibraryIntent(requestedLibraryIntent{}, userRequestedLibraryIntent(requestedKind))
-	destination, err := normalizeCaptureDestination(req.Destination, s.core.defaultCaptureDestination())
+	destination, err := normalizeCaptureDestination(req.Destination, captureDestinationInbox)
 	if err != nil {
 		return dto.SubmitResponse{}, err
 	}
 	params := LinkCapture{
-		URL:                        strings.TrimSpace(req.URL),
-		Destination:                destination,
-		SourceKey:                  identityURL,
-		Description:                req.Description,
-		Status:                     model.LinkStatusPending,
-		SourceMetadata:             withOriginalURL(sourceMetadataForParseDepth(parseDepth), req.URL, identityURL),
-		RequestedLibraryKind:       intent.Kind,
-		RequestedLibraryKindSource: intent.Source,
+		URL:                     strings.TrimSpace(req.URL),
+		Destination:             destination,
+		SourceKey:               identityURL,
+		Description:             req.Description,
+		Status:                  model.LinkStatusPending,
+		SourceMetadata:          withOriginalURL(nil, req.URL, identityURL),
+		RequestedLibraryKind:    requestedKind,
+		UserSelectedLibraryKind: requestedKind != model.RequestedLibraryKindAuto,
 	}
 	if destination == captureDestinationInbox {
 		return s.submitToInbox(ctx, identityURL, params)
@@ -75,18 +67,4 @@ func (s *SubmitService) submitToInbox(ctx context.Context, rawURL string, captur
 		return err
 	})
 	return response, err
-}
-
-// sourceMetadataForParseDepth builds the SourceMetadata map the parse
-// pipeline reads at run time. Returns nil when parseDepth is empty so
-// existing rows / SQL paths that distinguish "no metadata" from "empty
-// JSONB" behave the same way. Kept in this file (instead of a separate
-// utility) because it is the only call site that needs to construct
-// SourceMetadata from a parse_depth value — Batch is the other but
-// inlines the call directly.
-func sourceMetadataForParseDepth(parseDepth string) map[string]any {
-	if parseDepth == "" {
-		return nil
-	}
-	return map[string]any{"parse_depth": parseDepth}
 }

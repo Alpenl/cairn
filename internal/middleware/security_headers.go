@@ -20,9 +20,8 @@ import "github.com/gin-gonic/gin"
 //     的边界（反向代理 / CDN）上启用；从应用进程发，开发环境的 http://
 //     一旦命中浏览器就会被永久升级到 https://，调试会很难受。生产环境
 //     该由反代统一下发。
-//   - CSP（Content-Security-Policy）：/docs 用了 Scalar (jsdelivr) + 内联
-//     脚本，admin/concept-merges 也有内联 JS。一刀切的 CSP 会立刻把这两
-//     条页面打挂；需要专项设计 nonce/script-src 策略之后再开。
+//   - CSP（Content-Security-Policy）：Reader 的构建产物需要单独审查资源
+//     策略；在没有覆盖前不由通用 API 中间件猜测一套规则。
 //
 // 中间件无状态、不读取响应体，可安全挂在最前面（RequestID 之后、CORS
 // 之前），不会与下游 handler 写入的内容冲突。已存在的响应头不会被覆盖。

@@ -26,15 +26,8 @@ import type { ApiError, ApiResult } from '../api/result'
 import type { IdentityLease, IdentityOwnership } from '../identity'
 import { sameResource } from './equal'
 
-/**
- * 交给 fetcher 的条件请求上下文。
- *
- * fetcher 负责把 ifNoneMatch 发出去、并在拿到 200 时回调 onETag。store 不认识
- * HTTP，只负责保管这一小段状态。
- */
-export interface ConditionalContext {
-  ifNoneMatch: string | null
-  onETag: (tag: string | null) => void
+/** Request-scoped controls passed from the cache to its fetcher. */
+export interface FetchContext {
   /** Optional caller cancellation propagated to the concrete HTTP request. */
   signal?: AbortSignal
 }
@@ -49,8 +42,6 @@ export interface ResourceSnapshot<T = unknown> {
   readonly updatedAt: number
   /** 是否有请求在途。 */
   readonly revalidating: boolean
-  /** 上一次 200 响应带回的 ETag，下一次校验作为 If-None-Match 发出。 */
-  readonly etag?: string | null
   /** The newest representation generation consumers want to observe. */
   readonly desiredGeneration: number
   /** The newest generation for which a request has been started. */
@@ -309,7 +300,7 @@ export class ResourceStore {
    */
   async fetch<T>(
     key: string,
-    fetcher: (conditional: ConditionalContext) => Promise<ApiResult<T>>,
+    fetcher: (context: FetchContext) => Promise<ApiResult<T>>,
     options: FetchOptions<T> = {},
   ): Promise<ApiResult<T>> {
     if (options.signal?.aborted) return cancelledResult()
@@ -357,19 +348,7 @@ export class ResourceStore {
       ? this.captureDesiredGenerationFence()
       : null
 
-    let responseETag: string | null | undefined
-    const conditional: ConditionalContext = {
-      // force 是用户主动触发的重取（点同步、错误重试）。这时**不发**
-      // If-None-Match：服务端的读版本号自带 1 秒缓存，写完立刻点同步有可能
-      // 撞上那个窗口拿到 304 —— 表现为「点了同步没反应」。用户主动重取必须
-      // 永远有一条不经协商的逃生舱。
-      ifNoneMatch: options.force ? null : (this.peek(key).etag ?? null),
-      onETag: (tag) => {
-        if (!this.acceptsRequest(identity, requestEpoch, key, generation)) return
-        responseETag = tag
-      },
-      signal: options.signal,
-    }
+    const fetchContext: FetchContext = { signal: options.signal }
 
     let resolveRun!: (result: ApiResult<T>) => void
     const run = new Promise<ApiResult<T>>((resolve) => {
@@ -395,7 +374,6 @@ export class ResourceStore {
           identity,
           requestEpoch,
           targetGenerationFence,
-          responseETag,
         )
       } else {
         this.settleCancelledRequest(key, generation, identity, requestEpoch)
@@ -410,7 +388,7 @@ export class ResourceStore {
       return run
     }
 
-    void this.invoke(() => fetcher(conditional)).then((result) => finish(result, true))
+    void this.invoke(() => fetcher(fetchContext)).then((result) => finish(result, true))
     return run
   }
 
@@ -469,14 +447,13 @@ export class ResourceStore {
     identity: IdentityOwnership | null,
     requestEpoch: number,
     targetGenerationFence: DesiredGenerationFence | null,
-    responseETag: string | null | undefined,
   ): void {
     // request-key fence 始终先于动态键解析。否则请求途中失效 request key 后，
     // 一份失效前响应仍可能绕道写进尚未失效的 target key。
     if (!this.acceptsRequest(identity, requestEpoch, requestKey, generation)) return
 
     if (!result.ok || !options.resolveCommitKey) {
-      this.commitToKey(requestKey, result, options, generation, responseETag)
+      this.commitToKey(requestKey, result, options, generation)
       return
     }
     if (!targetGenerationFence) return
@@ -497,7 +474,7 @@ export class ResourceStore {
     }
 
     if (targetKey === requestKey) {
-      this.commitToKey(requestKey, result, options, generation, responseETag)
+      this.commitToKey(requestKey, result, options, generation)
       return
     }
 
@@ -510,7 +487,6 @@ export class ResourceStore {
       result,
       options,
       this.peek(targetKey).desiredGeneration,
-      responseETag,
     )
   }
 
@@ -543,7 +519,7 @@ export class ResourceStore {
     return this.peek(key).desiredGeneration === expectedGeneration
   }
 
-  /** Redirected success 不把 data / ETag 写回 request key，只结束请求状态。 */
+  /** Redirected success does not write data to the request key. */
   private settleRedirectedRequest(key: string, generation: number): void {
     const current = this.peek(key)
     this.publish(
@@ -582,10 +558,9 @@ export class ResourceStore {
     result: ApiResult<T>,
     options: FetchOptions<T>,
     generation: number,
-    responseETag: string | null | undefined,
   ): void {
     // 回源途中发生过失效 → 这份结果反映的是失效之前的状态，丢弃。
-    // 不丢的话失效等于没发生（与服务端 SnapshotCache 同一条教训）。
+    // 不丢的话失效等于没发生。
     // 在 commit 时刻重新读取条目，避免用 fetch 开始前的陈旧快照覆盖并发状态。
     const current = this.peek(key)
     const equal = options.equal ?? sameResource
@@ -593,24 +568,6 @@ export class ResourceStore {
     const settledGeneration = Math.max(current.settledGeneration, generation)
 
     if (!result.ok) {
-      // 304 不是失败：服务端确认我们手里那份仍然有效。刷新 updatedAt、
-      // 清掉可能残留的错误，数据与它的引用**原样保留**（下游 memo 不失效）。
-      if (result.error.kind === 'not-modified') {
-        this.publish(
-          key,
-          {
-            ...current,
-            error: null,
-            updatedAt: this.now(),
-            revalidating: false,
-            etag: responseETag === undefined ? current.etag : responseETag,
-            attemptedGeneration,
-            settledGeneration,
-          },
-          current.error !== null,
-        )
-        return
-      }
       // 静默校验失败：保留数据与既有错误态，只落 revalidating。
       if (options.silent) {
         this.publish(key, {
@@ -644,7 +601,6 @@ export class ResourceStore {
           error: null,
           updatedAt: this.now(),
           revalidating: false,
-          etag: responseETag === undefined ? current.etag : responseETag,
           attemptedGeneration,
           settledGeneration,
         },
@@ -652,14 +608,11 @@ export class ResourceStore {
       )
       return
     }
-    // onETag 在请求期间只写局部变量，到双 fence 全部通过后才随实际 target 提交。
-    // 未回调时沿用 target 现有 ETag；动态改键时不会把响应 ETag 留在 request key。
     this.publish(key, {
       data: result.data,
       error: null,
       updatedAt: this.now(),
       revalidating: false,
-      etag: responseETag === undefined ? current.etag : responseETag,
       desiredGeneration: current.desiredGeneration,
       attemptedGeneration,
       settledGeneration,

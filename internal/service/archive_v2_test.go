@@ -21,18 +21,11 @@ type archiveV2LinksFake struct {
 	err     error
 }
 
-func (f archiveV2LinksFake) Export(_ context.Context, w io.Writer) error {
+func (f archiveV2LinksFake) ExportArchiveLinks(_ context.Context, w io.Writer) (int, error) {
 	if _, err := io.WriteString(w, f.payload); err != nil {
-		return err
-	}
-	return f.err
-}
-
-func (f archiveV2LinksFake) ExportWithCount(ctx context.Context, w io.Writer) (int, error) {
-	if err := f.Export(ctx, w); err != nil {
 		return 0, err
 	}
-	return f.count, nil
+	return f.count, f.err
 }
 
 type archiveV2SectionsFake struct {
@@ -50,20 +43,6 @@ func (f archiveV2SectionsFake) StreamArchiveV2Section(_ context.Context, section
 		return errors.New("section unavailable")
 	}
 	return nil
-}
-
-type archiveV2RulesFake struct {
-	items [][]byte
-	err   error
-}
-
-func (f archiveV2RulesFake) StreamArchiveV2Rules(_ context.Context, yield func([]byte) error) error {
-	for _, raw := range f.items {
-		if err := yield(raw); err != nil {
-			return err
-		}
-	}
-	return f.err
 }
 
 func TestParseArchiveV2SectionsAcceptsOnlyFrozenCanonicalValues(t *testing.T) {
@@ -111,43 +90,6 @@ func TestParseArchiveV2SectionsAcceptsOnlyFrozenCanonicalValues(t *testing.T) {
 	}
 }
 
-func TestArchiveV2ExportsCompleteValidJSONAndEmptySections(t *testing.T) {
-	t.Parallel()
-	svc := NewArchiveV2Service(
-		archiveV2LinksFake{payload: `[{"id":"link-1"}]`, count: 1},
-		archiveV2SectionsFake{sections: map[string][][]byte{
-			"sites":           {[]byte(`{"id":"site-1","revision":4}`)},
-			"site_entries":    {[]byte(`{"id":"entry-1","site_id":"site-1"}`)},
-			"site_tags":       {[]byte(`{"site_id":"site-1","normalized_tag":"go"}`)},
-			"site_identities": nil,
-		}},
-		archiveV2RulesFake{items: [][]byte{[]byte(`{"host":"example.com","target_kind":"site"}`)}},
-	)
-	var body bytes.Buffer
-	if err := svc.Export(context.Background(), &body); err != nil {
-		t.Fatalf("Export() error = %v", err)
-	}
-	var decoded map[string]json.RawMessage
-	if err := json.Unmarshal(body.Bytes(), &decoded); err != nil {
-		t.Fatalf("archive is not valid JSON: %v\n%s", err, body.String())
-	}
-	for _, key := range []string{"links", "sites", "site_entries", "site_tags", "site_identities", "classification_rules"} {
-		var rows []json.RawMessage
-		if err := json.Unmarshal(decoded[key], &rows); err != nil {
-			t.Fatalf("%s is not an array: %v", key, err)
-		}
-	}
-	if got := string(decoded["site_identities"]); got != "[]" {
-		t.Fatalf("empty relation = %s, want []", got)
-	}
-	if got := string(decoded["schema_version"]); got != "2" {
-		t.Fatalf("schema_version = %s, want 2", got)
-	}
-	if _, ok := decoded["manifest"]; ok {
-		t.Fatal("legacy internal Export must not silently claim the browser manifest contract")
-	}
-}
-
 func TestArchiveV2SelectedStreamFiltersPrivateGroupsAndAuthenticatesManifest(t *testing.T) {
 	reader := &readerArchiveStreamFake{rows: map[string][][]byte{
 		"thoughts":           {[]byte(`{"contract_version":1,"id":"thought-sentinel","winner_key":{"logical_clock":7,"device_id":"d","op_id":"o"}}`)},
@@ -160,8 +102,8 @@ func TestArchiveV2SelectedStreamFiltersPrivateGroupsAndAuthenticatesManifest(t *
 	svc := NewArchiveV2Service(
 		archiveV2LinksFake{payload: `[{"id":"link-1"}]`, count: 1},
 		archiveV2SectionsFake{},
-		archiveV2RulesFake{},
-	).WithReaderArchive(NewReaderArchiveExporter(reader))
+		reader,
+	)
 
 	for _, test := range []struct {
 		name          string
@@ -203,11 +145,11 @@ func TestArchiveV2SelectedStreamFiltersPrivateGroupsAndAuthenticatesManifest(t *
 			reader.calls = nil
 			var body bytes.Buffer
 			const namespace = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-			if err := svc.ExportSelected(context.Background(), &body, ArchiveV2ExportOptions{
+			if err := svc.Export(context.Background(), &body, ArchiveV2ExportOptions{
 				Selection:           test.selection,
 				ClientDataNamespace: namespace,
 			}); err != nil {
-				t.Fatalf("ExportSelected() error = %v", err)
+				t.Fatalf("Export() error = %v", err)
 			}
 			raw := body.String()
 			for _, sentinel := range test.included {
@@ -276,75 +218,17 @@ func TestArchiveV2SelectedStreamFiltersPrivateGroupsAndAuthenticatesManifest(t *
 	}
 }
 
-func TestArchiveV2BaseSelectionRemainsUsableWithoutReaderArchive(t *testing.T) {
-	svc := NewArchiveV2Service(
-		archiveV2LinksFake{payload: "[]", count: 0},
-		archiveV2SectionsFake{},
-		archiveV2RulesFake{},
-	)
-	for _, selection := range []ArchiveV2Selection{
-		FullArchiveV2Selection(),
-		{IncludeThoughts: true},
-		{IncludeNotes: true},
-	} {
-		err := svc.ValidateSelection(selection)
-		carrier, ok := httperr.As(err)
-		if !ok || carrier.HTTPStatus() != http.StatusServiceUnavailable {
-			t.Fatalf("ValidateSelection(%#v) = %v, want stable 503", selection, err)
-		}
-		coder, ok := carrier.(httperr.ErrorCoder)
-		if !ok || coder.HTTPErrorCode() != httperr.CodeArchiveReaderUnavailable {
-			t.Fatalf("ValidateSelection(%#v) code = %v, want %s", selection, err, httperr.CodeArchiveReaderUnavailable)
-		}
-	}
-	if err := svc.ValidateSelection(ArchiveV2Selection{}); err != nil {
-		t.Fatalf("base-only ValidateSelection() error = %v", err)
-	}
-	var privateBody bytes.Buffer
-	err := svc.ExportSelected(context.Background(), &privateBody, ArchiveV2ExportOptions{
-		Selection:           FullArchiveV2Selection(),
-		ClientDataNamespace: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-	})
-	if err == nil || privateBody.Len() != 0 {
-		t.Fatalf("private ExportSelected() = %v with body %q, want preflight failure before streaming", err, privateBody.String())
-	}
-	carrier, ok := httperr.As(err)
-	if !ok || carrier.HTTPStatus() != http.StatusServiceUnavailable {
-		t.Fatalf("private ExportSelected() = %v, want stable 503", err)
-	}
-	var body bytes.Buffer
-	if err := svc.ExportSelected(context.Background(), &body, ArchiveV2ExportOptions{
-		ClientDataNamespace: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-	}); err != nil {
-		t.Fatalf("base-only ExportSelected() error = %v", err)
-	}
-
-	var decoded struct {
-		Reader   json.RawMessage   `json:"reader"`
-		Manifest archiveV2Manifest `json:"manifest"`
-	}
-	if err := json.Unmarshal(body.Bytes(), &decoded); err != nil {
-		t.Fatalf("base-only archive is not valid JSON: %v", err)
-	}
-	if decoded.Reader != nil {
-		t.Fatalf("base-only archive unexpectedly includes reader: %s", decoded.Reader)
-	}
-	for key := range decoded.Manifest.Counts {
-		if strings.HasPrefix(key, "reader.") {
-			t.Fatalf("base-only manifest unexpectedly includes Reader count %q", key)
-		}
-	}
-}
-
 func TestArchiveV2PropagatesStreamErrorAndLeavesIncompleteJSON(t *testing.T) {
 	t.Parallel()
 	svc := NewArchiveV2Service(
 		archiveV2LinksFake{payload: "[]"},
 		archiveV2SectionsFake{errAt: "site_tags"},
-		archiveV2RulesFake{},
+		&readerArchiveStreamFake{},
 	)
 	var body bytes.Buffer
-	err := svc.Export(context.Background(), &body)
+	err := svc.Export(context.Background(), &body, ArchiveV2ExportOptions{
+		ClientDataNamespace: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+	})
 	if err == nil {
 		t.Fatal("Export() must return a section stream error")
 	}
@@ -359,10 +243,12 @@ func TestArchiveV2PropagatesLinkExportError(t *testing.T) {
 	svc := NewArchiveV2Service(
 		archiveV2LinksFake{payload: "[", err: errors.New("link cursor failed")},
 		archiveV2SectionsFake{},
-		archiveV2RulesFake{},
+		&readerArchiveStreamFake{},
 	)
 	var body bytes.Buffer
-	if err := svc.Export(context.Background(), &body); err == nil {
+	if err := svc.Export(context.Background(), &body, ArchiveV2ExportOptions{
+		ClientDataNamespace: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+	}); err == nil {
 		t.Fatal("Export() must return a link export error")
 	}
 	if body.String() == "" {

@@ -216,7 +216,7 @@ describe('useArticleAnnotations', () => {
     })
   })
 
-  it('moves ambiguous and missing saved-content annotations to typed historical state', async () => {
+  it('keeps annotations on an old saved-content revision as read-only history', async () => {
     vi.stubGlobal('BroadcastChannel', undefined)
     const owner = lease()
     const source = 'same phrase appears once; same phrase appears twice'
@@ -270,13 +270,13 @@ describe('useArticleAnnotations', () => {
     expect(result.current.historicalAnnotations).toEqual([
       expect.objectContaining({
         status: 'historical',
-        reason: 'ambiguous-quote',
+        reason: 'revision-changed',
         sourceContentRevision: 7,
         annotation: expect.objectContaining({ id: 'ambiguous-reanchor' }),
       }),
       expect.objectContaining({
         status: 'historical',
-        reason: 'missing-quote',
+        reason: 'revision-changed',
         sourceContentRevision: 7,
         annotation: expect.objectContaining({ id: 'missing-reanchor' }),
       }),
@@ -297,7 +297,7 @@ describe('useArticleAnnotations', () => {
       ok: true,
       value: expect.arrayContaining([
         expect.objectContaining({
-          target: expect.objectContaining({ kind: 'legacy-stale' }),
+          target: { kind: 'saved-content', contentRevision: 7 },
         }),
       ]),
     })

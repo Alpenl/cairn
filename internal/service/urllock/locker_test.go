@@ -135,12 +135,6 @@ func TestURLLockSetsAreSortedAndDeduplicated(t *testing.T) {
 			t.Fatalf("in-process shard indexes = %v, want strictly ascending unique values", shards)
 		}
 	}
-	lockIDs := advisoryLockObjIDs(urls)
-	for i := 1; i < len(lockIDs); i++ {
-		if lockIDs[i-1] >= lockIDs[i] {
-			t.Fatalf("advisory lock ids = %v, want strictly ascending unique values", lockIDs)
-		}
-	}
 }
 
 // TestInProcessURLLockerHonorsContextCancellation guards the cancel

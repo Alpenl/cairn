@@ -2,39 +2,12 @@ package dto
 
 import "time"
 
-// SubmitResponse 是单条链接提交后回给客户端的结果，描述本次提交进入的状态以及对应的 link/job 标识。
+// SubmitResponse 是单条链接提交后回给客户端的结果，描述本次提交进入的状态以及对应的资源标识。
 type SubmitResponse struct {
-	// JobID is omitted on submissions that hit an already-done link: there is
-	// no parse_jobs row to report and the previous "synthesize a fake done
-	// job" workaround now goes away. The pointer + omitempty combo keeps
-	// the JSON shape identical for the common pending/processing path
-	// (string job_id) while making the absence explicit on done.
-	JobID       *string `json:"job_id,omitempty"`
-	LinkID      string  `json:"link_id,omitempty"`
-	InboxID     string  `json:"inbox_id,omitempty"`
-	Destination string  `json:"destination,omitempty"`
-	Status      string  `json:"status"`
-}
-
-// BatchItemResponse carries the per-item outcome of POST /api/links/batch.
-// Result and Error are mutually exclusive: one of them is set per item. The
-// item position is implied by the array index — no explicit Index field is
-// surfaced because the response order matches the request order one-to-one.
-// Error is a short, sanitized client-facing message; internal cause chains
-// stay in the structured logs.
-type BatchItemResponse struct {
-	Result *SubmitResponse `json:"result,omitempty"`
-	Error  string          `json:"error,omitempty"`
-}
-
-// BatchSubmitResponse is returned by POST /api/links/batch as a parallel
-// array of per-item submission outcomes. Per-item errors surface alongside
-// successes (partial-success contract); a request only fails outright when
-// validation rejects the envelope itself (empty / >100). Aggregate
-// success/failure counters are omitted because the client can derive them
-// from Results in O(n) without server bookkeeping.
-type BatchSubmitResponse struct {
-	Results []BatchItemResponse `json:"results"`
+	LinkID      string `json:"link_id,omitempty"`
+	InboxID     string `json:"inbox_id,omitempty"`
+	Destination string `json:"destination,omitempty"`
+	Status      string `json:"status"`
 }
 
 // CapabilitiesResponse lets independently deployed clients enable additive
@@ -42,7 +15,6 @@ type BatchSubmitResponse struct {
 type CapabilitiesResponse struct {
 	LibraryKinds           bool                       `json:"library_kinds"`
 	SiteLibrary            bool                       `json:"site_library"`
-	SiteAutoClassification bool                       `json:"site_auto_classification"`
 	SiteManagement         bool                       `json:"site_management"`
 	SiteAdvancedManagement bool                       `json:"site_advanced_management"`
 	ArchiveVersions        []int                      `json:"archive_versions"`
@@ -88,7 +60,6 @@ type ConversionExecuteResponse struct {
 	SiteRevision    int64        `json:"site_revision,omitempty"`
 	EntryID         string       `json:"entry_id,omitempty"`
 	ReparseRequired bool         `json:"reparse_required"`
-	ParseJobID      string       `json:"parse_job_id,omitempty"`
 	ReaderTarget    ReaderTarget `json:"reader_target"`
 }
 
@@ -111,7 +82,6 @@ type SiteListItemResponse struct {
 	Tags             []string                  `json:"tags"`
 	EntryCount       int                       `json:"entry_count"`
 	Pinned           bool                      `json:"pinned"`
-	NeedsReview      bool                      `json:"needs_review"`
 	PrimaryEntry     *SitePrimaryEntryResponse `json:"primary_entry"`
 	Revision         int64                     `json:"revision"`
 	FirstCollectedAt time.Time                 `json:"first_collected_at"`
@@ -124,17 +94,11 @@ type PaginatedSitesResponse struct {
 	Limit        int                    `json:"limit"`
 	RecentCutoff *time.Time             `json:"recent_cutoff,omitempty"`
 }
-type SiteTagResponse struct {
-	Tag    string `json:"tag"`
-	Source string `json:"source"`
-}
 type SiteEntryResponse struct {
 	ID                string     `json:"id"`
 	LinkID            string     `json:"link_id"`
 	Name              string     `json:"name"`
-	NameSource        string     `json:"name_source"`
 	Purpose           string     `json:"purpose"`
-	PurposeSource     string     `json:"purpose_source"`
 	URL               string     `json:"url"`
 	FirstCollectedAt  time.Time  `json:"first_collected_at"`
 	LastRecollectedAt *time.Time `json:"last_recollected_at,omitempty"`
@@ -148,8 +112,6 @@ type RelatedReadingResponse struct {
 type SiteDetailResponse struct {
 	SiteListItemResponse
 	UserNote        string                   `json:"user_note"`
-	GroupingLocked  bool                     `json:"grouping_locked"`
-	TagsWithSource  []SiteTagResponse        `json:"tags_with_source"`
 	Entries         []SiteEntryResponse      `json:"entries"`
 	RelatedReadings []RelatedReadingResponse `json:"related_readings"`
 }
@@ -190,10 +152,9 @@ type ListLinksRequest struct {
 	// 400 so a typo never silently returns an empty page.
 	Status string
 
-	// Query is the raw ?q= value (Phase 9 hybrid search). Blank / whitespace
+	// Query is the raw ?q= value. Blank / whitespace
 	// is treated as "not supplied" (back-compat: falls through to the normal
-	// list path). Non-blank switches to semantic+ILIKE hybrid search (or pure
-	// ILIKE when EMBEDDING_MODEL is off / vectorization fails): top-50, no
+	// list path). Non-blank switches to keyword search: top-50, no
 	// pagination — page/after are ignored. Over-length q returns 422.
 	Query string
 
@@ -230,8 +191,7 @@ type TranslationSourceIdentity struct {
 //   - Message —— 面向最终用户的简短描述，可能本地化或脱敏，不适合做
 //     程序判断。
 //   - CurrentIdentity —— translation source CAS 冲突时的权威当前身份；其他
-//     错误省略。saved content 使用 content_revision，summary 使用 source_hash；
-//     已下线的 deep-research 只保留历史可读能力，不接受新的创建请求。
+//     错误省略。saved content 使用 content_revision，summary 使用 source_hash。
 type ErrorDetail struct {
 	Code            int                        `json:"code"`                       // HTTP 状态码或业务码
 	ErrorCode       string                     `json:"error_code,omitempty"`       // 机器可读 slug，例如 link_not_found
@@ -246,23 +206,16 @@ type ErrorResponse struct {
 
 // LinkResponse 是 /api/links 系列接口对外暴露的链接视图，包含解析结果、状态及低置信度 / 错误诊断字段。
 type LinkResponse struct {
-	ID                        string   `json:"id"`
-	URL                       string   `json:"url"`
-	Title                     *string  `json:"title"`
-	Summary                   *string  `json:"summary"`
-	Description               *string  `json:"description"`
-	Tags                      []string `json:"tags"`
-	ContentType               *string  `json:"content_type"` // 内容形态：article / listing / homepage 等
-	LibraryKind               *string  `json:"library_kind,omitempty"`
-	LibraryKindSource         *string  `json:"library_kind_source,omitempty"`
-	LibraryKindLocked         bool     `json:"library_kind_locked,omitempty"`
-	PredictedLibraryKind      *string  `json:"predicted_library_kind,omitempty"`
-	ClassificationConfidence  *float32 `json:"classification_confidence,omitempty"`
-	ClassificationReason      *string  `json:"classification_reason,omitempty"`
-	ClassificationExplanation *string  `json:"classification_explanation,omitempty"`
-	ClassifierVersion         *string  `json:"classifier_version,omitempty"`
-	ContentRevision           int64    `json:"content_revision,omitempty"`
-	MetadataRevision          int64    `json:"metadata_revision"`
+	ID               string   `json:"id"`
+	URL              string   `json:"url"`
+	Title            *string  `json:"title"`
+	Summary          *string  `json:"summary"`
+	Description      *string  `json:"description"`
+	Tags             []string `json:"tags"`
+	ContentType      *string  `json:"content_type"` // 内容形态：article / listing / homepage 等
+	LibraryKind      *string  `json:"library_kind,omitempty"`
+	ContentRevision  int64    `json:"content_revision,omitempty"`
+	MetadataRevision int64    `json:"metadata_revision"`
 	// ContentSource is detail-only metadata. List/search projections leave it
 	// nil so the API does not expand their wire contract or query payload.
 	ContentSource       *string   `json:"content_source,omitempty"`
@@ -272,7 +225,7 @@ type LinkResponse struct {
 	ParentID            *string   `json:"parent_id"`  // 父链接 ID，构成域名内的链接树
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
-	FetcherType         *string   `json:"fetcher_type"`          // 实际使用的抓取器类型（http / yt-dlp 等）
+	FetcherType         *string   `json:"fetcher_type"`          // 实际使用的抓取器类型
 	IsLowConfidence     bool      `json:"is_low_confidence"`     // 解析结果是否被判定为低置信度
 	LowConfidenceReason *string   `json:"low_confidence_reason"` // 低置信度原因，便于前端给出提示
 	ErrorCategory       *string   `json:"error_category"`        // 失败分类（upstream_http / parse_error 等）
@@ -327,9 +280,8 @@ type TranslationResponse struct {
 	TranslatedText *string `json:"translated_text"`
 	SourceFormat   string  `json:"source_format"`
 	TargetLanguage string  `json:"target_language"`
-	// SourceContentRevision is null for summary translations, historical
-	// retired deep-research rows, and legacy-unverified rows. It is
-	// intentionally not omitted so clients can distinguish those rows without
+	// SourceContentRevision is null for summary translations. It is
+	// intentionally not omitted so clients can distinguish summary rows without
 	// guessing from response shape.
 	SourceContentRevision *int64    `json:"source_content_revision"`
 	Status                string    `json:"status"`
@@ -346,16 +298,6 @@ type TranslationListResponse struct {
 	// domain-separated hash persisted on verified translation rows.
 	CurrentSummarySourceHash *string               `json:"current_summary_source_hash"`
 	Items                    []TranslationResponse `json:"items"`
-}
-
-// JobResponse 是 /api/jobs 等接口对外暴露的解析任务视图，可选地内嵌当前 Link 快照。
-type JobResponse struct {
-	ID            string        `json:"id"`
-	LinkID        string        `json:"link_id"`
-	Status        string        `json:"status"`
-	ErrorCategory *string       `json:"error_category"`
-	ErrorMsg      *string       `json:"error_msg"`
-	Link          *LinkResponse `json:"link"` // 关联的链接快照；列表场景下可能为 nil
 }
 
 // PaginatedLinksResponse always carries Items + Limit. In offset mode
@@ -443,30 +385,6 @@ type GroupedSearchResponse struct {
 	Notes    *ReaderNoteSearchGroup    `json:"notes,omitempty"`
 }
 
-type ClassificationRuleResponse struct {
-	ID              string    `json:"id"`
-	Host            string    `json:"host"`
-	IdentityAdapter *string   `json:"identity_adapter,omitempty"`
-	PathPrefix      *string   `json:"path_prefix,omitempty"`
-	TargetKind      string    `json:"target_kind"`
-	Enabled         bool      `json:"enabled"`
-	Revision        int64     `json:"revision"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-}
-
-type LibraryReviewResponse struct {
-	ID         string         `json:"id"`
-	Kind       string         `json:"kind"`
-	LinkID     *string        `json:"link_id,omitempty"`
-	SiteID     *string        `json:"site_id,omitempty"`
-	Payload    map[string]any `json:"payload"`
-	Status     string         `json:"status"`
-	Revision   int64          `json:"revision"`
-	CreatedAt  time.Time      `json:"created_at"`
-	ResolvedAt *time.Time     `json:"resolved_at,omitempty"`
-}
-
 type SiteMergePreviewEntryResponse struct {
 	ID        string `json:"id"`
 	SiteID    string `json:"site_id"`
@@ -476,9 +394,8 @@ type SiteMergePreviewEntryResponse struct {
 	Duplicate bool   `json:"duplicate"`
 }
 
-// SiteMergeFieldConflictResponse is emitted only for competing user-owned
-// values. Auto fields are recomputable and never force the user through a
-// resolution dialog.
+// SiteMergeFieldConflictResponse reports competing non-empty values. The
+// target remains the default unless the user explicitly selects a source.
 type SiteMergeFieldConflictResponse struct {
 	Field        string `json:"field"`
 	TargetValue  string `json:"target_value"`
@@ -490,7 +407,7 @@ type SiteMergePreviewResponse struct {
 	TargetSiteID       string                           `json:"target_site_id"`
 	TargetRevision     int64                            `json:"target_revision"`
 	Entries            []SiteMergePreviewEntryResponse  `json:"entries"`
-	UserTags           []string                         `json:"user_tags"`
+	Tags               []string                         `json:"tags"`
 	IdentityKeys       []string                         `json:"identity_keys"`
 	FieldConflicts     []SiteMergeFieldConflictResponse `json:"field_conflicts"`
 	RequiresResolution bool                             `json:"requires_resolution"`
@@ -509,7 +426,7 @@ type SiteSplitPreviewResponse struct {
 	Payload        SiteSplitRequest                `json:"payload"`
 	Entries        []SiteMergePreviewEntryResponse `json:"entries"`
 	Identities     []SiteSplitIdentityResponse     `json:"identities"`
-	UserTags       []string                        `json:"user_tags"`
+	Tags           []string                        `json:"tags"`
 }
 
 type SiteSplitIdentityResponse struct {

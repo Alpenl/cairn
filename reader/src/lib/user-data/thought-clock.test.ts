@@ -16,6 +16,7 @@ import {
 describe('thought Lamport clock contract', () => {
   it('starts at one and advances only from the largest observed clock', () => {
     expect(nextThoughtLogicalClock([])).toBe(1)
+    expect(nextThoughtLogicalClock([0])).toBe(1)
     expect(nextThoughtLogicalClock([41])).toBe(42)
     expect(nextThoughtLogicalClock([42, 9])).toBe(43)
     expect(maximumThoughtClock([3, 20, 7])).toBe(20)
@@ -30,22 +31,22 @@ describe('thought Lamport clock contract', () => {
     )
   })
 
-  it('validates canonical identifiers and legacy zero explicitly', () => {
+  it('validates canonical identifiers and positive version keys', () => {
     expect(isValidThoughtIdentifier('device-a')).toBe(true)
     expect(isValidThoughtIdentifier(' device-a')).toBe(false)
     expect(isValidThoughtIdentifier('device\0a')).toBe(false)
     expect(isValidThoughtIdentifier('\ud800')).toBe(false)
     expect(isValidThoughtIdentifier('a'.repeat(129))).toBe(false)
     expect(isValidThoughtVersionKey({
-      logicalClock: 0,
-      deviceId: 'legacy-device',
-      opId: 'legacy-op',
-    }, true)).toBe(true)
+      logicalClock: 1,
+      deviceId: 'device',
+      opId: 'op',
+    })).toBe(true)
     expect(isValidThoughtVersionKey({
       logicalClock: 0,
-      deviceId: 'legacy-device',
-      opId: 'legacy-op',
-    }, false)).toBe(false)
+      deviceId: 'device',
+      opId: 'op',
+    })).toBe(false)
   })
 
   it('orders equal clocks by canonical UTF-8 bytes and then operation id', () => {

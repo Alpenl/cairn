@@ -2,7 +2,6 @@ package analyzer
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -84,49 +83,6 @@ func TestOpenAIAnalyzerDefaultHTTPClientRejectsUnsafeBaseURL(t *testing.T) {
 	}
 }
 
-func TestOpenAIAnalyzerAllowsUnsafeBaseURLWhenExplicitlyEnabled(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{
-					"message": map[string]any{
-						"content": "{\"summary\":\"private gateway ok\",\"tags\":[\"Go\"]}",
-					},
-				},
-			},
-		})
-	}))
-	defer server.Close()
-
-	analyzer := NewOpenAIAnalyzer(OpenAIAnalyzerOptions{
-		BaseURL:              server.URL,
-		APIKey:               "secret-key",
-		Model:                "gpt-test",
-		HTTPClient:           fetcher.NewHTTPClientWithOptions(fetcher.HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}).Raw(),
-		EmptyResponseRetries: 1,
-		MaxSummaryChars:      50,
-		MinTags:              1,
-		MaxTags:              5,
-		MaxTagChars:          12,
-	})
-
-	got, err := analyzer.Analyze(context.Background(), AnalyzeRequest{
-		Content: fetcher.Content{
-			URL:  "https://example.com/post",
-			Body: "content",
-		},
-	})
-	if err != nil {
-		t.Fatalf("Analyze() error = %v, want success with unsafe targets explicitly enabled", err)
-	}
-	if got.Summary != "private gateway ok" {
-		t.Fatalf("summary = %q, want private gateway ok", got.Summary)
-	}
-}
-
 func TestOpenAIAnalyzerRejectsOversizedResponses(t *testing.T) {
 	t.Parallel()
 
@@ -140,7 +96,7 @@ func TestOpenAIAnalyzerRejectsOversizedResponses(t *testing.T) {
 		BaseURL:              server.URL,
 		APIKey:               "secret-key",
 		Model:                "gpt-test",
-		HTTPClient:           fetcher.NewHTTPClientWithOptions(fetcher.HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}).Raw(),
+		HTTPClient:           server.Client(),
 		EmptyResponseRetries: 1,
 		MaxSummaryChars:      50,
 		MinTags:              1,
@@ -176,7 +132,7 @@ func TestOpenAIAnalyzerRejectsUnexpectedContentType(t *testing.T) {
 		BaseURL:              server.URL,
 		APIKey:               "secret-key",
 		Model:                "gpt-test",
-		HTTPClient:           fetcher.NewHTTPClientWithOptions(fetcher.HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}).Raw(),
+		HTTPClient:           server.Client(),
 		EmptyResponseRetries: 1,
 		MaxSummaryChars:      50,
 		MinTags:              1,

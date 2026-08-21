@@ -4,16 +4,13 @@ import { Wp26BackendFixture, WP26_NAMESPACE } from './wp26-fixtures'
 const NOW = '2026-08-10T08:00:00Z'
 const PAGE_SIZE = 12
 
-const READING_ACTIONS = ['read', 'read_later', 'save', 'unsave', 'open', 'open_workspace']
-
 export type Rf57Mode = 'recommended' | 'chronological'
 export type Rf57Source = 'inbox' | 'reading' | 'subscription'
 
 interface Rf57FeedItem {
   readonly key: string
   readonly source: Rf57Source
-  readonly item_type: Rf57Source
-  readonly actions: readonly string[]
+  readonly resource_key: string
   readonly title: string
   readonly summary: string
   readonly url: string
@@ -23,54 +20,35 @@ interface Rf57FeedItem {
   readonly read: boolean
   readonly read_later: boolean
   readonly saved: boolean
-  readonly score: number
-  readonly score_contributions: {
-    readonly pending_confirmation: number
-    readonly saved_library: number
-    readonly subscription_recent: number
-    readonly unread: number
-    readonly read_later: number
-    readonly chronological_fallback: number
-  }
-  readonly enabled_score_signals: readonly string[]
-  readonly reason_code: string
-  readonly reason_params: Record<string, unknown>
-  readonly reason_contribution: number
-  readonly reason_text: string
-  readonly published_at: null
   readonly event_at: string
-  readonly created_at: string
 }
 
 function tuple(mode: Rf57Mode, filter: readonly Rf57Source[]): string {
   return `${mode}-${[...filter].sort().join('+') || 'none'}`
 }
 
-/** Link id, stable per (mode, filter, index) so a resumed snapshot keeps its keys. */
+/** Link id, stable per (mode, filter, index) so a resumed live page keeps its keys. */
 export function rf57LinkID(mode: Rf57Mode, filter: readonly Rf57Source[], index: number): string {
   return `rf57-${tuple(mode, filter)}-${index}`
 }
 
 /** The value the surface puts in `data-feed-item-key` for that card. */
 export function rf57CardKey(mode: Rf57Mode, filter: readonly Rf57Source[], index: number): string {
-  return `reading:${rf57LinkID(mode, filter, index)}`
+  return `link:${rf57LinkID(mode, filter, index)}`
 }
 
 export function rf57ItemTitle(mode: Rf57Mode, filter: readonly Rf57Source[], index: number): string {
   return `RF57 ${tuple(mode, filter)} 第 ${index} 条`
 }
 
-function itemFor(mode: Rf57Mode, filter: readonly Rf57Source[], index: number, tall: boolean): Rf57FeedItem {
+function itemFor(mode: Rf57Mode, filter: readonly Rf57Source[], index: number): Rf57FeedItem {
   const id = rf57LinkID(mode, filter, index)
   return {
-    key: `reading:${id}`,
+    key: `link:${id}`,
     source: 'reading',
-    item_type: 'reading',
-    actions: READING_ACTIONS,
+    resource_key: `link:${id}`,
     title: rf57ItemTitle(mode, filter, index),
-    summary: tall
-      ? `第 ${index} 条内容的摘要。${'这条摘要后来变长了，把它下面的所有卡片一起推下去。'.repeat(12)}`
-      : `第 ${index} 条内容的摘要，用来把卡片撑到可以滚动的高度。`,
+    summary: `第 ${index} 条内容的摘要，用来把卡片撑到可以滚动的高度。`,
     url: `https://rf57.example.test/${id}`,
     link_id: id,
     inbox_id: null,
@@ -78,23 +56,7 @@ function itemFor(mode: Rf57Mode, filter: readonly Rf57Source[], index: number, t
     read: false,
     read_later: false,
     saved: false,
-    score: 20,
-    score_contributions: {
-      pending_confirmation: 0,
-      saved_library: 0,
-      subscription_recent: 0,
-      unread: 20,
-      read_later: 0,
-      chronological_fallback: 0,
-    },
-    enabled_score_signals: ['unread'],
-    reason_code: 'unread',
-    reason_params: { read: false },
-    reason_contribution: 20,
-    reason_text: '来自最近的阅读记录',
-    published_at: null,
     event_at: NOW,
-    created_at: NOW,
   }
 }
 
@@ -108,10 +70,6 @@ function normalizeSources(values: readonly string[]): Rf57Source[] {
   return filtered.length > 0 ? filtered : order
 }
 
-function snapshotID(mode: Rf57Mode, filter: readonly Rf57Source[]): string {
-  return `rf57-snapshot-${tuple(mode, filter)}`
-}
-
 function cursorFor(mode: Rf57Mode, filter: readonly Rf57Source[]): string {
   return `rf57-cursor-${tuple(mode, filter)}`
 }
@@ -122,13 +80,6 @@ function cursorFor(mode: Rf57Mode, filter: readonly Rf57Source[]): string {
  */
 export class Rf57BackendFixture extends Wp26BackendFixture {
   readonly feedRequests: string[] = []
-  /** Cards the server has stopped returning, by index. */
-  readonly droppedIndexes = new Set<number>()
-  /** Cards whose summary grew, pushing everything below them down. */
-  readonly grownIndexes = new Set<number>()
-  /** Retires the persisted snapshot once, the way retention expiry does. */
-  expireSnapshotOnce = false
-  private snapshotGeneration = 1
 
   override async handle(route: Route): Promise<void> {
     const request = route.request()
@@ -138,32 +89,14 @@ export class Rf57BackendFixture extends Wp26BackendFixture {
       this.feedRequests.push(`${url.pathname}${url.search}`)
       const mode: Rf57Mode = url.searchParams.get('mode') === 'chronological' ? 'chronological' : 'recommended'
       const filter = normalizeSources(url.searchParams.getAll('source'))
-      if (this.expireSnapshotOnce && url.searchParams.get('snapshot_id') !== null) {
-        this.expireSnapshotOnce = false
-        this.snapshotGeneration += 1
-        await route.fulfill({
-          status: 410,
-          headers: { 'Content-Type': 'application/json', 'X-WebTag-Data-Namespace': WP26_NAMESPACE },
-          body: JSON.stringify({ error: { code: 410, message: 'snapshot expired' } }),
-        })
-        return
-      }
       const secondPage = url.searchParams.get('after') !== null
       const start = secondPage ? PAGE_SIZE : 0
       const items = Array.from({ length: PAGE_SIZE }, (_, offset) => start + offset)
-        .filter((index) => !this.droppedIndexes.has(index))
-        .map((index) => itemFor(mode, filter, index, this.grownIndexes.has(index)))
+        .map((index) => itemFor(mode, filter, index))
       await this.fulfillJSON(route, {
         items,
-        snapshot_id: `${snapshotID(mode, filter)}-g${this.snapshotGeneration}`,
         mode,
         ...(secondPage ? {} : { next_cursor: cursorFor(mode, filter) }),
-        capabilities: ['snapshot', 'cursor', 'dedupe', 'reason', 'source_filter', 'actions'],
-        sources: [
-          { id: 'inbox', label: '收件箱', enabled: filter.includes('inbox'), count: 0, capabilities: [] },
-          { id: 'reading', label: '收藏', enabled: filter.includes('reading'), count: PAGE_SIZE, capabilities: ['read'] },
-          { id: 'subscription', label: '订阅', enabled: filter.includes('subscription'), count: PAGE_SIZE, capabilities: ['read'] },
-        ],
       })
       return
     }

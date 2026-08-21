@@ -20,8 +20,6 @@ type readerActivityPageStore struct {
 	calls []model.ReaderActivityQuery
 }
 
-func (s *readerActivityPageStore) RefreshActivity(context.Context) error { return nil }
-
 func (s *readerActivityPageStore) ListActivity(_ context.Context, query model.ReaderActivityQuery) (model.ReaderActivityPage, error) {
 	s.calls = append(s.calls, query)
 	start := 0

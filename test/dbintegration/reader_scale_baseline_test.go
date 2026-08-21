@@ -273,26 +273,23 @@ func readerScalePaths() []readerScalePath {
 			},
 		},
 		{
-			name:         "recommended_feed",
-			note:         "GET /api/reader-feed: builds a fresh recommended snapshot and writes the whole candidate set as one JSONB row",
+			name: "recommended_feed",
+			note: "GET /api/reader-feed: builds a fresh recommended snapshot and writes the whole candidate set as one JSONB row",
 			// The snapshot INSERT is the last statement but not the interesting
 			// one — its plan is a bare Result. The first candidate query is:
 			// every done reading link, left joined to engagement and feedback,
 			// sorted, then cut to 1000. That is what the build actually pays
 			// for, and it is the first statement mentioning feed feedback.
-			planSelector: "reader_feed_feedback",
+			planSelector: "reader_feed_hides",
 			run: func(ctx context.Context, deps readerScaleDeps) (any, error) {
-				return deps.svc.Feed(ctx, "recommended", "", "", 30)
+				return deps.svc.FeedWithSources(ctx, "recommended", "", nil, 30)
 			},
 		},
 		{
 			name:         "activity",
-			note:         "GET /api/reader/activity: full tag+domain projection rebuild (unnest over links.tags) under an installation advisory lock, then the paged read",
+			note:         "GET /api/reader/activity: one read-only tag+domain aggregation over confirmed Reading links with keyset pagination",
 			planSelector: "unnest(l.tags)",
 			run: func(ctx context.Context, deps readerScaleDeps) (any, error) {
-				if err := deps.repo.RefreshActivity(ctx); err != nil {
-					return nil, err
-				}
 				return deps.repo.ListActivity(ctx, model.ReaderActivityQuery{
 					Kind:  model.ReaderActivityKindAll,
 					Limit: 100,

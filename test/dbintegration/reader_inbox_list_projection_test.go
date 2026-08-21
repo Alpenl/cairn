@@ -12,14 +12,13 @@ import (
 // TestReaderInboxListDoesNotCarryOversizedCaptureBody is the executable
 // evidence for the Inbox list/detail split. A capture accepts a 4 MiB body and
 // a 1 MiB note, and the Inbox list is read on every open — before the split the
-// queue response shipped both, plus one reader_categorizables subquery per row.
+// queue response shipped both.
 //
 // This test asserts the observable contract on real PostgreSQL:
 //   - the list response never contains the capture body or the tail of the note;
 //   - the whole page stays small even though the row is multi-megabyte;
 //   - the card preview is bounded and still says something useful;
-//   - GET /api/inbox/{id} keeps the full detail contract, body, note and
-//     category memberships included.
+//   - GET /api/inbox/{id} keeps the full body and note detail contract.
 func TestReaderInboxListDoesNotCarryOversizedCaptureBody(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
@@ -40,14 +39,6 @@ func TestReaderInboxListDoesNotCarryOversizedCaptureBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInbox oversized: %v", err)
 	}
-	category, err := repo.CreateCategory(ctx, "projection")
-	if err != nil {
-		t.Fatalf("CreateCategory: %v", err)
-	}
-	if err := repo.SetCategoryMembership(ctx, category.ID, "inbox", created.ID.String(), true); err != nil {
-		t.Fatalf("SetCategoryMembership(inbox): %v", err)
-	}
-
 	page, err := reader.ListInbox(ctx, "active", "", 30)
 	if err != nil {
 		t.Fatalf("ListInbox: %v", err)
@@ -66,9 +57,6 @@ func TestReaderInboxListDoesNotCarryOversizedCaptureBody(t *testing.T) {
 	}
 	if strings.Contains(wire, noteTailMarker) {
 		t.Fatal("Inbox list response carries the full user note")
-	}
-	if strings.Contains(wire, category.ID.String()) {
-		t.Fatal("Inbox list response carries detail-only category memberships")
 	}
 	// A 4 MiB body plus a 1 MiB note used to make this page multi-megabyte.
 	// The bound is generous on purpose: it fails on a regression, not on
@@ -100,10 +88,7 @@ func TestReaderInboxListDoesNotCarryOversizedCaptureBody(t *testing.T) {
 	if detail.Body != body || detail.Note != note {
 		t.Fatalf("GetInbox body=%d bytes note=%d bytes, want the full capture", len(detail.Body), len(detail.Note))
 	}
-	if len(detail.CategoryIDs) != 1 || detail.CategoryIDs[0] != category.ID.String() {
-		t.Fatalf("GetInbox category_ids = %#v, want the attached category", detail.CategoryIDs)
-	}
-	if detail.ProposalStatus != "pending" || string(detail.ProposalSignals) != `{}` || detail.MetadataRevision != created.MetadataRevision {
+	if detail.ProposalStatus != "idle" || detail.MetadataRevision != created.MetadataRevision {
 		t.Fatalf("GetInbox proposal/revision contract = %#v", detail)
 	}
 }

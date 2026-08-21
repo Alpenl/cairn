@@ -46,22 +46,6 @@ describe('thought Markdown checklist adapter', () => {
     expect(listChecklistBlocks('- [ ] task-23\n')[0].blockRef).toBe('task:330a484')
   })
 
-  it('can still update a projection carrying the old padded anchor', () => {
-    const result = updateChecklistState('- [ ] task-23\n', 'task:0330a484', true, 1)
-    expect(result).toMatchObject({ status: 'updated', source: '- [x] task-23\n' })
-  })
-
-  it('can update a projection carrying the pre-stability anchor', () => {
-    const result = updateChecklistState(
-      '# Plan\n\n- [ ] First\n- [x] Second\n',
-      'task:307967ac',
-      true,
-      1,
-    )
-    expect(result).toMatchObject({ status: 'updated' })
-    if (result.status === 'updated') expect(result.source).toContain('- [x] First')
-  })
-
   it('only changes the selected checkbox marker and preserves all other bytes', () => {
     const source = '- [ ] keep  \r\ntext\n'
     const block = listChecklistBlocks(source)[0]

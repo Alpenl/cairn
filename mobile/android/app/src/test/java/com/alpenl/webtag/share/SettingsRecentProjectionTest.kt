@@ -60,7 +60,6 @@ class SettingsRecentProjectionTest {
         assertEquals("failed", view.status)
         // The whole canonical link ID, not a prefix: a shortened one is not addressable.
         assertEquals("0199a1d2-7c41-7b3e-9f60-2b8c4d5e6f70", view.linkId)
-        assertEquals("job-42", view.jobId)
         assertEquals(RESULT_TIME, view.resultTimeMillis)
         assertTrue(view.refreshVisible)
         assertTrue(view.refreshEnabled)
@@ -86,7 +85,6 @@ class SettingsRecentProjectionTest {
         assertEquals("", view.url)
         assertEquals("", view.linkId)
         assertEquals("", view.status)
-        assertNull(view.jobId)
         assertNull(view.resultTimeMillis)
         assertNull(view.blockReason)
         assertNull(view.blockNotBefore)
@@ -185,7 +183,6 @@ class SettingsRecentProjectionTest {
     ) = RecentResult(
         url = url,
         linkId = linkId,
-        jobId = "job-42",
         status = status,
         createdAt = RESULT_TIME,
         identity = QueueIdentity("https://webtag.example", "namespace"),

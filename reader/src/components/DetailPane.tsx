@@ -63,16 +63,13 @@ import type { TocHeading } from '../lib/toc'
 
 // 键为后端实际产出的 fetcher 主类型（查表前先经 fetcherKey 剥后缀）。
 const FETCHER_LABEL: Record<string, string> = {
-  basic: '网页',
-  light: '网页',
-  github: 'GitHub',
+	basic: '网页',
+	github: 'GitHub',
   arxiv: 'arXiv',
   pdf: 'PDF',
-  ytdlp: '字幕',
-  jina: '渲染抓取',
-  grok: 'AI 直读',
-  search: '搜索',
-  wechat: '公众号',
+	jina: '渲染抓取',
+	grok: 'AI 直读',
+	wechat: '公众号',
 }
 
 const NO_TRANSLATION_HISTORY: TranslationResponse[] = []
@@ -199,7 +196,6 @@ interface DetailToolbarProps {
   onCopy: () => void
   annCount: number
   onJumpNotes: () => void
-  onOpenContentHistory?: (id: string) => void
   onConvertToSite?: () => void
   onDeleteLink?: () => void
   onToggleFont: () => void
@@ -212,7 +208,7 @@ interface DetailToolbarProps {
   onJumpToc: (id: string) => void
 }
 
-function DetailToolbar({ l, onBack, onChat, chatOpen, aiEnabled, annotationsEnabled, progressEnabled, onCopy, annCount, onJumpNotes, onOpenContentHistory, onConvertToSite, onDeleteLink, onToggleFont, focusMode, onToggleFocus, progress, editing, tocItems, activeTocId, onJumpToc }: DetailToolbarProps) {
+function DetailToolbar({ l, onBack, onChat, chatOpen, aiEnabled, annotationsEnabled, progressEnabled, onCopy, annCount, onJumpNotes, onConvertToSite, onDeleteLink, onToggleFont, focusMode, onToggleFocus, progress, editing, tocItems, activeTocId, onJumpToc }: DetailToolbarProps) {
   return (
     <div className="reader-toolbar-wrap">
       <div className="reader-toolbar">
@@ -233,17 +229,6 @@ function DetailToolbar({ l, onBack, onChat, chatOpen, aiEnabled, annotationsEnab
           <button className="tb-btn" onClick={onCopy} title="复制链接">
             <Icon name="copy" size={16} />
           </button>
-          {onOpenContentHistory && (
-            <button
-              type="button"
-              className="tb-btn"
-              onClick={() => onOpenContentHistory(l.id)}
-              title="正文历史"
-              aria-label="正文历史"
-            >
-              <Icon name="clock" size={16} />
-            </button>
-          )}
           {l.status === 'done' && l.library_kind === 'reading' && onConvertToSite && (
             <button className="tb-btn" onClick={onConvertToSite} title="移到网站收藏" aria-label="移到网站收藏">
               <Icon name="layers" size={16} />
@@ -342,7 +327,7 @@ export interface DetailPaneProps {
   readerClient?: IdentityBoundReaderClient
   annotationsEnabled: boolean
   aiEnabled: boolean
-  semanticEnabled: boolean
+  relatedTagsEnabled: boolean
   engagementEnabled: boolean
   /** 当前链接的划线集合（来自 durable annotation document，由 MainView 提升）。 */
   anns: Annotation[]
@@ -369,8 +354,6 @@ export interface DetailPaneProps {
   onSaveContent: (id: string) => void
   /** 重新抓取并替换已保存原文。 */
   onReplaceContent: (id: string) => void
-  /** 打开当前链接的已保存正文历史。 */
-  onOpenContentHistory?: (id: string) => void
   /** Replace the saved original through the revision-bound edit endpoint. */
   onEditContent?: (
     id: string,
@@ -400,8 +383,6 @@ export interface DetailPaneProps {
   translations: TranslationResponse[]
   /** 属于其它 saved-content generation 或已被 source hash 判 stale 的历史译文。 */
   staleTranslations?: TranslationResponse[]
-  /** saved-content identity 未经 revision 验证的兼容窗口/历史译文。 */
-  legacyTranslations?: TranslationResponse[]
   translationsLoading: boolean
   /** Reports the mounted canonical rendered summary projection. */
   onSummaryBlockText?: (
@@ -451,7 +432,7 @@ function DetailPaneInner({
   readerClient,
   annotationsEnabled,
   aiEnabled,
-  semanticEnabled,
+  relatedTagsEnabled,
   engagementEnabled,
   anns,
   historicalAnnotations = [],
@@ -464,7 +445,6 @@ function DetailPaneInner({
   onAskAI,
   onSaveContent,
   onReplaceContent,
-  onOpenContentHistory,
   onEditContent = EDIT_CONTENT_UNAVAILABLE,
   onEditMetadata = EDIT_METADATA_UNAVAILABLE,
   onContentEditStateChange = IGNORE_CONTENT_EDIT_STATE,
@@ -474,7 +454,6 @@ function DetailPaneInner({
   loadingDetail = false,
   translations,
   staleTranslations = NO_TRANSLATION_HISTORY,
-  legacyTranslations = NO_TRANSLATION_HISTORY,
   translationsLoading,
   onSummaryBlockText,
   summarySourceHash = null,
@@ -533,10 +512,10 @@ function DetailPaneInner({
     onHistoricalDegraded?.()
   }, [historicalDegraded, l?.content_revision, linkId, onHistoricalDegraded, onToast, savedDocument?.id.contentRevision, savedDocument?.id.linkId])
 
-  const related = useReaderRelatedTags(l, corpus, readerClient, { enabled: semanticEnabled })
+  const related = useReaderRelatedTags(l, corpus, readerClient, { enabled: relatedTagsEnabled })
   const rel = useMemo(
-    () => semanticEnabled ? related.tags.slice(0, 3) : [],
-    [related.tags, semanticEnabled],
+    () => relatedTagsEnabled ? related.tags.slice(0, 3) : [],
+    [related.tags, relatedTagsEnabled],
   )
   const surfaceCapabilities = useMemo(
     () => SAVED_DETAIL_CAPABILITIES.filter((capability) => {
@@ -622,13 +601,6 @@ function DetailPaneInner({
     (item) => item.scope === 'full' && item.stale,
   )
   const selectionTranslations = translations.filter((item) => item.scope === 'selection')
-  const historicalTranslations = useMemo(
-    () => [
-      ...staleTranslations.map((item) => ({ item, state: 'stale' as const })),
-      ...legacyTranslations.map((item) => ({ item, state: 'legacy' as const })),
-    ],
-    [legacyTranslations, staleTranslations],
-  )
   const popTranslation = translationPop?.translationId
     ? translations.find((item) => item.id === translationPop.translationId)
     : undefined
@@ -1331,7 +1303,6 @@ function DetailPaneInner({
         onCopy={onCopy}
         annCount={visibleAnnotations.length}
         onJumpNotes={jumpToNotes}
-		onOpenContentHistory={onOpenContentHistory}
 			onConvertToSite={onConvertToSite}
 			onDeleteLink={onDeleteLink}
         onToggleFont={() => setFontPopoverOpen((open) => !open)}
@@ -1415,7 +1386,7 @@ function DetailPaneInner({
           fullTranslation={fullTranslation}
           hasStaleFullTranslation={hasStaleFullTranslation}
           selectionTranslations={selectionTranslations}
-          historicalTranslations={historicalTranslations}
+          historicalTranslations={staleTranslations}
           previous={previous}
           next={next}
           onPickTag={onPickTag}

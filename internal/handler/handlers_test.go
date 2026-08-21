@@ -5,13 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"webtag/internal/dto"
@@ -21,9 +19,8 @@ import (
 
 func TestPostLinksReturnsAccepted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	jobID := "job-1"
 	deps := linkFakeDeps(&fakeLinkService{
-		submitResponse: dto.SubmitResponse{JobID: &jobID, LinkID: "link-1", Status: "pending"},
+		submitResponse: dto.SubmitResponse{LinkID: "link-1", Status: "pending"},
 	})
 
 	router := gin.New()
@@ -44,16 +41,15 @@ func TestPostLinksReturnsAccepted(t *testing.T) {
 		t.Fatalf("Unmarshal() returned error: %v", err)
 	}
 
-	if got.JobID == nil || *got.JobID != "job-1" || got.LinkID != "link-1" || got.Status != "pending" {
+	if got.LinkID != "link-1" || got.Status != "pending" {
 		t.Fatalf("unexpected response: %+v", got)
 	}
 }
 
 func TestPostRefreshReturnsAccepted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	refreshJobID := "job-r"
 	deps := linkFakeDeps(&fakeLinkService{
-		refreshResponse: dto.SubmitResponse{JobID: &refreshJobID, LinkID: "link-r", Status: "pending"},
+		refreshResponse: dto.SubmitResponse{LinkID: "link-r", Status: "pending"},
 	})
 
 	router := gin.New()
@@ -68,67 +64,10 @@ func TestPostRefreshReturnsAccepted(t *testing.T) {
 	}
 }
 
-func TestPostBatchReturnsAccepted(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	batchJobID := "job-1"
-	deps := linkFakeDeps(&fakeLinkService{
-		batchResponse: dto.BatchSubmitResponse{
-			Results: []dto.BatchItemResponse{
-				{Result: &dto.SubmitResponse{JobID: &batchJobID, LinkID: "link-1", Status: "pending"}},
-			},
-		},
-	})
-
-	router := gin.New()
-	RegisterRoutes(router, withStubDeps(deps))
-
-	body := []byte(`{"items":[{"url":"https://example.com/a"}]}`)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/links/batch", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
-	}
-}
-
-func TestPostBatchAllowsPerItemValidationFailures(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	jobID := "job-good"
-	deps := linkFakeDeps(&fakeLinkService{
-		batchResponse: dto.BatchSubmitResponse{Results: []dto.BatchItemResponse{
-			{Error: "invalid url"},
-			{Result: &dto.SubmitResponse{JobID: &jobID, LinkID: "link-good", Status: "pending"}},
-		}},
-	})
-
-	router := gin.New()
-	RegisterRoutes(router, withStubDeps(deps))
-
-	body := []byte(`{"items":[{"url":"not a url"},{"url":"https://example.com/good"}]}`)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/links/batch", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202 partial-success envelope; body=%q", rec.Code, rec.Body.String())
-	}
-	var response dto.BatchSubmitResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("decode batch response: %v", err)
-	}
-	if len(response.Results) != 2 || response.Results[0].Error == "" || response.Results[1].Result == nil {
-		t.Fatalf("batch response = %#v, want one item error followed by one success", response.Results)
-	}
-}
-
 func TestPostIngestReturnsAccepted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	ingestJobID := "job-i"
 	svc := &fakeLinkService{
-		ingestResponse: dto.SubmitResponse{JobID: &ingestJobID, LinkID: "link-i", Status: "pending"},
+		ingestResponse: dto.SubmitResponse{LinkID: "link-i", Status: "pending"},
 	}
 	deps := linkFakeDeps(svc)
 
@@ -233,26 +172,6 @@ func TestPostIngestRejectsOversizedRequestBody(t *testing.T) {
 	}
 }
 
-func TestPostBatchRejectsOversizedItemCount(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	deps := linkFakeDeps(&fakeLinkService{
-		batchErr: httperr.New(http.StatusUnprocessableEntity, "batch items exceed limit"),
-	})
-
-	router := gin.New()
-	RegisterRoutes(router, withStubDeps(deps))
-
-	body := `{"items":[{"url":"https://example.com/a"}]}`
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/links/batch", bytes.NewReader([]byte(body)))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
-	}
-}
-
 // TestGetLinkContentReadsSavedSnapshotWithoutFetching 钉住「原文按需取」这条
 // 契约的读半边：GET /api/links/:id/content 只读已保存快照，服务层不抓取。
 func TestGetLinkContentReadsSavedSnapshotWithoutFetching(t *testing.T) {
@@ -288,23 +207,19 @@ func TestPatchLinkContentPassesJSONAndReturnsCanonicalResponse(t *testing.T) {
 	RegisterRoutes(router, withStubDeps(Dependencies{LinksContent: content}))
 
 	body := `{"content":"edited body","expected_content_revision":7}`
-	for _, path := range []string{"/api/links/link-1/content", "/api/v1/links/link-1/content"} {
-		t.Run(path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			router.ServeHTTP(rec, req)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/links/link-1/content", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
 
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-			}
-			if content.editRequest == nil || content.editRequest.Content != "edited body" || content.editRequest.ExpectedContentRevision != 7 {
-				t.Fatalf("edit request = %#v, want decoded body and revision 7", content.editRequest)
-			}
-			if !strings.Contains(rec.Body.String(), `"content_source":"user"`) || !strings.Contains(rec.Body.String(), `"content_revision":8`) {
-				t.Fatalf("response = %s, want source=user and revision=8", rec.Body.String())
-			}
-		})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if content.editRequest == nil || content.editRequest.Content != "edited body" || content.editRequest.ExpectedContentRevision != 7 {
+		t.Fatalf("edit request = %#v, want decoded body and revision 7", content.editRequest)
+	}
+	if !strings.Contains(rec.Body.String(), `"content_source":"user"`) || !strings.Contains(rec.Body.String(), `"content_revision":8`) {
+		t.Fatalf("response = %s, want source=user and revision=8", rec.Body.String())
 	}
 }
 
@@ -439,104 +354,24 @@ func TestPostLinksKeepsMalformedJSONAsUnprocessableEntity(t *testing.T) {
 	}
 }
 
-// TestAPIV1AliasMatchesLegacyPrefix 验证 Wave 9 MED M6 加入的 /api/v1/*
-// 别名跟 /api/* 走同一份 handler、返回相同响应。两个前缀分别 POST 一次
-// 同一个 LinkCreateRequest，断言 status、body 字段都一致。任意一侧未挂
-// 上路由（404）或返回不同结果都会被这条测试捕获，避免后续新增 endpoint
-// 时只在一个前缀注册而留下 silent drift。
-func TestAPIV1AliasMatchesLegacyPrefix(t *testing.T) {
+func TestRemovedPublicAPIsReturnNotFound(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	jobID := "job-1"
-	deps := linkFakeDeps(&fakeLinkService{
-		submitResponse: dto.SubmitResponse{JobID: &jobID, LinkID: "link-1", Status: "pending"},
-	})
+	deps := linkFakeDeps(&fakeLinkService{})
 	router := gin.New()
 	RegisterRoutes(router, withStubDeps(deps))
 
-	body := []byte(`{"url":"https://example.com/a"}`)
-	doPost := func(path string) (int, dto.SubmitResponse) {
+	for _, request := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/links"},
+		{method: http.MethodPost, path: "/api/links/batch"},
+	} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		router.ServeHTTP(rec, req)
-		var got dto.SubmitResponse
-		if rec.Code == http.StatusAccepted {
-			_ = json.Unmarshal(rec.Body.Bytes(), &got)
+		router.ServeHTTP(rec, httptest.NewRequest(request.method, request.path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s %s status = %d, want %d", request.method, request.path, rec.Code, http.StatusNotFound)
 		}
-		return rec.Code, got
-	}
-
-	legacyCode, legacyBody := doPost("/api/links")
-	v1Code, v1Body := doPost("/api/v1/links")
-
-	if legacyCode != http.StatusAccepted {
-		t.Fatalf("/api/links status = %d, want %d", legacyCode, http.StatusAccepted)
-	}
-	if v1Code != http.StatusAccepted {
-		t.Fatalf("/api/v1/links status = %d, want %d", v1Code, http.StatusAccepted)
-	}
-	if legacyBody.LinkID != v1Body.LinkID || legacyBody.Status != v1Body.Status {
-		t.Fatalf("alias response drift: legacy=%+v v1=%+v", legacyBody, v1Body)
-	}
-}
-
-func TestGetJobReturnsLinkOnlyWhenDone(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	deps := Dependencies{
-		Jobs: &fakeJobService{
-			response: dto.JobResponse{
-				ID:       "job-1",
-				LinkID:   "link-1",
-				Status:   "done",
-				ErrorMsg: nil,
-				Link: &dto.LinkResponse{
-					ID:        "link-1",
-					URL:       "https://example.com",
-					Status:    "done",
-					Tags:      []string{"tag"},
-					CreatedAt: time.Unix(0, 0).UTC(),
-					UpdatedAt: time.Unix(0, 0).UTC(),
-				},
-			},
-		},
-	}
-
-	router := gin.New()
-	RegisterRoutes(router, withStubDeps(deps))
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/jobs/job-1", nil)
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-}
-
-func TestListJobsParsesIDsQuery(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	deps := Dependencies{
-		Jobs: &fakeJobService{
-			listResponse: []dto.JobResponse{{ID: "job-1", LinkID: "link-1", Status: "pending"}},
-		},
-	}
-
-	router := gin.New()
-	RegisterRoutes(router, withStubDeps(deps))
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/jobs?ids=job-1,job-2,,job-3", nil)
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	svc := deps.Jobs.(*fakeJobService)
-	if len(svc.listRequestIDs) != 3 {
-		t.Fatalf("List() ids len = %d, want 3", len(svc.listRequestIDs))
-	}
-	if svc.listRequestIDs[0] != "job-1" || svc.listRequestIDs[1] != "job-2" || svc.listRequestIDs[2] != "job-3" {
-		t.Fatalf("List() ids = %#v, want [job-1 job-2 job-3]", svc.listRequestIDs)
 	}
 }
 
@@ -679,11 +514,10 @@ func TestRegisterRoutesPanicsOnMissingService(t *testing.T) {
 		deps Dependencies
 		want string
 	}{
-		{"missing all", Dependencies{}, "LinksWrite, LinksRead, Ingest, Jobs, Tags, Tree"},
-		{"missing LinksWrite", Dependencies{LinksRead: &fakeLinkService{}, Ingest: &fakeLinkService{}, Jobs: &fakeJobService{}, Tags: &fakeTagService{}, Tree: &fakeTreeService{}}, "LinksWrite"},
+		{"missing all", Dependencies{}, "LinksWrite, LinksRead, Ingest, Tags, Tree"},
+		{"missing LinksWrite", Dependencies{LinksRead: &fakeLinkService{}, Ingest: &fakeLinkService{}, Tags: &fakeTagService{}, Tree: &fakeTreeService{}}, "LinksWrite"},
 		{"missing Tree", func() Dependencies {
 			d := linkFakeDeps(&fakeLinkService{})
-			d.Jobs = &fakeJobService{}
 			d.Tags = &fakeTagService{}
 			return d
 		}(), "Tree"},
@@ -952,11 +786,9 @@ func TestWriteErrorFallsBackToDefaultSlugWhenServiceOmitsCode(t *testing.T) {
 type fakeLinkService struct {
 	submitResponse  dto.SubmitResponse
 	refreshResponse dto.SubmitResponse
-	batchResponse   dto.BatchSubmitResponse
 	ingestResponse  dto.SubmitResponse
 	submitErr       error
 	refreshErr      error
-	batchErr        error
 	ingestErr       error
 	listErr         error
 	listResponse    dto.PaginatedLinksResponse
@@ -967,13 +799,6 @@ type fakeLinkService struct {
 	lastIncludeContent bool
 	deleteErr          error
 	ingestRequest      *dto.IngestRequest
-	exportPayload      string
-	exportErr          error
-	exportCalls        int
-	// Phase 14 (v4.0 M3)：GET /api/export/concepts 桩字段。
-	exportConceptsPayload string
-	exportConceptsErr     error
-	exportConceptsCalls   int
 }
 
 type fakeContentService struct {
@@ -1016,10 +841,6 @@ func (f *fakeLinkService) Refresh(context.Context, string) (dto.SubmitResponse, 
 	return f.refreshResponse, f.refreshErr
 }
 
-func (f *fakeLinkService) Batch(context.Context, dto.BatchCreateRequest) (dto.BatchSubmitResponse, error) {
-	return f.batchResponse, f.batchErr
-}
-
 func (f *fakeLinkService) Ingest(_ context.Context, req dto.IngestRequest) (dto.SubmitResponse, error) {
 	reqCopy := req
 	f.ingestRequest = &reqCopy
@@ -1043,43 +864,6 @@ func (f *fakeLinkService) GetWithContent(_ context.Context, _ string, includeCon
 
 func (f *fakeLinkService) Delete(context.Context, string) error {
 	return f.deleteErr
-}
-
-func (f *fakeLinkService) Export(_ context.Context, w io.Writer) error {
-	f.exportCalls++
-	if f.exportPayload != "" {
-		if _, err := io.WriteString(w, f.exportPayload); err != nil {
-			return err
-		}
-	}
-	return f.exportErr
-}
-
-func (f *fakeLinkService) ExportConcepts(_ context.Context, w io.Writer) error {
-	f.exportConceptsCalls++
-	if f.exportConceptsPayload != "" {
-		if _, err := io.WriteString(w, f.exportConceptsPayload); err != nil {
-			return err
-		}
-	}
-	return f.exportConceptsErr
-}
-
-type fakeJobService struct {
-	response       dto.JobResponse
-	err            error
-	listResponse   []dto.JobResponse
-	listErr        error
-	listRequestIDs []string
-}
-
-func (f *fakeJobService) Get(context.Context, string) (dto.JobResponse, error) {
-	return f.response, f.err
-}
-
-func (f *fakeJobService) List(_ context.Context, ids []string) ([]dto.JobResponse, error) {
-	f.listRequestIDs = append([]string(nil), ids...)
-	return f.listResponse, f.listErr
 }
 
 type fakeTagService struct {
@@ -1132,9 +916,6 @@ func withStubDeps(deps Dependencies) Dependencies {
 	if deps.Ingest == nil {
 		deps.Ingest = &fakeLinkService{}
 	}
-	if deps.Jobs == nil {
-		deps.Jobs = &fakeJobService{}
-	}
 	if deps.Tags == nil {
 		deps.Tags = &fakeTagService{}
 	}
@@ -1155,25 +936,6 @@ func linkFakeDeps(svc *fakeLinkService) Dependencies {
 		LinksWrite: svc,
 		LinksRead:  svc,
 		Ingest:     svc,
-	}
-}
-
-// TestGetJobPropagatesServiceError 锁定 getJob 的 err → writeError 分支。
-// 之前只有 happy-path 测试（TestGetJobReturnsLinkOnlyWhenDone），覆盖率
-// 66.7% 留在错误路径上。回归会让 service 抛出的 4xx/5xx 直接静默成 200。
-func TestGetJobPropagatesServiceError(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	deps := Dependencies{
-		Jobs: &fakeJobService{err: httperr.New(http.StatusNotFound, "job not found")},
-	}
-	router := gin.New()
-	RegisterRoutes(router, withStubDeps(deps))
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/jobs/job-x", nil))
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want %d (body=%s)", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 }
 

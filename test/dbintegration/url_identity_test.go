@@ -31,39 +31,35 @@ const urlIdentityCanonicalForm = "https://identity.example.com/docs/guide?a=1&b=
 func newURLIdentitySubmitService(t *testing.T, pool *pgxpool.Pool) (*service.SubmitService, *countingSubmitQueue) {
 	t.Helper()
 	links := repository.NewPGXLinkRepository(pool)
-	jobs := repository.NewPGXJobRepository(pool)
 	queue := &countingSubmitQueue{}
-	return service.NewSubmitService(
+	submit, _ := service.NewLinkServices(
 		links,
-		jobs,
 		dbLinkCommands(pool, links, queue),
-		urllock.NewAdvisoryURLLocker(pool, urllock.AdvisoryLockClassSubmit),
+		urllock.NewInProcessURLLocker(),
 		service.SubmitServiceOptions{},
-	), queue
+	)
+	return submit, queue
 }
 
-func TestURLIdentitySerialVariantsReuseOneRecordAndJob(t *testing.T) {
+func TestURLIdentitySerialVariantsReuseOneRecord(t *testing.T) {
 	pool := StartPostgres(t)
 	submit, _ := newURLIdentitySubmitService(t, pool)
 	submittedDisplayURL := "  " + urlIdentityVariants[4] + "  "
-	first, err := submit.Submit(t.Context(), dto.LinkCreateRequest{URL: submittedDisplayURL})
-	if err != nil || first.JobID == nil {
+	first, err := submit.Submit(t.Context(), dto.LinkCreateRequest{URL: submittedDisplayURL, Destination: "library"})
+	if err != nil || first.LinkID == "" {
 		t.Fatalf("first Submit() = %+v, %v", first, err)
 	}
 	for _, variant := range urlIdentityVariants {
-		result, submitErr := submit.Submit(t.Context(), dto.LinkCreateRequest{URL: variant})
+		result, submitErr := submit.Submit(t.Context(), dto.LinkCreateRequest{URL: variant, Destination: "library"})
 		if submitErr != nil {
 			t.Fatalf("Submit(%q): %v", variant, submitErr)
 		}
-		if result.LinkID != first.LinkID || result.JobID == nil || *result.JobID != *first.JobID {
-			t.Fatalf("Submit(%q) = %+v, want link %s job %s", variant, result, first.LinkID, *first.JobID)
+		if result.LinkID != first.LinkID {
+			t.Fatalf("Submit(%q) = %+v, want link %s", variant, result, first.LinkID)
 		}
 	}
 	if got := rawCountLinks(t, pool); got != 1 {
 		t.Fatalf("links = %d, want 1", got)
-	}
-	if got := rawCountJobs(t, pool); got != 1 {
-		t.Fatalf("parse jobs = %d, want 1", got)
 	}
 	linkID := uuid.MustParse(first.LinkID)
 	if got := rawLinkIdentity(t, pool, linkID); got.URL != strings.TrimSpace(submittedDisplayURL) || got.SourceKey != urlIdentityCanonicalForm {
@@ -83,7 +79,7 @@ func TestURLIdentityConcurrentVariantsCollapseOntoOneRecord(t *testing.T) {
 		go func(index int, variant string) {
 			defer group.Done()
 			<-start
-			responses[index], errorsByIndex[index] = submit.Submit(t.Context(), dto.LinkCreateRequest{URL: variant})
+			responses[index], errorsByIndex[index] = submit.Submit(t.Context(), dto.LinkCreateRequest{URL: variant, Destination: "library"})
 		}(index, variant)
 	}
 	close(start)
@@ -96,57 +92,26 @@ func TestURLIdentityConcurrentVariantsCollapseOntoOneRecord(t *testing.T) {
 			t.Fatalf("response %d link = %s, want %s", index, responses[index].LinkID, responses[0].LinkID)
 		}
 	}
-	if rawCountLinks(t, pool) != 1 || rawCountJobs(t, pool) != 1 {
-		t.Fatalf("concurrent variants wrote links/jobs = %d/%d, want 1/1", rawCountLinks(t, pool), rawCountJobs(t, pool))
-	}
-}
-
-func TestURLIdentityBatchAndSingleShareOneRecord(t *testing.T) {
-	pool := StartPostgres(t)
-	submit, _ := newURLIdentitySubmitService(t, pool)
-	items := make([]dto.LinkCreateRequest, 0, len(urlIdentityVariants))
-	for _, variant := range urlIdentityVariants {
-		items = append(items, dto.LinkCreateRequest{URL: variant})
-	}
-	batch, err := submit.Batch(t.Context(), dto.BatchCreateRequest{Items: items})
-	if err != nil {
-		t.Fatalf("Batch(): %v", err)
-	}
-	if len(batch.Results) != len(items) || batch.Results[0].Result == nil {
-		t.Fatalf("Batch() = %+v", batch)
-	}
-	wantLinkID := batch.Results[0].Result.LinkID
-	for index, result := range batch.Results {
-		if result.Error != "" || result.Result == nil || result.Result.LinkID != wantLinkID {
-			t.Fatalf("Batch() result %d = %+v, want link %s", index, result, wantLinkID)
-		}
-	}
-	single, err := submit.Submit(t.Context(), dto.LinkCreateRequest{URL: urlIdentityVariants[5]})
-	if err != nil || single.LinkID != wantLinkID {
-		t.Fatalf("Submit() after batch = %+v, %v; want link %s", single, err, wantLinkID)
-	}
-	if rawCountLinks(t, pool) != 1 || rawCountJobs(t, pool) != 1 {
-		t.Fatalf("batch and single wrote links/jobs = %d/%d, want 1/1", rawCountLinks(t, pool), rawCountJobs(t, pool))
+	if rawCountLinks(t, pool) != 1 {
+		t.Fatalf("concurrent variants wrote links = %d, want 1", rawCountLinks(t, pool))
 	}
 }
 
 func TestURLIdentityMultimodalIngestAndSubmitShareOneRecord(t *testing.T) {
 	pool := StartPostgres(t)
 	links := repository.NewPGXLinkRepository(pool)
-	jobs := repository.NewPGXJobRepository(pool)
 	_, ingest := service.NewLinkServices(
 		links,
-		jobs,
 		dbLinkCommands(pool, links, &countingSubmitQueue{}),
-		urllock.NewAdvisoryURLLocker(pool, urllock.AdvisoryLockClassSubmit),
+		urllock.NewInProcessURLLocker(),
 		service.SubmitServiceOptions{},
 	)
 	displayURL := "  " + urlIdentityVariants[6] + "  "
-	created, err := ingest.Ingest(t.Context(), dto.IngestRequest{Sources: []dto.IngestSource{
+	created, err := ingest.Ingest(t.Context(), dto.IngestRequest{Destination: "library", Sources: []dto.IngestSource{
 		{Kind: "url", URL: displayURL},
 		{Kind: "text", Text: "Selected passage"},
 	}})
-	if err != nil || created.JobID == nil {
+	if err != nil || created.LinkID == "" {
 		t.Fatalf("Ingest() = %+v, %v", created, err)
 	}
 	identity := rawLinkIdentity(t, pool, uuid.MustParse(created.LinkID))
@@ -154,8 +119,8 @@ func TestURLIdentityMultimodalIngestAndSubmitShareOneRecord(t *testing.T) {
 		t.Fatalf("ingest identity = %+v", identity)
 	}
 	submit, _ := newURLIdentitySubmitService(t, pool)
-	reused, err := submit.Submit(t.Context(), dto.LinkCreateRequest{URL: urlIdentityVariants[2]})
-	if err != nil || reused.LinkID != created.LinkID || reused.JobID == nil || *reused.JobID != *created.JobID {
+	reused, err := submit.Submit(t.Context(), dto.LinkCreateRequest{URL: urlIdentityVariants[2], Destination: "library"})
+	if err != nil || reused.LinkID != created.LinkID {
 		t.Fatalf("Submit() after Ingest() = %+v, %v", reused, err)
 	}
 }
@@ -181,16 +146,12 @@ func TestURLIdentityRejectedURLsWriteNothing(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := submit.Submit(t.Context(), dto.LinkCreateRequest{URL: test.url})
 			assertUnprocessableCode(t, err, test.code)
-			batch, batchErr := submit.Batch(t.Context(), dto.BatchCreateRequest{Items: []dto.LinkCreateRequest{{URL: test.url}}})
-			if batchErr != nil || len(batch.Results) != 1 || batch.Results[0].Error == "" || batch.Results[0].Result != nil {
-				t.Fatalf("Batch(%q) = %+v, %v", test.url, batch, batchErr)
-			}
 		})
 	}
-	if rawCountLinks(t, pool) != 0 || rawCountJobs(t, pool) != 0 {
-		t.Fatalf("rejected URLs wrote links/jobs = %d/%d", rawCountLinks(t, pool), rawCountJobs(t, pool))
+	if rawCountLinks(t, pool) != 0 {
+		t.Fatalf("rejected URLs wrote links = %d", rawCountLinks(t, pool))
 	}
-	if calls := queue.enqueueCalls.Load() + queue.enqueueTxCalls.Load(); calls != 0 {
+	if calls := queue.enqueueTxCalls.Load(); calls != 0 {
 		t.Fatalf("rejected URLs enqueued %d jobs", calls)
 	}
 }
@@ -198,7 +159,7 @@ func TestURLIdentityRejectedURLsWriteNothing(t *testing.T) {
 func TestURLIdentityInboxConfirmReusesCanonicalRecord(t *testing.T) {
 	pool := StartPostgres(t)
 	submit, _ := newURLIdentitySubmitService(t, pool)
-	saved, err := submit.Submit(t.Context(), dto.LinkCreateRequest{URL: urlIdentityVariants[0]})
+	saved, err := submit.Submit(t.Context(), dto.LinkCreateRequest{URL: urlIdentityVariants[0], Destination: "library"})
 	if err != nil {
 		t.Fatalf("Submit(): %v", err)
 	}
@@ -211,7 +172,7 @@ func TestURLIdentityInboxConfirmReusesCanonicalRecord(t *testing.T) {
 		"summary",
 	)
 	reader := repository.NewPGXReaderVNextRepository(pool)
-	linkID, err := reader.ConfirmInbox(t.Context(), inboxID)
+	linkID, err := reader.ConfirmInbox(t.Context(), inboxID, nil)
 	if err != nil || linkID.String() != saved.LinkID {
 		t.Fatalf("ConfirmInbox() = %s, %v; want %s", linkID, err, saved.LinkID)
 	}

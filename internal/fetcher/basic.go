@@ -381,9 +381,8 @@ func chooseBestDocumentTitle(current string, doc *goquery.Document) string {
 // worst case is a single low-confidence link, not a panic or a
 // security issue.
 //
-// If we ever want to flip this default, first instrument the call rate
-// with metrics.ParseRunsTotal{fetcher_type="basic_no_content_type"} so
-// we can compare hit-rate against the cost of the upgrade path.
+// If we ever want to flip this default, first measure how often the branch is
+// used so the hit rate can be compared with the cost of the upgrade path.
 func isAllowedBasicContentType(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {

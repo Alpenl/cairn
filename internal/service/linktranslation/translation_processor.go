@@ -11,12 +11,10 @@ import (
 )
 
 const translationFailureMessage = "翻译服务暂时不可用，请重试"
-const translationCancelledMessage = "翻译任务已取消，请重试"
 
 type JobProcessor interface {
 	Run(context.Context, model.TranslationAttempt) error
-	RecordDiscard(context.Context, model.TranslationAttempt, error) error
-	RecordCancellation(context.Context, model.TranslationAttempt, error) error
+	RecordFailure(context.Context, model.TranslationAttempt, error) error
 }
 
 type ProcessorOptions struct {
@@ -69,12 +67,8 @@ func (p *Processor) Run(ctx context.Context, attempt model.TranslationAttempt) e
 	return nil
 }
 
-func (p *Processor) RecordDiscard(ctx context.Context, attempt model.TranslationAttempt, _ error) error {
+func (p *Processor) RecordFailure(ctx context.Context, attempt model.TranslationAttempt, _ error) error {
 	return p.projectFailure(ctx, attempt, translationFailureMessage, "failure")
-}
-
-func (p *Processor) RecordCancellation(ctx context.Context, attempt model.TranslationAttempt, _ error) error {
-	return p.projectFailure(ctx, attempt, translationCancelledMessage, "cancellation")
 }
 
 func (p *Processor) projectFailure(ctx context.Context, attempt model.TranslationAttempt, message, projection string) error {
@@ -93,7 +87,7 @@ func (p *Processor) logRejected(ctx context.Context, projection string, attempt 
 		return
 	}
 	p.logger.WarnContext(ctx, "translation attempt projection rejected",
-		"reason", model.TranslationAttemptRejectionNotCurrent.String(),
+		"reason", string(attemptRejectionNotCurrent),
 		"projection", projection,
 		"translation_id", attempt.TranslationID.String(),
 		"river_job_id", attempt.RiverJobID,

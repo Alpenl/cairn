@@ -1,8 +1,5 @@
 import type { Annotation, AnnotationSource } from '../annotations'
-import {
-  isValidSourceHash,
-  isValidSourceIdentityComponent,
-} from '../article/source-block'
+import { isValidSourceHash } from '../article/source-block'
 
 export interface SavedContentAnnotationTarget {
   readonly kind: 'saved-content'
@@ -19,21 +16,10 @@ export interface NoteAnnotationTarget {
   readonly noteRevision: number
 }
 
-/**
- * An explicitly quarantined source whose offsets cannot be proven against a
- * current document. `sourceKey` is migration-owned provenance, not a current
- * content revision or summary hash.
- */
-export interface LegacyStaleAnnotationTarget {
-  readonly kind: 'legacy-stale'
-  readonly sourceKey: string
-}
-
 export type AnnotationTarget =
   | SavedContentAnnotationTarget
   | SummaryAnnotationTarget
   | NoteAnnotationTarget
-  | LegacyStaleAnnotationTarget
 
 export interface AnnotationUpdatePatch {
   readonly note?: string
@@ -80,15 +66,10 @@ export interface NoteAnnotationAddDraft extends AnnotationAddDraftBase {
   readonly blockKey?: string
 }
 
-export interface LegacyStaleAnnotationAddDraft extends AnnotationAddDraftBase {
-  readonly blockKey: string
-}
-
 export type AnnotationAddDraft =
   | SavedContentAnnotationAddDraft
   | SummaryAnnotationAddDraft
   | NoteAnnotationAddDraft
-  | LegacyStaleAnnotationAddDraft
 
 export type AnnotationAddOperationInput =
   | (AnnotationOperationInputBase<SavedContentAnnotationTarget> & {
@@ -102,10 +83,6 @@ export type AnnotationAddOperationInput =
   | (AnnotationOperationInputBase<NoteAnnotationTarget> & {
       readonly kind: 'add'
       readonly draft: NoteAnnotationAddDraft
-    })
-  | (AnnotationOperationInputBase<LegacyStaleAnnotationTarget> & {
-      readonly kind: 'add'
-      readonly draft: LegacyStaleAnnotationAddDraft
     })
 
 export interface AnnotationUpdateOperationInput extends AnnotationOperationInputBase {
@@ -281,9 +258,6 @@ function cloneTarget(target: AnnotationTarget): AnnotationTarget | null {
         return null
       }
       return { kind: target.kind, noteRevision: target.noteRevision }
-    case 'legacy-stale':
-      if (!isValidSourceIdentityComponent(target.sourceKey)) return null
-      return { kind: target.kind, sourceKey: target.sourceKey }
   }
 }
 
@@ -301,8 +275,6 @@ export function annotationTargetKey(target: AnnotationTarget): string | null {
       return `summary:${canonical.sourceHash}`
     case 'note':
       return `note:${canonical.noteRevision}`
-    case 'legacy-stale':
-      return `legacy-stale:${canonical.sourceKey.length}:${canonical.sourceKey}`
   }
 }
 

@@ -14,11 +14,10 @@ import (
 
 // SessionOptions configures browser session exchange for one installation.
 type SessionOptions struct {
-	SigningKey      []byte
-	TTL             time.Duration
-	Authenticator   *middleware.InstallationAuthenticator
-	AllowOpenAccess bool
-	Representations middleware.VersionReader
+	SigningKey     []byte
+	TTL            time.Duration
+	Authenticator  *middleware.InstallationAuthenticator
+	IdentityReader middleware.IdentityReader
 }
 
 type sessionCreateRequest struct {
@@ -27,28 +26,21 @@ type sessionCreateRequest struct {
 
 // RegisterSessionExchangeRoutes mounts the login and logout endpoints outside
 // the protected group. The login exchanges the static installation token for
-// a short-lived HttpOnly cookie; explicitly open installations need no token.
+// a short-lived HttpOnly cookie.
 func RegisterSessionExchangeRoutes(router gin.IRoutes, opts SessionOptions) {
-	if len(opts.SigningKey) == 0 ||
-		(!opts.AllowOpenAccess && (opts.Authenticator == nil || !opts.Authenticator.Configured())) {
+	if len(opts.SigningKey) == 0 || opts.Authenticator == nil || !opts.Authenticator.Configured() {
 		return
 	}
 	ttl := opts.TTL
 	if ttl <= 0 {
 		ttl = session.DefaultTTL
 	}
-	// 与其他公开路由一样按 apiRoutePrefixes 挂载：只挂 /api/session 会让固定
-	// 使用 /api/v1 前缀的客户端在登录这一步拿到 404，整个 v1 表面不可用。
-	for _, prefix := range apiRoutePrefixes {
-		router.POST(prefix+"/session", createSession(opts, ttl))
-		router.DELETE(prefix+"/session", deleteSession())
-	}
+	router.POST(apiRoutePrefix+"/session", createSession(opts, ttl))
+	router.DELETE(apiRoutePrefix+"/session", deleteSession())
 }
 
 func RegisterSessionIdentityRoute(router gin.IRoutes) {
-	for _, prefix := range apiRoutePrefixes {
-		router.GET(prefix+"/session", getSessionIdentity())
-	}
+	router.GET(apiRoutePrefix+"/session", getSessionIdentity())
 }
 
 func createSession(opts SessionOptions, ttl time.Duration) gin.HandlerFunc {
@@ -57,12 +49,12 @@ func createSession(opts SessionOptions, ttl time.Duration) gin.HandlerFunc {
 		if !bindJSONWithLimit(c, &req, defaultMaxJSONBodyBytes) {
 			return
 		}
-		if !opts.AllowOpenAccess && !opts.Authenticator.Authenticate(req.Token) {
+		if !opts.Authenticator.Authenticate(req.Token) {
 			middleware.JSONErrorWithSlug(c, http.StatusUnauthorized, middleware.ErrCodeUnauthorized, "installation token is invalid")
 			return
 		}
 
-		identity, err := resolveInstallationRepresentation(c, opts.Representations)
+		identity, err := resolveInstallationIdentity(c, opts.IdentityReader)
 		if err != nil {
 			middleware.JSONErrorWithSlug(c, http.StatusInternalServerError, middleware.ErrCodeInternalError, "installation namespace is unavailable")
 			return
@@ -108,19 +100,11 @@ func getSessionIdentity() gin.HandlerFunc {
 	}
 }
 
-func resolveInstallationRepresentation(c *gin.Context, versions middleware.VersionReader) (representation.ClientIdentity, error) {
-	if versions == nil {
-		return representation.ClientIdentity{}, representation.ErrInvalidVersion
+func resolveInstallationIdentity(c *gin.Context, identities middleware.IdentityReader) (representation.ClientIdentity, error) {
+	if identities == nil {
+		return representation.ClientIdentity{}, representation.ErrInvalidIdentity
 	}
-	components, err := representation.NewComponentSet()
-	if err != nil {
-		return representation.ClientIdentity{}, err
-	}
-	base, err := versions.Current(c.Request.Context(), components)
-	if err != nil {
-		return representation.ClientIdentity{}, err
-	}
-	return representation.NewClientIdentity(base)
+	return identities.Current(c.Request.Context())
 }
 
 func setIdentityResponseHeaders(c *gin.Context, namespace string) {

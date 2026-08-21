@@ -84,8 +84,6 @@ type ReaderScaleCounts struct {
 	FeedSubscriptions  int `json:"feed_subscription_count"`
 	FeedFolders        int `json:"feed_folder_count"`
 	Sites              int `json:"site_count"`
-	Categories         int `json:"category_count"`
-	Categorizables     int `json:"categorizable_count"`
 	Engagements        int `json:"engagement_count"`
 	StandaloneTodos    int `json:"standalone_todo_count"`
 	TodoProjectionRows int `json:"todo_projection_source_count"`
@@ -135,7 +133,6 @@ func ReaderScaleFixtureSpec() ReaderScaleSpec {
 			FeedItems:         10000,
 			FeedSubscriptions: 50,
 			FeedFolders:       5,
-			Categories:        24,
 			Engagements:       3000,
 			StandaloneTodos:   200,
 		},
@@ -150,8 +147,6 @@ func ReaderScaleFixtureSpec() ReaderScaleSpec {
 		inboxNote:            2 << 10,
 	}
 	spec.Counts.Sites = spec.Counts.Links / spec.siteEvery
-	// One categorizable per 5th link and per 2nd inbox item.
-	spec.Counts.Categorizables = spec.Counts.Links/5 + spec.Counts.InboxItems/2
 	spec.Counts.TodoProjectionRows = readerScaleProjectionCount(spec)
 	return spec
 }
@@ -259,7 +254,6 @@ func SeedReaderScaleFixture(t testing.TB, pool *pgxpool.Pool) ReaderScaleSpec {
 	seedReaderScaleNotes(t, ctx, pool, spec)
 	seedReaderScaleInbox(t, ctx, pool, spec)
 	seedReaderScaleFeed(t, ctx, pool, spec, linkIDs)
-	seedReaderScaleCategories(t, ctx, pool, spec, linkIDs)
 	seedReaderScaleStandaloneTodos(t, ctx, pool, spec)
 
 	if _, err := pool.Exec(ctx, `VACUUM (ANALYZE)`); err != nil {
@@ -288,10 +282,9 @@ func seedReaderScaleLinks(t testing.TB, ctx context.Context, pool *pgxpool.Pool,
 		"created_at", "updated_at", "domain", "content_type", "path_depth",
 		"parent_path", "description", "is_low_confidence", "source_kind",
 		"source_key", "content", "content_format", "library_kind",
-		"library_kind_source", "library_kind_locked", "content_revision",
+		"library_kind_locked", "content_revision",
 		"first_collected_at", "last_recollected_at", "content_cjk_chars",
 		"content_words", "content_source", "metadata_revision", "feed_managed",
-		"requested_library_kind", "requested_library_kind_source",
 	}
 	rows := make([][]any, 0, spec.Counts.Links)
 	ids := make([]uuid.UUID, spec.Counts.Links)
@@ -341,7 +334,6 @@ func seedReaderScaleLinks(t testing.TB, ctx context.Context, pool *pgxpool.Pool,
 			content,
 			"plain",
 			libraryKind,
-			"auto",
 			false,
 			int64(1),
 			collected,
@@ -351,8 +343,6 @@ func seedReaderScaleLinks(t testing.TB, ctx context.Context, pool *pgxpool.Pool,
 			"fetched",
 			int64(1),
 			false,
-			"auto",
-			"auto",
 		})
 	}
 	copyReaderScale(t, ctx, pool, "links", columns, rows)
@@ -363,15 +353,14 @@ func seedReaderScaleLinks(t testing.TB, ctx context.Context, pool *pgxpool.Pool,
 
 func seedReaderScaleSites(t testing.TB, ctx context.Context, pool *pgxpool.Pool, spec ReaderScaleSpec, linkIDs []uuid.UUID, siteLink []bool) {
 	siteColumns := []string{
-		"id", "site_key", "name", "name_source", "intro", "intro_source",
-		"homepage_url", "homepage_source", "icon_url", "icon_source",
-		"user_note", "pinned", "primary_source", "grouping_locked",
-		"needs_review", "revision", "first_collected_at", "last_collected_at",
+		"id", "site_key", "name", "intro", "homepage_url", "icon_url",
+		"user_note", "pinned",
+		"revision", "first_collected_at", "last_collected_at",
 		"created_at", "updated_at",
 	}
 	entryColumns := []string{
-		"id", "site_id", "link_id", "entry_name", "entry_name_source",
-		"purpose", "purpose_source", "normalized_url", "first_collected_at",
+		"id", "site_id", "link_id", "entry_name", "purpose",
+		"normalized_url", "first_collected_at",
 		"last_recollected_at", "created_at", "updated_at",
 	}
 	siteRows := make([][]any, 0, spec.Counts.Sites)
@@ -391,17 +380,10 @@ func seedReaderScaleSites(t testing.TB, ctx context.Context, pool *pgxpool.Pool,
 			siteID,
 			fmt.Sprintf("reader-scale:site:%05d", ordinal),
 			fmt.Sprintf("Site %04d", ordinal),
-			"auto",
 			"Intro " + readerScaleText(160, fmt.Sprintf("site-intro-%05d", ordinal)),
-			"auto",
 			fmt.Sprintf("https://%s/", domain),
-			"auto",
 			fmt.Sprintf("https://%s/favicon.ico", domain),
-			"auto",
 			"",
-			false,
-			"auto",
-			false,
 			false,
 			int64(1),
 			at, at, at, at,
@@ -411,9 +393,7 @@ func seedReaderScaleSites(t testing.TB, ctx context.Context, pool *pgxpool.Pool,
 			siteID,
 			linkIDs[i],
 			fmt.Sprintf("Entry %04d", ordinal),
-			"auto",
 			"Purpose " + readerScaleText(96, fmt.Sprintf("site-purpose-%05d", ordinal)),
-			"auto",
 			fmt.Sprintf("https://%s/article/%05d", domain, i),
 			at, at, at, at,
 		})
@@ -593,9 +573,8 @@ func seedReaderScaleNotes(t testing.TB, ctx context.Context, pool *pgxpool.Pool,
 func seedReaderScaleInbox(t testing.TB, ctx context.Context, pool *pgxpool.Pool, spec ReaderScaleSpec) {
 	columns := []string{
 		"id", "url", "identity_key", "source_kind", "title", "body", "summary",
-		"suggested_tags", "tags", "status", "metadata_revision", "job_id",
-		"created_at", "updated_at", "expires_at", "expired_at", "deleted_at",
-		"note", "proposal_signals", "proposal_status",
+		"suggested_tags", "tags", "status", "metadata_revision",
+		"created_at", "updated_at", "expires_at", "deleted_at", "note", "proposal_status",
 	}
 	rows := make([][]any, 0, spec.Counts.InboxItems)
 	for i := range spec.Counts.InboxItems {
@@ -619,17 +598,11 @@ func seedReaderScaleInbox(t testing.TB, ctx context.Context, pool *pgxpool.Pool,
 			[]string{fmt.Sprintf("tag-%03d", (i*3)%spec.tagPool)},
 			"pending",
 			int64(1),
-			nil,
 			at,
 			at,
 			at.Add(30 * 24 * time.Hour),
 			nil,
-			nil,
 			readerScaleText(spec.inboxNote, fmt.Sprintf("inbox-note-%04d", i)),
-			mustJSON(map[string]any{
-				"confidence": 0.5 + float64(i%40)/100,
-				"reason":     readerScaleText(64, fmt.Sprintf("inbox-signal-%04d", i)),
-			}),
 			"completed",
 		})
 	}
@@ -717,40 +690,6 @@ func seedReaderScaleFeed(t testing.TB, ctx context.Context, pool *pgxpool.Pool, 
 	copyReaderScale(t, ctx, pool, "feed_items", itemColumns, itemRows)
 }
 
-// ------------------------------------------------------------ categories
-
-func seedReaderScaleCategories(t testing.TB, ctx context.Context, pool *pgxpool.Pool, spec ReaderScaleSpec, linkIDs []uuid.UUID) {
-	categoryColumns := []string{"id", "name", "created_at"}
-	categoryRows := make([][]any, 0, spec.Counts.Categories)
-	categoryIDs := make([]uuid.UUID, spec.Counts.Categories)
-	for i := range spec.Counts.Categories {
-		id := readerScaleUUID(fmt.Sprintf("category:%02d", i))
-		categoryIDs[i] = id
-		categoryRows = append(categoryRows, []any{id, fmt.Sprintf("Category %02d", i), readerScaleAt(i)})
-	}
-	copyReaderScale(t, ctx, pool, "reader_categories", categoryColumns, categoryRows)
-
-	linkColumns := []string{"category_id", "host_kind", "host_id"}
-	rows := make([][]any, 0, spec.Counts.Categorizables)
-	for i := range linkIDs {
-		if i%5 != 0 {
-			continue
-		}
-		rows = append(rows, []any{categoryIDs[i%len(categoryIDs)], "link", linkIDs[i].String()})
-	}
-	for i := range spec.Counts.InboxItems {
-		if i%2 != 0 {
-			continue
-		}
-		id := readerScaleUUID(fmt.Sprintf("inbox:%04d", i))
-		rows = append(rows, []any{categoryIDs[i%len(categoryIDs)], "inbox", id.String()})
-	}
-	if len(rows) != spec.Counts.Categorizables {
-		t.Fatalf("reader scale fixture: built %d categorizables, want %d", len(rows), spec.Counts.Categorizables)
-	}
-	copyReaderScale(t, ctx, pool, "reader_categorizables", linkColumns, rows)
-}
-
 // ----------------------------------------------------------------- todos
 
 // seedReaderScaleStandaloneTodos seeds only standalone rows. Projected rows are
@@ -808,8 +747,6 @@ var readerScaleDigestTables = []string{
 	"reader_thought_tombstones",
 	"reader_notes",
 	"reader_inbox",
-	"reader_categories",
-	"reader_categorizables",
 	"reader_todos",
 	"feed_folders",
 	"feed_subscriptions",

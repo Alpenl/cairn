@@ -17,11 +17,7 @@ func TestReaderInboxListColumnsExcludeDetailOnlyPayload(t *testing.T) {
 	for _, column := range []string{
 		"identity_key",
 		"suggested_tags",
-		"proposal_signals",
 		"proposal_status",
-		"category_ids",
-		"reader_categorizables",
-		"job_id",
 		"deleted_at",
 	} {
 		if strings.Contains(readerInboxListColumns, column) {

@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 
 import type { ApiError, ApiResult } from '../api/result'
-import { resourceStore, type CacheEntry, type ConditionalContext, type FetchOptions } from './store'
+import { resourceStore, type CacheEntry, type FetchContext, type FetchOptions } from './store'
 
 export interface CachedResource<T> {
   /** 当前可渲染的数据。从未成功过时为 undefined。 */
@@ -34,7 +34,7 @@ export interface CachedResource<T> {
  */
 export function useCachedResource<T>(
   key: string | null,
-  fetcher: (conditional: ConditionalContext) => Promise<ApiResult<T>>,
+  fetcher: (context: FetchContext) => Promise<ApiResult<T>>,
   options: { equal?: FetchOptions['equal']; enabled?: boolean } = {},
 ): CachedResource<T> {
   const enabled = options.enabled ?? true
@@ -63,7 +63,7 @@ export function useCachedResource<T>(
   const reload = useCallback(
     (fetchOptions: FetchOptions = {}): Promise<ApiResult<T> | null> => {
       if (!key) return Promise.resolve(null)
-      return resourceStore.fetch<T>(key, (conditional) => fetcherRef.current(conditional), {
+      return resourceStore.fetch<T>(key, (context) => fetcherRef.current(context), {
         equal: equalRef.current,
         ...fetchOptions,
         // 用户主动重取默认强制回源；静默（后台）重取默认合并在途请求。
@@ -80,7 +80,7 @@ export function useCachedResource<T>(
   useEffect(() => {
     if (!key || !enabled) return
     if (entry.attemptedGeneration >= entry.desiredGeneration) return
-    void resourceStore.fetch<T>(key, (conditional) => fetcherRef.current(conditional), {
+    void resourceStore.fetch<T>(key, (context) => fetcherRef.current(context), {
       equal: equalRef.current,
       generation: entry.desiredGeneration,
     })

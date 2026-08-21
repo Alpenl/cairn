@@ -18,8 +18,6 @@ import { isRecord } from '../records'
 import type {
 	ConversionPreviewResponse,
 	ConversionExecuteResponse,
-	ClassificationRuleResponse,
-	LibraryReviewResponse,
 	GroupedSearchResponse,
 	ReaderThoughtSearchResponse,
 	ReaderNoteSearchResponse,
@@ -57,7 +55,6 @@ import type {
   ReaderHostLifecycleResponse,
   ReaderTrashItemResponse,
   ReaderTrashResponse,
-  ReaderInboxJobResponse,
   ReaderInboxResponse,
   ReaderInboxListItemResponse,
   ReaderInboxResponsePage,
@@ -65,21 +62,14 @@ import type {
   ReaderInboxBulkResponse,
   ReaderInboxConfirmAIProposalsResponse,
   ReaderConfirmResponse,
-  ReaderCategoryResponse,
-  ReaderCategoriesResponse,
   ReaderTodoResponse,
   ReaderTodosResponse,
   ReaderEngagementResponse,
-  ReaderFeedAction,
   ReaderFeedFeedbackResponse,
   ReaderFeedItemResponse,
   ReaderFeedResponse,
-  ReaderFeedSectionResponse,
-  ReaderFeedSourceResponse,
   ReaderHomeResponse,
   ReaderLinkMetadataResponse,
-  ReaderContentHistoryResponse,
-  ReaderContentHistoryRestoreResponse,
   ReaderRelatedTagsResponse,
   ReaderActivityResponse,
   ReaderTagActivityResponse,
@@ -106,7 +96,7 @@ const READER_CAPABILITY_KEYS = [
   'home',
   'feed',
   'ai',
-  'semantic',
+  'related_tags',
   'activity',
   'history',
   'trash',
@@ -119,51 +109,16 @@ const READER_RESPONSE_FRESHNESS_VALUES = {
   stale: true,
 } as const
 
-const READER_FEED_ACTIONS = {
-  confirm: true,
-  discard: true,
-  read: true,
-  read_later: true,
+const READER_FEED_FEEDBACK_ACTIONS = {
   save: true,
   unsave: true,
   hide: true,
-  not_interested: true,
-  open: true,
-  open_workspace: true,
-} as const satisfies Record<ReaderFeedAction, true>
+} as const
 
 const READER_FEED_ITEM_TYPES = {
   reading: true,
   inbox: true,
   subscription: true,
-} as const
-
-// A score signal owns one column of score_contributions; a reason code only
-// explains the card. Every signal is a reason code, never the reverse:
-// continue_reading is a Home reason that the ranking pass never produces, so it
-// carries no contribution and never joins enabled_score_signals.
-const READER_FEED_SCORE_SIGNALS = {
-  pending_confirmation: true,
-  saved_library: true,
-  subscription_recent: true,
-  unread: true,
-  read_later: true,
-  chronological_fallback: true,
-} as const
-
-const READER_FEED_REASON_CODES = {
-  ...READER_FEED_SCORE_SIGNALS,
-  continue_reading: true,
-} as const
-
-const READER_FEED_CAPABILITIES = {
-  snapshot: true,
-  cursor: true,
-  dedupe: true,
-  reason: true,
-  source_filter: true,
-  actions: true,
-  inbox_batch: true,
 } as const
 
 const DISABLED_READER_CAPABILITIES: ReaderCapabilitiesResponse = {
@@ -175,7 +130,7 @@ const DISABLED_READER_CAPABILITIES: ReaderCapabilitiesResponse = {
   home: false,
   feed: false,
   ai: false,
-  semantic: false,
+  related_tags: false,
   activity: false,
   history: false,
   trash: false,
@@ -203,7 +158,6 @@ export function normalizeCapabilitiesResponse(value: unknown): CapabilitiesRespo
   return {
     library_kinds: source.library_kinds === true,
     site_library: source.site_library === true,
-    site_auto_classification: source.site_auto_classification === true,
     site_management: source.site_management === true,
     site_advanced_management: source.site_advanced_management === true,
     archive_versions: Array.isArray(source.archive_versions)
@@ -217,7 +171,6 @@ export function normalizeCapabilitiesResponse(value: unknown): CapabilitiesRespo
 export function isCapabilitiesResponse(v: unknown): v is CapabilitiesResponse {
   if (!isRecord(v) || typeof v.library_kinds !== 'boolean' ||
     typeof v.site_library !== 'boolean' ||
-    typeof v.site_auto_classification !== 'boolean' ||
     typeof v.site_management !== 'boolean' ||
     typeof v.site_advanced_management !== 'boolean' ||
     !Array.isArray(v.archive_versions) || !v.archive_versions.every(isInteger) ||
@@ -481,11 +434,10 @@ export function isConversionExecuteResponse(v: unknown): v is ConversionExecuteR
 		!isInteger(v.content_revision) || !isString(v.status) ||
 		typeof v.reparse_required !== 'boolean' || !isRecord(v.reader_target) || !isString(v.reader_target.view)) return false
 	const target = v.reader_target
-	return (target.view === 'sites' || target.view === 'processing' || target.view === 'reading' || target.view === 'failed' || target.view === 'review') &&
+	return (target.view === 'sites' || target.view === 'processing' || target.view === 'reading' || target.view === 'failed') &&
 		(v.site_id === undefined || isString(v.site_id)) &&
 		(v.site_revision === undefined || isInteger(v.site_revision)) &&
-		(v.entry_id === undefined || isString(v.entry_id)) &&
-		(v.parse_job_id === undefined || isString(v.parse_job_id))
+		(v.entry_id === undefined || isString(v.entry_id))
 }
 
 export function isTranslationResponse(v: unknown): v is TranslationResponse {
@@ -555,7 +507,7 @@ export function isGroupedSearchResponse(v: unknown): v is GroupedSearchResponse 
 export function isSiteListItem(v: unknown): v is SiteListItemResponse {
 	return isRecord(v) && isString(v.id) && isString(v.name) && isString(v.intro) &&
 		isString(v.display_host) && isStringArray(v.tags) && isInteger(v.entry_count) &&
-		typeof v.pinned === 'boolean' && typeof v.needs_review === 'boolean' &&
+		typeof v.pinned === 'boolean' &&
 		isInteger(v.revision) && isString(v.first_collected_at) && isString(v.last_collected_at)
 }
 
@@ -570,8 +522,7 @@ export function isSiteDetail(v: unknown): v is SiteDetailResponse {
 	const raw: Record<string, unknown> = v
 	if (!isSiteListItem(raw)) return false
 	const detail = raw as unknown as Record<string, unknown>
-	return isString(detail['user_note']) && typeof detail['grouping_locked'] === 'boolean' &&
-		Array.isArray(detail['tags_with_source']) && Array.isArray(detail['entries']) &&
+	return isString(detail['user_note']) && Array.isArray(detail['entries']) &&
 		Array.isArray(detail['related_readings']) && detail['related_readings'].every((item) => isRecord(item) && isString(item.id) && isString(item.title) && isString(item.url) && isString(item.created_at))
 }
 
@@ -582,7 +533,7 @@ export function isSiteEntryDeleteResponse(v: unknown): v is SiteEntryDeleteRespo
 export function isSiteMergePreviewResponse(v: unknown): v is SiteMergePreviewResponse {
 	return isRecord(v) && isString(v.target_site_id) && isInteger(v.target_revision) &&
 		Array.isArray(v.entries) && v.entries.every((entry) => isRecord(entry) && isString(entry.id) && isString(entry.site_id) && isString(entry.link_id) && isString(entry.name) && isString(entry.url) && typeof entry.duplicate === 'boolean') &&
-		isStringArray(v.user_tags) && isStringArray(v.identity_keys) &&
+		isStringArray(v.tags) && isStringArray(v.identity_keys) &&
 		Array.isArray(v.field_conflicts) && v.field_conflicts.every((conflict) => isRecord(conflict) && isString(conflict.field) && isString(conflict.target_value) && isString(conflict.source_site_id) && isString(conflict.source_value)) &&
 		typeof v.requires_resolution === 'boolean'
 }
@@ -603,29 +554,9 @@ export function isSiteSplitPreviewResponse(v: unknown): v is SiteSplitPreviewRes
 	return isRecord(v) && isString(v.source_site_id) && isInteger(v.source_revision) && isSiteSplitRequest(v.payload) &&
 		Array.isArray(v.entries) && v.entries.every((entry) => isRecord(entry) && isString(entry.id) && isString(entry.site_id) && isString(entry.link_id) && isString(entry.name) && isString(entry.url) && typeof entry.duplicate === 'boolean') &&
 		Array.isArray(v.identities) && v.identities.every((identity) => isRecord(identity) && isString(identity.identity_key) && typeof identity.eligible_for_new_site === 'boolean' && (identity.owner === 'source' || identity.owner === 'new_site')) &&
-		isStringArray(v.user_tags)
+		isStringArray(v.tags)
 }
 export function isSiteSplitExecuteResponse(v: unknown): v is SiteSplitExecuteResponse { return isRecord(v) && isString(v.source_site_id) && isInteger(v.source_revision) && isString(v.new_site_id) && isInteger(v.new_site_revision) && isInteger(v.moved_entries) }
-
-export function isClassificationRuleResponse(v: unknown): v is ClassificationRuleResponse {
-	return isRecord(v) && isString(v.id) && isString(v.host) &&
-		isOptionalNullableString(v.identity_adapter) && isOptionalNullableString(v.path_prefix) &&
-		(v.target_kind === 'reading' || v.target_kind === 'site') && typeof v.enabled === 'boolean' &&
-		isInteger(v.revision) && isString(v.created_at) && isString(v.updated_at)
-}
-
-export function isClassificationRuleArray(v: unknown): v is ClassificationRuleResponse[] {
-	return Array.isArray(v) && v.every(isClassificationRuleResponse)
-}
-
-export function isLibraryReviewResponse(v: unknown): v is LibraryReviewResponse {
-	return isRecord(v) && isString(v.id) &&
-		(v.kind === 'classification_uncertain' || v.kind === 'migration_suggestion' || v.kind === 'note_conflict' || v.kind === 'merge_conflict') &&
-		isRecord(v.payload) && (v.status === 'pending' || v.status === 'applied' || v.status === 'dismissed') &&
-		isInteger(v.revision) && isString(v.created_at) && isOptionalNullableString(v.link_id) && isOptionalNullableString(v.site_id) && isOptionalNullableString(v.resolved_at)
-}
-
-export function isLibraryReviewArray(v: unknown): v is LibraryReviewResponse[] { return Array.isArray(v) && v.every(isLibraryReviewResponse) }
 
 /** 校验 TagCountResponse[]。 */
 export function isTagCountArray(v: unknown): v is TagCountResponse[] {
@@ -668,7 +599,7 @@ function isThoughtIdentifier(value: unknown): value is string {
 
 function isThoughtVersionKey(value: unknown): boolean {
   return isRecord(value) && Number.isSafeInteger(value.logical_clock) &&
-    (value.logical_clock as number) >= 0 &&
+    (value.logical_clock as number) > 0 &&
     (value.logical_clock as number) <= Number.MAX_SAFE_INTEGER &&
     isThoughtIdentifier(value.device_id) && isThoughtIdentifier(value.op_id)
 }
@@ -728,8 +659,6 @@ function isReaderThoughtTarget(value: unknown, hostID: string): boolean {
       return isString(version.source_hash) && version.source_hash.length > 0
     case 'note':
       return isSafePositiveInteger(version.note_revision)
-    case 'legacy-stale':
-      return isString(version.source_key) && version.source_key.length > 0
     default:
       return false
   }
@@ -756,7 +685,7 @@ function isReaderThoughtSupersessionOperation(
     !isSafePositiveInteger(value.sequence) || !isThoughtIdentifier(value.op_id) ||
     !isThoughtIdentifier(value.device_id) || typeof logicalClock !== 'number' ||
     !Number.isSafeInteger(logicalClock) ||
-    logicalClock < 0 || logicalClock > Number.MAX_SAFE_INTEGER ||
+    logicalClock <= 0 || logicalClock > Number.MAX_SAFE_INTEGER ||
     value.annotation_id !== annotationID || !isThoughtIdentifier(value.annotation_id) ||
     (value.operation_kind !== 'add' && value.operation_kind !== 'update' && value.operation_kind !== 'delete') ||
     (value.host_kind !== 'link' && value.host_kind !== 'note' && value.host_kind !== 'inbox') ||
@@ -915,17 +844,12 @@ function isReaderInbox(value: unknown): value is ReaderInboxResponse {
     isString(value.note) &&
     isOptionalNullableString(value.summary) &&
     isStringArray(value.suggested_tags) &&
-    isRecord(value.proposal_signals) &&
-    (value.proposal_status === 'pending' || value.proposal_status === 'running' || value.proposal_status === 'completed' || value.proposal_status === 'failed') &&
+		(value.proposal_status === 'idle' || value.proposal_status === 'pending' || value.proposal_status === 'running' || value.proposal_status === 'completed' || value.proposal_status === 'failed') &&
     isStringArray(value.tags) &&
-    isStringArray(value.category_ids) &&
-    (value.status === 'pending' || value.status === 'confirmed' || value.status === 'discarded') &&
-    isInteger(value.metadata_revision) &&
-    isOptionalNullableString(value.job_id) &&
-    isNullableString(value.expires_at) &&
-    isNullableString(value.expired_at) &&
-    typeof value.expired === 'boolean' &&
-    value.expired === (value.expired_at !== null) &&
+		(value.status === 'pending' || value.status === 'confirmed') &&
+		isInteger(value.metadata_revision) &&
+		isNullableString(value.expires_at) &&
+		typeof value.expired === 'boolean' &&
     isString(value.created_at) &&
     isString(value.updated_at)
   )
@@ -948,7 +872,7 @@ function isReaderInboxListItem(value: unknown): value is ReaderInboxListItemResp
     isOptionalNullableString(value.title) &&
     isString(value.preview) &&
     isStringArray(value.tags) &&
-    (value.status === 'pending' || value.status === 'confirmed' || value.status === 'discarded') &&
+		(value.status === 'pending' || value.status === 'confirmed') &&
     isInteger(value.metadata_revision) &&
     typeof value.expired === 'boolean' &&
     isString(value.updated_at)
@@ -998,24 +922,8 @@ export function isReaderInboxConfirmAIProposalsResponse(
   )
 }
 
-export function isReaderInboxJobResponse(v: unknown): v is ReaderInboxJobResponse {
-  return isRecord(v) && isString(v.inbox_id) && isString(v.status) && isString(v.job_id)
-}
-
 export function isReaderConfirmResponse(v: unknown): v is ReaderConfirmResponse {
   return isRecord(v) && v.target_kind === 'link' && isString(v.link_id) && v.status === 'confirmed'
-}
-
-function isReaderCategory(value: unknown): value is ReaderCategoryResponse {
-  return isRecord(value) && isString(value.id) && isString(value.name) && isInteger(value.count) && isString(value.created_at)
-}
-
-export function isReaderCategoryResponse(v: unknown): v is ReaderCategoryResponse {
-  return isReaderCategory(v)
-}
-
-export function isReaderCategoriesResponse(v: unknown): v is ReaderCategoriesResponse {
-  return isRecord(v) && Array.isArray(v.items) && v.items.every(isReaderCategory)
 }
 
 function isReaderTodo(value: unknown): value is ReaderTodoResponse {
@@ -1074,90 +982,17 @@ export function isReaderEngagementResponse(v: unknown): v is ReaderEngagementRes
   )
 }
 
-function isReaderFeedAction(value: unknown): value is ReaderFeedAction {
-  return isString(value) && Object.prototype.hasOwnProperty.call(READER_FEED_ACTIONS, value)
-}
-
-type ReaderFeedScoreSignal = keyof typeof READER_FEED_SCORE_SIGNALS
-
-function isReaderFeedReasonCode(value: unknown): value is keyof typeof READER_FEED_REASON_CODES {
-  return isString(value) && Object.prototype.hasOwnProperty.call(READER_FEED_REASON_CODES, value)
-}
-
-function isReaderFeedScoreSignal(value: unknown): value is ReaderFeedScoreSignal {
-  return isString(value) && Object.prototype.hasOwnProperty.call(READER_FEED_SCORE_SIGNALS, value)
-}
-
-function isReaderFeedScoreContributions(value: unknown): value is Record<ReaderFeedScoreSignal, number> {
-  return (
-    isRecord(value) &&
-    Object.keys(READER_FEED_SCORE_SIGNALS).every((signal) => isInteger(value[signal])) &&
-    Object.keys(value).every((signal) => Object.prototype.hasOwnProperty.call(READER_FEED_SCORE_SIGNALS, signal))
-  )
-}
-
-function isReaderFeedReasonParams(code: keyof typeof READER_FEED_REASON_CODES, value: unknown): boolean {
-  if (!isRecord(value)) return false
-  switch (code) {
-    case 'continue_reading':
-      return Object.keys(value).length === 0
-    case 'pending_confirmation':
-      return value.source === 'inbox' && Object.keys(value).length === 1
-    case 'saved_library':
-      return value.source === 'reading' && Object.keys(value).length === 1
-    case 'subscription_recent':
-      return value.source === 'subscription' && Object.keys(value).length === 1
-    case 'unread':
-      return value.read === false && Object.keys(value).length === 1
-    case 'read_later':
-      return value.read_later === true && Object.keys(value).length === 1
-    case 'chronological_fallback':
-      return isString(value.created_at) && Object.keys(value).length === 1
-  }
-}
-
-function isUniqueReaderFeedArray(
-  value: unknown,
-  predicate: (value: unknown) => boolean,
-): boolean {
-  if (!Array.isArray(value)) return false
-  const seen = new Set<unknown>()
-  return value.every((item) => {
-    if (!predicate(item) || seen.has(item)) return false
-    seen.add(item)
-    return true
-  })
-}
-
-function isReaderFeedSection(value: unknown): value is ReaderFeedSectionResponse {
-  return (
-    isRecord(value) &&
-    isString(value.id) &&
-    isString(value.source) &&
-    Object.prototype.hasOwnProperty.call(READER_FEED_ITEM_TYPES, value.source) &&
-    isString(value.label) &&
-    isNonNegativeInteger(value.count) &&
-    isUniqueReaderFeedArray(value.capabilities, isReaderFeedAction)
-  )
-}
-
-function isReaderFeedSource(value: unknown): value is ReaderFeedSourceResponse {
-  return (
-    isRecord(value) &&
-    isString(value.id) &&
-    Object.prototype.hasOwnProperty.call(READER_FEED_ITEM_TYPES, value.id) &&
-    isString(value.label) &&
-    typeof value.enabled === 'boolean' &&
-    isNonNegativeInteger(value.count) &&
-    isUniqueReaderFeedArray(value.capabilities, isReaderFeedAction)
-  )
+function isReaderFeedFeedbackAction(value: unknown): boolean {
+  return isString(value) && Object.prototype.hasOwnProperty.call(READER_FEED_FEEDBACK_ACTIONS, value)
 }
 
 function isReaderFeedItem(value: unknown): value is ReaderFeedItemResponse {
-  if (!isRecord(value)) return false
   if (
+    !isRecord(value) ||
     !isString(value.key) ||
     !isString(value.source) ||
+    !Object.prototype.hasOwnProperty.call(READER_FEED_ITEM_TYPES, value.source) ||
+    !isString(value.resource_key) ||
     !isString(value.title) ||
     !isString(value.summary) ||
     !isString(value.url) ||
@@ -1167,63 +1002,20 @@ function isReaderFeedItem(value: unknown): value is ReaderFeedItemResponse {
     typeof value.read !== 'boolean' ||
     typeof value.read_later !== 'boolean' ||
     typeof value.saved !== 'boolean' ||
-    !isInteger(value.score) ||
-    !isReaderFeedScoreContributions(value.score_contributions) ||
-    !isUniqueReaderFeedArray(value.enabled_score_signals, isReaderFeedScoreSignal) ||
-    !isReaderFeedReasonCode(value.reason_code) ||
-    !isReaderFeedReasonParams(value.reason_code, value.reason_params) ||
-    !isInteger(value.reason_contribution) ||
-    value.reason_contribution < 0 ||
-    !isString(value.reason_text) ||
-    !isOptionalDateTime(value.published_at) ||
-    !isString(value.event_at) ||
-    !isString(value.created_at)
+    !isString(value.event_at)
   ) {
     return false
   }
-  const contributions = value.score_contributions as Record<ReaderFeedScoreSignal, number>
-  if (value.score !== Object.values(contributions).reduce((total, contribution) => total + contribution, 0)) {
-    return false
-  }
-  if (isReaderFeedScoreSignal(value.reason_code)) {
-    // A scored card must name a signal that was actually enabled, and must
-    // report exactly the contribution the ranking pass wrote for it.
-    if (
-      !(value.enabled_score_signals as ReaderFeedScoreSignal[]).includes(value.reason_code) ||
-      contributions[value.reason_code] !== value.reason_contribution
-    ) {
+  switch (value.source) {
+    case 'reading':
+      return isString(value.link_id) && value.inbox_id == null && value.feed_item_id == null
+    case 'inbox':
+      return isString(value.inbox_id) && value.link_id == null && value.feed_item_id == null
+    case 'subscription':
+      return isString(value.feed_item_id) && value.inbox_id == null
+    default:
       return false
-    }
-  } else if (
-    // A reason outside the ranking pass owns no contributions column, so it must
-    // claim no contribution either.
-    value.reason_contribution !== 0 ||
-    Object.prototype.hasOwnProperty.call(contributions, value.reason_code)
-  ) {
-    return false
   }
-  if (value.item_type !== undefined) {
-    if (!isString(value.item_type) || !Object.prototype.hasOwnProperty.call(READER_FEED_ITEM_TYPES, value.item_type) || value.item_type !== value.source) {
-      return false
-    }
-  }
-  if (
-    (value.resource_key !== undefined && !isString(value.resource_key)) ||
-    (value.action_key !== undefined && !isString(value.action_key)) ||
-    (value.dedupe_key !== undefined && !isString(value.dedupe_key)) ||
-    (value.section_id !== undefined && !isString(value.section_id)) ||
-    // `capabilities` belongs to the response envelope, never to an item.
-    // Reject it here so a malformed envelope cannot hide an invalid value in
-    // a card while the top-level capability collection is absent.
-    value.capabilities !== undefined
-  ) {
-    return false
-  }
-  return value.actions === undefined || isUniqueReaderFeedArray(value.actions, isReaderFeedAction)
-}
-
-function isReaderFeedCapability(value: unknown): boolean {
-  return isString(value) && Object.prototype.hasOwnProperty.call(READER_FEED_CAPABILITIES, value)
 }
 
 export function isReaderFeedItemResponse(v: unknown): v is ReaderFeedItemResponse {
@@ -1231,9 +1023,7 @@ export function isReaderFeedItemResponse(v: unknown): v is ReaderFeedItemRespons
 }
 
 export function isReaderFeedFeedbackResponse(value: unknown): value is ReaderFeedFeedbackResponse {
-  if (!isRecord(value) || !isString(value.item_key) || !isReaderFeedAction(value.action) || typeof value.saved !== 'boolean') return false
-  if (value.association === undefined) return true
-  return isRecord(value.association) && isString(value.association.feed_item_id) && isString(value.association.link_id) && typeof value.association.created_link === 'boolean'
+  return isRecord(value) && isString(value.item_key) && isReaderFeedFeedbackAction(value.action) && isOptionalString(value.link_id)
 }
 
 export function isReaderFeedResponse(v: unknown): v is ReaderFeedResponse {
@@ -1242,11 +1032,7 @@ export function isReaderFeedResponse(v: unknown): v is ReaderFeedResponse {
     Array.isArray(v.items) &&
     v.items.every(isReaderFeedItem) &&
     isOptionalString(v.next_cursor) &&
-    isString(v.snapshot_id) &&
-    (v.mode === 'recommended' || v.mode === 'chronological') &&
-    (v.capabilities === undefined || isUniqueReaderFeedArray(v.capabilities, isReaderFeedCapability)) &&
-    (v.sections === undefined || (Array.isArray(v.sections) && v.sections.every(isReaderFeedSection))) &&
-    (v.sources === undefined || (Array.isArray(v.sources) && v.sources.every(isReaderFeedSource)))
+    (v.mode === 'recommended' || v.mode === 'chronological')
   )
 }
 
@@ -1278,25 +1064,8 @@ export function isReaderLinkMetadataResponse(v: unknown): v is ReaderLinkMetadat
   return isRecord(v) && isString(v.link_id) && isSafePositiveInteger(v.metadata_revision)
 }
 
-export function isReaderContentHistoryResponse(v: unknown): v is ReaderContentHistoryResponse {
-  return (
-    isRecord(v) &&
-    isInteger(v.id) &&
-    isInteger(v.revision) &&
-    isOptionalNullableString(v.content) &&
-    isOptionalNullableString(v.content_document) &&
-    isString(v.content_format) &&
-    isString(v.content_source) &&
-    isString(v.created_at)
-  )
-}
-
-export function isReaderContentHistoryRestoreResponse(v: unknown): v is ReaderContentHistoryRestoreResponse {
-  return isRecord(v) && isString(v.link_id) && isPositiveInteger(v.content_revision)
-}
-
 export function isReaderRelatedTagsResponse(v: unknown): v is ReaderRelatedTagsResponse {
-  return isRecord(v) && isStringArray(v.items) && isString(v.model) && typeof v.degraded === 'boolean'
+  return isRecord(v) && isStringArray(v.items)
 }
 
 export function isReaderTagActivityResponse(v: unknown): v is ReaderTagActivityResponse {

@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -17,35 +16,26 @@ func TestCaptureEntryPointsUseTheSameRequestedLibraryIntentContract(t *testing.T
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		invoke     func(context.Context, *SubmitService, *IngestService) error
-		wantKind   model.RequestedLibraryKind
-		wantSource model.RequestedLibraryKindSource
+		name             string
+		invoke           func(context.Context, *SubmitService, *IngestService) error
+		wantKind         model.RequestedLibraryKind
+		wantUserSelected bool
 	}{
 		{
-			name: "single explicit reading",
+			name: "single explicit site",
 			invoke: func(ctx context.Context, submit *SubmitService, _ *IngestService) error {
 				_, err := submit.Submit(ctx, dto.LinkCreateRequest{
-					URL: "https://intent.example/single", RequestedLibraryKind: "reading",
+					URL: "https://intent.example/single", Destination: captureDestinationLibrary, RequestedLibraryKind: "site",
 				})
 				return err
 			},
-			wantKind: model.RequestedLibraryKindReading, wantSource: model.RequestedLibraryKindSourceUser,
-		},
-		{
-			name: "batch explicit site",
-			invoke: func(ctx context.Context, submit *SubmitService, _ *IngestService) error {
-				_, err := submit.Batch(ctx, dto.BatchCreateRequest{Items: []dto.LinkCreateRequest{{
-					URL: "https://intent.example/batch", RequestedLibraryKind: "site",
-				}}})
-				return err
-			},
-			wantKind: model.RequestedLibraryKindSite, wantSource: model.RequestedLibraryKindSourceUser,
+			wantKind: model.RequestedLibraryKindSite, wantUserSelected: true,
 		},
 		{
 			name: "extension browser capture explicit reading",
 			invoke: func(ctx context.Context, _ *SubmitService, ingest *IngestService) error {
 				_, err := ingest.Ingest(ctx, dto.IngestRequest{
+					Destination:          captureDestinationLibrary,
 					RequestedLibraryKind: "reading",
 					Sources: []dto.IngestSource{{
 						Kind: "browser_capture", URL: "https://intent.example/extension",
@@ -54,7 +44,7 @@ func TestCaptureEntryPointsUseTheSameRequestedLibraryIntentContract(t *testing.T
 				})
 				return err
 			},
-			wantKind: model.RequestedLibraryKindReading, wantSource: model.RequestedLibraryKindSourceUser,
+			wantKind: model.RequestedLibraryKindReading, wantUserSelected: true,
 		},
 		{
 			name: "RSS analysis automatic reading",
@@ -65,25 +55,20 @@ func TestCaptureEntryPointsUseTheSameRequestedLibraryIntentContract(t *testing.T
 				})
 				return err
 			},
-			wantKind: model.RequestedLibraryKindReading, wantSource: model.RequestedLibraryKindSourceAuto,
+			wantKind: model.RequestedLibraryKindReading, wantUserSelected: false,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			linkID, jobID := uuid.New(), uuid.New()
+			linkID := uuid.New()
 			links := &repotest.ObservableLinkStore{
 				CreateFunc: func(_ context.Context, params repository.CreateLinkParams) (*model.Link, error) {
 					return &model.Link{ID: linkID, URL: params.URL, SourceKey: params.SourceKey, Status: params.Status}, nil
 				},
 			}
-			jobs := &repotest.ObservableJobStore{
-				CreateFunc: func(_ context.Context, createdLinkID uuid.UUID) (*model.ParseJob, error) {
-					return &model.ParseJob{ID: jobID, LinkID: createdLinkID, Status: model.JobStatusPending}, nil
-				},
-			}
-			commands := (&submitFakeSubmitter{links: links, jobs: jobs}).withQueue(&submitFakeQueue{})
-			submit, ingest := NewLinkServices(links, jobs, commands, &submitFakeLocker{}, SubmitServiceOptions{})
+			commands := (&submitFakeSubmitter{links: links}).withQueue(&submitFakeQueue{})
+			submit, ingest := NewLinkServices(links, commands, &submitFakeLocker{}, SubmitServiceOptions{})
 
 			if err := test.invoke(context.Background(), submit, ingest); err != nil {
 				t.Fatalf("entry point error = %v", err)
@@ -92,50 +77,49 @@ func TestCaptureEntryPointsUseTheSameRequestedLibraryIntentContract(t *testing.T
 				t.Fatalf("Create calls = %d, want 1", len(links.CreateCalls))
 			}
 			created := links.CreateCalls[0]
-			if created.RequestedLibraryKind != test.wantKind || created.RequestedLibraryKindSource != test.wantSource {
-				t.Fatalf("requested intent = %s/%s, want %s/%s",
-					created.RequestedLibraryKind, created.RequestedLibraryKindSource, test.wantKind, test.wantSource)
+			if created.RequestedLibraryKind != test.wantKind || created.UserSelectedLibraryKind != test.wantUserSelected {
+				t.Fatalf("library request = %s user-selected=%v, want %s/%v",
+					created.RequestedLibraryKind, created.UserSelectedLibraryKind, test.wantKind, test.wantUserSelected)
 			}
 		})
 	}
 }
 
-func TestExplicitIntentOnActiveLinkReusesCurrentParseAttempt(t *testing.T) {
+func TestExplicitIntentOnActiveLinkKeepsCurrentWork(t *testing.T) {
 	t.Parallel()
 
 	for _, status := range []model.LinkStatus{model.LinkStatusPending, model.LinkStatusProcessing} {
 		status := status
 		t.Run(string(status), func(t *testing.T) {
-			linkID, jobID := uuid.New(), uuid.New()
+			linkID := uuid.New()
 			rawURL := "https://active-intent.example/" + string(status)
 			link := &model.Link{ID: linkID, URL: rawURL, SourceKey: rawURL, Status: status}
 			links := &repotest.ObservableLinkStore{
 				ByID:  map[uuid.UUID]*model.Link{linkID: link},
 				ByURL: map[string]*model.Link{rawURL: link},
 			}
-			job := &model.ParseJob{ID: jobID, LinkID: linkID, Status: model.JobStatusProcessing, UpdatedAt: time.Now().UTC()}
-			jobs := &repotest.ObservableJobStore{LatestByLinkID: map[uuid.UUID]*model.ParseJob{linkID: job}}
-			commands := (&submitFakeSubmitter{links: links, jobs: jobs}).withQueue(&submitFakeQueue{})
-			submit := NewSubmitService(links, jobs, commands, &submitFakeLocker{}, SubmitServiceOptions{})
+			queue := &submitFakeQueue{}
+			commands := (&submitFakeSubmitter{links: links}).withQueue(queue)
+			submit, _ := NewLinkServices(links, commands, &submitFakeLocker{}, SubmitServiceOptions{})
 
 			response, err := submit.Submit(context.Background(), dto.LinkCreateRequest{
-				URL: rawURL, RequestedLibraryKind: "site",
+				URL: rawURL, Destination: captureDestinationLibrary, RequestedLibraryKind: "site",
 			})
 			if err != nil {
 				t.Fatalf("Submit() error = %v", err)
 			}
-			if len(commands.intentUpdates) != 1 {
-				t.Fatalf("intent updates = %d, want 1", len(commands.intentUpdates))
+			if len(commands.libraryKindUpdates) != 1 {
+				t.Fatalf("library kind updates = %d, want 1", len(commands.libraryKindUpdates))
 			}
-			update := commands.intentUpdates[0]
-			if update.Kind != model.RequestedLibraryKindSite || update.Source != model.RequestedLibraryKindSourceUser {
-				t.Fatalf("intent update = %s/%s, want site/user", update.Kind, update.Source)
+			update := commands.libraryKindUpdates[0]
+			if update.Kind != model.LibraryKindSite || !update.Override {
+				t.Fatalf("library kind update = %s override=%v, want site/true", update.Kind, update.Override)
 			}
-			if response.JobID == nil || *response.JobID != jobID.String() {
-				t.Fatalf("job id = %v, want reused %s", response.JobID, jobID)
+			if response.LinkID != linkID.String() || response.Status != string(status) {
+				t.Fatalf("response = %#v, want active link %s in %s", response, linkID, status)
 			}
-			if len(commands.requeueCaptures) != 0 || len(jobs.CreateCalls) != 0 {
-				t.Fatalf("active intent created replacement work: requeues=%d jobs=%d", len(commands.requeueCaptures), len(jobs.CreateCalls))
+			if len(commands.requeueCaptures) != 0 || len(queue.ids) != 0 {
+				t.Fatalf("active intent created replacement work: requeues=%d queued=%d", len(commands.requeueCaptures), len(queue.ids))
 			}
 		})
 	}

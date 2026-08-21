@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"webtag/internal/alloc"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -39,7 +38,7 @@ func (r *PGXFeedRepository) ListItems(ctx context.Context, filter FeedItemFilter
 		return model.PaginatedFeedItems{}, fmt.Errorf("list feed items: %w", err)
 	}
 	defer rows.Close()
-	items := make([]model.FeedItem, 0, alloc.Hint(filter.Limit))
+	items := make([]model.FeedItem, 0)
 	for rows.Next() {
 		item, scanErr := scanFeedItem(rows)
 		if scanErr != nil {

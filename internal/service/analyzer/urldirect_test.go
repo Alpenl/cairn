@@ -28,7 +28,7 @@ func newURLDirectAnalyzer() *OpenAIAnalyzer {
 // accessible/title JSON contract plus the shared tag rules.
 func TestURLDirectPromptInstructsFetchAndAccessible(t *testing.T) {
 	t.Parallel()
-	got := buildURLDirectPrompt(nil, "article")
+	got := buildURLDirectPrompt("article")
 	for _, want := range []string{"抓取", "accessible", "title", "summary", "tags"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("url-direct prompt missing %q\n%s", want, got)

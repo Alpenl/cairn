@@ -21,7 +21,6 @@ function makeSite(index: number, prefix = 'site'): SiteListItemResponse {
     tags: [],
     entry_count: 1,
     pinned: false,
-    needs_review: false,
     primary_entry: null,
     revision: index,
     first_collected_at: '2026-08-01T00:00:00Z',

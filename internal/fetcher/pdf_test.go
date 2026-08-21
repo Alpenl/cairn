@@ -17,10 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
-
 	"webtag/internal/errsafe"
-	"webtag/internal/observability"
 )
 
 func minimalTextPDF(text string) []byte {
@@ -91,7 +88,7 @@ func TestPDFFetcherRejectsUnexpectedContentType(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewPDFFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewPDFFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 
 	_, err := fetcher.Fetch(context.Background(), server.URL+"/report.pdf")
 	if err == nil {
@@ -111,7 +108,7 @@ func TestPDFFetcherRejectsOversizedResponses(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewPDFFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewPDFFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.MaxBytes = 16
 
 	_, err := fetcher.Fetch(context.Background(), server.URL+"/report.pdf")
@@ -132,7 +129,7 @@ func TestPDFFetcherRejectsHugeDeclaredObjectBudgetWithoutLeakingURL(t *testing.T
 		_, _ = w.Write(payload)
 	}))
 	defer server.Close()
-	fetcher := NewPDFFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewPDFFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	sensitiveURL := server.URL + "/report.pdf?signed=query-secret"
 	content, err := fetcher.Fetch(context.Background(), sensitiveURL)
 	if err == nil {
@@ -146,57 +143,6 @@ func TestPDFFetcherRejectsHugeDeclaredObjectBudgetWithoutLeakingURL(t *testing.T
 	}
 	if strings.Contains(err.Error(), "query-secret") {
 		t.Fatalf("Fetch() error leaked URL query: %v", err)
-	}
-	outcome, limit := pdfParseMetricLabels(err)
-	if outcome != pdfParseOutcomeLimit || limit != pdfParseLimitObjects {
-		t.Fatalf("Fetch() labels = (%q, %q), want (%q, %q)", outcome, limit, pdfParseOutcomeLimit, pdfParseLimitObjects)
-	}
-}
-
-func TestPDFFetcherRecordsBoundedObjectLimitMetric(t *testing.T) {
-	t.Parallel()
-
-	payload := []byte("%PDF-1.4\ntrailer << /Size 999999999 >>\nstartxref\n0\n%%EOF\n")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/pdf")
-		_, _ = w.Write(payload)
-	}))
-	defer server.Close()
-	metrics := observability.NewMetrics()
-	fetcher := newPDFFetcherWithMetrics(
-		NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}),
-		metrics,
-	)
-
-	_, err := fetcher.Fetch(context.Background(), server.URL+"/private.pdf?signed=metric-secret")
-	if err == nil {
-		t.Fatal("Fetch() error = nil, want object budget rejection")
-	}
-	if got := testutil.ToFloat64(metrics.PDFParseOutcomesTotal.WithLabelValues("limit", "objects")); got != 1 {
-		t.Fatalf("PDF parse limit/objects metric = %v, want 1", got)
-	}
-}
-
-func TestPDFFetcherRecordsStableOutcomeMetricMatrix(t *testing.T) {
-	t.Parallel()
-
-	metrics := observability.NewMetrics()
-	fetcher := newPDFFetcherWithMetrics(nil, metrics)
-	cases := []struct {
-		outcome string
-		limit   string
-		err     error
-	}{
-		{outcome: "success", limit: "none", err: nil},
-		{outcome: "limit", limit: "output", err: newPDFLimitError(pdfParseLimitOutput)},
-		{outcome: "crash", limit: "none", err: &pdfParseError{outcome: pdfParseOutcomeCrash, limit: pdfParseLimitNone, cause: errPDFResourceBudget}},
-		{outcome: "timeout", limit: "wall_time", err: &pdfParseError{outcome: pdfParseOutcomeTimeout, limit: pdfParseLimitWallTime, cause: context.DeadlineExceeded}},
-	}
-	for _, tc := range cases {
-		fetcher.recordParseOutcome(tc.err)
-		if got := testutil.ToFloat64(metrics.PDFParseOutcomesTotal.WithLabelValues(tc.outcome, tc.limit)); got != 1 {
-			t.Fatalf("PDF parse metric (%q, %q) = %v, want 1", tc.outcome, tc.limit, got)
-		}
 	}
 }
 
@@ -228,10 +174,6 @@ func TestParsePDFIsolatedRejectsDeclaredPageCountAboveBudget(t *testing.T) {
 	if !errors.Is(err, errPDFResourceBudget) {
 		t.Fatalf("parsePDFIsolated() error = %v, want resource-budget rejection", err)
 	}
-	outcome, limit := pdfParseMetricLabels(err)
-	if outcome != pdfParseOutcomeLimit || limit != pdfParseLimitPages {
-		t.Fatalf("parsePDFIsolated() labels = (%q, %q), want (%q, %q)", outcome, limit, pdfParseOutcomeLimit, pdfParseLimitPages)
-	}
 }
 
 func TestParsePDFIsolatedRejectsMalformedStructureWithinFixedBudget(t *testing.T) {
@@ -258,10 +200,6 @@ func TestParsePDFIsolatedRejectsMalformedStructureWithinFixedBudget(t *testing.T
 	if strings.Contains(err.Error(), sentinel) {
 		t.Fatalf("parsePDFIsolated() error leaked malformed input: %v", err)
 	}
-	outcome, limit := pdfParseMetricLabels(err)
-	if outcome != pdfParseOutcomeParseError || limit != pdfParseLimitNone {
-		t.Fatalf("parsePDFIsolated() labels = (%q, %q), want (%q, %q)", outcome, limit, pdfParseOutcomeParseError, pdfParseLimitNone)
-	}
 }
 
 func TestParsePDFIsolatedRejectsCompressedOutputBombWithoutPartialText(t *testing.T) {
@@ -284,10 +222,6 @@ func TestParsePDFIsolatedRejectsCompressedOutputBombWithoutPartialText(t *testin
 	}
 	if !errors.Is(err, errPDFResourceBudget) {
 		t.Fatalf("parsePDFIsolated() error = %v, want resource-budget rejection", err)
-	}
-	outcome, limit := pdfParseMetricLabels(err)
-	if outcome != pdfParseOutcomeLimit || limit != pdfParseLimitOutput {
-		t.Fatalf("parsePDFIsolated() labels = (%q, %q), want (%q, %q)", outcome, limit, pdfParseOutcomeLimit, pdfParseLimitOutput)
 	}
 }
 
@@ -322,10 +256,6 @@ func TestParsePDFIsolatedTerminatesBlockedHelperAtWallTime(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("parsePDFIsolated() error = %v, want context deadline", err)
 	}
-	outcome, limit := pdfParseMetricLabels(err)
-	if outcome != pdfParseOutcomeTimeout || limit != pdfParseLimitWallTime {
-		t.Fatalf("parsePDFIsolated() labels = (%q, %q), want (%q, %q)", outcome, limit, pdfParseOutcomeTimeout, pdfParseLimitWallTime)
-	}
 }
 
 func TestParsePDFIsolatedClassifiesHelperCrashWithoutLeakingInput(t *testing.T) {
@@ -348,10 +278,6 @@ func TestParsePDFIsolatedClassifiesHelperCrashWithoutLeakingInput(t *testing.T) 
 	if strings.Contains(err.Error(), sentinel) {
 		t.Fatalf("parsePDFIsolated() error leaked PDF text: %v", err)
 	}
-	outcome, limit := pdfParseMetricLabels(err)
-	if outcome != pdfParseOutcomeCrash || limit != pdfParseLimitNone {
-		t.Fatalf("parsePDFIsolated() labels = (%q, %q), want (%q, %q)", outcome, limit, pdfParseOutcomeCrash, pdfParseLimitNone)
-	}
 }
 
 func TestParsePDFIsolatedEnforcesHelperCPULimit(t *testing.T) {
@@ -370,15 +296,11 @@ func TestParsePDFIsolatedEnforcesHelperCPULimit(t *testing.T) {
 	if !errors.Is(err, errPDFResourceBudget) {
 		t.Fatalf("parsePDFIsolated() error = %v, want resource-budget rejection", err)
 	}
-	outcome, limit := pdfParseMetricLabels(err)
-	if outcome != pdfParseOutcomeLimit || limit != pdfParseLimitCPU {
-		t.Fatalf("parsePDFIsolated() labels = (%q, %q), want (%q, %q)", outcome, limit, pdfParseOutcomeLimit, pdfParseLimitCPU)
-	}
 }
 
 func TestParsePDFIsolatedContainsMemoryExhaustionWithinRSSLimit(t *testing.T) {
 	if raceDetectorEnabled {
-		t.Skip("race runtime reserves a large shadow address space; release helper enforces RLIMIT_AS")
+		t.Skip("race helper does not apply the production data-segment limit")
 	}
 
 	const memoryBudget = int64(512 << 20)
@@ -436,10 +358,6 @@ func TestParsePDFIsolatedCancellationCleansUpHelperProcessTree(t *testing.T) {
 		}
 		if !errors.Is(got.err, context.Canceled) {
 			t.Fatalf("parsePDFIsolated() error = %v, want context.Canceled", got.err)
-		}
-		outcome, limit := pdfParseMetricLabels(got.err)
-		if outcome != pdfParseOutcomeCanceled || limit != pdfParseLimitNone {
-			t.Fatalf("parsePDFIsolated() labels = (%q, %q), want (%q, %q)", outcome, limit, pdfParseOutcomeCanceled, pdfParseLimitNone)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("parsePDFIsolated() did not return within 2s after cancellation")
@@ -564,7 +482,7 @@ func TestPDFFetcherRetriesTransientHTTPFailures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewPDFFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewPDFFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 
 	_, err := fetcher.Fetch(context.Background(), server.URL+"/report.pdf")
 	if err == nil {

@@ -15,7 +15,6 @@ import { listAnnotationOperationsForTest } from '../../test/annotation-operation
 import type {
   AnnotationOperationInput,
   AnnotationTarget,
-  LegacyStaleAnnotationAddDraft,
   SavedContentAnnotationAddDraft,
   SummaryAnnotationAddDraft,
 } from './annotation-types'
@@ -38,11 +37,6 @@ const SUMMARY_A = {
   kind: 'summary',
   sourceHash: 'a'.repeat(64),
 } as const satisfies AnnotationTarget
-const LEGACY_CONTENT = {
-  kind: 'legacy-stale',
-  sourceKey: 'unverified-content-v1',
-} as const satisfies AnnotationTarget
-
 function identity(namespace: string): IdentityLease {
   return new IdentityLease({
     serverClientDataNamespace: `server-${namespace}`,
@@ -103,13 +97,6 @@ function summaryDraft(id: string): SummaryAnnotationAddDraft {
   }
 }
 
-function legacyDraft(id: string): LegacyStaleAnnotationAddDraft {
-  return {
-    ...contentDraft(id),
-    blockKey: 'content-document',
-  }
-}
-
 async function deleteUserDataDatabase(): Promise<void> {
   resetUserDataDatabaseHandle()
   await new Promise<void>((resolve, reject) => {
@@ -158,13 +145,6 @@ describe('transactional annotation operation store', () => {
       target: SUMMARY_A,
       draft: summaryDraft('same-annotation-id'),
     })).resolves.toMatchObject({ ok: true, value: { status: 'committed' } })
-    await expect(commitAnnotationOperation(leaseA, {
-      kind: 'add',
-      opId: 'A-legacy',
-      linkId: 'old-link',
-      target: LEGACY_CONTENT,
-      draft: legacyDraft('same-annotation-id'),
-    })).resolves.toMatchObject({ ok: true, value: { status: 'committed' } })
     await expect(commitAnnotationOperation(leaseB, {
       kind: 'add',
       opId: 'B-content-7',
@@ -200,13 +180,12 @@ describe('transactional annotation operation store', () => {
         ['L1', 'saved-content'],
         ['L1', 'summary'],
         ['L2', 'saved-content'],
-        ['old-link', 'legacy-stale'],
       ])
       expect(rowsA.value.every((row) => row.namespace === 'physical-A')).toBe(true)
     }
     await expect(enumerateAnnotatedLinkIds(leaseA)).resolves.toEqual({
       ok: true,
-      value: ['L1', 'L2', 'old-link'],
+      value: ['L1', 'L2'],
     })
     await expect(enumerateAnnotatedLinkIds(leaseB)).resolves.toEqual({
       ok: true,

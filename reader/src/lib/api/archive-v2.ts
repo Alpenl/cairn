@@ -57,7 +57,6 @@ const TOP_LEVEL_ARRAY_SECTIONS = [
   'site_entries',
   'site_tags',
   'site_identities',
-  'classification_rules',
 ] as const
 
 const READER_BASE_SECTIONS = [
@@ -66,15 +65,9 @@ const READER_BASE_SECTIONS = [
   'feed_items',
   'feed_saves',
   'inbox',
-  'categories',
-  'categorizables',
   'todos',
   'engagement',
-  'feed_feedback',
-  'feed_snapshots',
-  'tag_activity',
-  'domain_activity',
-  'content_history',
+  'feed_hides',
 ] as const
 
 const READER_THOUGHT_SECTIONS = [
@@ -112,19 +105,11 @@ const CLIENT_DATA_NAMESPACE_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const RFC3339_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/
 
-const FIELD_SOURCES = new Set(['auto', 'user', 'migration'])
-const SITE_IDENTITY_SOURCES = new Set(['auto', 'manual_merge', 'manual_split', 'migration'])
 const HOST_KINDS = new Set(['link', 'inbox', 'note'])
 const THOUGHT_OPERATION_KINDS = new Set(['add', 'update', 'delete'])
 const INBOX_STATUSES = new Set(['pending', 'confirmed', 'discarded'])
 const TODO_ORIGIN_KINDS = new Set(['standalone', 'thought', 'note'])
 const TODO_ORIGIN_HOST_KINDS = new Set(['thought', 'note'])
-const FEED_FEEDBACK_ACTIONS = new Set(['not_interested', 'hide', 'save', 'unsave'])
-const FEED_SNAPSHOT_MODES = new Set(['recommended', 'chronological'])
-const CONTENT_FORMATS = new Set(['plain', 'markdown', 'html'])
-const CONTENT_SOURCES = new Set(['fetched', 'user'])
-const RULE_TARGET_KINDS = new Set(['reading', 'site'])
-
 type NormalizedArchiveV2Selection = Readonly<{
   includeThoughts: boolean
   includeNotes: boolean
@@ -367,30 +352,22 @@ function requireJSONArray(value: unknown, name: string): readonly unknown[] {
 
 function validateSiteRow(value: unknown, name: string): void {
   const row = requireExactRecord(value, name, [
-    'id', 'site_key', 'name', 'name_source', 'intro', 'intro_source',
-    'homepage_url', 'homepage_source', 'icon_url', 'icon_source', 'user_note',
-    'pinned', 'primary_entry_id', 'primary_source', 'grouping_locked',
-    'needs_review', 'revision', 'first_collected_at', 'last_collected_at',
+	'id', 'site_key', 'name', 'intro', 'homepage_url', 'icon_url', 'user_note',
+	'pinned', 'primary_entry_id',
+	'revision', 'first_collected_at', 'last_collected_at',
     'created_at', 'updated_at',
   ])
   requireUUID(row.id, `${name}.id`)
   requireNonEmptyString(row.site_key, `${name}.site_key`)
   requireStringLength(row.name, `${name}.name`, 1, 256)
-  requireEnum(row.name_source, `${name}.name_source`, FIELD_SOURCES)
   requireStringLength(row.intro, `${name}.intro`, 0, 1000)
-  requireEnum(row.intro_source, `${name}.intro_source`, FIELD_SOURCES)
   const homepageURL = requireNullableString(row.homepage_url, `${name}.homepage_url`)
   if (homepageURL !== null) requireStringLength(homepageURL, `${name}.homepage_url`, 1, 2048)
-  requireNullableEnum(row.homepage_source, `${name}.homepage_source`, FIELD_SOURCES)
   const iconURL = requireNullableString(row.icon_url, `${name}.icon_url`)
   if (iconURL !== null) requireStringLength(iconURL, `${name}.icon_url`, 1, 2048)
-  requireNullableEnum(row.icon_source, `${name}.icon_source`, FIELD_SOURCES)
   requireStringLength(row.user_note, `${name}.user_note`, 0, 10000)
   requireBoolean(row.pinned, `${name}.pinned`)
   requireNullableUUID(row.primary_entry_id, `${name}.primary_entry_id`)
-  requireEnum(row.primary_source, `${name}.primary_source`, FIELD_SOURCES)
-  requireBoolean(row.grouping_locked, `${name}.grouping_locked`)
-  requireBoolean(row.needs_review, `${name}.needs_review`)
   requireSafeInteger(row.revision, `${name}.revision`, 1)
   requireDateTime(row.first_collected_at, `${name}.first_collected_at`)
   requireDateTime(row.last_collected_at, `${name}.last_collected_at`)
@@ -405,17 +382,15 @@ function requireNullableEnum(value: unknown, name: string, values: ReadonlySet<s
 
 function validateSiteEntryRow(value: unknown, name: string): void {
   const row = requireExactRecord(value, name, [
-    'id', 'site_id', 'link_id', 'entry_name', 'entry_name_source', 'purpose',
-    'purpose_source', 'normalized_url', 'first_collected_at', 'last_recollected_at',
+	'id', 'site_id', 'link_id', 'entry_name', 'purpose', 'normalized_url',
+	'first_collected_at', 'last_recollected_at',
     'created_at', 'updated_at',
   ])
   requireUUID(row.id, `${name}.id`)
   requireUUID(row.site_id, `${name}.site_id`)
   requireUUID(row.link_id, `${name}.link_id`)
   requireStringLength(row.entry_name, `${name}.entry_name`, 1, 256)
-  requireEnum(row.entry_name_source, `${name}.entry_name_source`, FIELD_SOURCES)
   requireStringLength(row.purpose, `${name}.purpose`, 0, 1000)
-  requireEnum(row.purpose_source, `${name}.purpose_source`, FIELD_SOURCES)
   requireStringLength(row.normalized_url, `${name}.normalized_url`, 1, 2048)
   requireDateTime(row.first_collected_at, `${name}.first_collected_at`)
   requireNullableDateTime(row.last_recollected_at, `${name}.last_recollected_at`)
@@ -425,42 +400,21 @@ function validateSiteEntryRow(value: unknown, name: string): void {
 
 function validateSiteTagRow(value: unknown, name: string): void {
   const row = requireExactRecord(value, name, [
-    'site_id', 'tag', 'normalized_tag', 'source', 'concept_id', 'created_at', 'updated_at',
+	'site_id', 'tag', 'normalized_tag', 'created_at', 'updated_at',
   ])
   requireUUID(row.site_id, `${name}.site_id`)
   requireStringLength(row.tag, `${name}.tag`, 1, 128)
   requireStringLength(row.normalized_tag, `${name}.normalized_tag`, 1, 128)
-  requireEnum(row.source, `${name}.source`, FIELD_SOURCES)
-  requireNullableUUID(row.concept_id, `${name}.concept_id`)
   requireDateTime(row.created_at, `${name}.created_at`)
   requireDateTime(row.updated_at, `${name}.updated_at`)
 }
 
 function validateSiteIdentityRow(value: unknown, name: string): void {
   const row = requireExactRecord(value, name, [
-    'identity_key', 'site_id', 'source', 'locked', 'created_at', 'updated_at',
+	'identity_key', 'site_id', 'created_at', 'updated_at',
   ])
   requireNonEmptyString(row.identity_key, `${name}.identity_key`)
   requireUUID(row.site_id, `${name}.site_id`)
-  requireEnum(row.source, `${name}.source`, SITE_IDENTITY_SOURCES)
-  requireBoolean(row.locked, `${name}.locked`)
-  requireDateTime(row.created_at, `${name}.created_at`)
-  requireDateTime(row.updated_at, `${name}.updated_at`)
-}
-
-function validateClassificationRuleRow(value: unknown, name: string): void {
-  const row = requireExactRecord(value, name, [
-    'id', 'host', 'identity_adapter', 'path_prefix', 'target_kind', 'enabled',
-    'revision', 'created_at', 'updated_at',
-  ])
-  requireUUID(row.id, `${name}.id`)
-  requireStringLength(row.host, `${name}.host`, 1, 253)
-  requireNullableString(row.identity_adapter, `${name}.identity_adapter`)
-  const pathPrefix = requireNullableString(row.path_prefix, `${name}.path_prefix`)
-  if (pathPrefix !== null) requireStringLength(pathPrefix, `${name}.path_prefix`, 1, 2048)
-  requireEnum(row.target_kind, `${name}.target_kind`, RULE_TARGET_KINDS)
-  requireBoolean(row.enabled, `${name}.enabled`)
-  requireSafeInteger(row.revision, `${name}.revision`, 1)
   requireDateTime(row.created_at, `${name}.created_at`)
   requireDateTime(row.updated_at, `${name}.updated_at`)
 }
@@ -567,7 +521,7 @@ function validateNoteHistoryRow(value: unknown, name: string): void {
 function validateInboxRow(value: unknown, name: string): void {
   const row = requireExactRecord(value, name, [
     'id', 'url', 'source_kind', 'title', 'body', 'summary', 'suggested_tags', 'tags',
-    'status', 'metadata_revision', 'job_id', 'expires_at', 'expired_at', 'deleted_at',
+		'status', 'metadata_revision', 'expires_at', 'deleted_at',
     'created_at', 'updated_at',
   ])
   requireUUID(row.id, `${name}.id`)
@@ -580,26 +534,10 @@ function validateInboxRow(value: unknown, name: string): void {
   requireStringArray(row.tags, `${name}.tags`)
   requireEnum(row.status, `${name}.status`, INBOX_STATUSES)
   requireSafeInteger(row.metadata_revision, `${name}.metadata_revision`, 1)
-  requireNullableUUID(row.job_id, `${name}.job_id`)
-  requireNullableDateTime(row.expires_at, `${name}.expires_at`)
-  requireNullableDateTime(row.expired_at, `${name}.expired_at`)
+	requireNullableDateTime(row.expires_at, `${name}.expires_at`)
   requireNullableDateTime(row.deleted_at, `${name}.deleted_at`)
   requireDateTime(row.created_at, `${name}.created_at`)
   requireDateTime(row.updated_at, `${name}.updated_at`)
-}
-
-function validateCategoryRow(value: unknown, name: string): void {
-  const row = requireExactRecord(value, name, ['id', 'name', 'created_at'])
-  requireUUID(row.id, `${name}.id`)
-  requireNonEmptyString(row.name, `${name}.name`)
-  requireDateTime(row.created_at, `${name}.created_at`)
-}
-
-function validateCategorizableRow(value: unknown, name: string): void {
-  const row = requireExactRecord(value, name, ['category_id', 'host_kind', 'host_id'])
-  requireUUID(row.category_id, `${name}.category_id`)
-  requireEnum(row.host_kind, `${name}.host_kind`, HOST_KINDS)
-  requireUUID(row.host_id, `${name}.host_id`)
 }
 
 function validateTodoRow(value: unknown, name: string): void {
@@ -704,48 +642,16 @@ function validateFeedItemRow(value: unknown, name: string): void {
 
 function validateFeedSaveRow(value: unknown, name: string): void {
   const row = requireExactRecord(value, name, [
-    'feed_item_id', 'link_id', 'created_link', 'created_at',
+    'feed_item_id', 'link_id', 'created_at',
   ])
   requireUUID(row.feed_item_id, `${name}.feed_item_id`)
   requireUUID(row.link_id, `${name}.link_id`)
-  requireBoolean(row.created_link, `${name}.created_link`)
   requireDateTime(row.created_at, `${name}.created_at`)
 }
 
-function validateFeedFeedbackRow(value: unknown, name: string): void {
-  const row = requireExactRecord(value, name, ['item_key', 'action', 'created_at'])
+function validateFeedHideRow(value: unknown, name: string): void {
+  const row = requireExactRecord(value, name, ['item_key', 'created_at'])
   requireNonEmptyString(row.item_key, `${name}.item_key`)
-  requireEnum(row.action, `${name}.action`, FEED_FEEDBACK_ACTIONS)
-  requireDateTime(row.created_at, `${name}.created_at`)
-}
-
-function validateFeedSnapshotRow(value: unknown, name: string): void {
-  const row = requireExactRecord(value, name, ['id', 'mode', 'items', 'created_at'])
-  requireUUID(row.id, `${name}.id`)
-  requireEnum(row.mode, `${name}.mode`, FEED_SNAPSHOT_MODES)
-  requireJSONArray(row.items, `${name}.items`)
-  requireDateTime(row.created_at, `${name}.created_at`)
-}
-
-function validateActivityRow(value: unknown, name: string, field: 'tag' | 'domain'): void {
-  const row = requireExactRecord(value, name, [field, 'last_at', 'last_link_id'])
-  requireNonEmptyString(row[field], `${name}.${field}`)
-  requireDateTime(row.last_at, `${name}.last_at`)
-  requireNullableUUID(row.last_link_id, `${name}.last_link_id`)
-}
-
-function validateContentHistoryRow(value: unknown, name: string): void {
-  const row = requireExactRecord(value, name, [
-    'id', 'link_id', 'revision', 'content', 'content_document', 'content_format',
-    'content_source', 'created_at',
-  ])
-  requireSafeInteger(row.id, `${name}.id`, 1)
-  requireUUID(row.link_id, `${name}.link_id`)
-  requireSafeInteger(row.revision, `${name}.revision`, 1)
-  requireNullableString(row.content, `${name}.content`)
-  requireNullableString(row.content_document, `${name}.content_document`)
-  requireEnum(row.content_format, `${name}.content_format`, CONTENT_FORMATS)
-  requireEnum(row.content_source, `${name}.content_source`, CONTENT_SOURCES)
   requireDateTime(row.created_at, `${name}.created_at`)
 }
 
@@ -755,15 +661,9 @@ const READER_ROW_VALIDATORS: Readonly<Record<ReaderArchiveSection, ArchiveRowVal
   feed_items: validateFeedItemRow,
   feed_saves: validateFeedSaveRow,
   inbox: validateInboxRow,
-  categories: validateCategoryRow,
-  categorizables: validateCategorizableRow,
   todos: validateTodoRow,
   engagement: validateEngagementRow,
-  feed_feedback: validateFeedFeedbackRow,
-  feed_snapshots: validateFeedSnapshotRow,
-  tag_activity: (value, name) => validateActivityRow(value, name, 'tag'),
-  domain_activity: (value, name) => validateActivityRow(value, name, 'domain'),
-  content_history: validateContentHistoryRow,
+  feed_hides: validateFeedHideRow,
   thoughts: validateThoughtRow,
   thought_ops: validateThoughtOperationRow,
   thought_supersession_events: validateThoughtSupersessionEventRow,
@@ -842,7 +742,6 @@ function validateTopLevelRows(
     site_entries: validateSiteEntryRow,
     site_tags: validateSiteTagRow,
     site_identities: validateSiteIdentityRow,
-    classification_rules: validateClassificationRuleRow,
   }
   for (const section of TOP_LEVEL_ARRAY_SECTIONS) {
     const rows = requireObjectArray(archive[section], section)

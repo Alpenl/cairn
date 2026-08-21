@@ -27,7 +27,7 @@ func TestGitHubFetcherReadmeTruncationPreservesUTF8(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewGitHubFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}), "")
+	fetcher := NewGitHubFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}), "")
 	fetcher.APIBaseURL = server.URL
 	fetcher.ReadmeMaxChars = 4
 
@@ -66,7 +66,7 @@ func TestGitHubFetcherRetriesTransientRepositoryFailures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewGitHubFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}), "")
+	fetcher := NewGitHubFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}), "")
 	fetcher.APIBaseURL = server.URL
 
 	got, err := fetcher.Fetch(context.Background(), "https://github.com/example/project")
@@ -98,7 +98,7 @@ func TestGitHubFetcherRejectsUnexpectedRepositoryContentType(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewGitHubFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}), "")
+	fetcher := NewGitHubFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}), "")
 	fetcher.APIBaseURL = server.URL
 
 	_, err := fetcher.Fetch(context.Background(), "https://github.com/example/project")
@@ -127,7 +127,7 @@ func TestGitHubFetcherRejectsOversizedRepositoryResponses(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewGitHubFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}), "")
+	fetcher := NewGitHubFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}), "")
 	fetcher.APIBaseURL = server.URL
 	fetcher.RepositoryMaxBytes = 32
 
@@ -157,7 +157,7 @@ func TestGitHubFetcherSkipsUnsupportedReadmeContentType(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewGitHubFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}), "")
+	fetcher := NewGitHubFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}), "")
 	fetcher.APIBaseURL = server.URL
 
 	got, err := fetcher.Fetch(context.Background(), "https://github.com/example/project")

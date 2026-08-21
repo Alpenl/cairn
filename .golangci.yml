@@ -42,22 +42,9 @@ linters:
       # 测试文件：允许忽略 errcheck、宽松复杂度、宽松 gosec
       - path: _test\.go
         linters: [errcheck, gocyclo, gosec, bodyclose]
-      # cmd/eval：评测脚本，作用域有限且未进 codecov；保持轻量门禁
-      - path: cmd/eval/
-        linters: [errcheck, gocyclo, gosec, bodyclose, errorlint, gocritic]
       # test/dbintegration：独立 sub-module 中的测试基础设施，同上
       - path: test/dbintegration/
         linters: [errcheck, gocyclo, gosec, bodyclose, errorlint, gocritic]
-      # internal/eval：评测 harness，作用域有限。其它 linter 放宽是合理的
-      # （评测脚本对 errcheck / gosec / bodyclose 的常态噪音敏感度低），但
-      # staticcheck 不再整组豁免——只单独豁免 ST1008（runner.go 的 timed*
-      # 函数返回 (T, error, int64) 是评测计时签名约定，耗时放最后），其它
-      # staticcheck 检查（unused 字段、可疑判等、SA1xxx 系列）必须照常生效。
-      - path: internal/eval/
-        linters: [errcheck, gocyclo, gosec, bodyclose, errorlint, gocritic]
-      - path: internal/eval/
-        linters: [staticcheck]
-        text: "ST1008"
 formatters:
   # 暂不启用 gofumpt / goimports：本仓存量代码风格混合 gofmt（标准）和
   # 部分手写格式，一次性 gofumpt-walk 会引入大量与本 PR 无关的 reformat

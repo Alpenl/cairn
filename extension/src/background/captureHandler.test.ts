@@ -11,7 +11,7 @@
  *   - 抓取脚本注入失败（restricted / failed）→ failed(对应 errorKind)
  *   - 后端未配置 → failed(not-configured)
  *   - ingest 失败（401）→ failed(unauthorized)
- *   - ingest 命中已 done 链接（无 job_id）→ done
+ *   - ingest 命中已 done 链接 → done
  *   - ingest 成功 + 轮询到 done / failed
  *   - 并发守卫：进行中再次 startCapture 返回当前快照、不重复触发
  *   - try/catch 防死锁：toIngestSource 路径意外抛出被兜底为 failed，
@@ -29,7 +29,7 @@ import type {
   CapabilitiesResponse,
   IngestRequest,
   IngestSource,
-  Job,
+  Link,
   SubmitResponse,
 } from '@/api/types'
 import type { RawCapture } from '@/contentScripts/capture'
@@ -95,54 +95,63 @@ const fail = (kind: string, message = 'err'): ApiResult<never> => ({
   error: { kind: kind as never, message },
 })
 
-/** 构造一个 done 状态的 Job。 */
-function doneJob(): Job {
+function linkWithStatus(
+  status: Link['status'],
+  overrides: Partial<Link> = {},
+): Link {
   return {
-    id: 'job-1',
-    link_id: 'link-1',
-    status: 'done',
+    id: 'link-1',
+    url: 'https://example.com/article',
+    title: '示例文章',
+    summary: null,
+    description: null,
+    tags: [],
+    content_type: 'article',
+    status,
+    domain: 'example.com',
+    path_depth: 1,
+    parent_id: null,
+    parent_path: '/',
+    fetcher_type: null,
+    is_low_confidence: false,
+    has_content: false,
+    low_confidence_reason: null,
     error_category: null,
     error_msg: null,
-    link: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    metadata_revision: 1,
+    ...overrides,
   }
 }
 
-function doneReadingJob(): Job {
-  return {
-    ...doneJob(),
-    link: { library_kind: 'reading' } as unknown as Job['link'],
-  }
+/** 构造一个 done 状态的 Link。 */
+function doneLink(): Link {
+  return linkWithStatus('done')
 }
 
-function doneSiteJob(): Job {
-  return {
-    ...doneJob(),
-    link: { library_kind: 'site' } as unknown as Job['link'],
-  }
+function doneReadingLink(): Link {
+  return linkWithStatus('done', { library_kind: 'reading' })
 }
 
-/** 构造一个 failed 状态的 Job。 */
-function failedJob(errorMsg: string | null, errorCategory: string | null): Job {
-  return {
-    id: 'job-1',
-    link_id: 'link-1',
-    status: 'failed',
+function doneSiteLink(): Link {
+  return linkWithStatus('done', { library_kind: 'site' })
+}
+
+/** 构造一个 failed 状态的 Link。 */
+function failedLink(
+  errorMsg: string | null,
+  errorCategory: string | null,
+): Link {
+  return linkWithStatus('failed', {
     error_category: errorCategory,
     error_msg: errorMsg,
-    link: null,
-  }
+  })
 }
 
-/** 构造一个 processing 状态的 Job（永远解析中，用于覆盖轮询预算耗尽路径）。 */
-function processingJob(): Job {
-  return {
-    id: 'job-1',
-    link_id: 'link-1',
-    status: 'processing',
-    error_category: null,
-    error_msg: null,
-    link: null,
-  }
+/** 构造一个 processing 状态的 Link（永远解析中，用于覆盖轮询预算耗尽路径）。 */
+function processingLink(): Link {
+  return linkWithStatus('processing')
 }
 
 /**
@@ -241,8 +250,8 @@ interface StubOptions {
   notConfigured?: boolean
   inject?: CaptureInjectResult
   ingest?: ApiResult<SubmitResponse>
-  getJob?: ApiResult<Job>
-  getJobFactory?: () => Promise<ApiResult<Job>>
+  getLink?: ApiResult<Link>
+  getLinkFactory?: () => Promise<ApiResult<Link>>
   /** 注入一个会抛错的 ingest，验证 try/catch 兜底。 */
   ingestThrows?: boolean
   /** injectCapture 调用计数注入点。 */
@@ -279,14 +288,14 @@ function makeDeps(opts: StubOptions = {}): {
   injectCalls: () => number
   ingestCalls: () => number
   saveLinkContentCalls: () => number
-  getJobCalls: () => number
+  getLinkCalls: () => number
 } {
   const snapshots: CaptureSnapshot[] = []
   const store = makeMemoryStore(opts.storeOptions)
   let injectCount = 0
   let ingestCount = 0
   let saveLinkContentCount = 0
-  let getJobCount = 0
+  let getLinkCount = 0
 
   const client: WebTagClient = {
     getCapabilities: (() => {
@@ -298,7 +307,6 @@ function makeDeps(opts: StubOptions = {}): {
           ok<CapabilitiesResponse>({
             library_kinds: true,
             site_library: true,
-            site_auto_classification: true,
             site_management: true,
             site_advanced_management: true,
             archive_versions: [],
@@ -312,7 +320,7 @@ function makeDeps(opts: StubOptions = {}): {
               home: true,
               feed: true,
               ai: true,
-              semantic: true,
+              related_tags: true,
               activity: true,
               history: true,
               trash: true,
@@ -331,12 +339,13 @@ function makeDeps(opts: StubOptions = {}): {
         opts.ingest ?? ok<SubmitResponse>({ link_id: 'l', status: 'done' }),
       )
     }) as WebTagClient['ingest'],
-    getJob: (() => {
-      getJobCount += 1
+    getLink: (() => {
+      getLinkCount += 1
       return (
-        opts.getJobFactory?.() ?? Promise.resolve(opts.getJob ?? ok(doneJob()))
+        opts.getLinkFactory?.() ??
+        Promise.resolve(opts.getLink ?? ok(doneLink()))
       )
-    }) as WebTagClient['getJob'],
+    }) as WebTagClient['getLink'],
     saveLinkContent: (linkId: string) => {
       saveLinkContentCount += 1
       opts.onSaveLinkContent?.(linkId)
@@ -388,7 +397,7 @@ function makeDeps(opts: StubOptions = {}): {
     injectCalls: () => injectCount,
     ingestCalls: () => ingestCount,
     saveLinkContentCalls: () => saveLinkContentCount,
-    getJobCalls: () => getJobCount,
+    getLinkCalls: () => getLinkCount,
   }
 }
 
@@ -443,7 +452,7 @@ describe('createCaptureController — 提交阶段', () => {
     expect(snapshot.requestedKind).toBe('site')
   })
 
-  it('ingest 命中已 done 链接（无 job_id）时直接返回 done', async () => {
+  it('ingest 命中已 done 链接时直接返回 done', async () => {
     const { deps } = makeDeps({
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({ link_id: 'link-1', status: 'done' }),
@@ -453,9 +462,9 @@ describe('createCaptureController — 提交阶段', () => {
     expect(snapshot.stage).toBe('done')
   })
 
-  it('默认把扩展采集写入 Inbox，并接受没有 link/job 的 Inbox 响应', async () => {
+  it('默认把扩展采集写入 Inbox，并接受只有 Inbox 身份的响应', async () => {
     let ingestBody: unknown
-    const { deps, getJobCalls, saveLinkContentCalls } = makeDeps({
+    const { deps, getLinkCalls, saveLinkContentCalls } = makeDeps({
       ingest: ok<SubmitResponse>({
         inbox_id: 'inbox-1',
         destination: 'inbox',
@@ -471,7 +480,7 @@ describe('createCaptureController — 提交阶段', () => {
     expect(snapshot.stage).toBe('done')
     expect(ingestBody).toMatchObject({ destination: 'inbox' })
     expect(ingestBody).not.toHaveProperty('link_id')
-    expect(getJobCalls()).toBe(0)
+    expect(getLinkCalls()).toBe(0)
     expect(saveLinkContentCalls()).toBe(0)
   })
 
@@ -528,7 +537,6 @@ describe('createCaptureController — 提交阶段', () => {
       capabilities: ok<CapabilitiesResponse>({
         library_kinds: true,
         site_library: true,
-        site_auto_classification: true,
         site_management: true,
         site_advanced_management: true,
         archive_versions: [],
@@ -668,7 +676,6 @@ describe('createCaptureController — 提交阶段', () => {
         capabilities: ok({
           library_kinds: libraryKinds,
           site_library: siteLibrary,
-          site_auto_classification: true,
           site_management: siteManagement,
           site_advanced_management: false,
           archive_versions: [],
@@ -682,7 +689,7 @@ describe('createCaptureController — 提交阶段', () => {
             home: false,
             feed: false,
             ai: false,
-            semantic: false,
+            related_tags: false,
             activity: false,
             history: false,
             trash: false,
@@ -730,7 +737,7 @@ describe('createCaptureController — 提交阶段', () => {
   })
 
   it('重复 URL 的已有 failed library 状态不会被普通 ingest 隐式 retry', async () => {
-    const { deps, getJobCalls } = makeDeps({
+    const { deps, getLinkCalls } = makeDeps({
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({ link_id: 'failed-link', status: 'failed' }),
     })
@@ -740,7 +747,7 @@ describe('createCaptureController — 提交阶段', () => {
 
     expect(snapshot.stage).toBe('failed')
     expect(snapshot.errorKind).toBe('job-failed')
-    expect(getJobCalls()).toBe(0)
+    expect(getLinkCalls()).toBe(0)
   })
 
   it('微信公众号采集完成时自动保存浏览器中已渲染的原文', async () => {
@@ -775,16 +782,15 @@ describe('createCaptureController — 提交阶段', () => {
     expect(saveLinkContentCalls()).toBe(0)
   })
 
-  it('ingest 成功且有 job_id 时返回 submitted 初始快照', async () => {
+  it('ingest 返回 pending Link 时返回 submitted 初始快照', async () => {
     vi.useFakeTimers()
     const { deps } = makeDeps({
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'link-1',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok(doneJob()),
+      getLink: ok(doneLink()),
     })
     const controller = createCaptureController(deps)
     const snapshot = await controller.startCapture('备注内容')
@@ -837,10 +843,9 @@ describe('createCaptureController — 轮询阶段', () => {
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'l',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok(doneJob()),
+      getLink: ok(doneLink()),
       onSaveLinkContent: (linkId) => {
         savedLinkId = linkId
       },
@@ -861,10 +866,9 @@ describe('createCaptureController — 轮询阶段', () => {
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'l',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok(failedJob('抓取失败', 'fetch_error')),
+      getLink: ok(failedLink('抓取失败', 'fetch_error')),
     })
     const controller = createCaptureController(deps)
     await controller.startCapture('')
@@ -882,10 +886,9 @@ describe('createCaptureController — 轮询阶段', () => {
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'reading-link',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok(doneReadingJob()),
+      getLink: ok(doneReadingLink()),
     })
     const controller = createCaptureController(deps)
     await controller.startCapture('', undefined, 'auto')
@@ -900,10 +903,9 @@ describe('createCaptureController — 轮询阶段', () => {
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'site-link',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok(doneSiteJob()),
+      getLink: ok(doneSiteLink()),
     })
     const controller = createCaptureController(deps)
     await controller.startCapture('', undefined, 'site')
@@ -920,10 +922,9 @@ describe('createCaptureController — 轮询阶段', () => {
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'l',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok(processingJob()),
+      getLink: ok(processingLink()),
     })
     const controller = createCaptureController(deps)
     await controller.startCapture('')
@@ -1014,16 +1015,15 @@ describe('createCaptureController — getLatestSnapshot', () => {
     warnSpy.mockRestore()
   })
 
-  it('轮询中读取状态复用 live activation，不中断下一次 getJob', async () => {
+  it('轮询中读取状态复用 live activation，不中断下一次 getLink', async () => {
     vi.useFakeTimers()
-    const { deps, getJobCalls } = makeDeps({
+    const { deps, getLinkCalls } = makeDeps({
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'link-a',
-        job_id: 'job-a',
         status: 'pending',
       }),
-      getJob: ok(processingJob()),
+      getLink: ok(processingLink()),
     })
     const controller = createCaptureController(deps)
     expect((await controller.startCapture('')).stage).toBe('submitted')
@@ -1031,7 +1031,7 @@ describe('createCaptureController — getLatestSnapshot', () => {
     expect((await controller.getLatestSnapshot()).stage).toBe('submitted')
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + 100)
 
-    expect(getJobCalls()).toBe(1)
+    expect(getLinkCalls()).toBe(1)
     vi.clearAllTimers()
   })
 })
@@ -1043,25 +1043,17 @@ describe('createCaptureController — 持久化', () => {
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'l',
-        job_id: 'job-1',
         status: 'pending',
       }),
       // 轮询保持 processing，让 in-flight 记录留存便于断言。
-      getJob: ok<Job>({
-        id: 'job-1',
-        link_id: 'l',
-        status: 'processing',
-        error_category: null,
-        error_msg: null,
-        link: null,
-      }),
+      getLink: ok(processingLink()),
     })
     const controller = createCaptureController(deps)
     await controller.startCapture('备注')
 
     const inFlight = store._inFlight()
     expect(inFlight).not.toBeNull()
-    expect(inFlight?.jobId).toBe('job-1')
+    expect(inFlight?.linkId).toBe('l')
     expect(inFlight?.note).toBe('备注')
     expect(inFlight?.attempt).toBe(0)
 
@@ -1074,10 +1066,9 @@ describe('createCaptureController — 持久化', () => {
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'l',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok(doneJob()),
+      getLink: ok(doneLink()),
     })
     const controller = createCaptureController(deps)
     await controller.startCapture('')
@@ -1099,19 +1090,19 @@ describe('createCaptureController — 持久化', () => {
 
 describe('createCaptureController — resumeIfNeeded 看门狗', () => {
   it('store 无 in-flight 时 resumeIfNeeded 不做任何事', async () => {
-    const { deps, getJobCalls } = makeDeps()
+    const { deps, getLinkCalls } = makeDeps()
     const controller = createCaptureController(deps)
     await controller.resumeIfNeeded()
-    expect(getJobCalls()).toBe(0)
+    expect(getLinkCalls()).toBe(0)
   })
 
   it('store 有 in-flight 且本实例无轮询时，resumeIfNeeded 从持久 attempt 续跑到 done', async () => {
     vi.useFakeTimers()
     // 预置一个进行中任务（模拟上一个被回收的 SW 留下的状态）。
-    const { deps, store } = makeDeps({ getJob: ok(doneJob()) })
+    const { deps, store } = makeDeps({ getLink: ok(doneLink()) })
     await store.setInFlight({
       owner: OWNER_A,
-      jobId: 'job-1',
+      linkId: 'link-1',
       url: 'https://example.com/x',
       title: '续跑页',
       note: '',
@@ -1160,7 +1151,7 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
     const idempotencyKey = 'persisted-site-idempotency-key'
     const persistedCapture: InFlightCapture = {
       owner: OWNER_A,
-      jobId: '',
+      linkId: '',
       url: source.url ?? '',
       title: source.title ?? '',
       note: 'keep the persisted note',
@@ -1248,7 +1239,7 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
     const { deps, store } = makeDeps({ notConfigured: true })
     await store.setInFlight({
       owner: OWNER_A,
-      jobId: 'job-1',
+      linkId: 'link-1',
       url: 'https://example.com/x',
       title: '续跑页',
       note: '',
@@ -1278,10 +1269,10 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
     // 若直接续跑，runCapturePolling 的 for 循环条件一开始即为 false，循环体不执行，
     // 既不发布终态也不清 in-flight，记录会残留到 MAX_CAPTURE_AGE_MS 陈旧兜底。
     // 修复后应直接走与活体预算耗尽一致的 still-processing 终态收尾。
-    const { deps, store, getJobCalls } = makeDeps()
+    const { deps, store, getLinkCalls } = makeDeps()
     await store.setInFlight({
       owner: OWNER_A,
-      jobId: 'job-1',
+      linkId: 'link-1',
       url: 'https://example.com/x',
       title: '临界页',
       note: '',
@@ -1301,20 +1292,20 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
     const controller = createCaptureController(deps)
     await controller.resumeIfNeeded()
 
-    // 收尾为中性的 still-processing 终态，不进轮询（getJob 零调用）。
+    // 收尾为中性的 still-processing 终态，不进轮询（getLink 零调用）。
     const snapshot = await controller.getLatestSnapshot()
     expect(snapshot.stage).toBe('still-processing')
     expect(snapshot.errorKind).toBeUndefined()
-    expect(getJobCalls()).toBe(0)
+    expect(getLinkCalls()).toBe(0)
     // in-flight 已清除，不再阻塞后续新采集。
     expect(store._inFlight()).toBeNull()
   })
 
   it('续跑前 attempt 超过 MAX_POLL_ATTEMPTS 时同样走 still-processing 收尾', async () => {
-    const { deps, store, getJobCalls } = makeDeps()
+    const { deps, store, getLinkCalls } = makeDeps()
     await store.setInFlight({
       owner: OWNER_A,
-      jobId: 'job-1',
+      linkId: 'link-1',
       url: 'https://example.com/y',
       title: '超界页',
       note: '',
@@ -1335,12 +1326,12 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
     expect((await controller.getLatestSnapshot()).stage).toBe(
       'still-processing',
     )
-    expect(getJobCalls()).toBe(0)
+    expect(getLinkCalls()).toBe(0)
     expect(store._inFlight()).toBeNull()
   })
 
   it('A 的 submitting capture 在 B 恢复时零 ingest，并允许 B 独立采集', async () => {
-    const { deps, store, ingestCalls, getJobCalls, saveLinkContentCalls } =
+    const { deps, store, ingestCalls, getLinkCalls, saveLinkContentCalls } =
       makeDeps({
         owner: OWNER_B,
         captureDestination: 'library',
@@ -1354,7 +1345,7 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
     }
     await store.setInFlight({
       owner: OWNER_A,
-      jobId: '',
+      linkId: '',
       url: source.url ?? '',
       title: source.title ?? '',
       note: '',
@@ -1381,7 +1372,7 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
 
     expect(decryptSpy).not.toHaveBeenCalled()
     expect(ingestCalls()).toBe(0)
-    expect(getJobCalls()).toBe(0)
+    expect(getLinkCalls()).toBe(0)
     expect(saveLinkContentCalls()).toBe(0)
     expect(await controller.getLatestSnapshot()).toEqual(IDLE_CAPTURE_SNAPSHOT)
     expect(store._inFlight()).toBeNull()
@@ -1396,7 +1387,7 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
     const { deps, store, injectCalls } = makeDeps()
     const persisted = {
       owner: OWNER_A,
-      jobId: 'job-a',
+      linkId: 'link-a',
       url: 'https://private-a.example.test/transient',
       title: 'Private A title',
       note: '',
@@ -1431,7 +1422,7 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
     })
     await store.setInFlight({
       owner: OWNER_A,
-      jobId: 'job-a',
+      linkId: 'link-a',
       url: 'https://private-a.example.test/article',
       title: 'Private A title',
       note: '',
@@ -1463,13 +1454,13 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
       { fingerprint: OWNER_A.fingerprint, revision: OWNER_A.revision + 1 },
     ],
   ] as const)(
-    'A polling capture is quarantined for %s with zero getJob/save',
+    'A polling capture is quarantined for %s with zero getLink/save',
     async (_name, currentOwner) => {
-      const { deps, store, ingestCalls, getJobCalls, saveLinkContentCalls } =
+      const { deps, store, ingestCalls, getLinkCalls, saveLinkContentCalls } =
         makeDeps({ owner: currentOwner })
       await store.setInFlight({
         owner: OWNER_A,
-        jobId: 'job-a',
+        linkId: 'link-a',
         url: 'https://private-a.example.test/article',
         title: 'Private A title',
         note: '',
@@ -1489,7 +1480,7 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
       await controller.resumeIfNeeded()
 
       expect(ingestCalls()).toBe(0)
-      expect(getJobCalls()).toBe(0)
+      expect(getLinkCalls()).toBe(0)
       expect(saveLinkContentCalls()).toBe(0)
       expect(await controller.getLatestSnapshot()).toEqual(
         IDLE_CAPTURE_SNAPSHOT,
@@ -1498,18 +1489,17 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
     },
   )
 
-  it('revoked lease stops before the next getJob continuation', async () => {
+  it('revoked lease stops before the next getLink continuation', async () => {
     vi.useFakeTimers()
     let current = true
-    const { deps, store, getJobCalls } = makeDeps({
+    const { deps, store, getLinkCalls } = makeDeps({
       captureDestination: 'library',
       leaseCurrent: () => current,
       ingest: ok<SubmitResponse>({
         link_id: 'link-a',
-        job_id: 'job-a',
         status: 'pending',
       }),
-      getJob: ok(processingJob()),
+      getLink: ok(processingLink()),
     })
     const controller = createCaptureController(deps)
     expect((await controller.startCapture('')).stage).toBe('submitted')
@@ -1517,32 +1507,31 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
     current = false
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + 100)
 
-    expect(getJobCalls()).toBe(0)
+    expect(getLinkCalls()).toBe(0)
     expect(store._inFlight()).toBeNull()
     expect(store._snapshot()).toEqual(IDLE_CAPTURE_SNAPSHOT)
   })
 
-  it('revoked lease after getJob returns prevents save and hides old snapshot', async () => {
+  it('revoked lease after getLink returns prevents save and hides old snapshot', async () => {
     vi.useFakeTimers()
     let current = true
-    const pendingJob = deferred<ApiResult<Job>>()
-    const { deps, store, getJobCalls, saveLinkContentCalls } = makeDeps({
+    const pendingLink = deferred<ApiResult<Link>>()
+    const { deps, store, getLinkCalls, saveLinkContentCalls } = makeDeps({
       captureDestination: 'library',
       leaseCurrent: () => current,
       ingest: ok<SubmitResponse>({
         link_id: 'link-a',
-        job_id: 'job-a',
         status: 'pending',
       }),
-      getJobFactory: () => pendingJob.promise,
+      getLinkFactory: () => pendingLink.promise,
     })
     const controller = createCaptureController(deps)
     expect((await controller.startCapture('')).stage).toBe('submitted')
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + 100)
-    expect(getJobCalls()).toBe(1)
+    expect(getLinkCalls()).toBe(1)
 
     current = false
-    pendingJob.resolve(ok(doneReadingJob()))
+    pendingLink.resolve(ok(doneReadingLink()))
     await vi.waitFor(() => expect(store._inFlight()).toBeNull())
 
     expect(saveLinkContentCalls()).toBe(0)
@@ -1552,16 +1541,15 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
   it('a late A poll cannot clear the newer B in-flight capture', async () => {
     vi.useFakeTimers()
     let currentOwner = OWNER_A
-    const { deps, store, getJobCalls } = makeDeps({
+    const { deps, store, getLinkCalls } = makeDeps({
       owner: () => currentOwner,
       leaseCurrent: (owner) => owner === currentOwner,
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'link',
-        job_id: 'job',
         status: 'pending',
       }),
-      getJob: ok(processingJob()),
+      getLink: ok(processingLink()),
     })
     const controller = createCaptureController(deps)
     expect((await controller.startCapture('A')).owner).toEqual(OWNER_A)
@@ -1573,7 +1561,7 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
 
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + 100)
 
-    expect(getJobCalls()).toBe(0)
+    expect(getLinkCalls()).toBe(0)
     expect(store._inFlight()?.owner).toEqual(OWNER_B)
     expect(store._snapshot().owner).toEqual(OWNER_B)
   })
@@ -1589,14 +1577,13 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'link',
-        job_id: 'job',
         status: 'pending',
       }),
-      getJob: ok(doneJob()),
+      getLink: ok(doneLink()),
     })
     await store.setInFlight({
       owner: OWNER_A,
-      jobId: 'job-a',
+      linkId: 'link-a',
       url: 'https://private-a.example.test/deferred',
       title: 'Private A title',
       note: '',
@@ -1640,33 +1627,25 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
 
   it('本实例已有轮询在跑时，resumeIfNeeded 不重复启动轮询', async () => {
     vi.useFakeTimers()
-    const { deps, getJobCalls } = makeDeps({
+    const { deps, getLinkCalls } = makeDeps({
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'l',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok<Job>({
-        id: 'job-1',
-        link_id: 'l',
-        status: 'processing',
-        error_category: null,
-        error_msg: null,
-        link: null,
-      }),
+      getLink: ok(processingLink()),
     })
     const controller = createCaptureController(deps)
     // 启动一次采集 → 本实例已有轮询循环在跑。
     await controller.startCapture('')
     await vi.advanceTimersByTimeAsync(2100)
-    const callsAfterFirstPoll = getJobCalls()
+    const callsAfterFirstPoll = getLinkCalls()
 
     // 看门狗触发：本实例 pollLoopRunning=true，应直接跳过。
     await controller.resumeIfNeeded()
     // 仅靠原轮询自然推进，没有第二个循环叠加调用。
     await vi.advanceTimersByTimeAsync(2100)
-    expect(getJobCalls()).toBe(callsAfterFirstPoll + 1)
+    expect(getLinkCalls()).toBe(callsAfterFirstPoll + 1)
 
     vi.clearAllTimers()
   })
@@ -1695,17 +1674,9 @@ describe('createCaptureController — 并发守卫', () => {
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'l',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok<Job>({
-        id: 'job-1',
-        link_id: 'l',
-        status: 'processing',
-        error_category: null,
-        error_msg: null,
-        link: null,
-      }),
+      getLink: ok(processingLink()),
     })
     const controller = createCaptureController(deps)
 
@@ -1745,10 +1716,9 @@ describe('createCaptureController — 并发守卫', () => {
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
         link_id: 'l',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok(processingJob()),
+      getLink: ok(processingLink()),
       onIngestOptions: (options) => {
         ingestOptions = options
       },
@@ -1772,7 +1742,6 @@ describe('createCaptureController — 并发守卫', () => {
         ok<CapabilitiesResponse>({
           library_kinds: true,
           site_library: true,
-          site_auto_classification: true,
           site_management: true,
           site_advanced_management: true,
           archive_versions: [],
@@ -1786,7 +1755,7 @@ describe('createCaptureController — 并发守卫', () => {
             home: true,
             feed: true,
             ai: true,
-            semantic: true,
+            related_tags: true,
             activity: true,
             history: true,
             trash: true,
@@ -1868,17 +1837,9 @@ describe('createCaptureController — storage 故障下的 fail-safe', () => {
       storeOptions: { dropSetInFlight: true },
       ingest: ok<SubmitResponse>({
         link_id: 'l',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok<Job>({
-        id: 'job-1',
-        link_id: 'l',
-        status: 'processing',
-        error_category: null,
-        error_msg: null,
-        link: null,
-      }),
+      getLink: ok(processingLink()),
     })
     const controller = createCaptureController(deps)
 
@@ -1909,14 +1870,13 @@ describe('createCaptureController — storage 故障下的 fail-safe', () => {
       now: () => nowMs,
       // dropClearInFlight：轮询终态时 clearInFlight 被丢弃，僵尸记录留存。
       storeOptions: { dropClearInFlight: true },
-      // 走轮询路径（有 job_id）：persistInFlight 真实落盘一条 in-flight 记录，
+      // 走 pending Link 轮询路径：persistInFlight 真实落盘一条 in-flight 记录，
       // 轮询到 done 后 finishCapture → clearInFlight 被丢弃 → 留下僵尸记录。
       ingest: ok<SubmitResponse>({
         link_id: 'l',
-        job_id: 'job-1',
         status: 'pending',
       }),
-      getJob: ok(doneJob()),
+      getLink: ok(doneLink()),
     })
     const controller = createCaptureController(deps)
 
@@ -1943,11 +1903,11 @@ describe('createCaptureController — storage 故障下的 fail-safe', () => {
   // ── H1：看门狗对陈旧僵尸记录不续跑，直接清槽 ──────────────────
   it('resumeIfNeeded 遇陈旧僵尸记录时不续跑、直接清掉持久槽位', async () => {
     let nowMs = 1_700_000_000_000
-    const { deps, store, getJobCalls } = makeDeps({ now: () => nowMs })
+    const { deps, store, getLinkCalls } = makeDeps({ now: () => nowMs })
     // 预置一条「采集早已开始」的 in-flight 记录。
     await store.setInFlight({
       owner: OWNER_A,
-      jobId: 'job-zombie',
+      linkId: 'link-zombie',
       url: 'https://example.com/x',
       title: '僵尸记录',
       note: '',
@@ -1967,8 +1927,8 @@ describe('createCaptureController — storage 故障下的 fail-safe', () => {
     const controller = createCaptureController(deps)
     await controller.resumeIfNeeded()
 
-    // 不对陈旧任务 getJob 续跑，且持久槽位被清空（不再阻塞后续新采集）。
-    expect(getJobCalls()).toBe(0)
+    // 不对陈旧任务 getLink 续跑，且持久槽位被清空（不再阻塞后续新采集）。
+    expect(getLinkCalls()).toBe(0)
     expect(store._inFlight()).toBeNull()
   })
 })

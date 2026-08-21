@@ -1,10 +1,10 @@
 /**
  * 命令面板（⌘K）。
  *
- * 结构：搜索框（语义+关键词胶囊 + esc）→ 分组结果列表（标签 / 域名 / 链接 / 命令）。
+ * 结构：搜索框（关键词胶囊 + esc）→ 分组结果列表（标签 / 域名 / 链接 / 命令）。
  * 交互：上下键移动、回车执行、esc 关闭、鼠标 hover 选中。
  *
- * R3 接线：链接搜索接后端 `q=` 混合搜索（useCommandSearch，300ms 防抖 + 本地即时
+ * R3 接线：链接搜索接后端 `q=` 关键词搜索（useCommandSearch，300ms 防抖 + 本地即时
  * 预览 + feature-detect 降级）；`#` 前缀搜标签、否则标签 + 域名匹配（来自派生 stats）；
  * 命令组覆盖视图跳转 / AI / 订阅源 / 同步 / 切主题。
  */
@@ -103,7 +103,7 @@ export function CommandPalette({
     loadMoreThoughts,
     degraded,
   } = useCommandSearch(client, q, corpus, {
-    remoteEnabled: capabilityPolicy.semantic,
+    remoteEnabled: true,
   })
 
   const linkResults = useMemo<CommandItem[]>(() => {
@@ -262,7 +262,7 @@ export function CommandPalette({
           />
           {q.trim() && (
             <span className="kbd" style={{ marginRight: 6 }}>
-              {degraded || !capabilityPolicy.semantic ? '关键词' : '语义+关键词'}
+              {degraded ? '本地关键词' : '关键词'}
             </span>
           )}
           <span className="kbd">esc</span>

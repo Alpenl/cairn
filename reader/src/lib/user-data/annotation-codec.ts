@@ -269,8 +269,6 @@ function bindClonedAnnotation(
     case 'note':
       if (!isNonEmptyString(base.blockKey)) return null
       return { ...base, sourceNoteRevision: target.noteRevision }
-    case 'legacy-stale':
-      return base
   }
 }
 
@@ -326,7 +324,6 @@ export function annotationFromAddDraft(
   let blockKey: unknown
   switch (canonicalTarget.kind) {
     case 'saved-content':
-    case 'legacy-stale':
       blockKey = 'blockKey' in candidate ? candidate.blockKey : undefined
       break
     case 'summary':

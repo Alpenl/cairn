@@ -28,13 +28,13 @@ func TestLinkProjectionColumnsMatchDBTags(t *testing.T) {
 		{name: "submit lookup", columns: linkSubmitLookupColumns, typeOf: reflect.TypeOf(LinkSubmitLookup{})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			columns := strings.Split(tc.columns, ", ")
+			columns := projectionColumns(tc.columns)
 			if len(columns) != tc.typeOf.NumField() {
 				t.Fatalf("SQL columns=%d projection fields=%d\nSQL: %s", len(columns), tc.typeOf.NumField(), tc.columns)
 			}
 			for i, column := range columns {
 				field := tc.typeOf.Field(i)
-				if got := field.Tag.Get("db"); got != column {
+				if got := field.Tag.Get("db"); got != projectionColumnName(column) {
 					t.Fatalf("column[%d]=%q but %s.%s has db tag %q", i, column, tc.typeOf.Name(), field.Name, got)
 				}
 			}
@@ -58,8 +58,7 @@ func TestLinkProjectionScanners(t *testing.T) {
 			WillReturnRows(mock.NewRows(projectionColumns(linkDetailColumns)).AddRow(
 				id, "https://example.com/detail", "Title", "Summary", []string{"go"}, "basic",
 				true, "thin_content", model.LinkStatusDone, nil, "note", "example.com", "article",
-				"reading", "auto", true, "site", float64(0.75), "personal_rule_host", "why", "v2",
-				int64(7), int64(4), "user", true, 12, 34, 2, "/parent", parentID.String(), createdAt, updatedAt,
+				"reading", int64(7), int64(4), "user", true, 12, 34, 2, "/parent", parentID.String(), createdAt, updatedAt,
 			))
 
 		got, err := repo.GetDetailByID(context.Background(), id)
@@ -69,7 +68,7 @@ func TestLinkProjectionScanners(t *testing.T) {
 		if got == nil || got.ID != id || got.ParentID == nil || *got.ParentID != parentID || got.ContentSource != model.ContentSourceUser || got.MetadataRevision != 4 {
 			t.Fatalf("detail = %#v", got)
 		}
-		if got.ClassificationConfidence == nil || *got.ClassificationConfidence != float32(0.75) || got.Title == nil || *got.Title != "Title" {
+		if got.Title == nil || *got.Title != "Title" {
 			t.Fatalf("detail nullable fields = %#v", got)
 		}
 	})
@@ -82,8 +81,8 @@ func TestLinkProjectionScanners(t *testing.T) {
 			WillReturnRows(mock.NewRows(projectionColumns(linkParseInputColumns)).AddRow(
 				id, "https://example.com/capture", "browser_capture", "capture:1", "Input title",
 				"Input text", "<p>Input</p>", []byte(`["https://img.example/a.png"]`),
-				[]byte(`{"parse_depth":"deep","capture_source_fingerprint":"abc"}`), "note",
-				model.LinkStatusPending, "reading", "user", "reading", true, int64(4), updatedAt,
+				[]byte(`{"capture_source_fingerprint":"abc"}`), "note",
+				model.LinkStatusPending, "reading", true, int64(4), int64(5), int64(6), updatedAt,
 			))
 
 		got, err := repo.GetParseInputByID(context.Background(), id)
@@ -93,11 +92,14 @@ func TestLinkProjectionScanners(t *testing.T) {
 		if got == nil || got.SourceKind != "browser_capture" || got.SourceKey != "capture:1" {
 			t.Fatalf("parse input = %#v", got)
 		}
-		if len(got.InputImages) != 1 || got.SourceMetadata["parse_depth"] != "deep" {
+		if len(got.InputImages) != 1 || got.SourceMetadata["capture_source_fingerprint"] != "abc" {
 			t.Fatalf("decoded parse payload = %#v", got)
 		}
-		if got.RequestedLibraryKind != model.RequestedLibraryKindReading || got.RequestedLibraryKindSource != model.RequestedLibraryKindSourceUser {
-			t.Fatalf("requested intent = %s/%s", got.RequestedLibraryKind, got.RequestedLibraryKindSource)
+		if got.LibraryKind == nil || *got.LibraryKind != model.LibraryKindReading || !got.LibraryKindLocked {
+			t.Fatalf("library selection = %v locked=%v", got.LibraryKind, got.LibraryKindLocked)
+		}
+		if got.MetadataRevision != 5 || got.ParseGeneration != 6 {
+			t.Fatalf("parse fences = metadata revision %d, generation %d; want 5/6", got.MetadataRevision, got.ParseGeneration)
 		}
 	})
 
@@ -107,15 +109,15 @@ func TestLinkProjectionScanners(t *testing.T) {
 		mock.ExpectQuery(regexp.QuoteMeta(getLinkLifecycleByIDSQL)).
 			WithArgs(id).
 			WillReturnRows(mock.NewRows(projectionColumns(linkLifecycleColumns)).AddRow(
-				id, "https://example.com/lifecycle", model.LinkStatusDone, "reading", "auto", true,
-				"personal_rule_host", int64(9), true, nil,
+				id, "https://example.com/lifecycle", model.LinkStatusDone, "reading", true,
+				int64(9), true, nil,
 			))
 
 		got, err := repo.GetLifecycleByID(context.Background(), id)
 		if err != nil {
 			t.Fatalf("GetLifecycleByID() error = %v", err)
 		}
-		if got == nil || got.ContentRevision != 9 || !got.HasContent || got.LibraryKindSource == nil || *got.LibraryKindSource != model.LibraryKindSourceAuto {
+		if got == nil || got.ContentRevision != 9 || !got.HasContent || got.LibraryKind == nil || *got.LibraryKind != model.LibraryKindReading || !got.LibraryKindLocked {
 			t.Fatalf("lifecycle = %#v", got)
 		}
 	})
@@ -127,7 +129,7 @@ func TestLinkProjectionScanners(t *testing.T) {
 		mock.ExpectQuery(regexp.QuoteMeta(getLinkSubmitLookupByURLSQL)).
 			WithArgs(rawURL).
 			WillReturnRows(mock.NewRows(projectionColumns(linkSubmitLookupColumns)).AddRow(
-				id, rawURL, nil, model.LinkStatusProcessing, "reading", "user", "reading",
+				id, rawURL, nil, model.LinkStatusProcessing, "reading", true, createdAt,
 			))
 
 		got, err := repo.GetSubmitLookupByURL(context.Background(), rawURL)
@@ -135,8 +137,7 @@ func TestLinkProjectionScanners(t *testing.T) {
 			t.Fatalf("GetSubmitLookupByURL() error = %v", err)
 		}
 		if got == nil || got.SourceKey != rawURL || got.Status != model.LinkStatusProcessing ||
-			got.RequestedLibraryKind != model.RequestedLibraryKindReading ||
-			got.RequestedLibraryKindSource != model.RequestedLibraryKindSourceUser {
+			got.LibraryKind == nil || *got.LibraryKind != model.LibraryKindReading || !got.LibraryKindLocked {
 			t.Fatalf("submit lookup = %#v", got)
 		}
 	})
@@ -158,5 +159,32 @@ func newProjectionRepository(t *testing.T) (pgxmock.PgxPoolIface, *PGXLinkReposi
 }
 
 func projectionColumns(columns string) []string {
-	return strings.Split(columns, ", ")
+	return splitProjectionColumns(columns)
+}
+
+func splitProjectionColumns(columns string) []string {
+	var result []string
+	start, depth := 0, 0
+	for index, char := range columns {
+		switch char {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				result = append(result, strings.TrimSpace(columns[start:index]))
+				start = index + 1
+			}
+		}
+	}
+	return append(result, strings.TrimSpace(columns[start:]))
+}
+
+func projectionColumnName(expression string) string {
+	upper := strings.ToUpper(expression)
+	if index := strings.LastIndex(upper, " AS "); index >= 0 {
+		return strings.TrimSpace(expression[index+4:])
+	}
+	return strings.TrimSpace(expression)
 }

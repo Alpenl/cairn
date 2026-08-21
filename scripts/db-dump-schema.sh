@@ -14,11 +14,8 @@
 #     的 schema.sql 一并提交。
 #
 # 运行方式：
-#   ./scripts/db-dump-schema.sh        # 默认 image=pgvector/pgvector:pg16
+#   ./scripts/db-dump-schema.sh        # 默认 image=postgres:16
 #   PG_IMAGE=postgres:15 ./scripts/db-dump-schema.sh
-#
-# 默认镜像用 pgvector/pgvector:pg16（stock postgres:16 + pgvector 扩展）：
-# Phase 5（v3.0）迁移会 CREATE EXTENSION vector，纯 postgres:16 跑不过。
 #
 # 退出码：
 #   0 成功；非 0 = docker 不可用 / migrate 失败 / pg_dump 失败。
@@ -26,12 +23,13 @@
 # 依赖：docker；本地构建 cmd/migrate 由脚本接管，无需提前 make build。
 set -euo pipefail
 
-PG_IMAGE="${PG_IMAGE:-pgvector/pgvector:pg16}"
+PG_IMAGE="${PG_IMAGE:-postgres:16}"
 CONTAINER_NAME="webtag-schema-dump-$$"
 PG_PASSWORD="schema_dump_pw"
 PG_DB="webtag_schema_dump"
 PG_PORT="${PG_PORT:-55432}"
 OUT_FILE="${OUT_FILE:-internal/migrate/schema.sql}"
+INSTALL_OUT_FILE="${INSTALL_OUT_FILE:-internal/migrate/install_schema.sql}"
 
 cleanup() {
     # 永远尝试清理容器；忽略 not-found / already-removed 的退出码。
@@ -90,14 +88,8 @@ expect() {
     fi
 }
 
-expect "SELECT count(*) FROM schema_migrations WHERE version = 'f03e51d6911b'" "1"
-expect "SELECT count(*) FROM schema_migrations" "10"
-expect "SELECT version FROM schema_migrations WHERE version = 'reader2026081301'" "reader2026081301"
-expect "SELECT version FROM schema_migrations WHERE version = 'integrity2026081401'" "integrity2026081401"
-expect "SELECT version FROM schema_migrations WHERE version = 'historical2026081401'" "historical2026081401"
-expect "SELECT version FROM schema_migrations WHERE version = 'conceptaudit2026081401'" "conceptaudit2026081401"
-expect "SELECT version FROM schema_migrations WHERE version = 'lifecycle2026081401'" "lifecycle2026081401"
-expect "SELECT version FROM schema_migrations WHERE version = 'readersearch2026081701'" "readersearch2026081701"
+expect "SELECT version FROM schema_migrations" "schema2026082201"
+expect "SELECT count(*) FROM schema_migrations" "1"
 expect "SELECT to_regclass('public.idx_reader_thoughts_search_trgm')" "idx_reader_thoughts_search_trgm"
 expect "SELECT to_regclass('public.idx_reader_thought_tombstones_search_trgm')" "idx_reader_thought_tombstones_search_trgm"
 # The tsvector index that no `%query%` ILIKE predicate could ever use must be gone.
@@ -105,23 +97,35 @@ expect "SELECT coalesce(to_regclass('public.idx_reader_thought_search')::text,'n
 # Both trigram indexes must be valid: CREATE INDEX CONCURRENTLY can leave an
 # indisvalid=false relation behind, and to_regclass would still resolve it.
 expect "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname IN ('idx_reader_thoughts_search_trgm','idx_reader_thought_tombstones_search_trgm') AND i.indisvalid AND i.indisready" "2"
-expect "SELECT version FROM schema_migrations WHERE version = 'readertodoprojection2026081701'" "readertodoprojection2026081701"
-expect "SELECT to_regclass('public.feed_lifecycle_repair_audit')" "feed_lifecycle_repair_audit"
-expect "SELECT to_regclass('public.reader_todo_projection_backfills')" "reader_todo_projection_backfills"
-expect "SELECT version FROM schema_migrations WHERE version = 'readerinboxdocument2026081801'" "readerinboxdocument2026081801"
+expect "SELECT coalesce(to_regclass('public.feed_lifecycle_repair_audit')::text,'none')" "none"
+expect "SELECT coalesce(to_regclass('public.reader_todo_projection_backfills')::text,'none')" "none"
+expect "SELECT count(*) FROM pg_extension WHERE extname='vector'" "0"
+expect "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('concept','concept_alias','concept_merge_proposal','link_concept','library_classification_rules','library_review_items','reader_content_history','reader_todo_projection_backfills','feed_lifecycle_repair_audit')" "0"
+expect "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND ((table_name='links' AND column_name IN ('embedding','embedding_model')) OR (table_name='sites' AND column_name IN ('needs_review','embedding','embedding_model')) OR (table_name='site_tags' AND column_name='concept_id'))" "0"
+expect "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND ((table_name='sites' AND column_name IN ('name_source','intro_source','homepage_source','icon_source','primary_source','grouping_locked')) OR (table_name='site_entries' AND column_name IN ('entry_name_source','purpose_source')) OR (table_name='site_tags' AND column_name='source') OR (table_name='site_identities' AND column_name IN ('source','locked')))" "0"
+expect "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('reader_categories','reader_categorizables')" "0"
 # 收件箱必须能带着采集到的结构走到确认入库那一步，否则 content_document 只能
 # 拿压平的纯文本冒充 markdown。
 expect "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reader_inbox' AND column_name IN ('body_document','body_format')" "2"
+expect "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='reader_inbox_jobs'" "0"
+expect "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reader_inbox' AND column_name IN ('job_id','proposal_signals','expired_at','expiry_lease_id','expiry_lease_until')" "0"
 expect "SELECT count(*) FROM pg_constraint WHERE conname='reader_inbox_body_format_check' AND conrelid='public.reader_inbox'::regclass" "1"
-expect "SELECT count(*) FROM reader_todo_projection_backfills" "1"
 expect "SELECT to_regclass('public.idx_link_translations_saved_revision_unique')" "idx_link_translations_saved_revision_unique"
-expect "SELECT to_regclass('public.idx_link_translations_legacy_source_unique')" "idx_link_translations_legacy_source_unique"
-expect "SELECT to_regclass('public.idx_river_job_translation_terminal_history')" "idx_river_job_translation_terminal_history"
+expect "SELECT to_regclass('public.idx_link_translations_summary_source_unique')" "idx_link_translations_summary_source_unique"
+# Translation terminal projection is worker-owned. The two indexes used only by
+# the retired history/missing-row reconciler must not survive the cleanup step.
+expect "SELECT coalesce(to_regclass('public.idx_link_translations_missing_reconcile')::text,'none')" "none"
+expect "SELECT coalesce(to_regclass('public.idx_river_job_translation_terminal_history')::text,'none')" "none"
 expect "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name='tenant_id'" "0"
 expect "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('tenants','api_keys','usage_events','feed_bootstraps','tenant_read_revision','tenant_feed_revision')" "0"
 expect "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND (c.relrowsecurity OR c.relforcerowsecurity)" "0"
 expect "SELECT count(*) FROM pg_policies WHERE schemaname='public'" "0"
-expect "SELECT (SELECT count(*) FROM installation_state)+(SELECT count(*) FROM library_read_revision)+(SELECT count(*) FROM global_read_revision)+(SELECT count(*) FROM feed_read_revision)" "4"
+expect "SELECT count(*) FROM installation_state" "1"
+expect "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('library_read_revision','global_read_revision','feed_read_revision')" "0"
+expect "SELECT count(*) FROM pg_trigger AS trg JOIN pg_class AS rel ON rel.oid=trg.tgrelid JOIN pg_namespace AS ns ON ns.oid=rel.relnamespace JOIN pg_proc AS proc ON proc.oid=trg.tgfoid WHERE NOT trg.tgisinternal AND ns.nspname='public' AND proc.proname LIKE 'bump_%'" "0"
+expect "SELECT count(*) FROM pg_proc AS proc JOIN pg_namespace AS ns ON ns.oid=proc.pronamespace WHERE ns.nspname='public' AND proc.proname IN ('lock_library_feed_revisions','lock_library_global_revisions','lock_representation_revisions')" "0"
+expect "SELECT count(*) FROM pg_proc AS proc JOIN pg_namespace AS ns ON ns.oid=proc.pronamespace WHERE ns.nspname='public' AND proc.proname IN ('guard_representation_write_gate','lock_representation_write_gate_shared','lock_representation_write_gate_exclusive')" "0"
+expect "SELECT count(*) FROM pg_trigger AS trg JOIN pg_class AS rel ON rel.oid=trg.tgrelid JOIN pg_namespace AS ns ON ns.oid=rel.relnamespace JOIN pg_proc AS proc ON proc.oid=trg.tgfoid WHERE NOT trg.tgisinternal AND ns.nspname='public' AND proc.proname='guard_representation_write_gate'" "0"
 expect "SELECT count(*) FROM feed_subscriptions" "1"
 
 # 4. 导出 schema。--schema-only 跳过数据；--no-owner / --no-privileges
@@ -162,4 +166,7 @@ awk '{ lines[NR] = $0 } END {
 } > "$OUT_FILE"
 rm -f "$OUT_FILE.tmp" "$NORMALIZED_FILE"
 
+bash scripts/render-install-schema.sh "$OUT_FILE" "$INSTALL_OUT_FILE"
+
 echo ">> done: $OUT_FILE ($(wc -l < "$OUT_FILE") lines)"
+echo ">> done: $INSTALL_OUT_FILE ($(wc -l < "$INSTALL_OUT_FILE") lines)"

@@ -2,7 +2,7 @@
 // application code can swap encoding/json without per-call-site changes.
 // Sonic is fully drop-in compatible with encoding/json's Marshal/Unmarshal
 // surface but is significantly faster on large payloads (analyzer LLM
-// responses, yt-dlp metadata, link JSONB columns).
+// responses and link JSONB columns).
 //
 // On platforms where sonic does not support JIT it transparently falls back to
 // encoding/json via its compat layer, so behaviour is identical across all

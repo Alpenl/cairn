@@ -621,7 +621,7 @@ final class WebTagShareTests: XCTestCase {
         try repository.releaseExpiredLeases(now: start.addingTimeInterval(11))
         XCTAssertTrue(try repository.claim(id: entry.id, owner: "owner-b", now: start.addingTimeInterval(11), leaseDuration: 10))
         let claimed = try XCTUnwrap(try repository.entry(id: entry.id))
-        let response = SubmitResponse(linkID: "11111111-1111-1111-1111-111111111111", status: "pending", jobID: nil)
+        let response = SubmitResponse(linkID: "11111111-1111-1111-1111-111111111111", status: "pending")
         try repository.finishSuccess(entry: claimed, owner: "owner-b", response: response, now: start.addingTimeInterval(12))
         XCTAssertTrue(try repository.list().isEmpty)
         let recent = try XCTUnwrap(try repository.recent(identity: identity))
@@ -640,7 +640,7 @@ final class WebTagShareTests: XCTestCase {
         let entry = try repository.enqueue(url: "https://example.org/failed", identity: identity, now: start)
         XCTAssertTrue(try repository.claim(id: entry.id, owner: "failed-owner", now: start))
         let claimed = try XCTUnwrap(try repository.entry(id: entry.id))
-        let response = SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "failed", jobID: nil)
+        let response = SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "failed")
 
         try repository.finishSuccess(entry: claimed, owner: "failed-owner", response: response, now: start.addingTimeInterval(1))
 
@@ -812,7 +812,7 @@ final class WebTagShareTests: XCTestCase {
         XCTAssertEqual(try repository.finishSuccess(
             entry: stale,
             owner: "owner-a",
-            response: SubmitResponse(linkID: "55555555-5555-5555-5555-555555555555", status: "pending", jobID: nil),
+            response: SubmitResponse(linkID: "55555555-5555-5555-5555-555555555555", status: "pending"),
             now: start.addingTimeInterval(3)
         ), .staleClaim)
         XCTAssertEqual(try repository.entry(id: entry.id)?.leaseOwner, "owner-b")
@@ -834,7 +834,7 @@ final class WebTagShareTests: XCTestCase {
         XCTAssertEqual(try repository.finishSuccess(
             entry: expired,
             owner: "expired-owner",
-            response: SubmitResponse(linkID: "66666666-6666-6666-6666-666666666666", status: "pending", jobID: nil),
+            response: SubmitResponse(linkID: "66666666-6666-6666-6666-666666666666", status: "pending"),
             now: start.addingTimeInterval(1)
         ), .staleClaim)
         XCTAssertEqual(try repository.entry(id: entry.id)?.leaseOwner, "expired-owner")
@@ -1011,7 +1011,7 @@ final class WebTagShareTests: XCTestCase {
         try repository.finishSuccess(
             entry: claimed,
             owner: "owner",
-            response: SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "done", jobID: nil)
+            response: SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "done")
         )
         try activate(repository, activeIdentity)
         let redacted = try XCTUnwrap(try repository.recent(identity: activeIdentity))
@@ -1111,7 +1111,6 @@ final class WebTagShareTests: XCTestCase {
         XCTAssertNil(migrated.lastErrorCode)
         XCTAssertNil(migrated.lastHTTPStatus)
         XCTAssertNil(migrated.linkID)
-        XCTAssertNil(migrated.jobID)
         XCTAssertNil(migrated.leaseOwner)
         XCTAssertNil(migrated.leaseExpiresAt)
     }
@@ -1962,7 +1961,7 @@ final class WebTagShareTests: XCTestCase {
             ShareTerminalMessage.Message(text: text, completesRequest: closesSheet)
         }
         func submitted(_ status: String) -> SubmissionOutcome {
-            .submitted(SubmitResponse(linkID: "9f1c0f1e", status: status, jobID: nil))
+            .submitted(SubmitResponse(linkID: "9f1c0f1e", status: status))
         }
 
         XCTAssertEqual(message(submitted("pending")), expected("已收藏", closesSheet: true))
@@ -2120,7 +2119,7 @@ final class WebTagShareTests: XCTestCase {
             try repository.finishSuccess(
                 entry: claimed,
                 owner: "owner-a",
-                response: SubmitResponse(linkID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", status: "done", jobID: nil)
+                response: SubmitResponse(linkID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", status: "done")
             ),
             .identityChanged
         )
@@ -2142,7 +2141,7 @@ final class WebTagShareTests: XCTestCase {
         XCTAssertEqual(try repository.finishSuccess(
             entry: try XCTUnwrap(try repository.entry(id: completed.id)),
             owner: "recent-r1",
-            response: SubmitResponse(linkID: "cccccccc-cccc-cccc-cccc-cccccccccccc", status: "done", jobID: nil)
+            response: SubmitResponse(linkID: "cccccccc-cccc-cccc-cccc-cccccccccccc", status: "done")
         ), .applied)
         let frozen = try repository.enqueue(url: "https://example.org/queue-r1", identity: identity)
 
@@ -2181,7 +2180,7 @@ final class WebTagShareTests: XCTestCase {
         XCTAssertEqual(try queue.finishSuccess(
             entry: try XCTUnwrap(try queue.entry(id: completed.id)),
             owner: "recent-r1",
-            response: SubmitResponse(linkID: "11111111-1111-1111-1111-111111111111", status: "done", jobID: nil)
+            response: SubmitResponse(linkID: "11111111-1111-1111-1111-111111111111", status: "done")
         ), .applied)
 
         let start = Date(timeIntervalSince1970: 80_000)
@@ -2282,7 +2281,7 @@ final class WebTagShareTests: XCTestCase {
         XCTAssertEqual(try queue.finishSuccess(
             entry: try XCTUnwrap(try queue.entry(id: newer.id)),
             owner: "recent-r2",
-            response: SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "done", jobID: nil)
+            response: SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "done")
         ), .applied)
         try queue.delete(id: frozen.id)
         try queue.delete(id: secondQueued.id)
@@ -2520,12 +2519,12 @@ final class WebTagShareTests: XCTestCase {
         try activate(repository, identity)
         let first = try repository.enqueue(url: "https://example.org/one", identity: identity)
         XCTAssertTrue(try repository.claim(id: first.id, owner: "first"))
-        XCTAssertEqual(try repository.finishSuccess(entry: try XCTUnwrap(try repository.entry(id: first.id)), owner: "first", response: SubmitResponse(linkID: "11111111-1111-1111-1111-111111111111", status: "done", jobID: nil)), .applied)
+        XCTAssertEqual(try repository.finishSuccess(entry: try XCTUnwrap(try repository.entry(id: first.id)), owner: "first", response: SubmitResponse(linkID: "11111111-1111-1111-1111-111111111111", status: "done")), .applied)
         let capture = try XCTUnwrap(try repository.refreshCapture(identity: identity))
 
         let second = try repository.enqueue(url: "https://example.org/two", identity: identity)
         XCTAssertTrue(try repository.claim(id: second.id, owner: "second"))
-        XCTAssertEqual(try repository.finishSuccess(entry: try XCTUnwrap(try repository.entry(id: second.id)), owner: "second", response: SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "done", jobID: nil)), .applied)
+        XCTAssertEqual(try repository.finishSuccess(entry: try XCTUnwrap(try repository.entry(id: second.id)), owner: "second", response: SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "done")), .applied)
         XCTAssertEqual(
             try repository.recordRefreshBlocked(capture: capture, notBefore: Date().addingTimeInterval(60), reason: "cooldown_active"),
             .recentReplaced
@@ -2535,7 +2534,7 @@ final class WebTagShareTests: XCTestCase {
         let secondCapture = try XCTUnwrap(try repository.refreshCapture(identity: identity))
         try activate(repository, identity)
         XCTAssertEqual(
-            try repository.recordRefreshSuccess(capture: secondCapture, response: SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "done", jobID: nil)),
+            try repository.recordRefreshSuccess(capture: secondCapture, response: SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "done")),
             .identityChanged
         )
     }
@@ -2760,7 +2759,7 @@ final class WebTagShareTests: XCTestCase {
         XCTAssertEqual(
             try repository.finishSuccess(
                 entry: try XCTUnwrap(try repository.entry(id: first.id)), owner: "refresh-first",
-                response: SubmitResponse(linkID: "11111111-1111-1111-1111-111111111111", status: "done", jobID: nil)
+                response: SubmitResponse(linkID: "11111111-1111-1111-1111-111111111111", status: "done")
             ),
             .applied
         )
@@ -2771,7 +2770,7 @@ final class WebTagShareTests: XCTestCase {
         XCTAssertEqual(
             try repository.finishSuccess(
                 entry: try XCTUnwrap(try repository.entry(id: second.id)), owner: "refresh-second",
-                response: SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "processing", jobID: nil)
+                response: SubmitResponse(linkID: "22222222-2222-2222-2222-222222222222", status: "processing")
             ),
             .applied
         )
@@ -2779,7 +2778,7 @@ final class WebTagShareTests: XCTestCase {
         XCTAssertEqual(
             try repository.recordRefreshSuccess(
                 capture: capture,
-                response: SubmitResponse(linkID: "11111111-1111-1111-1111-111111111111", status: "done", jobID: nil)
+                response: SubmitResponse(linkID: "11111111-1111-1111-1111-111111111111", status: "done")
             ),
             .recentReplaced
         )
@@ -2811,7 +2810,7 @@ final class WebTagShareTests: XCTestCase {
         XCTAssertEqual(
             try repository.finishSuccess(
                 entry: try XCTUnwrap(try repository.entry(id: entry.id)), owner: "boundary",
-                response: SubmitResponse(linkID: "99999999-9999-9999-9999-999999999999", status: "pending", jobID: nil),
+                response: SubmitResponse(linkID: "99999999-9999-9999-9999-999999999999", status: "pending"),
                 now: start.addingTimeInterval(59.999)
             ),
             .applied
@@ -3633,7 +3632,6 @@ private func migrationQueueEntry(id: String, activation: ActivationIdentity) -> 
         lastErrorCode: nil,
         lastHTTPStatus: nil,
         linkID: nil,
-        jobID: nil,
         leaseOwner: nil,
         leaseExpiresAt: nil
     )
@@ -3682,7 +3680,6 @@ private func settingsEntry(
         lastErrorCode: nil,
         lastHTTPStatus: nil,
         linkID: nil,
-        jobID: nil,
         leaseOwner: nil,
         leaseExpiresAt: nil
     )
@@ -3711,7 +3708,6 @@ private func settingsRecent(mismatch: Bool, notBefore: Date?, reason: String?) -
     RecentResult(
         url: mismatch ? "" : "https://example.org/recent",
         linkID: mismatch ? "" : "44444444-4444-4444-4444-444444444444",
-        jobID: mismatch ? nil : "job-1",
         status: "failed",
         createdAt: Date(timeIntervalSince1970: 5_000),
         identity: settingsFixtureIdentity,

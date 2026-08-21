@@ -79,19 +79,11 @@ var ErrInvalid = errors.New("session: credential is invalid or expired")
 type Claims struct {
 	// ExpiresAt is the sliding deadline, moved forward by Renew.
 	ExpiresAt time.Time
-	// AbsoluteExpiresAt is the ceiling renewal cannot cross. Zero means the
-	// claim is not renewable — that is how a v3 token, minted before this
-	// field existed, is represented.
+	// AbsoluteExpiresAt is the ceiling renewal cannot cross.
 	AbsoluteExpiresAt time.Time
 }
 
-const (
-	// payloadVersion is what Sign emits. Parse also accepts legacyPayloadVersion
-	// so that deploying this change does not invalidate the sessions already in
-	// people's browsers — the very failure this change exists to stop.
-	payloadVersion       = "v4"
-	legacyPayloadVersion = "v3"
-)
+const payloadVersion = "v4"
 
 func Sign(claims Claims, key []byte) (string, error) {
 	if len(key) == 0 {
@@ -102,7 +94,7 @@ func Sign(claims Claims, key []byte) (string, error) {
 	}
 	absolute := claims.AbsoluteExpiresAt
 	if absolute.IsZero() {
-		absolute = claims.ExpiresAt
+		return "", ErrInvalid
 	}
 	if absolute.Before(claims.ExpiresAt) {
 		return "", ErrInvalid
@@ -145,34 +137,22 @@ func Parse(token string, key []byte, now time.Time) (Claims, error) {
 	return claims, nil
 }
 
-// decodeClaims reads either payload shape. A v3 token carries only the sliding
-// deadline and comes back with a zero AbsoluteExpiresAt, which Renew reads as
-// "not renewable": such a session runs out on its original schedule and the
-// next login mints a v4 token that can slide.
 func decodeClaims(parts []string) (Claims, error) {
-	switch {
-	case len(parts) == 3 && parts[0] == payloadVersion:
-		expiresAt, err := unixField(parts[1])
-		if err != nil {
-			return Claims{}, err
-		}
-		absolute, err := unixField(parts[2])
-		if err != nil {
-			return Claims{}, err
-		}
-		if absolute.Before(expiresAt) {
-			return Claims{}, ErrInvalid
-		}
-		return Claims{ExpiresAt: expiresAt, AbsoluteExpiresAt: absolute}, nil
-	case len(parts) == 2 && parts[0] == legacyPayloadVersion:
-		expiresAt, err := unixField(parts[1])
-		if err != nil {
-			return Claims{}, err
-		}
-		return Claims{ExpiresAt: expiresAt}, nil
-	default:
+	if len(parts) != 3 || parts[0] != payloadVersion {
 		return Claims{}, ErrInvalid
 	}
+	expiresAt, err := unixField(parts[1])
+	if err != nil {
+		return Claims{}, err
+	}
+	absolute, err := unixField(parts[2])
+	if err != nil {
+		return Claims{}, err
+	}
+	if absolute.Before(expiresAt) {
+		return Claims{}, ErrInvalid
+	}
+	return Claims{ExpiresAt: expiresAt, AbsoluteExpiresAt: absolute}, nil
 }
 
 func unixField(raw string) (time.Time, error) {
@@ -186,13 +166,11 @@ func unixField(raw string) (time.Time, error) {
 // Renew reports the claims a still-valid session should be re-signed with, and
 // whether re-signing is worth doing at all.
 //
-// It declines in three cases, each for its own reason: the claim is a legacy
-// non-renewable one; the deadline is still comfortably far away, so a
-// Set-Cookie would be noise; or the absolute ceiling is close enough that
-// sliding would gain nothing. In the last case the session is left to run out
-// on schedule — that is the point of the ceiling.
+// It declines when the deadline is still comfortably far away, when the TTL
+// is invalid, or when the absolute ceiling is close enough that sliding would
+// gain nothing.
 func Renew(claims Claims, now time.Time, ttl time.Duration) (Claims, bool) {
-	if claims.AbsoluteExpiresAt.IsZero() || ttl <= 0 {
+	if ttl <= 0 {
 		return Claims{}, false
 	}
 	if claims.ExpiresAt.Sub(now) > ttl/renewLeadFraction {

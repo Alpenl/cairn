@@ -31,8 +31,6 @@
     "feed_items": 10000,
     "feed_subscriptions": 50,
     "links": 10000,
-    "reader_categories": 24,
-    "reader_categorizables": 2500,
     "reader_engagement": 3000,
     "reader_inbox": 1000,
     "reader_notes": 2000,
@@ -46,52 +44,49 @@
     "feed_folders": "76bcb381fc5c22cfda67216b6e7e6098",
     "feed_items": "d63e5f850aebff3055e37e52d8e9c73c",
     "feed_subscriptions": "c590960aaccf29e3488cc4690a10f043",
-    "links": "a2fa74493fecf09d6e1895120b6528aa",
-    "reader_categories": "4bb9583ff29c91f9af74f854337737c6",
-    "reader_categorizables": "dbdc54c6309a903aff88838c5afca0dd",
+    "links": "be867f256b04e46a70aa7e7eb8b339a2",
     "reader_engagement": "cb7a45a305d003d40b9c5c6a8753fbd0",
-    "reader_inbox": "033e577026ec63275cb4a18727615129",
+    "reader_inbox": "525594a7da6229c40fbfa636c5496ad4",
     "reader_notes": "377d55fa85e42a817a7edc4236b75d37",
     "reader_thought_tombstones": "7d22588f80b0c6c653ebacad2bb0b2de",
     "reader_thoughts": "f9b5182f8296b6ee0ccf21549119eb62",
     "reader_todos": "2da1aebe94e56a404fcfdfb78eba8d78",
-    "site_entries": "2dd35883bdf929238dd5641e298a9c9c",
-    "sites": "f21b7c9112abd3508a8465a9aac1771e"
+    "site_entries": "cfd502aa75e77227f7f807949bce1325",
+    "sites": "8e0cde84055f3b391ce5cc40813562c8"
   },
   "deterministic_locks": {
     "query_counts": {
-      "activity": 4,
+      "activity": 1,
       "home": 4,
       "inbox_first_screen": 2,
-      "recommended_feed": 4,
+      "recommended_feed": 3,
       "thought_search": 1,
       "todos": 1
     },
     "response_byte_ceilings": {
       "activity": 12288,
       "home": 71680,
-      "inbox_first_screen": 17408,
-      "recommended_feed": 40960,
+      "inbox_first_screen": 2048,
+      "recommended_feed": 41984,
       "thought_search": 12288,
       "todos": 11264
     },
     "plan_shapes": {
       "activity": [
         "Aggregate",
-        "CTE Scan on cte current",
-        "Hash",
-        "Hash Join",
-        "ModifyTable on reader_tag_activity",
+        "Append",
+        "Gather Merge",
+        "Limit",
         "ProjectSet",
+        "Result",
         "Seq Scan on links",
-        "Seq Scan on reader_tag_activity",
-        "Sort",
-        "Subquery Scan"
+        "Sort"
       ],
       "home": [
         "Aggregate",
         "Hash",
         "Hash Join",
+        "Index Only Scan on reader_inbox using idx_reader_inbox_pending_expiry",
         "Index Only Scan on reader_notes using idx_reader_notes_updated",
         "Index Only Scan on reader_thought_tombstones using reader_thought_tombstones_pkey",
         "Index Only Scan on sites using idx_sites_pinned_updated",
@@ -104,8 +99,9 @@
         "Seq Scan on reader_todos"
       ],
       "inbox_first_screen": [
-        "Index Scan on reader_inbox using idx_reader_inbox_pending",
-        "Limit"
+        "Limit",
+        "Seq Scan on reader_inbox",
+        "Sort"
       ],
       "recommended_feed": [
         "Hash",
@@ -114,7 +110,7 @@
         "Nested Loop",
         "Seq Scan on links",
         "Seq Scan on reader_engagement",
-        "Seq Scan on reader_feed_feedback",
+        "Seq Scan on reader_feed_hides",
         "Sort"
       ],
       "thought_search": [

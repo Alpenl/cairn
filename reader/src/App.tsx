@@ -69,7 +69,6 @@ type IdentityGate =
 const READER_CAPABILITIES_OFF: CapabilitiesResponse = {
   library_kinds: false,
   site_library: false,
-  site_auto_classification: false,
   site_management: false,
   site_advanced_management: false,
   archive_versions: [],
@@ -83,7 +82,7 @@ const READER_CAPABILITIES_OFF: CapabilitiesResponse = {
     home: false,
     feed: false,
     ai: false,
-    semantic: false,
+    related_tags: false,
     activity: false,
     history: false,
     trash: false,

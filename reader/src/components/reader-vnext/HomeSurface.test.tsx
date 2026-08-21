@@ -36,6 +36,7 @@ function feedItem(overrides: Partial<ReaderFeedItemResponse> = {}): ReaderFeedIt
   return {
     key: 'inbox:I1',
     source: 'inbox',
+    resource_key: 'inbox:I1',
     title: '收件箱文章',
     summary: '需要整理',
     url: 'https://example.com/inbox',
@@ -45,26 +46,9 @@ function feedItem(overrides: Partial<ReaderFeedItemResponse> = {}): ReaderFeedIt
     read: false,
     read_later: false,
     saved: false,
-    score: 120,
-    score_contributions: {
-      pending_confirmation: 100,
-      saved_library: 0,
-      subscription_recent: 0,
-      unread: 20,
-      read_later: 0,
-      chronological_fallback: 0,
-    },
-    enabled_score_signals: ['pending_confirmation', 'unread', 'read_later', 'chronological_fallback'],
-    reason_code: 'pending_confirmation',
-    reason_params: { source: 'inbox' },
-    reason_contribution: 100,
-    reason_text: '收件箱采集',
-    published_at: null,
     event_at: '2026-08-10T01:00:00Z',
-    created_at: '2026-08-10T01:00:00Z',
-    actions: ['confirm', 'discard', 'hide', 'not_interested', 'open'],
     ...overrides,
-  } as ReaderFeedItemResponse
+  }
 }
 
 function thought(overrides: Partial<ReaderThoughtResponse> = {}): ReaderThoughtResponse {
@@ -447,8 +431,8 @@ describe('HomeSurface', () => {
     expect(within(row).getByRole('button', { name: '打开收件箱' }).closest('.reader-list-row-actions')).not.toBeNull()
   })
 
-  it('does not expose a continue-reading open control without an explicit item action', async () => {
-    const item = feedItem({ title: '不可打开的继续阅读', actions: [] })
+  it('does not expose a continue-reading open control without a resource target', async () => {
+    const item = feedItem({ title: '不可打开的继续阅读', link_id: null, inbox_id: null })
     const { onOpenLink } = renderHome(makeClient([home({ continue_reading: [item] })]).client)
 
     const row = await screen.findByText('不可打开的继续阅读')

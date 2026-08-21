@@ -9,7 +9,7 @@ import (
 
 func TestParseLibraryV2ReadingResponse(t *testing.T) {
 	a := newLibraryResponseAnalyzer()
-	got, err := a.parseAnalysisResponseForRequest(`{"schema_version":2,"library_kind":"reading","classification_confidence":0.92,"classification_reason":"ai_reading_resolution","classification_explanation":"长文为主","reading_profile":{"title":"游标分页","summary":"解释游标分页的一致性设计。","tags":["API","分页"]}}`, 120, model.RequestedLibraryKindAuto)
+	got, err := a.parseAnalysisResponseForRequest(`{"schema_version":2,"library_kind":"reading","reading_profile":{"title":"游标分页","summary":"解释游标分页的一致性设计。","tags":["API","分页"]}}`, 120, model.RequestedLibraryKindAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,7 @@ func TestParseLibraryV2ReadingResponse(t *testing.T) {
 
 func TestParseLibraryV2SiteResponseForExplicitSite(t *testing.T) {
 	a := newLibraryResponseAnalyzer()
-	got, err := a.parseAnalysisResponseForRequest(`{"schema_version":2,"library_kind":"site","classification_confidence":1,"classification_reason":"explicit_site","classification_explanation":"用户选择网站","site_profile":{"name":"Excalidraw","intro":"一个可在浏览器使用的开源白板和图表工具。","entry_name":"首页","purpose":"在线绘图与协作","tags":["白板","绘图"]}}`, 120, model.RequestedLibraryKindSite)
+	got, err := a.parseAnalysisResponseForRequest(`{"schema_version":2,"library_kind":"site","site_profile":{"name":"Excalidraw","intro":"一个可在浏览器使用的开源白板和图表工具。","entry_name":"首页","purpose":"在线绘图与协作","tags":["白板","绘图"]}}`, 120, model.RequestedLibraryKindSite)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,14 +29,14 @@ func TestParseLibraryV2SiteResponseForExplicitSite(t *testing.T) {
 	}
 }
 
-func TestLibraryV2RejectsExplicitKindConflictAndLegacySite(t *testing.T) {
+func TestLibraryResponseRejectsExplicitKindConflict(t *testing.T) {
 	a := newLibraryResponseAnalyzer()
-	_, err := a.parseAnalysisResponseForRequest(`{"schema_version":2,"library_kind":"reading","classification_confidence":0.8,"classification_reason":"x","classification_explanation":"x","reading_profile":{"title":"t","summary":"摘要","tags":[]}}`, 120, model.RequestedLibraryKindSite)
+	_, err := a.parseAnalysisResponseForRequest(`{"schema_version":2,"library_kind":"reading","reading_profile":{"title":"t","summary":"摘要","tags":[]}}`, 120, model.RequestedLibraryKindSite)
 	if err == nil || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("error = %v", err)
 	}
 	_, err = a.parseAnalysisResponseForRequest(`{"title":"t","summary":"摘要","tags":[]}`, 120, model.RequestedLibraryKindSite)
-	if err == nil || !strings.Contains(err.Error(), "schema_version=2") {
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("error = %v", err)
 	}
 }

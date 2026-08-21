@@ -1,8 +1,6 @@
 package session
 
 import (
-	"encoding/base64"
-	"strconv"
 	"testing"
 	"time"
 )
@@ -118,27 +116,5 @@ func TestSignRejectsAnAbsoluteDeadlineBeforeTheSlidingOne(t *testing.T) {
 	}, []byte("ordering-key"))
 	if err == nil {
 		t.Fatal("a ceiling earlier than the sliding deadline is incoherent and must not sign")
-	}
-}
-
-// 部署这次改动时，浏览器里已经存在的是 v3 票。它们必须继续可用直到自然到期
-// ——否则这次「修掉被登出」的改动本身就会把所有人登出一次。
-func TestParseStillAcceptsLegacyV3Tokens(t *testing.T) {
-	key := []byte("legacy-token-key")
-	now := time.Unix(1_700_000_000, 0)
-	expiresAt := now.Add(time.Hour)
-	payload := legacyPayloadVersion + "|" + strconv.FormatInt(expiresAt.Unix(), 10)
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(payload))
-	token := encoded + "." + base64.RawURLEncoding.EncodeToString(mac(encoded, key))
-
-	claims, err := Parse(token, key, now)
-	if err != nil {
-		t.Fatalf("Parse(v3) error = %v", err)
-	}
-	if !claims.AbsoluteExpiresAt.IsZero() {
-		t.Fatal("a v3 token carries no absolute deadline")
-	}
-	if _, ok := Renew(claims, now, DefaultTTL); ok {
-		t.Fatal("a v3 token must not renew; it runs out and the next login mints v4")
 	}
 }

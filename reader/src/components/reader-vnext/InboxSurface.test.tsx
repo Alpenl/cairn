@@ -14,18 +14,14 @@ function inbox(overrides: Partial<ReaderInboxResponse> = {}): ReaderInboxRespons
     source_kind: 'manual',
     title: '第一篇',
 	body: '正文',
-	note: '',
-	summary: '摘要',
+    note: '',
+    summary: '摘要',
     suggested_tags: ['阅读'],
-    proposal_signals: {},
     proposal_status: 'completed',
     tags: ['阅读'],
-    category_ids: [],
     status: 'pending',
     metadata_revision: 1,
-    job_id: null,
     expires_at: '2026-09-09T01:00:00Z',
-    expired_at: null,
     expired: false,
     created_at: '2026-08-10T01:00:00Z',
     updated_at: '2026-08-10T01:00:00Z',
@@ -68,7 +64,6 @@ function makeClient(
       expired_count: pendingItems.filter((item) => item.expired).length,
     })
   })
-  const listCategories = vi.fn(async () => ok({ items: [] }))
   // Detail records the stub has served on the list path but that are not part
   // of `serverItems` (tests that install their own listInbox).
   const listedDetails = new Map<string, ReaderInboxResponse>()
@@ -99,12 +94,12 @@ function makeClient(
   })
   const restoreInbox = vi.fn(async (id: string) => {
     serverItems = serverItems.map((item) => item.id === id
-      ? { ...item, status: 'pending', expired: false, expired_at: null }
+      ? { ...item, status: 'pending', expired: false, expires_at: '2026-09-10T01:00:00Z' }
       : item)
     return ok(true)
   })
   const discardInbox = vi.fn(async (id: string) => {
-    serverItems = serverItems.map((item) => item.id === id ? { ...item, status: 'discarded' } : item)
+    serverItems = serverItems.filter((item) => item.id !== id)
     return ok(true)
   })
   const confirmInboxBulk = vi.fn(async (request: { inbox_ids: string[]; expected_revisions?: Record<string, number> }) => {
@@ -118,19 +113,20 @@ function makeClient(
   const confirmAIProposals = vi.fn(async () => ok({ atomic: true as const, items: [], remaining_count: 0 }))
   const discardInboxBulk = vi.fn(async (request: { inbox_ids: string[] }) => {
     const ids = new Set(request.inbox_ids)
-    serverItems = serverItems.map((item) => ids.has(item.id) ? { ...item, status: 'discarded' } : item)
+    serverItems = serverItems.filter((item) => !ids.has(item.id))
     return ok({
       atomic: true as const,
       items: request.inbox_ids.map((id) => ({ inbox_id: id, status: 'discarded' as const })),
     })
   })
-  const resummarizeInbox = vi.fn(async () => ok({ inbox_id: 'inbox-1', status: 'queued', job_id: 'job-1' }))
-  const getInboxJob = vi.fn(async () => ok({ inbox_id: 'inbox-1', status: 'queued', job_id: 'job-1' }))
-  const createCategory = vi.fn(async () => ok({ id: 'category-1', name: '分类', count: 0, created_at: '2026-08-10T01:00:00Z' }))
-  const setCategoryMembership = vi.fn(async () => ok(true))
+  const resummarizeInbox = vi.fn(async (id: string) => {
+    const current = serverItems.find((item) => item.id === id) ?? inbox({ id })
+    const updated = { ...current, proposal_status: 'pending' as const }
+    serverItems = serverItems.map((item) => item.id === id ? updated : item)
+    return ok(updated)
+  })
   const stub: Record<string, unknown> = {
     listInbox,
-    listCategories,
     getInbox,
     patchInbox,
     createInbox,
@@ -141,9 +137,6 @@ function makeClient(
     confirmAIProposals,
     discardInboxBulk,
     resummarizeInbox,
-    getInboxJob,
-    createCategory,
-    setCategoryMembership,
     isIdentityCurrent: vi.fn(() => true),
     ...overrides,
   }
@@ -178,14 +171,13 @@ function makeClient(
     confirmAIProposals,
     discardInboxBulk,
     resummarizeInbox,
-    setCategoryMembership,
   }
 }
 
 /**
  * The editor fetches its detail record on demand, so the first
  * GET /api/inbox/{id} in a scenario is that load. Tests that want to control a
- * later reread (a CAS conflict refresh, a completed-job refresh) install this:
+ * later reread (a CAS conflict refresh or proposal-status poll) install this:
  * the first call answers with the record the queue is showing, and every later
  * call is deferred for the test to resolve.
  */
@@ -296,10 +288,9 @@ describe('InboxSurface', () => {
     expect(screen.getByRole('textbox', { name: '正文' })).toHaveValue('第二篇正文')
   })
 
-  it('labels a queue row by host and only flags rows that left the pending flow', async () => {
+  it('labels a queue row by host without repeating its pending state', async () => {
     const { client } = makeClient([
       inbox({ url: 'https://www.example.com/2026/08/article', source_kind: 'browser_capture' }),
-      inbox({ id: 'inbox-2', title: '第二篇', url: 'https://feeds.example.org/post', status: 'discarded' }),
     ])
 
     renderInbox(client)
@@ -309,10 +300,8 @@ describe('InboxSurface', () => {
     // row icon's tooltip rather than a snake_cased label.
     expect(pending).toHaveTextContent('example.com')
     expect(pending).not.toHaveTextContent('browser_capture')
-    // Every active row is pending, so repeating the state on each of them is
-    // noise. Only rows that left the flow carry a state.
+    // Every Inbox row is pending, so repeating the state on each one is noise.
     expect(pending).not.toHaveTextContent('待处理')
-    expect(screen.getByRole('button', { name: /第二篇/ })).toHaveTextContent('已丢弃')
   })
 
   it('renders queue rows through the shared preview card with the picker in its leading slot', async () => {
@@ -399,7 +388,7 @@ describe('InboxSurface', () => {
       id: 'shared',
       title: '过期版本',
       expired: true,
-      expired_at: '2026-08-11T01:00:00Z',
+      expires_at: '2026-08-11T01:00:00Z',
     })
     const listInbox = vi.fn(async (params: { partition?: 'active' | 'expired' }) => ok(
       params.partition === 'expired'
@@ -470,7 +459,7 @@ describe('InboxSurface', () => {
     const expired = inbox({
       id: 'expired-1',
       title: '已过期文章',
-      expired_at: '2026-08-11T01:00:00Z',
+      expires_at: '2026-08-11T01:00:00Z',
       expired: true,
     })
     let updatedOnServer = false
@@ -511,14 +500,14 @@ describe('InboxSurface', () => {
     const firstExpired = inbox({
       id: 'expired-1',
       title: '已过期文章一',
-      expired_at: '2026-08-11T01:00:00Z',
+      expires_at: '2026-08-11T01:00:00Z',
       expired: true,
     })
     const secondExpired = inbox({
       id: 'expired-2',
       title: '已过期文章二',
       url: 'https://example.com/expired-two',
-      expired_at: '2026-08-11T01:00:00Z',
+      expires_at: '2026-08-11T01:00:00Z',
       expired: true,
     })
     let updatedOnServer = false
@@ -686,7 +675,7 @@ describe('InboxSurface', () => {
     const expired = inbox({
       id: 'expired-1',
       title: '已过期文章',
-      expired_at: '2026-08-11T01:00:00Z',
+      expires_at: '2026-08-11T01:00:00Z',
       expired: true,
     })
     const restored = inbox({
@@ -757,7 +746,7 @@ describe('InboxSurface', () => {
     expect(listInbox).toHaveBeenLastCalledWith({ partition: 'expired', after: undefined, limit: 50 })
   })
 
-  it('keeps discarded items addressable and restores them to pending', async () => {
+  it('removes discarded items from Inbox so Trash owns restoration', async () => {
     const item = inbox()
     const { client, discardInbox, restoreInbox } = makeClient([item])
 
@@ -766,47 +755,31 @@ describe('InboxSurface', () => {
     expect(await screen.findByRole('heading', { name: '第一篇' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '丢弃' }))
     await waitFor(() => expect(discardInbox).toHaveBeenCalledWith('inbox-1'))
-    expect(await screen.findByRole('button', { name: '恢复到收件箱' })).toBeInTheDocument()
-    expect(screen.getAllByText('已丢弃').length).toBeGreaterThan(0)
-
-    fireEvent.click(screen.getByRole('button', { name: '恢复到收件箱' }))
-    await waitFor(() => expect(restoreInbox).toHaveBeenCalledWith('inbox-1'))
-    expect(screen.getAllByText('收件箱').length).toBeGreaterThan(0)
+    expect(await screen.findByText('收件箱是空的')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '恢复到收件箱' })).not.toBeInTheDocument()
+    expect(restoreInbox).not.toHaveBeenCalled()
   })
 
-  it('does not revive a discarded row from a completed job refresh started before the mutation', async () => {
-    const item = inbox({ job_id: 'job-1' })
+  it('does not revive a discarded row from a proposal poll started before the mutation', async () => {
+    const item = inbox({ proposal_status: 'running' })
     const { getInbox, resolveReread: resolveRefresh } = deferredInboxReread(item)
-    const getInboxJob = vi.fn(async () => ok({ inbox_id: item.id, status: 'completed' as const, job_id: 'job-1' }))
-    const { client, discardInbox } = makeClient([item], { getInbox, getInboxJob })
+    const { client, discardInbox } = makeClient([item], { getInbox })
 
     renderInbox(client)
 
     await screen.findByRole('heading', { name: '第一篇' })
-    // Call 1 loaded the detail; call 2 is the job-completion refresh under test.
+    // Call 1 loaded the detail; call 2 is the proposal-status poll under test.
     await waitFor(() => expect(getInbox).toHaveBeenCalledTimes(2))
     fireEvent.click(screen.getByRole('button', { name: '丢弃' }))
     await waitFor(() => expect(discardInbox).toHaveBeenCalledWith('inbox-1'))
-    expect(await screen.findByRole('button', { name: '恢复到收件箱' })).toBeInTheDocument()
+    expect(await screen.findByText('收件箱是空的')).toBeInTheDocument()
 
     await act(async () => {
-      resolveRefresh(ok(item))
+      resolveRefresh(ok({ ...item, proposal_status: 'completed', summary: '迟到摘要' }))
     })
 
-    expect(screen.getByRole('button', { name: '恢复到收件箱' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '第一篇' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '确认入库' })).not.toBeInTheDocument()
-  })
-
-  it('loads a discarded deep-link target so it has a recovery entry point', async () => {
-    const discarded = inbox({ id: 'discarded-1', title: '已丢弃文章', status: 'discarded' })
-    const getInbox = vi.fn(async () => ok(discarded))
-    const { client } = makeClient([], { getInbox })
-
-    renderInbox(client, 'discarded-1')
-
-    expect(await screen.findByRole('heading', { name: '已丢弃文章' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '恢复到收件箱' })).toBeInTheDocument()
-    expect(getInbox).toHaveBeenCalledWith('discarded-1')
   })
 
   it('releases an empty deep-link target loader after identity revocation without applying its response', async () => {
@@ -946,31 +919,29 @@ describe('InboxSurface', () => {
     const initial = inbox()
     const staleAppend = inbox({ id: 'stale-append', title: '过期追加项', url: 'https://example.com/stale' })
     const retryItem = inbox({ id: 'retry-current', title: '重试列表项', url: 'https://example.com/retry' })
-    const category = { id: 'category-1', name: '研究', count: 0, created_at: '2026-08-10T01:00:00Z' }
     let resolveAppend!: (value: ReturnType<typeof ok>) => void
     let resolveRetry!: (value: ReturnType<typeof ok>) => void
-    let resolveMembership!: (value: unknown) => void
+    let resolveResummarize!: (value: unknown) => void
     const listInbox = vi.fn()
       .mockResolvedValueOnce(ok({ items: [initial], next_cursor: 'cursor-1' }))
       .mockImplementationOnce(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveAppend = resolve }))
       .mockImplementationOnce(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveRetry = resolve }))
-    const setCategoryMembership = vi.fn(() => new Promise((resolve) => { resolveMembership = resolve }))
+    const resummarizeInbox = vi.fn(() => new Promise((resolve) => { resolveResummarize = resolve }))
     const { client } = makeClient([initial], {
       listInbox,
-      listCategories: vi.fn(async () => ok({ items: [category] })),
-      setCategoryMembership,
+      resummarizeInbox,
     })
 
-    renderInbox(client)
+	renderInbox(client)
 
-    await screen.findByRole('button', { name: '研究' })
-    fireEvent.click(screen.getByRole('button', { name: '研究' }))
-    await waitFor(() => expect(setCategoryMembership).toHaveBeenCalledTimes(1))
-    fireEvent.click(screen.getByRole('button', { name: '更多' }))
-    await waitFor(() => expect(listInbox).toHaveBeenCalledTimes(2))
+	await screen.findByRole('heading', { name: '第一篇' })
+	fireEvent.click(screen.getByRole('button', { name: '更多' }))
+	await waitFor(() => expect(listInbox).toHaveBeenCalledTimes(2))
+	fireEvent.click(screen.getByRole('button', { name: '重新生成摘要' }))
+	await waitFor(() => expect(resummarizeInbox).toHaveBeenCalledTimes(1))
 
     await act(async () => {
-      resolveMembership(err({ kind: 'other' as const, message: '分类失败' }))
+      resolveResummarize(err({ kind: 'other' as const, message: '摘要失败' }))
     })
     fireEvent.click(await screen.findByRole('button', { name: '重试' }))
     await waitFor(() => expect(listInbox).toHaveBeenCalledTimes(3))
@@ -1091,7 +1062,7 @@ describe('InboxSurface', () => {
     }))
   })
 
-  it('sends selected IDs to bulk discard and renders discarded recovery rows', async () => {
+  it('sends selected IDs to bulk discard and removes them from Inbox', async () => {
     const first = inbox()
     const second = inbox({ id: 'inbox-2', title: '第二篇', url: 'https://example.com/two' })
     const { client, discardInboxBulk } = makeClient([first, second])
@@ -1105,8 +1076,8 @@ describe('InboxSurface', () => {
 
     await waitFor(() => expect(discardInboxBulk).toHaveBeenCalledWith({ inbox_ids: ['inbox-1', 'inbox-2'] }))
     expect(await screen.findByText('批量丢弃完成')).toBeInTheDocument()
-    expect(screen.getAllByText(/已丢弃/).length).toBeGreaterThanOrEqual(2)
-    expect(screen.getByRole('button', { name: '恢复到收件箱' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /第一篇|第二篇/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '恢复到收件箱' })).not.toBeInTheDocument()
   })
 
   it('saves a dirty draft before changing selected Inbox items', async () => {
@@ -1768,15 +1739,16 @@ describe('InboxSurface', () => {
       expect(screen.queryByRole('button', { name: '恢复到收件箱' })).not.toBeInTheDocument()
     })
 
-    it('releases single restore busy without changing the row status', async () => {
+    it('releases expiry restore busy without moving the stale row', async () => {
       let current = true
       let resolveRestore!: (value: ReturnType<typeof ok>) => void
       const restoreInbox = vi.fn(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveRestore = resolve }))
-      const discarded = inbox({ status: 'discarded', title: '已丢弃' })
-      const { client } = makeClient([discarded], { restoreInbox, isIdentityCurrent: () => current })
+      const expired = inbox({ expired: true, expires_at: '2026-08-11T01:00:00Z', title: '已过期' })
+      const { client } = makeClient([expired], { restoreInbox, isIdentityCurrent: () => current })
 
       renderInbox(client)
-      fireEvent.click(await screen.findByRole('button', { name: '恢复到收件箱' }))
+      fireEvent.click(await screen.findByRole('tab', { name: '已过期 (1)' }))
+      fireEvent.click(await screen.findByRole('button', { name: '恢复有效期' }))
       await waitFor(() => expect(restoreInbox).toHaveBeenCalledWith('inbox-1'))
 
       current = false
@@ -1784,8 +1756,8 @@ describe('InboxSurface', () => {
         resolveRestore(ok(true))
       })
 
-      expect(screen.getByRole('button', { name: '恢复到收件箱' })).not.toBeDisabled()
-      expect(screen.queryByRole('button', { name: '确认入库' })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '恢复有效期' })).not.toBeDisabled()
+      expect(screen.getByRole('heading', { name: '已过期' })).toBeInTheDocument()
     })
 
     it('releases bulk confirm busy without removing stale rows', async () => {
@@ -1832,7 +1804,7 @@ describe('InboxSurface', () => {
       expect(screen.queryByText('批量丢弃完成')).not.toBeInTheDocument()
     })
 
-    it('releases resummarize busy without applying the stale job', async () => {
+    it('releases resummarize busy without applying the stale proposal response', async () => {
       let current = true
       let resolveResummarize!: (value: ReturnType<typeof ok>) => void
       const resummarizeInbox = vi.fn(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveResummarize = resolve }))
@@ -1844,11 +1816,12 @@ describe('InboxSurface', () => {
 
       current = false
       await act(async () => {
-        resolveResummarize(ok({ inbox_id: 'inbox-1', status: 'queued', job_id: 'stale-job' }))
+        resolveResummarize(ok(inbox({ proposal_status: 'pending', summary: '迟到摘要' })))
       })
 
       expect(screen.getByRole('button', { name: '重新生成摘要' })).not.toBeDisabled()
-      expect(screen.queryByText(/stale-job/)).not.toBeInTheDocument()
+      expect(screen.queryByText('摘要等待中')).not.toBeInTheDocument()
+      expect(screen.queryByDisplayValue('迟到摘要')).not.toBeInTheDocument()
     })
   })
 
@@ -2084,11 +2057,8 @@ describe('InboxSurface', () => {
     }))
   })
 
-  it('persists title, body, summary, note, tags, adopted suggestions, and category membership', async () => {
-    const category = { id: 'category-1', name: '研究', count: 0, created_at: '2026-08-10T01:00:00Z' }
-    const { client, patchInbox } = makeClient([inbox()], {
-      listCategories: vi.fn(async () => ok({ items: [category] })),
-    })
+  it('persists title, body, summary, note, tags, and adopted suggestions', async () => {
+    const { client, patchInbox } = makeClient([inbox()])
 
     renderInbox(client)
     fireEvent.change(await screen.findByRole('textbox', { name: '标题' }), { target: { value: '新标题' } })
@@ -2100,10 +2070,6 @@ describe('InboxSurface', () => {
     expect(screen.getByText('完整正文')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '编辑' }))
     fireEvent.click(screen.getByRole('button', { name: '采用 #阅读' }))
-    fireEvent.click(screen.getByRole('button', { name: '研究' }))
-    await waitFor(() => expect((client.setCategoryMembership as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('category-1', {
-      host_kind: 'inbox', host_id: 'inbox-1', present: true,
-    }))
     fireEvent.click(screen.getByRole('button', { name: '保存元数据' }))
     await waitFor(() => expect(patchInbox).toHaveBeenCalledWith('inbox-1', 1, {
       title: '新标题', body: '完整正文', note: '用户备注', summary: '用户摘要', tags: ['已有', '阅读'],
@@ -2153,60 +2119,6 @@ describe('InboxSurface', () => {
     })
 
     expect(screen.getByRole('textbox', { name: '标题' })).toHaveValue('请求后的新输入')
-  })
-
-  it('scopes a delayed category response to the Inbox item that initiated it', async () => {
-    const category = { id: 'category-1', name: '研究', count: 0, created_at: '2026-08-10T01:00:00Z' }
-    const first = inbox()
-    const second = inbox({ id: 'inbox-2', title: '第二篇' })
-    let resolveMembership!: (value: ReturnType<typeof ok>) => void
-    const setCategoryMembership = vi.fn(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveMembership = resolve }))
-    const { client } = makeClient([first, second], {
-      listCategories: vi.fn(async () => ok({ items: [category] })),
-      setCategoryMembership,
-    })
-    renderInbox(client)
-
-    await screen.findByRole('heading', { name: '第一篇' })
-    fireEvent.click(screen.getByRole('button', { name: '研究' }))
-    await waitFor(() => expect(setCategoryMembership).toHaveBeenCalledWith('category-1', {
-      host_kind: 'inbox', host_id: 'inbox-1', present: true,
-    }))
-    fireEvent.click(screen.getByRole('button', { name: /第二篇/ }))
-    await waitFor(() => expect(screen.getByRole('textbox', { name: '标题' })).toHaveValue('第二篇'))
-    await act(async () => {
-      resolveMembership(ok(true))
-    })
-
-    expect(screen.getByRole('button', { name: '研究' }).className).not.toContain('active')
-    fireEvent.click(screen.getByRole('button', { name: /第一篇/ }))
-    await waitFor(() => expect(screen.getByRole('button', { name: '研究' }).className).toContain('active'))
-  })
-
-  it('ignores an older category result after a newer request for the same item succeeds', async () => {
-    const category = { id: 'category-1', name: '研究', count: 0, created_at: '2026-08-10T01:00:00Z' }
-    let resolveFirst!: (value: ReturnType<typeof err>) => void
-    const setCategoryMembership = vi.fn()
-      .mockImplementationOnce(() => new Promise<ReturnType<typeof err>>((resolve) => { resolveFirst = resolve }))
-      .mockResolvedValueOnce(ok(true))
-    const { client } = makeClient([inbox()], {
-      listCategories: vi.fn(async () => ok({ items: [category] })),
-      setCategoryMembership,
-    })
-    renderInbox(client)
-
-    const categoryButton = await screen.findByRole('button', { name: '研究' })
-    fireEvent.click(categoryButton)
-    fireEvent.click(categoryButton)
-    await waitFor(() => expect(setCategoryMembership).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(categoryButton.className).toContain('active'))
-
-    await act(async () => {
-      resolveFirst(err({ kind: 'network-unreachable', message: '旧分类请求失败' }))
-    })
-
-    expect(categoryButton.className).toContain('active')
-    expect(screen.queryByText('旧分类请求失败')).not.toBeInTheDocument()
   })
 
   describe('新建条目 Dialog', () => {
@@ -2277,26 +2189,4 @@ describe('InboxSurface', () => {
     })
   })
 
-  it('ignores a delayed category result after its identity is no longer current', async () => {
-    const category = { id: 'category-1', name: '研究', count: 0, created_at: '2026-08-10T01:00:00Z' }
-    let current = true
-    let resolveMembership!: (value: ReturnType<typeof ok>) => void
-    const setCategoryMembership = vi.fn(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveMembership = resolve }))
-    const { client } = makeClient([inbox()], {
-      listCategories: vi.fn(async () => ok({ items: [category] })),
-      setCategoryMembership,
-      isIdentityCurrent: () => current,
-    })
-    renderInbox(client)
-
-    const categoryButton = await screen.findByRole('button', { name: '研究' })
-    fireEvent.click(categoryButton)
-    await waitFor(() => expect(setCategoryMembership).toHaveBeenCalledTimes(1))
-    current = false
-    await act(async () => {
-      resolveMembership(ok(true))
-    })
-
-    expect(categoryButton.className).not.toContain('active')
-  })
 })

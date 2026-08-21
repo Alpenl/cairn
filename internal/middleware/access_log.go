@@ -1,8 +1,7 @@
 // Package middleware 汇总了 WebTag HTTP 层使用的 Gin 中间件，
 // 包括请求 ID 注入与日志染色（RequestID）、访问日志（AccessLog）、
 // CORS 处理（CORS）、Panic 恢复与统一 JSON 错误响应（Recovery / JSONError）、
-// 基于令牌桶的按 IP 限流（RateLimit）、Prometheus HTTP 指标采集（HTTPMetrics），
-// 以及保护 /metrics 端点的 Bearer Token 鉴权（BearerAuth）。
+// 请求 ID、访问日志与 panic 恢复等 HTTP 基础中间件。
 package middleware
 
 import (

@@ -59,7 +59,7 @@ describe('annotation codec', () => {
     )).toBeNull()
   })
 
-  it('distinguishes migration rebinding from strict durable decoding', () => {
+  it('distinguishes source rebinding from strict durable decoding', () => {
     const target = { kind: 'summary', sourceHash: SUMMARY_HASH } as const
     const bound = annotation({
       blockKey: 'summary',
@@ -76,10 +76,6 @@ describe('annotation codec', () => {
       sourceContentRevision: 8,
       sourceSummaryHash: 'b'.repeat(64),
     }, target)).toEqual(bound)
-    expect(bindAnnotationToTarget(bound, {
-      kind: 'legacy-stale',
-      sourceKey: 'legacy-source',
-    })).toEqual(annotation({ blockKey: 'summary' }))
   })
 
   it('materializes target-discriminated drafts without trusting source identity fields', () => {

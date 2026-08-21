@@ -4,10 +4,7 @@ set -eu
 VERSION="${VERSION:-$(sh scripts/version.sh)}"
 COMMIT="${COMMIT:-}"
 
-# pgvector/pgvector:pg16 (stock postgres:16 + pgvector extension) is required
-# since the Phase 5 (v3.0) migration runs CREATE EXTENSION vector. Keep in
-# sync with test/dbintegration/postgres.go and the migration smoke script.
-pg_container="$(docker run -d --name webtag-app-smoke-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=webtag -p 5432 pgvector/pgvector:pg16)"
+pg_container="$(docker run -d --name webtag-app-smoke-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=webtag -p 5432 postgres:16)"
 
 cleanup() {
 	docker rm -f webtag-app-smoke >/dev/null 2>&1 || true
@@ -15,25 +12,6 @@ cleanup() {
 }
 
 trap cleanup EXIT INT TERM
-
-pg_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}' "$pg_container")"
-until docker exec "$pg_container" pg_isready -U postgres >/dev/null 2>&1; do
-	sleep 1
-done
-
-DATABASE_URL="postgres://postgres:postgres@127.0.0.1:${pg_port}/webtag?sslmode=disable" make migrate-fresh
-
-app_container="$(docker run -d \
-	--name webtag-app-smoke \
-	--add-host=host.docker.internal:host-gateway \
-	-p 127.0.0.1::8000 \
-	-e DATABASE_URL="postgres://postgres:postgres@host.docker.internal:${pg_port}/webtag?sslmode=disable" \
-	-e AI_BASE_URL=https://example.com/v1 \
-	-e AI_API_KEY=smoke-key \
-	-e AI_MODEL=smoke-model \
-	-e CURSOR_SIGNING_KEY=smoke-cursor-signing-key-0123456789abcdef \
-	webtag:${VERSION})"
-app_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8000/tcp") 0).HostPort}}' "$app_container")"
 
 # 失败时把两个容器的状态与日志一次性打出来。容器可能已经退出，
 # docker ps 看不到，但 docker inspect / logs 仍然可用（前提是没有 --rm）。
@@ -47,6 +25,43 @@ dump_smoke_diagnostics() {
 		docker logs "$c" >&2 || true
 	done
 }
+
+pg_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}' "$pg_container")"
+
+attempt=0
+until docker run --rm \
+	--add-host=host.docker.internal:host-gateway \
+	postgres:16 \
+	pg_isready -h host.docker.internal -p "$pg_port" -U postgres -d webtag >/dev/null 2>&1; do
+	attempt=$((attempt + 1))
+	if [ "$attempt" -ge 30 ]; then
+		docker logs "$pg_container" >&2 || true
+		echo "PostgreSQL did not become reachable through its published port" >&2
+		exit 1
+	fi
+	sleep 1
+done
+
+DATABASE_URL="postgres://postgres:postgres@127.0.0.1:${pg_port}/webtag?sslmode=disable" make migrate-fresh
+
+app_container="$(docker run -d \
+	--name webtag-app-smoke \
+	--add-host=host.docker.internal:host-gateway \
+	-p 127.0.0.1::8000 \
+	-e DATABASE_URL="postgres://postgres:postgres@host.docker.internal:${pg_port}/webtag?sslmode=disable" \
+	-e AI_BASE_URL=https://example.com/v1 \
+	-e AI_API_KEY=smoke-key \
+	-e AI_MODEL=smoke-model \
+	-e EXTENSION_API_TOKEN=smoke-installation-token \
+	-e SESSION_SIGNING_KEY=smoke-session-signing-key-0123456789abcdef \
+	-e CURSOR_SIGNING_KEY=smoke-cursor-signing-key-0123456789abcdef \
+	webtag:${VERSION})"
+app_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8000/tcp") 0).HostPort}}' "$app_container" 2>/dev/null || true)"
+if [ -z "$app_port" ]; then
+	dump_smoke_diagnostics
+	echo "application container did not expose port 8000" >&2
+	exit 1
+fi
 
 wait_for_http() {
 	path="$1"

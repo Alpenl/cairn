@@ -1,7 +1,6 @@
 package dbintegration
 
 import (
-	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -15,8 +14,8 @@ import (
 
 // TestReaderInboxOwnershipAndConfirmationContract is the real-PostgreSQL
 // acceptance matrix for the fields that deliberately have independent owners.
-// It also proves category readback/migration, canonical confirmation retries,
-// and a late proposal result after a user metadata write.
+// It also proves canonical confirmation retries and a late proposal result
+// after a user metadata write.
 func TestReaderInboxOwnershipAndConfirmationContract(t *testing.T) {
 	pool := StartPostgres(t)
 	repo := repository.NewPGXReaderVNextRepository(pool)
@@ -29,43 +28,79 @@ func TestReaderInboxOwnershipAndConfirmationContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInbox: %v", err)
 	}
-	category, err := repo.CreateCategory(ctx, "research")
-	if err != nil {
-		t.Fatalf("CreateCategory: %v", err)
-	}
-	if err := repo.SetCategoryMembership(ctx, category.ID, "inbox", created.ID.String(), true); err != nil {
-		t.Fatalf("SetCategoryMembership(inbox): %v", err)
-	}
-
 	before, err := repo.GetInbox(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("GetInbox before proposal: %v", err)
 	}
-	if before.Note != "private note" || before.Summary != nil || len(before.SuggestedTags) != 0 || len(before.CategoryIDs) != 1 || before.CategoryIDs[0] != category.ID || string(before.ProposalSignals) != `{}` || before.ProposalStatus != "pending" {
+	if before.Note != "private note" || before.Summary != nil || len(before.SuggestedTags) != 0 || before.ProposalStatus != "idle" {
 		t.Fatalf("initial independent ownership/readback = %#v", before)
 	}
 	if _, err := repo.PatchInbox(ctx, modelReaderInboxPatchContract(created.ID, stringPtrContract("stale"), nil, nil, nil, before.MetadataRevision+1)); !errors.Is(err, repository.ErrRevisionConflict) {
 		t.Fatalf("PatchInbox stale revision error = %v, want ErrRevisionConflict", err)
 	}
 
-	job, inserted, err := repo.BeginInboxResummarizeJob(ctx, created.ID, before.MetadataRevision)
-	if err != nil || !inserted {
-		t.Fatalf("BeginInboxResummarizeJob error=%v inserted=%v", err, inserted)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin initial proposal transaction: %v", err)
 	}
-	if _, err := repo.ClaimInboxJob(ctx, job.ID); err != nil {
-		t.Fatalf("ClaimInboxJob: %v", err)
+	if _, err := repo.StartInboxProposalTx(ctx, tx, created.ID, before.MetadataRevision); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("StartInboxProposalTx: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit initial proposal: %v", err)
+	}
+	if _, err := repo.ClaimInboxProposal(ctx, created.ID, before.MetadataRevision); err != nil {
+		t.Fatalf("ClaimInboxProposal: %v", err)
+	}
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin duplicate proposal transaction: %v", err)
+	}
+	duplicate, err := repo.StartInboxProposalTx(ctx, tx, created.ID, before.MetadataRevision)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("duplicate StartInboxProposalTx: %v", err)
+	}
+	if duplicate.ProposalStatus != "running" {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("duplicate StartInboxProposalTx status = %q, want running", duplicate.ProposalStatus)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit duplicate proposal: %v", err)
 	}
 	updatedTitle, updatedBody, updatedNote := "User title", "user body", "user note"
 	updated, err := repo.PatchInbox(ctx, modelReaderInboxPatchContract(created.ID, &updatedTitle, &updatedBody, &updatedNote, []string{"user-final"}, before.MetadataRevision))
 	if err != nil {
 		t.Fatalf("PatchInbox user-owned fields: %v", err)
 	}
-	if err := repo.CompleteInboxJob(ctx, job.ID, "AI summary", []string{"ai-suggested"}); err != nil {
-		t.Fatalf("CompleteInboxJob after user edit: %v", err)
+	if err := repo.CompleteInboxProposal(ctx, created.ID, before.MetadataRevision, "stale AI summary", []string{"stale"}); !errors.Is(err, repository.ErrReaderInboxProposalNotRunnable) {
+		t.Fatalf("CompleteInboxProposal after user edit error = %v, want ErrReaderInboxProposalNotRunnable", err)
 	}
-	// A retry after a successful worker completion is idempotent.
-	if err := repo.CompleteInboxJob(ctx, job.ID, "ignored retry", []string{"ignored"}); err != nil {
-		t.Fatalf("CompleteInboxJob retry: %v", err)
+	staleDropped, err := repo.GetInbox(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetInbox after stale proposal: %v", err)
+	}
+	if staleDropped.Summary != nil || len(staleDropped.SuggestedTags) != 0 || staleDropped.ProposalStatus != "idle" {
+		t.Fatalf("stale proposal mutated current draft = %#v", staleDropped)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin current proposal transaction: %v", err)
+	}
+	if _, err := repo.StartInboxProposalTx(ctx, tx, created.ID, updated.MetadataRevision); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("StartInboxProposalTx current revision: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit current proposal: %v", err)
+	}
+	if _, err := repo.ClaimInboxProposal(ctx, created.ID, updated.MetadataRevision); err != nil {
+		t.Fatalf("ClaimInboxProposal current revision: %v", err)
+	}
+	if err := repo.CompleteInboxProposal(ctx, created.ID, updated.MetadataRevision, "AI summary", []string{"ai-suggested"}); err != nil {
+		t.Fatalf("CompleteInboxProposal current revision: %v", err)
 	}
 	after, err := repo.GetInbox(ctx, created.ID)
 	if err != nil {
@@ -74,12 +109,11 @@ func TestReaderInboxOwnershipAndConfirmationContract(t *testing.T) {
 	if after.Title == nil || *after.Title != updatedTitle || after.Body != updatedBody || after.Note != updatedNote || after.MetadataRevision != updated.MetadataRevision || len(after.Tags) != 1 || after.Tags[0] != "user-final" {
 		t.Fatalf("late AI overwrote user partition: %#v", after)
 	}
-	if after.Summary == nil || *after.Summary != "AI summary" || len(after.SuggestedTags) != 1 || after.SuggestedTags[0] != "ai-suggested" || after.ProposalStatus != "completed" || string(after.ProposalSignals) != `{}` {
+	if after.Summary == nil || *after.Summary != "AI summary" || len(after.SuggestedTags) != 1 || after.SuggestedTags[0] != "ai-suggested" || after.ProposalStatus != "completed" {
 		t.Fatalf("proposal partition/readback = %#v", after)
 	}
 
-	// Confirmation moves categories to the canonical link in the same
-	// transaction and remains safe when two clients race to confirm.
+	// Confirmation remains safe when two clients race to confirm.
 	var wg sync.WaitGroup
 	confirmIDs := make(chan uuid.UUID, 2)
 	errs := make(chan error, 2)
@@ -87,7 +121,7 @@ func TestReaderInboxOwnershipAndConfirmationContract(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			id, confirmErr := repo.ConfirmInbox(ctx, created.ID)
+			id, confirmErr := repo.ConfirmInbox(ctx, created.ID, nil)
 			confirmIDs <- id
 			errs <- confirmErr
 		}()
@@ -107,14 +141,6 @@ func TestReaderInboxOwnershipAndConfirmationContract(t *testing.T) {
 	if len(confirmed) != 2 || confirmed[0] != confirmed[1] {
 		t.Fatalf("concurrent confirmation identities = %#v", confirmed)
 	}
-	var categoryCount int
-	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM reader_categorizables WHERE category_id=$1 AND host_kind='link' AND host_id=$2`, category.ID, confirmed[0].String()).Scan(&categoryCount); err != nil {
-		t.Fatalf("read migrated category: %v", err)
-	}
-	if categoryCount != 1 {
-		t.Fatalf("migrated category count = %d, want 1", categoryCount)
-	}
-
 	blank, err := repo.CreateInbox(ctx, modelReaderInboxContract("https://inbox-contract.example/blank", stringPtrContract("  "), "body", "note", nil))
 	if err != nil {
 		t.Fatalf("CreateInbox blank: %v", err)
@@ -136,19 +162,16 @@ func TestReaderInboxOwnershipAndConfirmationContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInbox rollback fixture: %v", err)
 	}
-	if err := repo.SetCategoryMembership(ctx, category.ID, "inbox", rollback.ID.String(), true); err != nil {
-		t.Fatalf("SetCategoryMembership rollback fixture: %v", err)
-	}
-	if _, err := pool.Exec(t.Context(), `CREATE OR REPLACE FUNCTION reader_inbox_contract_abort_category_move() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'injected category migration failure'; END; $$ LANGUAGE plpgsql`); err != nil {
+	if _, err := pool.Exec(t.Context(), `CREATE OR REPLACE FUNCTION reader_inbox_contract_abort_finalize() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'injected confirmation finalization failure'; END; $$ LANGUAGE plpgsql`); err != nil {
 		t.Fatalf("create rollback trigger function: %v", err)
 	}
-	if _, err := pool.Exec(t.Context(), `CREATE TRIGGER trg_reader_inbox_contract_abort_category_move BEFORE UPDATE ON reader_categorizables FOR EACH ROW EXECUTE FUNCTION reader_inbox_contract_abort_category_move()`); err != nil {
+	if _, err := pool.Exec(t.Context(), `CREATE TRIGGER trg_reader_inbox_contract_abort_finalize BEFORE UPDATE ON reader_inbox FOR EACH ROW WHEN (NEW.status='confirmed') EXECUTE FUNCTION reader_inbox_contract_abort_finalize()`); err != nil {
 		t.Fatalf("create rollback trigger: %v", err)
 	}
-	if _, err := repo.ConfirmInbox(ctx, rollback.ID); err == nil {
-		t.Fatal("ConfirmInbox with injected category migration failure succeeded")
+	if _, err := repo.ConfirmInbox(ctx, rollback.ID, nil); err == nil {
+		t.Fatal("ConfirmInbox with injected finalization failure succeeded")
 	}
-	if _, err := pool.Exec(t.Context(), `DROP TRIGGER trg_reader_inbox_contract_abort_category_move ON reader_categorizables`); err != nil {
+	if _, err := pool.Exec(t.Context(), `DROP TRIGGER trg_reader_inbox_contract_abort_finalize ON reader_inbox`); err != nil {
 		t.Fatalf("drop rollback trigger: %v", err)
 	}
 	var rollbackStatus string
@@ -164,8 +187,76 @@ func TestReaderInboxOwnershipAndConfirmationContract(t *testing.T) {
 	}
 }
 
+func TestReaderInboxDiscardUsesTrashTombstoneAndRollsBackAtomically(t *testing.T) {
+	pool := StartPostgres(t)
+	repo := repository.NewPGXReaderVNextRepository(pool)
+	ctx := t.Context()
+
+	title := "Discardable"
+	discarded, err := repo.CreateInbox(ctx, modelReaderInboxContract(
+		"https://inbox-contract.example/discard", &title, "body", "note", nil,
+	))
+	if err != nil {
+		t.Fatalf("CreateInbox discard fixture: %v", err)
+	}
+	if err := repo.DiscardInbox(ctx, discarded.ID); err != nil {
+		t.Fatalf("DiscardInbox: %v", err)
+	}
+	var status string
+	var deleted bool
+	if err := pool.QueryRow(ctx, `SELECT status,deleted_at IS NOT NULL FROM reader_inbox WHERE id=$1`, discarded.ID).Scan(&status, &deleted); err != nil {
+		t.Fatalf("read discarded Inbox row: %v", err)
+	}
+	if status != "pending" || !deleted {
+		t.Fatalf("discarded Inbox storage = status:%q deleted:%t, want pending/true", status, deleted)
+	}
+	if _, err := repo.GetInbox(ctx, discarded.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("GetInbox discarded row error = %v, want ErrNotFound", err)
+	}
+	if err := repo.RestoreInbox(ctx, discarded.ID); err != nil {
+		t.Fatalf("RestoreInbox discarded row: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status,deleted_at IS NOT NULL FROM reader_inbox WHERE id=$1`, discarded.ID).Scan(&status, &deleted); err != nil {
+		t.Fatalf("read restored Inbox row: %v", err)
+	}
+	if status != "pending" || deleted {
+		t.Fatalf("restored Inbox storage = status:%q deleted:%t, want pending/false", status, deleted)
+	}
+
+	confirmedTitle := "Confirmed"
+	confirmed, err := repo.CreateInbox(ctx, modelReaderInboxContract(
+		"https://inbox-contract.example/confirmed", &confirmedTitle, "body", "note", nil,
+	))
+	if err != nil {
+		t.Fatalf("CreateInbox confirmed fixture: %v", err)
+	}
+	if _, err := repo.ConfirmInbox(ctx, confirmed.ID, nil); err != nil {
+		t.Fatalf("ConfirmInbox fixture: %v", err)
+	}
+	if err := repo.DiscardInbox(ctx, confirmed.ID); !errors.Is(err, repository.ErrReaderInboxStateConflict) {
+		t.Fatalf("DiscardInbox confirmed row error = %v, want ErrReaderInboxStateConflict", err)
+	}
+
+	pendingTitle := "Atomic pending"
+	pending, err := repo.CreateInbox(ctx, modelReaderInboxContract(
+		"https://inbox-contract.example/atomic", &pendingTitle, "body", "note", nil,
+	))
+	if err != nil {
+		t.Fatalf("CreateInbox atomic fixture: %v", err)
+	}
+	if _, err := repo.BulkDiscardInbox(ctx, []uuid.UUID{pending.ID, confirmed.ID}); !errors.Is(err, repository.ErrReaderInboxStateConflict) {
+		t.Fatalf("BulkDiscardInbox mixed state error = %v, want ErrReaderInboxStateConflict", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT deleted_at IS NOT NULL FROM reader_inbox WHERE id=$1`, pending.ID).Scan(&deleted); err != nil {
+		t.Fatalf("read atomic pending fixture: %v", err)
+	}
+	if deleted {
+		t.Fatal("BulkDiscardInbox partially tombstoned a pending row before rollback")
+	}
+}
+
 func modelReaderInboxContract(url string, title *string, body, note string, tags []string) model.ReaderInbox {
-	return model.ReaderInbox{URL: url, IdentityKey: url, SourceKind: "browser_capture", Title: title, Body: body, Note: note, Tags: tags, ProposalSignals: json.RawMessage(`{}`), ProposalStatus: "pending"}
+	return model.ReaderInbox{URL: url, IdentityKey: url, SourceKind: "browser_capture", Title: title, Body: body, Note: note, Tags: tags, ProposalStatus: "idle"}
 }
 
 func modelReaderInboxPatchContract(id uuid.UUID, title, body, note *string, tags []string, revision int64) model.ReaderInboxPatch {

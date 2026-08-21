@@ -51,8 +51,6 @@ func TestHomeAggregateMapsOneAuthoritativeResultToHomeDTO(t *testing.T) {
 			Summary:     "A saved article",
 			URL:         "https://example.com/article",
 			LinkID:      &linkID,
-			ReasonCode:  model.ReaderFeedReasonContinueReading,
-			ReasonText:  "已读 42%，继续阅读",
 			PublishedAt: &updatedAt,
 			CreatedAt:   updatedAt,
 		}},
@@ -140,11 +138,7 @@ func TestHomeAggregateMapsOneAuthoritativeResultToHomeDTO(t *testing.T) {
 	}
 }
 
-// TestHomeAggregateEmitsContinueReadingAsAnUnscoredReason pins the wire shape a
-// Reader client validates. continue_reading explains the card without being a
-// ranking signal, so it must never claim a contribution nor appear inside the
-// fixed-width score evidence — the two places a client checks column by column.
-func TestHomeAggregateEmitsContinueReadingAsAnUnscoredReason(t *testing.T) {
+func TestHomeAggregateEmitsMinimalContinueReadingItem(t *testing.T) {
 	linkID := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 	updatedAt := time.Date(2026, 8, 10, 9, 30, 0, 0, time.UTC)
 	store := &readerHomeAggregateStoreStub{aggregate: repository.ReaderHomeAggregate{
@@ -157,8 +151,6 @@ func TestHomeAggregateEmitsContinueReadingAsAnUnscoredReason(t *testing.T) {
 			Summary:     "A saved article",
 			URL:         "https://example.com/article",
 			LinkID:      &linkID,
-			ReasonCode:  model.ReaderFeedReasonContinueReading,
-			ReasonText:  "已读 42%，继续阅读",
 			PublishedAt: &updatedAt,
 			CreatedAt:   updatedAt,
 		}},
@@ -176,12 +168,11 @@ func TestHomeAggregateEmitsContinueReadingAsAnUnscoredReason(t *testing.T) {
 	}
 	var envelope struct {
 		ContinueReading []struct {
-			ReasonCode          string         `json:"reason_code"`
-			ReasonParams        map[string]any `json:"reason_params"`
-			ReasonContribution  int            `json:"reason_contribution"`
-			Score               int            `json:"score"`
-			ScoreContributions  map[string]int `json:"score_contributions"`
-			EnabledScoreSignals []string       `json:"enabled_score_signals"`
+			Key         string    `json:"key"`
+			Source      string    `json:"source"`
+			ResourceKey string    `json:"resource_key"`
+			LinkID      *string   `json:"link_id"`
+			EventAt     time.Time `json:"event_at"`
 		} `json:"continue_reading"`
 	}
 	if err := json.Unmarshal(wire, &envelope); err != nil {
@@ -191,22 +182,8 @@ func TestHomeAggregateEmitsContinueReadingAsAnUnscoredReason(t *testing.T) {
 		t.Fatalf("continue_reading = %#v, want one card", envelope.ContinueReading)
 	}
 	card := envelope.ContinueReading[0]
-	if card.ReasonCode != string(model.ReaderFeedReasonContinueReading) {
-		t.Fatalf("reason_code = %q, want %q", card.ReasonCode, model.ReaderFeedReasonContinueReading)
-	}
-	if len(card.ReasonParams) != 0 || card.ReasonContribution != 0 || card.Score != 0 || len(card.EnabledScoreSignals) != 0 {
-		t.Fatalf("unscored card = %#v, want empty params, zero contribution and no enabled signals", card)
-	}
-	if len(card.ScoreContributions) != 6 {
-		t.Fatalf("score_contributions keys = %#v, want the six ranking signals", card.ScoreContributions)
-	}
-	if _, ok := card.ScoreContributions[string(model.ReaderFeedReasonContinueReading)]; ok {
-		t.Fatalf("score_contributions = %#v, want no continue_reading column", card.ScoreContributions)
-	}
-	for signal, contribution := range card.ScoreContributions {
-		if contribution != 0 {
-			t.Fatalf("score_contributions[%q] = %d, want 0 for an unscored card", signal, contribution)
-		}
+	if card.Key != "link:"+linkID.String() || card.Source != "reading" || card.ResourceKey != "link:"+linkID.String() || card.LinkID == nil || *card.LinkID != linkID.String() || !card.EventAt.Equal(updatedAt) {
+		t.Fatalf("continue reading card = %#v, want minimal reading identity and event time", card)
 	}
 }
 
@@ -350,17 +327,5 @@ func TestHomeAggregateDoesNotReturnPartialDTOOnRepositoryError(t *testing.T) {
 	}
 	if got.Today != "" || got.Summary != "" || got.Counts != nil || got.ContinueReading != nil || got.RecentThoughts != nil || got.Todos != nil || got.Freshness != "" || got.Partial || got.Stale {
 		t.Fatalf("HomeAggregate() returned partial DTO: %#v", got)
-	}
-}
-
-func TestHomeAggregateRejectsStoresWithoutAuthoritativeSeam(t *testing.T) {
-	service := NewReaderVNextService(nil, nil)
-
-	got, err := service.HomeAggregate(context.Background())
-	if !errors.Is(err, ErrReaderHomeAggregateUnavailable) {
-		t.Fatalf("HomeAggregate() error = %v, want ErrReaderHomeAggregateUnavailable", err)
-	}
-	if got.Today != "" || got.Summary != "" || got.Counts != nil || got.ContinueReading != nil || got.RecentThoughts != nil || got.Todos != nil || got.Freshness != "" || got.Partial || got.Stale {
-		t.Fatalf("HomeAggregate() = %#v, want zero response", got)
 	}
 }

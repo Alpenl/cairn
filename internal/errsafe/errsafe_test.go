@@ -26,7 +26,6 @@ func TestClassifyError_Sentinels(t *testing.T) {
 		{"network", errsafe.ErrNetwork, "network"},
 		{"upstream http", errsafe.ErrUpstreamHTTP, "upstream_http"},
 		{"parse", errsafe.ErrParse, "parse"},
-		{"parse job missing", errsafe.ErrParseJobMissing, "parse_job_missing"},
 	}
 
 	for _, tt := range tests {

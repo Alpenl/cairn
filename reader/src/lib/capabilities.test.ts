@@ -12,10 +12,9 @@ import {
 const ENABLED: CapabilitiesResponse = {
   library_kinds: true,
   site_library: true,
-  site_auto_classification: true,
   site_management: true,
   site_advanced_management: true,
-  archive_versions: [1, 2],
+  archive_versions: [2],
   reader_vnext: true,
   reader: {
     annotations: true,
@@ -26,7 +25,7 @@ const ENABLED: CapabilitiesResponse = {
     home: true,
     feed: true,
     ai: true,
-    semantic: true,
+    related_tags: true,
     activity: true,
     history: true,
     trash: true,
@@ -43,7 +42,7 @@ describe('Reader capability policy', () => {
     ['home', 'home'],
     ['feed', 'feed'],
     ['ai', 'ai'],
-    ['semantic', 'semantic'],
+    ['related_tags', 'relatedTags'],
     ['activity', 'activity'],
     ['history', 'history'],
     ['trash', 'trash'],
@@ -91,7 +90,6 @@ describe('Reader capability policy', () => {
     ['Notes', { kind: 'library', id: 'notes' }, 'notes'],
     ['TODO', { kind: 'tool', id: 'todo' }, 'todos'],
     ['Thought History', { kind: 'tool', id: 'history' }, 'history'],
-    ['Review', { kind: 'internal', id: 'review' }, 'siteAdvanced'],
   ] satisfies ReadonlyArray<readonly [string, ReaderRoute, keyof ReaderCapabilityPolicy]>)('%s route follows only %s', (_label, route, policyKey) => {
     const policy = deriveReaderCapabilityPolicy(ENABLED)
     expect(readerRouteIsAvailable(route, policy)).toBe(true)

@@ -104,7 +104,7 @@ func TestTranslationProcessorRejectsStaleAttemptBeforeTranslator(t *testing.T) {
 		t.Fatalf("translator calls = %d, want 0", engine.calls)
 	}
 	if got := logs.String(); !strings.Contains(got, "translation attempt projection rejected") ||
-		!strings.Contains(got, "reason="+model.TranslationAttemptRejectionNotCurrent.String()) ||
+		!strings.Contains(got, "reason="+string(attemptRejectionNotCurrent)) ||
 		!strings.Contains(got, "projection=processing") {
 		t.Fatalf("log = %q", got)
 	}
@@ -117,7 +117,7 @@ func TestTranslationProcessorLogsRejectedTerminalAttempts(t *testing.T) {
 		TranslationID:     uuid.New(),
 		AttemptGeneration: 4, RiverJobID: 902,
 	}
-	for _, projection := range []string{"success", "failure", "cancellation"} {
+	for _, projection := range []string{"success", "failure"} {
 		t.Run(projection, func(t *testing.T) {
 			t.Parallel()
 			applied := false
@@ -139,15 +139,13 @@ func TestTranslationProcessorLogsRejectedTerminalAttempts(t *testing.T) {
 			case "success":
 				err = processor.Run(context.Background(), attempt)
 			case "failure":
-				err = processor.RecordDiscard(context.Background(), attempt, errors.New("discarded"))
-			case "cancellation":
-				err = processor.RecordCancellation(context.Background(), attempt, context.Canceled)
+				err = processor.RecordFailure(context.Background(), attempt, errors.New("discarded"))
 			}
 			if err != nil {
 				t.Fatalf("projection error = %v", err)
 			}
 			if got := logs.String(); !strings.Contains(got, "translation attempt projection rejected") ||
-				!strings.Contains(got, "reason="+model.TranslationAttemptRejectionNotCurrent.String()) ||
+				!strings.Contains(got, "reason="+string(attemptRejectionNotCurrent)) ||
 				!strings.Contains(got, "projection="+projection) {
 				t.Fatalf("log = %q", got)
 			}
@@ -206,8 +204,8 @@ func TestTranslationProcessorStoresSafeFinalFailure(t *testing.T) {
 		Translator:   &fakeTranslator{err: errors.New("upstream body contained secret details")},
 	})
 
-	if err := processor.RecordDiscard(context.Background(), attempt, errors.New("upstream body contained secret details")); err != nil {
-		t.Fatalf("RecordDiscard() error = %v", err)
+	if err := processor.RecordFailure(context.Background(), attempt, errors.New("upstream body contained secret details")); err != nil {
+		t.Fatalf("RecordFailure() error = %v", err)
 	}
 	if store.failedID != translationID || store.failedMessage != "翻译服务暂时不可用，请重试" {
 		t.Fatalf("stored failure = %s %q", store.failedID, store.failedMessage)

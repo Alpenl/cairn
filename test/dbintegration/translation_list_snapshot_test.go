@@ -3,11 +3,15 @@ package dbintegration
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"webtag/internal/contentdoc"
 	"webtag/internal/model"
@@ -36,8 +40,8 @@ func TestTranslationListUsesOneRepeatableReadSnapshot(t *testing.T) {
 
 	if _, err := pool.Exec(ctx, `INSERT INTO links (
 		id, url, source_key, status, summary, content_document, content_format,
-		library_kind, library_kind_source, content_revision, first_collected_at
-	) VALUES ($1, $2, $2, 'done', $3, $4, 'markdown', 'reading', 'user', $5, NOW())`,
+		library_kind, library_kind_locked, content_revision, first_collected_at
+	) VALUES ($1, $2, $2, 'done', $3, $4, 'markdown', 'reading', true, $5, NOW())`,
 		linkID,
 		"https://example.com/rf5a-translation-list-snapshot/"+linkID.String(),
 		oldSummary,
@@ -113,7 +117,7 @@ func TestTranslationListUsesOneRepeatableReadSnapshot(t *testing.T) {
 		firstResult <- listResult{list: list, err: listErr}
 	}()
 
-	waitForRF3BLockWait(t, ctx, pool, readerApplication, "FROM link_translations")
+	waitForTranslationLock(t, ctx, pool, readerApplication)
 	if err := writer.Commit(ctx); err != nil {
 		t.Fatalf("commit new source while list waits: %v", err)
 	}
@@ -144,6 +148,38 @@ func TestTranslationListUsesOneRepeatableReadSnapshot(t *testing.T) {
 		newFullID:              false,
 		newBlockSummaryID:      false,
 	})
+}
+
+func waitForTranslationLock(
+	t *testing.T,
+	ctx context.Context,
+	inspector *pgxpool.Pool,
+	applicationName string,
+) {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s did not reach the expected translation lock wait: %v", applicationName, ctx.Err())
+		case <-ticker.C:
+			var query string
+			var waitEventType *string
+			err := inspector.QueryRow(ctx, `SELECT query, wait_event_type
+				FROM pg_stat_activity
+				WHERE application_name=$1 AND state='active'`, applicationName).Scan(&query, &waitEventType)
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				t.Fatalf("inspect %s lock wait: %v", applicationName, err)
+			}
+			if waitEventType != nil && *waitEventType == "Lock" && strings.Contains(query, "FROM link_translations") {
+				return
+			}
+		}
+	}
 }
 
 func assertTranslationListSnapshot(

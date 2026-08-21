@@ -7,10 +7,10 @@ import (
 )
 
 type ReaderThoughtOpRequest struct {
-	ContractVersion int             `json:"contract_version,omitempty" binding:"omitempty,oneof=1"`
+	ContractVersion int             `json:"contract_version" binding:"required,oneof=1"`
 	OpID            string          `json:"op_id" binding:"required,max=128"`
 	DeviceID        string          `json:"device_id" binding:"required,max=128"`
-	LogicalClock    int64           `json:"logical_clock,omitempty" binding:"min=0"`
+	LogicalClock    int64           `json:"logical_clock" binding:"required,min=1"`
 	OperationKind   string          `json:"operation_kind" binding:"required,oneof=add update delete"`
 	AnnotationID    string          `json:"annotation_id" binding:"required,max=256"`
 	HostKind        string          `json:"host_kind" binding:"required,max=32"`
@@ -100,13 +100,6 @@ type ReaderThoughtConflictsResponse struct {
 	ContractVersion int                             `json:"contract_version"`
 	Items           []ReaderThoughtConflictResponse `json:"items"`
 	NextCursor      string                          `json:"next_cursor,omitempty"`
-}
-
-type ReaderThoughtReattachRequest struct {
-	TargetHostKind       string `json:"target_host_kind" binding:"required,max=32"`
-	TargetHostID         string `json:"target_host_id" binding:"required,max=256"`
-	ExpectedLastSequence int64  `json:"expected_last_sequence" binding:"min=0"`
-	ExpectedHostRevision int64  `json:"expected_host_revision" binding:"required,min=1"`
 }
 
 type ReaderNoteCreateRequest struct {
@@ -243,33 +236,27 @@ type ReaderInboxConfirmAIProposalsResponse struct {
 }
 
 type ReaderInboxResponse struct {
-	ID            string   `json:"id"`
-	URL           string   `json:"url"`
-	SourceKind    string   `json:"source_kind"`
-	Title         *string  `json:"title,omitempty"`
-	Body          string   `json:"body"`
-	Note          string   `json:"note"`
-	Summary       *string  `json:"summary,omitempty"`
-	SuggestedTags []string `json:"suggested_tags"`
-	// json.RawMessage 而非裸 []byte：encoding/json 会把裸 []byte 编码成 base64
-	// 字符串，而契约声明它是 object，Reader 的类型守卫会整条响应判定 shapeMismatch。
-	ProposalSignals  json.RawMessage `json:"proposal_signals"`
-	ProposalStatus   string          `json:"proposal_status"`
-	Tags             []string        `json:"tags"`
-	CategoryIDs      []string        `json:"category_ids"`
-	Status           string          `json:"status"`
-	MetadataRevision int64           `json:"metadata_revision"`
-	JobID            *string         `json:"job_id,omitempty"`
-	ExpiresAt        *time.Time      `json:"expires_at"`
-	ExpiredAt        *time.Time      `json:"expired_at"`
-	Expired          bool            `json:"expired"`
-	DeletedAt        *time.Time      `json:"deleted_at,omitempty"`
-	CreatedAt        time.Time       `json:"created_at"`
-	UpdatedAt        time.Time       `json:"updated_at"`
+	ID               string     `json:"id"`
+	URL              string     `json:"url"`
+	SourceKind       string     `json:"source_kind"`
+	Title            *string    `json:"title,omitempty"`
+	Body             string     `json:"body"`
+	Note             string     `json:"note"`
+	Summary          *string    `json:"summary,omitempty"`
+	SuggestedTags    []string   `json:"suggested_tags"`
+	ProposalStatus   string     `json:"proposal_status"`
+	Tags             []string   `json:"tags"`
+	Status           string     `json:"status"`
+	MetadataRevision int64      `json:"metadata_revision"`
+	ExpiresAt        *time.Time `json:"expires_at"`
+	Expired          bool       `json:"expired"`
+	DeletedAt        *time.Time `json:"deleted_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // ReaderInboxListItemResponse is the queue card contract. It deliberately has
-// no Body, Note, ProposalSignals, SuggestedTags or CategoryIDs field: a
+// no Body, Note or SuggestedTags field: a
 // capture accepts a 4 MiB body and a 1 MiB note, and the list is read every
 // time the Inbox opens. Clients that need those read GET /api/inbox/{id},
 // whose contract is unchanged.
@@ -288,8 +275,8 @@ type ReaderInboxListItemResponse struct {
 	// MetadataRevision is what the batch confirm/discard actions send back as
 	// the expected revision, so the list must carry it.
 	MetadataRevision int64 `json:"metadata_revision"`
-	// Expired mirrors the detail contract: it is the materialized partition
-	// flag, never a wall-clock comparison performed by the client.
+	// Expired mirrors the detail contract and is computed by PostgreSQL from
+	// ExpiresAt, never by the client clock.
 	Expired bool `json:"expired"`
 	// UpdatedAt is both the card timestamp and the keyset cursor field.
 	UpdatedAt time.Time `json:"updated_at"`
@@ -300,38 +287,6 @@ type ReaderInboxResponsePage struct {
 	NextCursor   string                        `json:"next_cursor,omitempty"`
 	ActiveCount  int                           `json:"active_count"`
 	ExpiredCount int                           `json:"expired_count"`
-}
-
-type ReaderInboxJobResponse struct {
-	InboxID    string     `json:"inbox_id"`
-	Status     string     `json:"status"`
-	JobID      string     `json:"job_id"`
-	Attempts   int        `json:"attempts"`
-	Error      string     `json:"error,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-}
-
-type ReaderCategoryResponse struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Count     int       `json:"count"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type ReaderCategoriesResponse struct {
-	Items []ReaderCategoryResponse `json:"items"`
-}
-
-type ReaderCategoryRequest struct {
-	Name string `json:"name" binding:"required,max=128"`
-}
-
-type ReaderCategoryMembershipRequest struct {
-	HostKind string `json:"host_kind" binding:"required,max=32"`
-	HostID   string `json:"host_id" binding:"required,max=256"`
-	Present  bool   `json:"present"`
 }
 
 type ReaderTodoCreateRequest struct {
@@ -425,95 +380,36 @@ type ReaderEngagementResponse struct {
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
-type ReaderFeedSectionResponse struct {
-	ID           string   `json:"id"`
-	Source       string   `json:"source"`
-	Label        string   `json:"label"`
-	Count        int      `json:"count"`
-	Capabilities []string `json:"capabilities"`
-}
-
-type ReaderFeedSourceResponse struct {
-	ID           string   `json:"id"`
-	Label        string   `json:"label"`
-	Enabled      bool     `json:"enabled"`
-	Count        int      `json:"count"`
-	Capabilities []string `json:"capabilities"`
-}
-
-type ReaderFeedReasonParams struct {
-	Source    *string    `json:"source,omitempty"`
-	Read      *bool      `json:"read,omitempty"`
-	ReadLater *bool      `json:"read_later,omitempty"`
-	CreatedAt *time.Time `json:"created_at,omitempty"`
-}
-
-type ReaderFeedScoreContributions struct {
-	PendingConfirmation   int `json:"pending_confirmation"`
-	SavedLibrary          int `json:"saved_library"`
-	SubscriptionRecent    int `json:"subscription_recent"`
-	Unread                int `json:"unread"`
-	ReadLater             int `json:"read_later"`
-	ChronologicalFallback int `json:"chronological_fallback"`
-}
-
 type ReaderFeedItemResponse struct {
-	Key                 string                       `json:"key"`
-	Source              string                       `json:"source"`
-	ItemType            string                       `json:"item_type,omitempty"`
-	ResourceKey         string                       `json:"resource_key,omitempty"`
-	ActionKey           string                       `json:"action_key,omitempty"`
-	DedupeKey           string                       `json:"dedupe_key,omitempty"`
-	SectionID           string                       `json:"section_id,omitempty"`
-	Actions             []string                     `json:"actions"`
-	Title               string                       `json:"title"`
-	Summary             string                       `json:"summary"`
-	URL                 string                       `json:"url"`
-	LinkID              *string                      `json:"link_id,omitempty"`
-	InboxID             *string                      `json:"inbox_id,omitempty"`
-	FeedItemID          *string                      `json:"feed_item_id,omitempty"`
-	Read                bool                         `json:"read"`
-	ReadLater           bool                         `json:"read_later"`
-	Saved               bool                         `json:"saved"`
-	Score               int                          `json:"score"`
-	ScoreContributions  ReaderFeedScoreContributions `json:"score_contributions"`
-	EnabledScoreSignals []string                     `json:"enabled_score_signals"`
-	ReasonCode          string                       `json:"reason_code"`
-	ReasonParams        ReaderFeedReasonParams       `json:"reason_params"`
-	ReasonContribution  int                          `json:"reason_contribution"`
-	ReasonText          string                       `json:"reason_text"`
-	PublishedAt         *time.Time                   `json:"published_at,omitempty"`
-	EventAt             time.Time                    `json:"event_at"`
-	CreatedAt           time.Time                    `json:"created_at"`
+	Key         string    `json:"key"`
+	Source      string    `json:"source"`
+	ResourceKey string    `json:"resource_key"`
+	Title       string    `json:"title"`
+	Summary     string    `json:"summary"`
+	URL         string    `json:"url"`
+	LinkID      *string   `json:"link_id,omitempty"`
+	InboxID     *string   `json:"inbox_id,omitempty"`
+	FeedItemID  *string   `json:"feed_item_id,omitempty"`
+	Read        bool      `json:"read"`
+	ReadLater   bool      `json:"read_later"`
+	Saved       bool      `json:"saved"`
+	EventAt     time.Time `json:"event_at"`
 }
 
 type ReaderFeedResponse struct {
-	Items        []ReaderFeedItemResponse    `json:"items"`
-	NextCursor   string                      `json:"next_cursor,omitempty"`
-	SnapshotID   string                      `json:"snapshot_id"`
-	Mode         string                      `json:"mode"`
-	Capabilities []string                    `json:"capabilities"`
-	Sections     []ReaderFeedSectionResponse `json:"sections"`
-	Sources      []ReaderFeedSourceResponse  `json:"sources"`
+	Items      []ReaderFeedItemResponse `json:"items"`
+	NextCursor string                   `json:"next_cursor,omitempty"`
+	Mode       string                   `json:"mode"`
 }
 
 type ReaderFeedFeedbackRequest struct {
-	Action string `json:"action" binding:"required,oneof=not_interested hide save unsave"`
-}
-
-// ReaderFeedSaveAssociationResponse identifies the exact subscription-save
-// association whose lifecycle was changed by feedback.
-type ReaderFeedSaveAssociationResponse struct {
-	FeedItemID  string `json:"feed_item_id"`
-	LinkID      string `json:"link_id"`
-	CreatedLink bool   `json:"created_link"`
+	Action string `json:"action" binding:"required,oneof=hide save unsave"`
 }
 
 type ReaderFeedFeedbackResponse struct {
-	ItemKey     string                             `json:"item_key"`
-	Action      string                             `json:"action"`
-	Saved       bool                               `json:"saved"`
-	Association *ReaderFeedSaveAssociationResponse `json:"association,omitempty"`
+	ItemKey string  `json:"item_key"`
+	Action  string  `json:"action"`
+	LinkID  *string `json:"link_id,omitempty"`
 }
 
 type ReaderHomeResponse struct {
@@ -552,9 +448,7 @@ type ReaderAIResponse struct {
 }
 
 type ReaderRelatedTagsResponse struct {
-	Items    []string `json:"items"`
-	Model    string   `json:"model"`
-	Degraded bool     `json:"degraded"`
+	Items []string `json:"items"`
 }
 
 type ReaderActivityResponse struct {
@@ -633,15 +527,6 @@ type ReaderLinkMetadataResponse struct {
 	MetadataRevision int64  `json:"metadata_revision"`
 }
 
-type ReaderContentHistoryRestoreRequest struct {
-	ExpectedContentRevision int64 `json:"expected_content_revision" binding:"min=1"`
-}
-
-type ReaderContentHistoryRestoreResponse struct {
-	LinkID          string `json:"link_id"`
-	ContentRevision int64  `json:"content_revision"`
-}
-
 type ReaderCapabilitiesResponse struct {
 	Annotations bool `json:"annotations"`
 	Notes       bool `json:"notes"`
@@ -651,18 +536,8 @@ type ReaderCapabilitiesResponse struct {
 	Home        bool `json:"home"`
 	Feed        bool `json:"feed"`
 	AI          bool `json:"ai"`
-	Semantic    bool `json:"semantic"`
+	RelatedTags bool `json:"related_tags"`
 	Activity    bool `json:"activity"`
 	History     bool `json:"history"`
 	Trash       bool `json:"trash"`
-}
-
-type ReaderContentHistoryResponse struct {
-	ID              int64     `json:"id"`
-	Revision        int64     `json:"revision"`
-	Content         *string   `json:"content,omitempty"`
-	ContentDocument *string   `json:"content_document,omitempty"`
-	ContentFormat   string    `json:"content_format"`
-	ContentSource   string    `json:"content_source"`
-	CreatedAt       time.Time `json:"created_at"`
 }

@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.uber.org/automaxprocs/maxprocs"
-
 	"webtag/internal/app"
 	"webtag/internal/buildinfo"
 	"webtag/internal/config"
@@ -31,7 +29,6 @@ func execute(args []string, stdout io.Writer) error {
 		return err
 	}
 
-	_, _ = maxprocs.Set(maxprocs.Logger(log.Printf))
 	return run()
 }
 

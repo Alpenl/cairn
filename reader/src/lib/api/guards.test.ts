@@ -21,8 +21,6 @@ import {
   isReaderHomeResponse,
   isReaderLinkMetadataResponse,
   hasCanonicalSafeLinkMetadataRevisionTokens,
-  isReaderContentHistoryResponse,
-  isReaderContentHistoryRestoreResponse,
   isReaderActivityResponse,
   isReaderNoteHistoryResponse,
   isReaderThoughtAckResponse,
@@ -72,104 +70,28 @@ function makeReaderFeedItem(overrides: Partial<ReaderFeedItemResponse> = {}): Re
   return {
     key: 'subscription:feed-1',
     source: 'subscription',
+    resource_key: 'link:link-1',
     title: 'Feed item',
     summary: 'Summary',
     url: 'https://example.com/article',
     link_id: 'link-1',
-    inbox_id: null,
     feed_item_id: 'feed-1',
     read: false,
     read_later: false,
     saved: false,
-    score: 60,
-    score_contributions: {
-      pending_confirmation: 0,
-      saved_library: 0,
-      subscription_recent: 40,
-      unread: 20,
-      read_later: 0,
-      chronological_fallback: 0,
-    },
-    enabled_score_signals: ['subscription_recent', 'unread', 'read_later', 'chronological_fallback'],
-    reason_code: 'subscription_recent',
-    reason_params: { source: 'subscription' },
-    reason_contribution: 40,
-    reason_text: '订阅更新',
-    published_at: null,
     event_at: '2026-08-10T01:00:00Z',
-    created_at: '2026-08-10T01:00:00Z',
-    item_type: 'subscription',
-    resource_key: 'link:link-1',
-    action_key: 'subscription:feed-1',
-    dedupe_key: 'url:https://example.com/article',
-    section_id: 'subscription',
-    actions: ['read', 'read_later', 'save', 'unsave', 'open'],
     ...overrides,
   } as ReaderFeedItemResponse
 }
 
-/**
- * Home 的 continue-reading 条目按服务端真实 wire 构造：它的推荐理由不参与打分，
- * 所以既没有贡献列、也不在 enabled_score_signals 里，reason_params 为空对象。
- */
-function makeContinueReadingItem(overrides: Record<string, unknown> = {}) {
-  return {
+function makeContinueReadingItem(overrides: Partial<ReaderFeedItemResponse> = {}): ReaderFeedItemResponse {
+  return makeReaderFeedItem({
     key: 'link:link-1',
     source: 'reading',
-    item_type: 'reading',
     resource_key: 'link:link-1',
-    action_key: 'link:link-1',
-    dedupe_key: 'url:https://example.com/article',
-    section_id: 'reading',
-    actions: ['read', 'read_later', 'open'],
-    title: 'Half-read article',
-    summary: 'A saved article',
-    url: 'https://example.com/article',
-    link_id: 'link-1',
-    read: false,
-    read_later: false,
-    saved: false,
-    score: 0,
-    score_contributions: {
-      pending_confirmation: 0,
-      saved_library: 0,
-      subscription_recent: 0,
-      unread: 0,
-      read_later: 0,
-      chronological_fallback: 0,
-    },
-    enabled_score_signals: [],
-    reason_code: 'continue_reading',
-    reason_params: {},
-    reason_contribution: 0,
-    reason_text: '已读 42%，继续阅读',
-    published_at: '2026-08-10T02:00:00Z',
-    event_at: '2026-08-10T02:00:00Z',
-    created_at: '2026-08-10T01:00:00Z',
+    feed_item_id: undefined,
     ...overrides,
-  }
-}
-
-/** 一条正常打分的资料库条目，用来守住打分类 reason code 的不变量。 */
-function makeScoredReadingItem(overrides: Record<string, unknown> = {}) {
-  return {
-    ...makeContinueReadingItem(),
-    score: 90,
-    score_contributions: {
-      pending_confirmation: 0,
-      saved_library: 70,
-      subscription_recent: 0,
-      unread: 20,
-      read_later: 0,
-      chronological_fallback: 0,
-    },
-    enabled_score_signals: ['saved_library', 'unread', 'read_later', 'chronological_fallback'],
-    reason_code: 'saved_library',
-    reason_params: { source: 'reading' },
-    reason_contribution: 70,
-    reason_text: '已保存到资料库',
-    ...overrides,
-  }
+  })
 }
 
 describe('isErrorResponse', () => {
@@ -359,125 +281,57 @@ describe('Reader TODO response guards', () => {
 })
 
 describe('Reader Feed response guard', () => {
-	it('accepts only feedback with a complete stable save association', () => {
-		const response: ReaderFeedFeedbackResponse = {
-			item_key: 'subscription:feed-1',
-			action: 'save',
-			saved: true,
-			association: { feed_item_id: 'feed-1', link_id: 'link-1', created_link: true },
-		}
-		expect(isReaderFeedFeedbackResponse(response)).toBe(true)
-		expect(isReaderFeedFeedbackResponse({ ...response, association: { feed_item_id: 'feed-1' } })).toBe(false)
-	})
-
-  it('接受显式 union identity、actions、section/source metadata', () => {
-    const item = makeReaderFeedItem()
-    expect(isReaderFeedResponse({
-      items: [item],
-      snapshot_id: 'snapshot-1',
-      mode: 'recommended',
-      capabilities: ['snapshot', 'cursor', 'dedupe', 'reason', 'source_filter', 'actions'],
-      sections: [{
-        id: 'subscription',
-        source: 'subscription',
-        label: '订阅',
-        count: 1,
-        capabilities: item.actions,
-      }],
-      sources: [{
-        id: 'subscription',
-        label: '订阅',
-        enabled: true,
-        count: 1,
-        capabilities: item.actions,
-      }],
-    })).toBe(true)
+  it('accepts feedback with an optional visible link', () => {
+    const response: ReaderFeedFeedbackResponse = {
+      item_key: 'subscription:feed-1',
+      action: 'save',
+      link_id: 'link-1',
+    }
+    expect(isReaderFeedFeedbackResponse(response)).toBe(true)
+    expect(isReaderFeedFeedbackResponse({ ...response, link_id: 7 })).toBe(false)
   })
 
-  it('接受 capability-off 和 legacy item wire', () => {
-    const legacy = makeReaderFeedItem()
-    delete (legacy as Record<string, unknown>).item_type
-    delete (legacy as Record<string, unknown>).resource_key
-    delete (legacy as Record<string, unknown>).action_key
-    delete (legacy as Record<string, unknown>).dedupe_key
-    delete (legacy as Record<string, unknown>).section_id
-    delete (legacy as Record<string, unknown>).actions
-    expect(isReaderFeedResponse({
-      items: [legacy],
-      snapshot_id: 'snapshot-legacy',
-      mode: 'chronological',
-      capabilities: [],
-      sections: [],
-      sources: [],
-    })).toBe(true)
-  })
-
-  it('拒绝未知的 item actions', () => {
-    const invalidItem = { ...makeReaderFeedItem(), actions: ['unsupported'] }
-    expect(isReaderFeedResponse({
-      items: [invalidItem],
-      snapshot_id: 'snapshot-invalid',
-      mode: 'recommended',
-    })).toBe(false)
-  })
-
-  it('缺少权威 event_at 时失败关闭', () => {
-    const item = makeReaderFeedItem()
-    const candidate = { ...item } as Record<string, unknown>
-    delete candidate.event_at
-    expect(isReaderFeedResponse({
-      items: [candidate],
-      snapshot_id: 'snapshot-missing-event-at',
-      mode: 'chronological',
-    })).toBe(false)
-  })
-
-  it('拒绝 item_type 与 source 不一致', () => {
-    expect(isReaderFeedResponse({
-      items: [makeReaderFeedItem({ item_type: 'inbox' })],
-      snapshot_id: 'snapshot-invalid',
-      mode: 'recommended',
-    })).toBe(false)
-  })
-
-  it('拒绝顶层未知的 Feed capability', () => {
+  it('accepts live pages with an optional keyset cursor', () => {
     expect(isReaderFeedResponse({
       items: [makeReaderFeedItem()],
-      snapshot_id: 'snapshot-invalid',
+      next_cursor: 'live-cursor',
       mode: 'recommended',
-      capabilities: ['unsupported'],
-    })).toBe(false)
+    })).toBe(true)
+    expect(isReaderFeedResponse({
+      items: [makeReaderFeedItem()],
+      mode: 'chronological',
+    })).toBe(true)
   })
 
-  it('拒绝重复的 action/capability 集合值', () => {
-    const item = makeReaderFeedItem()
-    expect(isReaderFeedResponse({
-      items: [{ ...item, actions: ['read', 'read'] }],
-      snapshot_id: 'snapshot-duplicate-actions',
-      mode: 'recommended',
-    })).toBe(false)
-    expect(isReaderFeedResponse({
-      items: [item],
-      snapshot_id: 'snapshot-duplicate-capabilities',
-      mode: 'recommended',
-      capabilities: ['snapshot', 'snapshot'],
-    })).toBe(false)
-  })
-
-  it('拒绝与冻结 score evidence 不一致的 reason tuple', () => {
-    const item = makeReaderFeedItem()
-    for (const invalid of [
-      { ...item, score: 61 },
-      { ...item, reason_contribution: 20 },
-      { ...item, enabled_score_signals: ['unread'] },
-      { ...item, reason_params: { source: 'reading', inferred_from: 'subscription' } },
-    ]) {
-      expect(isReaderFeedResponse({
-        items: [invalid],
-        snapshot_id: 'snapshot-invalid-evidence',
-        mode: 'recommended',
-      })).toBe(false)
+  it('requires the resource identity and visible event time', () => {
+    for (const field of ['resource_key', 'event_at']) {
+      const item = { ...makeReaderFeedItem() } as Record<string, unknown>
+      delete item[field]
+      expect(isReaderFeedResponse({ items: [item], mode: 'recommended' }), field).toBe(false)
     }
+  })
+
+  it('requires the union identity belonging to source', () => {
+    expect(isReaderFeedResponse({
+      items: [makeReaderFeedItem({ source: 'reading' })],
+      mode: 'recommended',
+    })).toBe(false)
+    expect(isReaderFeedResponse({
+      items: [makeReaderFeedItem({
+        key: 'inbox:inbox-1',
+        source: 'inbox',
+        resource_key: 'inbox:inbox-1',
+        link_id: undefined,
+        inbox_id: 'inbox-1',
+        feed_item_id: undefined,
+      })],
+      mode: 'recommended',
+    })).toBe(true)
+  })
+
+  it('rejects unknown modes and cursor types', () => {
+    expect(isReaderFeedResponse({ items: [], mode: 'ranking-v2' })).toBe(false)
+    expect(isReaderFeedResponse({ items: [], mode: 'recommended', next_cursor: 1 })).toBe(false)
   })
 })
 
@@ -518,40 +372,16 @@ describe('Reader Home response guard', () => {
     })).toBe(false)
   })
 
-  it('接受服务端真实返回的 continue-reading 条目：不打分的推荐理由', () => {
+  it('accepts the same minimal item shape for continue-reading', () => {
     expect(isReaderHomeResponse(makeReaderHome({
-      continue_reading: [makeContinueReadingItem() as unknown as ReaderFeedItemResponse],
+      continue_reading: [makeContinueReadingItem()],
     }))).toBe(true)
   })
 
-  it('拒绝把 continue_reading 伪装成打分信号的条目', () => {
-    for (const [name, invalid] of [
-      ['claims a contribution', { ...makeContinueReadingItem(), reason_contribution: 70 }],
-      ['joins the enabled signals', { ...makeContinueReadingItem(), enabled_score_signals: ['continue_reading'] }],
-      ['owns a contributions column', {
-        ...makeContinueReadingItem(),
-        score_contributions: { ...makeContinueReadingItem().score_contributions, continue_reading: 0 },
-      }],
-      ['carries scoring params', { ...makeContinueReadingItem(), reason_params: { source: 'reading' } }],
-    ] as [string, Record<string, unknown>][]) {
-      expect(isReaderHomeResponse(makeReaderHome({
-        continue_reading: [invalid as unknown as ReaderFeedItemResponse],
-      })), name).toBe(false)
-    }
-  })
-
-  it('打分类 reason code 仍必须与冻结的 score evidence 一致', () => {
-    const scored = makeScoredReadingItem()
-    for (const [name, invalid] of [
-      // 赢家必须出现在 enabled_score_signals 里。
-      ['winner missing from the enabled signals', { ...scored, enabled_score_signals: ['unread', 'read_later'] }],
-      // 赢家的 reason_contribution 必须等于它那一列的贡献。
-      ['winner contribution disagrees with its column', { ...scored, reason_contribution: 20 }],
-    ] as [string, Record<string, unknown>][]) {
-      expect(isReaderHomeResponse(makeReaderHome({
-        continue_reading: [invalid as unknown as ReaderFeedItemResponse],
-      })), name).toBe(false)
-    }
+  it('rejects continue-reading without a reading identity', () => {
+    expect(isReaderHomeResponse(makeReaderHome({
+      continue_reading: [makeContinueReadingItem({ link_id: undefined })],
+    }))).toBe(false)
   })
 })
 
@@ -603,7 +433,7 @@ describe('Reader history and lifecycle response guards', () => {
     expect(isReaderThoughtsResponse({ items: [thought] })).toBe(false)
   })
 
-  it('requires complete safe winner keys and canonical identifiers', () => {
+  it('requires complete positive winner keys and canonical identifiers', () => {
     const validAck = {
       contract_version: 1,
       op_id: 'op-a',
@@ -615,9 +445,9 @@ describe('Reader history and lifecycle response guards', () => {
     expect(isReaderThoughtAckResponse(validAck)).toBe(true)
     expect(isReaderThoughtAckResponse({
       ...validAck,
-      submitted_key: { logical_clock: 0, device_id: 'legacy-device', op_id: 'legacy-op' },
-      current_winner_key: { logical_clock: 0, device_id: 'legacy-device', op_id: 'legacy-op' },
-    })).toBe(true)
+      submitted_key: { logical_clock: 0, device_id: 'device', op_id: 'op' },
+      current_winner_key: { logical_clock: 0, device_id: 'device', op_id: 'op' },
+    })).toBe(false)
 
     for (const logicalClock of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
       expect(isReaderThoughtAckResponse({
@@ -640,8 +470,8 @@ describe('Reader history and lifecycle response guards', () => {
     expect(isReaderThoughtAckResponse(missingWinner)).toBe(false)
   })
 
-  it('validates note/content history shapes and requires a positive restored content revision', () => {
-    expect(isReaderNoteHistoryResponse({
+  it('validates note history shapes', () => {
+		expect(isReaderNoteHistoryResponse({
       id: 1,
       revision: 2,
       title: 'Note',
@@ -649,19 +479,7 @@ describe('Reader history and lifecycle response guards', () => {
 		reanchor_ops: [],
       created_at: '2026-08-10T01:00:00Z',
     })).toBe(true)
-    expect(isReaderContentHistoryResponse({
-      id: 1,
-      revision: 2,
-      content: 'body',
-      content_document: null,
-      content_format: 'plain',
-      content_source: 'user',
-      created_at: '2026-08-10T01:00:00Z',
-    })).toBe(true)
-    expect(isReaderContentHistoryRestoreResponse({ link_id: 'link-1', content_revision: 3 })).toBe(true)
-    expect(isReaderContentHistoryRestoreResponse({ link_id: 'link-1', content_revision: 0 })).toBe(false)
-    expect(isReaderContentHistoryRestoreResponse({ link_id: 'link-1', content_revision: -1 })).toBe(false)
-  })
+	})
 })
 
 describe('Reader thought supersession event guard', () => {
@@ -833,7 +651,7 @@ describe('Reader capability negotiation', () => {
       home: true,
       feed: true,
       ai: false,
-      semantic: true,
+      related_tags: true,
       activity: true,
       history: true,
       trash: true,
@@ -841,20 +659,18 @@ describe('Reader capability negotiation', () => {
     expect(isCapabilitiesResponse({
       library_kinds: true,
       site_library: true,
-      site_auto_classification: false,
       site_management: true,
       site_advanced_management: false,
-      archive_versions: [1, 2],
+      archive_versions: [2],
       reader_vnext: true,
       reader,
     })).toBe(true)
     expect(isCapabilitiesResponse({
       library_kinds: true,
       site_library: true,
-      site_auto_classification: false,
       site_management: true,
       site_advanced_management: false,
-      archive_versions: [1, 2],
+      archive_versions: [2],
       reader_vnext: true,
       reader: {
         annotations: true,
@@ -865,7 +681,7 @@ describe('Reader capability negotiation', () => {
         home: true,
         feed: true,
         ai: false,
-        semantic: true,
+        related_tags: true,
         activity: true,
         history: true,
       },
@@ -916,15 +732,11 @@ describe('Reader Inbox expiration and AI confirmation guards', () => {
     note: '',
     summary: null,
     suggested_tags: [],
-    proposal_signals: {},
     proposal_status: 'completed',
     tags: [],
-    category_ids: [],
     status: 'pending',
     metadata_revision: 1,
-    job_id: null,
     expires_at: '2026-09-10T01:00:00Z',
-    expired_at: null,
     expired: false,
     created_at: '2026-08-11T01:00:00Z',
     updated_at: '2026-08-11T01:00:00Z',
@@ -945,10 +757,11 @@ describe('Reader Inbox expiration and AI confirmation guards', () => {
     updated_at: '2026-08-11T01:00:00Z',
   }
 
-  it('requires the materialized expiration fields and their derived relation', () => {
+  it('requires the expiration deadline and server-derived partition flag', () => {
     expect(isReaderInboxResponse(activeInbox)).toBe(true)
-    expect(isReaderInboxResponse({ ...activeInbox, expired: true })).toBe(false)
-    expect(isReaderInboxResponse({ ...activeInbox, expired_at: undefined })).toBe(false)
+    expect(isReaderInboxResponse({ ...activeInbox, expired: true })).toBe(true)
+    expect(isReaderInboxResponse({ ...activeInbox, expires_at: undefined })).toBe(false)
+    expect(isReaderInboxResponse({ ...activeInbox, proposal_status: 'idle' })).toBe(true)
     expect(isReaderInboxResponsePage({
       items: [activeInboxCard],
       active_count: 1,
@@ -969,7 +782,7 @@ describe('Reader Inbox expiration and AI confirmation guards', () => {
     // The card guard must not start demanding the detail payload back: that
     // is exactly the regression the list/detail split removes.
     const withoutDetail: Record<string, unknown> = { ...activeInbox, preview: 'Body' }
-    for (const detailOnly of ['body', 'note', 'summary', 'suggested_tags', 'proposal_signals', 'category_ids']) {
+    for (const detailOnly of ['body', 'note', 'summary', 'suggested_tags']) {
       delete withoutDetail[detailOnly]
     }
     expect(isReaderInboxListItemResponse(withoutDetail)).toBe(true)

@@ -54,39 +54,16 @@ func TestStreamArchiveV2SectionRejectsUnknownAndStopsOnConsumerError(t *testing.
 	}
 }
 
-func TestStreamArchiveV2RulesInstallScopesAndStreams(t *testing.T) {
-	t.Parallel()
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mock.Close()
-	mock.ExpectQuery(regexp.QuoteMeta(archiveV2ClassificationRuleSQL)).WillReturnRows(mock.NewRows([]string{"json"}).AddRow(`{"host":"example.com"}`))
-	var got []string
-	err = NewPGXClassificationRuleRepository(mock).StreamArchiveV2Rules(context.Background(), func(raw []byte) error { got = append(got, string(raw)); return nil })
-	if err != nil || len(got) != 1 || got[0] != `{"host":"example.com"}` {
-		t.Fatalf("rules = %#v, %v", got, err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestArchiveV2RepositoryProjectionsExcludeStorageOnlyFields(t *testing.T) {
 	t.Parallel()
 	for section, query := range archiveV2SiteSectionSQL {
 		if !strings.Contains(query, "jsonb_build_object") {
 			t.Fatalf("%s does not use an explicit JSON projection", section)
 		}
-		for _, forbidden := range []string{"'tenant_id'", "'embedding'", "'embedding_model'"} {
+		for _, forbidden := range []string{"'tenant_id'"} {
 			if strings.Contains(query, forbidden) {
 				t.Fatalf("%s archive projection includes storage-only field %s", section, forbidden)
 			}
-		}
-	}
-	for _, forbidden := range []string{"'tenant_id'", "'embedding'", "'embedding_model'"} {
-		if strings.Contains(archiveV2ClassificationRuleSQL, forbidden) {
-			t.Fatalf("classification rule archive projection includes storage-only field %s", forbidden)
 		}
 	}
 }

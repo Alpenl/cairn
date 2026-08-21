@@ -3,10 +3,9 @@
 // 主要组成：
 //   - 通用 HTTP 客户端（HTTPClient）：带重试、Retry-After 解析、跨主机重定向时丢弃 Authorization；
 //   - SSRF 防护（safedial）：请求前预检 + DialContext 重新校验，封堵 DNS rebinding 的 TOCTOU 窗口；
-//   - 站点专用抓取器：arxiv / github / wechat / pdf / ytdlp / jina / lightfetch / 通用 basic / host_bound_html 模板；
-//   - 路由派发（Router / Manager）：按 URL 选择合适的 Fetcher，并在正文不足时依次回退到 jina、search 摘要；
-//   - 出站节流（OutboundLimiter）：对易触发反爬的站点按 host 做请求速率限制；
-//   - 观测层（metrics_transport）：包装 RoundTripper 上报抓取耗时指标。
+//   - 站点专用抓取器：arxiv / github / wechat / pdf / jina / 通用 basic / host_bound_html 模板；
+//   - 路由派发（Router / Manager）：按 URL 选择合适的 Fetcher，并在正文不足时回退到 jina；
+//   - 出站节流（OutboundLimiter）：对易触发反爬的站点按 host 做请求速率限制。
 package fetcher
 
 import (
@@ -34,11 +33,6 @@ type Content struct {
 type Fetcher interface {
 	CanHandle(url string) bool
 	Fetch(ctx context.Context, url string) (Content, error)
-}
-
-// Searcher 表示一种"以查询字符串换摘要"的搜索能力，供 Manager 在抓取失败时降级使用。
-type Searcher interface {
-	Search(ctx context.Context, query string) (string, error)
 }
 
 // FetchError 是抓取过程中出现错误时返回的结构化错误，保留原始 URL、失败原因与底层错误便于分类。
@@ -111,16 +105,12 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// runeCount / truncateRunes / limitTextByRunes are thin in-package
+// runeCount / limitTextByRunes are thin in-package
 // wrappers around internal/textutil. They exist so the existing fetcher
 // callers keep working without sprinkling textutil imports across every
 // fetcher file; the canonical implementations live in internal/textutil.
 func runeCount(value string) int {
 	return textutil.Count(value)
-}
-
-func truncateRunes(value string, limit int) string {
-	return textutil.Truncate(value, limit)
 }
 
 func limitTextByRunes(value string, limit int) string {

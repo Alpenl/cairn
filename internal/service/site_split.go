@@ -12,7 +12,6 @@ import (
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
-	"webtag/internal/observability"
 	"webtag/internal/repository"
 	"webtag/internal/siteidentity"
 )
@@ -20,20 +19,16 @@ import (
 // SiteSplitService keeps selection validation in the service and leaves the
 // multi-table move to one repository transaction.
 type SiteSplitService struct {
-	sites   repository.SiteReader
-	writer  repository.SiteSplitWriter
-	metrics *observability.Metrics
+	sites siteSplitStore
 }
 
-func NewSiteSplitServiceWithMetrics(sites repository.SiteReader, metrics *observability.Metrics) *SiteSplitService {
-	svc := NewSiteSplitService(sites)
-	svc.metrics = metrics
-	return svc
+type siteSplitStore interface {
+	siteDetailReader
+	ExecuteSiteSplit(context.Context, repository.ExecuteSiteSplitParams) (repository.SiteSplitResult, error)
 }
 
-func NewSiteSplitService(sites repository.SiteReader) *SiteSplitService {
-	writer, _ := sites.(repository.SiteSplitWriter)
-	return &SiteSplitService{sites: sites, writer: writer}
+func NewSiteSplitService(sites siteSplitStore) *SiteSplitService {
+	return &SiteSplitService{sites: sites}
 }
 
 func (s *SiteSplitService) Preview(ctx context.Context, rawSiteID string, request dto.SiteSplitRequest) (dto.SiteSplitPreviewResponse, error) {
@@ -45,9 +40,6 @@ func (s *SiteSplitService) Preview(ctx context.Context, rawSiteID string, reques
 }
 
 func (s *SiteSplitService) Execute(ctx context.Context, rawSiteID string, request dto.SiteSplitRequest) (dto.SiteSplitExecuteResponse, error) {
-	if s.writer == nil {
-		return dto.SiteSplitExecuteResponse{}, httperr.NewWithCode(503, "site_library_unavailable", "site split is not configured")
-	}
 	site, entries, payload, _, err := s.prepare(ctx, rawSiteID, request)
 	if err != nil {
 		return dto.SiteSplitExecuteResponse{}, err
@@ -61,16 +53,13 @@ func (s *SiteSplitService) Execute(ctx context.Context, rawSiteID string, reques
 	for _, entry := range entries {
 		ids = append(ids, entry.ID)
 	}
-	result, err := s.writer.ExecuteSiteSplit(ctx, repository.ExecuteSiteSplitParams{SourceID: site.ID, SourceRevision: site.Revision, EntryIDs: ids, Name: payload.Name, Intro: payload.Intro, HomepageURL: payload.HomepageURL, IconURL: payload.IconURL, UserNote: payload.UserNote, PrimaryEntryID: primary, IdentityKeyForNewSite: identity})
+	result, err := s.sites.ExecuteSiteSplit(ctx, repository.ExecuteSiteSplitParams{SourceID: site.ID, SourceRevision: site.Revision, EntryIDs: ids, Name: payload.Name, Intro: payload.Intro, HomepageURL: payload.HomepageURL, IconURL: payload.IconURL, UserNote: payload.UserNote, PrimaryEntryID: primary, IdentityKeyForNewSite: identity})
 	if errors.Is(err, repository.ErrRevisionConflict) {
-		s.recordSplit("conflict")
 		return dto.SiteSplitExecuteResponse{}, siteMergeConflict("site was changed")
 	}
 	if err != nil {
-		s.recordSplit("error")
 		return dto.SiteSplitExecuteResponse{}, err
 	}
-	s.recordSplit("success")
 	return dto.SiteSplitExecuteResponse{SourceSiteID: result.SourceID.String(), SourceRevision: result.SourceRevision, NewSiteID: result.NewSiteID.String(), NewSiteRevision: result.NewRevision, MovedEntries: result.MovedEntries}, nil
 }
 
@@ -180,12 +169,6 @@ func eligibleSplitIdentities(site *repository.SiteDetail, entries []model.SiteEn
 	return eligible
 }
 
-func (s *SiteSplitService) recordSplit(result string) {
-	if s != nil && s.metrics != nil && s.metrics.SiteSplitTotal != nil {
-		s.metrics.SiteSplitTotal.WithLabelValues(result).Inc()
-	}
-}
-
 func (s *SiteSplitService) selectedSplitEntries(ctx context.Context, rawSiteID string, revision int64, rawIDs []string) (*repository.SiteDetail, []model.SiteEntry, error) {
 	siteID, err := uuid.Parse(rawSiteID)
 	if err != nil || revision < 1 {
@@ -230,7 +213,7 @@ func (s *SiteSplitService) selectedSplitEntries(ctx context.Context, rawSiteID s
 }
 
 func splitPreview(site *repository.SiteDetail, entries []model.SiteEntry, payload dto.SiteSplitRequest, eligible map[string]struct{}) dto.SiteSplitPreviewResponse {
-	out := dto.SiteSplitPreviewResponse{SourceSiteID: site.ID.String(), SourceRevision: site.Revision, Payload: payload, Entries: []dto.SiteMergePreviewEntryResponse{}, Identities: []dto.SiteSplitIdentityResponse{}, UserTags: []string{}}
+	out := dto.SiteSplitPreviewResponse{SourceSiteID: site.ID.String(), SourceRevision: site.Revision, Payload: payload, Entries: []dto.SiteMergePreviewEntryResponse{}, Identities: []dto.SiteSplitIdentityResponse{}, Tags: []string{}}
 	for _, entry := range entries {
 		out.Entries = append(out.Entries, dto.SiteMergePreviewEntryResponse{ID: entry.ID.String(), SiteID: site.ID.String(), LinkID: entry.LinkID.String(), Name: entry.EntryName, URL: entry.NormalizedURL})
 	}
@@ -247,12 +230,10 @@ func splitPreview(site *repository.SiteDetail, entries []model.SiteEntry, payloa
 		out.Identities = append(out.Identities, dto.SiteSplitIdentityResponse{IdentityKey: identity.IdentityKey, EligibleForNewSite: canMove, Owner: owner})
 	}
 	for _, tag := range site.Tags {
-		if tag.Source == model.FieldSourceUser {
-			out.UserTags = append(out.UserTags, tag.Tag)
-		}
+		out.Tags = append(out.Tags, tag.Tag)
 	}
 	sort.Slice(out.Identities, func(i, j int) bool { return out.Identities[i].IdentityKey < out.Identities[j].IdentityKey })
-	sort.Strings(out.UserTags)
+	sort.Strings(out.Tags)
 	return out
 }
 

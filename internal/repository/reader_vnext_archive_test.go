@@ -74,7 +74,8 @@ func TestReaderArchiveFeedProjectionIsCompleteAndExcludesRefreshLeases(t *testin
 		"feed_folders":       {"'id',id", "'name',name", "'created_at',created_at", "'updated_at',updated_at"},
 		"feed_subscriptions": {"'folder_id',folder_id", "'canonical_url',canonical_url", "'active',active"},
 		"feed_items":         {"'subscription_id',subscription_id", "'content_text',content_text", "'content_html',content_html", "'read_at',read_at", "'starred',starred", "'read_later',read_later", "'link_id',link_id"},
-		"feed_saves":         {"'feed_item_id',feed_item_id", "'link_id',link_id", "'created_link',created_link"},
+		"feed_saves":         {"'feed_item_id',feed_item_id", "'link_id',link_id"},
+		"feed_hides":         {"'item_key',item_key", "'created_at',created_at"},
 	} {
 		sql := strings.ToLower(strings.Join(strings.Fields(readerArchiveSectionSQL[section]), " "))
 		for _, field := range fields {

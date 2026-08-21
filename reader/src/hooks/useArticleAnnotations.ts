@@ -51,9 +51,7 @@ export interface UseArticleAnnotationsOptions {
   readonly revisionChange?: ArticleAnnotationRevisionChange
 }
 
-export interface HistoricalArticleAnnotation extends HistoricalSavedContentAnnotation {
-  readonly sourceKey: string
-}
+export type HistoricalArticleAnnotation = HistoricalSavedContentAnnotation
 
 export interface ArticleAnnotationReanchorSummary {
   readonly status: 'committed' | 'degraded' | 'failed' | 'stale'
@@ -154,48 +152,18 @@ function targetForBlock(
 }
 
 type HistoricalTargetInfo = {
-  readonly kind: 'saved-content' | 'legacy-stale'
   readonly target: AnnotationTarget
-  readonly sourceKey: string
   readonly sourceRevision: number
-  readonly reason: HistoricalArticleAnnotation['reason']
-}
-
-function isHistoricalReason(value: string): value is HistoricalArticleAnnotation['reason'] {
-  return value === 'ambiguous-quote' ||
-    value === 'missing-quote' ||
-    value === 'deleted-range' ||
-    value === 'revision-changed'
 }
 
 function historicalTargetInfo(
   target: AnnotationTarget,
   currentRevision: number,
 ): HistoricalTargetInfo | null {
-  if (target.kind === 'saved-content') {
-    if (target.contentRevision >= currentRevision) return null
-    return {
-      kind: 'saved-content',
-      target,
-      sourceKey: `saved-content:${target.contentRevision}`,
-      sourceRevision: target.contentRevision,
-      reason: 'revision-changed',
-    }
-  }
-  if (target.kind !== 'legacy-stale') return null
-  const match = /^saved-content:(\d+)(?::[^:]+:([a-z-]+))?$/.exec(target.sourceKey)
-  if (!match) return null
-  const sourceRevision = Number(match[1])
-  if (!Number.isSafeInteger(sourceRevision) || sourceRevision <= 0) return null
-  const reason = match[2] && isHistoricalReason(match[2])
-    ? match[2]
-    : 'revision-changed'
+  if (target.kind !== 'saved-content' || target.contentRevision >= currentRevision) return null
   return {
-    kind: 'legacy-stale',
     target,
-    sourceKey: target.sourceKey,
-    sourceRevision,
-    reason,
+    sourceRevision: target.contentRevision,
   }
 }
 
@@ -232,23 +200,15 @@ async function readHistoricalAnnotations(
   )
   if (snapshots.some(({ snapshot }) => !snapshot.ok)) return { ok: false }
 
-  const legacyIDs = new Set<string>()
-  const candidates: (HistoricalArticleAnnotation & {
-    readonly targetKind: HistoricalTargetInfo['kind']
-  })[] = []
+  const candidates: HistoricalArticleAnnotation[] = []
   for (const { info, snapshot } of snapshots) {
     if (!snapshot.ok) continue
-    if (info.kind === 'legacy-stale') {
-      for (const annotation of snapshot.value.annotations) legacyIDs.add(annotation.id)
-    }
     for (const annotation of snapshot.value.annotations) {
       candidates.push({
         status: 'historical',
-        reason: info.reason,
+        reason: 'revision-changed',
         sourceContentRevision: info.sourceRevision,
         annotation,
-        sourceKey: info.sourceKey,
-        targetKind: info.kind,
       })
     }
   }
@@ -259,29 +219,12 @@ async function readHistoricalAnnotations(
     right.annotation.updatedAt - left.annotation.updatedAt ||
     left.annotation.id.localeCompare(right.annotation.id))) {
     if (currentAnnotationIds.has(item.annotation.id)) continue
-    if (item.targetKind === 'saved-content' && legacyIDs.has(item.annotation.id)) continue
-    if (!byAnnotationID.has(item.annotation.id)) {
-      byAnnotationID.set(item.annotation.id, {
-        status: item.status,
-        reason: item.reason,
-        sourceContentRevision: item.sourceContentRevision,
-        annotation: item.annotation,
-        sourceKey: item.sourceKey,
-      })
-    }
+    if (!byAnnotationID.has(item.annotation.id)) byAnnotationID.set(item.annotation.id, item)
   }
   const value = [...byAnnotationID.values()].sort((left, right) =>
     left.annotation.createdAt - right.annotation.createdAt ||
     left.annotation.id.localeCompare(right.annotation.id))
   return { ok: true, value: value.length === 0 ? EMPTY_HISTORICAL_ANNOTATIONS : value }
-}
-
-function reanchorSourceKey(
-  revision: number,
-  annotationId: string,
-  reason: string,
-): string {
-  return `saved-content:${revision}:${encodeURIComponent(annotationId)}:${reason}`
 }
 
 function reanchorOperationId(
@@ -322,15 +265,6 @@ function annotationAddOperation(
         ...draftBase,
         blockKey: annotation.blockKey as SavedContentAnnotationBlockKey,
       },
-    }
-  }
-  if (target.kind === 'legacy-stale') {
-    return {
-      kind: 'add',
-      opId,
-      linkId,
-      target,
-      draft: { ...draftBase, blockKey: annotation.blockKey },
     }
   }
   return null
@@ -629,16 +563,14 @@ export function useArticleAnnotations(
         setReanchorState({ identityKey, status: 'stale' })
         return { status: 'stale', reanchoredCount, historicalCount, results }
       }
-      const target: AnnotationTarget = result.status === 'reanchored'
-        ? { kind: 'saved-content', contentRevision: currentRevision }
-        : {
-            kind: 'legacy-stale',
-            sourceKey: reanchorSourceKey(
-              change.previousRevision,
-              result.annotation.id,
-              result.reason,
-            ),
-          }
+      if (result.status !== 'reanchored') {
+        historicalCount += 1
+        continue
+      }
+      const target: AnnotationTarget = {
+        kind: 'saved-content',
+        contentRevision: currentRevision,
+      }
       const operation = annotationAddOperation(
         linkId,
         result.annotation,
@@ -663,17 +595,13 @@ export function useArticleAnnotations(
       }
       const hint: AnnotationChangeHintInput = {
         linkId,
-        // Both the current saved-content target and the legacy-stale recovery
-        // target belong to this revision transition. Publishing the current
-        // revision lets other Reader instances refresh historical projections.
         documentRevision: currentRevision,
         annotationStoreVersion: committed.value.annotationStoreVersion,
       }
       channelRef.current?.publish(hint)
       emitReaderEvent(READER_EVENTS.annotationsChanged)
       scheduleCompaction(lease, linkId, target)
-      if (result.status === 'reanchored') reanchoredCount += 1
-      else historicalCount += 1
+      reanchoredCount += 1
     }
 
     if (signal.aborted) {

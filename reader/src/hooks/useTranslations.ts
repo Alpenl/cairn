@@ -35,7 +35,7 @@ export const TRANSLATIONS_CACHE_PREFIX = 'GET translations:/api/links'
 const NO_TRANSLATIONS: TranslationResponse[] = []
 
 export interface TranslationSourceIdentity {
-  /** Undefined keeps compatibility for non-Reader callers; null means unverified. */
+  /** Null means the link has no saved-content generation. */
   contentRevision?: number | null
   /** Hash of the canonical rendered summary block. */
   summarySourceHash?: string | null
@@ -44,7 +44,6 @@ export interface TranslationSourceIdentity {
 interface TranslationProjection {
   current: TranslationResponse[]
   stale: TranslationResponse[]
-  legacy: TranslationResponse[]
   currentContentRevision: number | null
 }
 
@@ -63,7 +62,6 @@ function projectTranslations(
     return {
       current: NO_TRANSLATIONS,
       stale: NO_TRANSLATIONS,
-      legacy: NO_TRANSLATIONS,
       currentContentRevision: null,
     }
   }
@@ -74,19 +72,13 @@ function projectTranslations(
     expectedContentRevision === undefined ||
     (contentRevisionOrNull(expectedContentRevision) === currentContentRevision &&
       currentContentRevision !== null)
-  // Persisted envelopes from before this field existed can still surface at
-  // runtime as undefined; the strict equality below keeps their summary rows
-  // isolated while saved-content rows remain recoverable.
   const authoritativeSummaryHash = response.current_summary_source_hash
   const current: TranslationResponse[] = []
   const stale: TranslationResponse[] = []
-  const legacy: TranslationResponse[] = []
   for (const item of response.items) {
     if (isSavedContentTranslationSource(item.scope, item.block_key)) {
-      // Persisted pre-RF5A items have this field as runtime `undefined` even
-      // though the generated wire type only permits number|null.
       if (item.source_content_revision == null) {
-        legacy.push(item)
+        continue
       } else if (
         !savedEnvelopeMatchesActive ||
         currentContentRevision === null ||
@@ -100,22 +92,21 @@ function projectTranslations(
       }
       continue
     }
-    // Summary is the only independently versioned source block still exposed
-    // by Reader. Retired or unknown blocks have no canonical source to verify.
+    // Summary is the only independently versioned source block exposed by Reader.
     if (item.block_key !== 'summary') {
-      legacy.push(item)
+      continue
     } else if (item.stale) {
       stale.push(item)
     } else if (
       typeof expectedSummaryHash !== 'string' ||
       authoritativeSummaryHash !== expectedSummaryHash
     ) {
-      legacy.push(item)
+      stale.push(item)
     } else {
       current.push(item)
     }
   }
-  return { current, stale, legacy, currentContentRevision }
+  return { current, stale, currentContentRevision }
 }
 
 /** 某条 saved-content generation 的译文列表缓存键。 */
@@ -138,7 +129,6 @@ export interface UseTranslationsResult {
   /** Safe for current-document rendering; saved rows are revision-verified. */
   items: TranslationResponse[]
   staleItems: TranslationResponse[]
-  legacyItems: TranslationResponse[]
   currentContentRevision: number | null
   loading: boolean
   error: ApiError | null
@@ -162,16 +152,12 @@ function buildTranslationRequest(
   command: TranslationCommandRequest,
   identity: TranslationSourceIdentity | undefined,
 ): ApiResult<TranslationCreateRequest> {
-  // Runtime callers may still carry fields compiled against the old public
-  // shape. Delete them before adding the identity owned by this hook.
-  const request = { ...command } as TranslationCreateRequest
-  delete request.expected_content_revision
-  delete request.expected_source_hash
+  const request: TranslationCreateRequest = { ...command }
 
   const savedSource = isSavedContentTranslationSource(request.scope, request.block_key)
-  if (savedSource && identity?.contentRevision !== undefined) {
+  if (savedSource) {
     if (
-      typeof identity.contentRevision !== 'number' ||
+      typeof identity?.contentRevision !== 'number' ||
       !Number.isInteger(identity.contentRevision) ||
       identity.contentRevision <= 0
     ) {
@@ -180,8 +166,8 @@ function buildTranslationRequest(
     request.expected_content_revision = identity.contentRevision
   }
 
-  if (request.block_key === 'summary' && identity?.summarySourceHash !== undefined) {
-    if (!identity.summarySourceHash) {
+  if (request.block_key === 'summary') {
+    if (!identity?.summarySourceHash) {
       return err({ kind: 'other', message: '摘要来源尚未验证，请刷新后重试' })
     }
     request.expected_source_hash = identity.summarySourceHash
@@ -305,16 +291,17 @@ export function useTranslations(
         const currentIdentity = sourceIdentityRef.current
         const savedSource = isSavedContentTranslationSource(request.scope, request.block_key)
         const summarySource = request.block_key === 'summary'
+        const observedContentRevision = observedIdentity?.contentRevision
+        const observedSummarySourceHash = observedIdentity?.summarySourceHash
         const sourceStillCurrent = savedSource
-          ? observedIdentity?.contentRevision === undefined ||
-            (request.expected_content_revision === observedIdentity.contentRevision &&
-              currentIdentity?.contentRevision === observedIdentity.contentRevision &&
-              response.data.source_content_revision === observedIdentity.contentRevision)
+          ? typeof observedContentRevision === 'number' &&
+            request.expected_content_revision === observedContentRevision &&
+            currentIdentity?.contentRevision === observedContentRevision &&
+            response.data.source_content_revision === observedContentRevision
           : summarySource
-            ? observedIdentity?.summarySourceHash === undefined ||
-              (observedIdentity.summarySourceHash !== null &&
-                currentIdentity?.summarySourceHash === observedIdentity.summarySourceHash &&
-                request.expected_source_hash === observedIdentity.summarySourceHash)
+            ? typeof observedSummarySourceHash === 'string' &&
+              currentIdentity?.summarySourceHash === observedSummarySourceHash &&
+              request.expected_source_hash === observedSummarySourceHash
             : true
         if (!sourceStillCurrent) {
           // The successful response belongs to a source that stopped being
@@ -383,7 +370,6 @@ export function useTranslations(
   return {
     items: projection.current,
     staleItems: projection.stale,
-    legacyItems: projection.legacy,
     currentContentRevision: projection.currentContentRevision,
     loading: resourceEnabled && resource.loading,
     error: resource.error,

@@ -10,7 +10,6 @@ import (
 
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
-	"webtag/internal/middleware"
 	"webtag/internal/model"
 )
 
@@ -21,9 +20,9 @@ type ReaderService interface {
 	PushThoughtOps(context.Context, dto.ReaderThoughtOpsRequest) ([]dto.ReaderThoughtAckResponse, error)
 	ListThoughts(context.Context, string, string, int) (dto.ReaderThoughtsResponse, error)
 	ListThoughtHistory(context.Context, string, int) (dto.ReaderThoughtsResponse, error)
+	ListThoughtConflicts(context.Context, string, int) (dto.ReaderThoughtConflictsResponse, error)
 	SyncThoughts(context.Context, string, int) (dto.ReaderThoughtsResponse, error)
 	GetThought(context.Context, string) (dto.ReaderThoughtResponse, error)
-	ReattachThought(context.Context, string, dto.ReaderThoughtReattachRequest) (dto.ReaderThoughtResponse, error)
 	CreateNote(context.Context, dto.ReaderNoteCreateRequest) (dto.ReaderNoteResponse, error)
 	ListNotes(context.Context, string, int) (dto.ReaderNotesResponse, error)
 	GetNote(context.Context, string) (dto.ReaderNoteResponse, error)
@@ -44,8 +43,7 @@ type ReaderService interface {
 	RestoreInbox(context.Context, string) error
 	ConfirmInboxBulk(context.Context, []string, map[string]int64) ([]model.ReaderInboxBulkResult, error)
 	DiscardInboxBulk(context.Context, []string) ([]model.ReaderInboxBulkResult, error)
-	ResummarizeInboxJob(context.Context, string) (dto.ReaderInboxJobResponse, error)
-	GetInboxJob(context.Context, string) (dto.ReaderInboxJobResponse, error)
+	ResummarizeInbox(context.Context, string) (dto.ReaderInboxResponse, error)
 	CreateTodo(context.Context, dto.ReaderTodoCreateRequest) (dto.ReaderTodoResponse, error)
 	ListTodos(context.Context, string, int) (dto.ReaderTodosResponse, error)
 	PatchTodo(context.Context, string, dto.ReaderTodoPatchRequest) (dto.ReaderTodoResponse, error)
@@ -53,34 +51,12 @@ type ReaderService interface {
 	GetEngagement(context.Context, string) (dto.ReaderEngagementResponse, error)
 	PatchEngagement(context.Context, string, dto.ReaderEngagementRequest) (dto.ReaderEngagementResponse, error)
 	Home(context.Context) (dto.ReaderHomeResponse, error)
-	Feed(context.Context, string, string, string, int) (dto.ReaderFeedResponse, error)
+	FeedWithSources(context.Context, string, string, []string, int) (dto.ReaderFeedResponse, error)
 	FeedbackFeed(context.Context, string, string) (dto.ReaderFeedFeedbackResponse, error)
 	RelatedTags(context.Context, string, int) (dto.ReaderRelatedTagsResponse, error)
 	Activity(context.Context, string, string, int) (dto.ReaderActivityResponse, error)
 	PatchLinkMetadata(context.Context, string, dto.ReaderLinkMetadataRequest, int64) (dto.ReaderLinkMetadataResponse, error)
-	ListContentHistory(context.Context, string, int) ([]dto.ReaderContentHistoryResponse, error)
-	RestoreContentHistory(context.Context, string, int64, int64) (dto.ReaderContentHistoryRestoreResponse, error)
 	CompleteAI(context.Context, dto.ReaderAIRequest) (dto.ReaderAIResponse, error)
-	ListCategories(context.Context) (dto.ReaderCategoriesResponse, error)
-	CreateCategory(context.Context, dto.ReaderCategoryRequest) (dto.ReaderCategoryResponse, error)
-	DeleteCategory(context.Context, string) error
-	SetCategoryMembership(context.Context, string, dto.ReaderCategoryMembershipRequest) error
-}
-
-// readerFeedSourceService is optional so existing ReaderService test doubles
-// remain source-filter agnostic. The concrete ReaderVNextService implements
-// it, and only the mixed Feed handler consumes the capability.
-type readerFeedSourceService interface {
-	FeedWithSources(context.Context, string, string, string, []string, int) (dto.ReaderFeedResponse, error)
-}
-
-type readerThoughtConflictService interface {
-	ListThoughtConflicts(context.Context, string, int) (dto.ReaderThoughtConflictsResponse, error)
-}
-
-// readerHostLifecycleService is optional so existing ReaderService fakes and
-// partially migrated deployments keep their established route surface.
-type readerHostLifecycleService interface {
 	RestoreHost(context.Context, string, string) (dto.ReaderHostLifecycleResponse, error)
 	PurgeHost(context.Context, string, string, dto.ReaderHostPurgeRequest) error
 	ListTrash(context.Context, string, string, int) (dto.ReaderTrashResponse, error)
@@ -93,20 +69,15 @@ func RegisterReaderRoutes(router gin.IRouter, reader ReaderService) {
 	if reader == nil {
 		return
 	}
-	for _, prefix := range apiRoutePrefixes {
-		registerReaderThoughtRoutes(router, prefix, reader)
-		registerReaderNoteRoutes(router, prefix, reader)
-		registerReaderInboxRoutes(router, prefix, reader)
-		registerReaderCategoryRoutes(router, prefix, reader)
-		registerReaderTodoRoutes(router, prefix, reader)
-		registerReaderAggregateRoutes(router, prefix, reader)
-		if lifecycle, ok := reader.(readerHostLifecycleService); ok {
-			registerReaderHostLifecycleRoutes(router, prefix, lifecycle)
-		}
-	}
+	registerReaderThoughtRoutes(router, apiRoutePrefix, reader)
+	registerReaderNoteRoutes(router, apiRoutePrefix, reader)
+	registerReaderInboxRoutes(router, apiRoutePrefix, reader)
+	registerReaderTodoRoutes(router, apiRoutePrefix, reader)
+	registerReaderAggregateRoutes(router, apiRoutePrefix, reader)
+	registerReaderHostLifecycleRoutes(router, apiRoutePrefix, reader)
 }
 
-func registerReaderHostLifecycleRoutes(router gin.IRouter, prefix string, lifecycle readerHostLifecycleService) {
+func registerReaderHostLifecycleRoutes(router gin.IRouter, prefix string, lifecycle ReaderService) {
 	router.GET(prefix+"/trash", readerListTrash(lifecycle))
 	router.POST(prefix+"/links/:link_id/restore", readerRestoreHost(lifecycle, "link", "link_id"))
 	router.DELETE(prefix+"/links/:link_id/purge", readerPurgeHost(lifecycle, "link", "link_id"))
@@ -121,7 +92,6 @@ func registerReaderThoughtRoutes(router gin.IRouter, prefix string, reader Reade
 	router.GET(prefix+"/annotations/conflicts", readerListThoughtConflicts(reader))
 	router.GET(prefix+"/annotations/history", readerListThoughtHistory(reader))
 	router.GET(prefix+"/annotations/:id", readerGetThought(reader))
-	router.POST(prefix+"/annotations/:id/reattach", readerReattachThought(reader))
 }
 
 func registerReaderNoteRoutes(router gin.IRouter, prefix string, reader ReaderService) {
@@ -151,14 +121,6 @@ func registerReaderInboxRoutes(router gin.IRouter, prefix string, reader ReaderS
 	router.POST(prefix+"/inbox/:id/discard", readerDiscardInbox(reader))
 	router.POST(prefix+"/inbox/:id/restore", readerRestoreInbox(reader))
 	router.POST(prefix+"/inbox/:id/resummarize", readerResummarizeInbox(reader))
-	router.GET(prefix+"/inbox/jobs/:job_id", readerGetInboxJob(reader))
-}
-
-func registerReaderCategoryRoutes(router gin.IRouter, prefix string, reader ReaderService) {
-	router.POST(prefix+"/categories", readerCreateCategory(reader))
-	router.GET(prefix+"/categories", readerListCategories(reader))
-	router.DELETE(prefix+"/categories/:id", readerDeleteCategory(reader))
-	router.PUT(prefix+"/categories/:id/members", readerSetCategoryMembership(reader))
 }
 
 func registerReaderTodoRoutes(router gin.IRouter, prefix string, reader ReaderService) {
@@ -175,8 +137,6 @@ func registerReaderAggregateRoutes(router gin.IRouter, prefix string, reader Rea
 	router.GET(prefix+"/engagement/:link_id", readerGetEngagement(reader))
 	router.PATCH(prefix+"/engagement/:link_id", readerPatchEngagement(reader))
 	router.PATCH(prefix+"/links/:link_id/metadata", readerPatchMetadata(reader))
-	router.GET(prefix+"/links/:link_id/content-history", readerListContentHistory(reader))
-	router.POST(prefix+"/links/:link_id/content-history/:history_id/restore", readerRestoreContentHistory(reader))
 	router.GET(prefix+"/reader/related-tags", readerRelatedTags(reader))
 	router.GET(prefix+"/reader/activity", readerActivity(reader))
 	router.POST(prefix+"/ai", readerCompleteAI(reader))
@@ -221,12 +181,7 @@ func readerSyncThoughts(reader ReaderService) gin.HandlerFunc {
 
 func readerListThoughtConflicts(reader ReaderService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		service, ok := reader.(readerThoughtConflictService)
-		if !ok {
-			c.JSON(http.StatusNotImplemented, gin.H{"error": "thought conflict recovery is unavailable"})
-			return
-		}
-		response, err := service.ListThoughtConflicts(c.Request.Context(), c.Query("after"), queryInt(c, "limit", 100))
+		response, err := reader.ListThoughtConflicts(c.Request.Context(), c.Query("after"), queryInt(c, "limit", 100))
 		if err != nil {
 			writeError(c, err)
 			return
@@ -249,21 +204,6 @@ func readerListThoughtHistory(reader ReaderService) gin.HandlerFunc {
 func readerGetThought(reader ReaderService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		response, err := reader.GetThought(c.Request.Context(), c.Param("id"))
-		if err != nil {
-			writeError(c, err)
-			return
-		}
-		c.JSON(http.StatusOK, response)
-	}
-}
-
-func readerReattachThought(reader ReaderService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var request dto.ReaderThoughtReattachRequest
-		if !bindJSONWithLimit(c, &request, defaultMaxJSONBodyBytes) {
-			return
-		}
-		response, err := reader.ReattachThought(c.Request.Context(), c.Param("id"), request)
 		if err != nil {
 			writeError(c, err)
 			return
@@ -528,7 +468,7 @@ func readerDiscardInbox(reader ReaderService) gin.HandlerFunc {
 	}
 }
 
-func readerListTrash(lifecycle readerHostLifecycleService) gin.HandlerFunc {
+func readerListTrash(lifecycle ReaderService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		response, err := lifecycle.ListTrash(c.Request.Context(), c.Query("host_kind"), c.Query("after"), queryInt(c, "limit", 50))
 		if err != nil {
@@ -539,7 +479,7 @@ func readerListTrash(lifecycle readerHostLifecycleService) gin.HandlerFunc {
 	}
 }
 
-func readerRestoreHost(lifecycle readerHostLifecycleService, kind, param string) gin.HandlerFunc {
+func readerRestoreHost(lifecycle ReaderService, kind, param string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		response, err := lifecycle.RestoreHost(c.Request.Context(), kind, c.Param(param))
 		if err != nil {
@@ -550,7 +490,7 @@ func readerRestoreHost(lifecycle readerHostLifecycleService, kind, param string)
 	}
 }
 
-func readerPurgeHost(lifecycle readerHostLifecycleService, kind, param string) gin.HandlerFunc {
+func readerPurgeHost(lifecycle ReaderService, kind, param string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var request dto.ReaderHostPurgeRequest
 		if !bindJSONWithLimit(c, &request, defaultMaxJSONBodyBytes) {
@@ -610,73 +550,12 @@ func readerInboxBulkResponse(items []model.ReaderInboxBulkResult) dto.ReaderInbo
 
 func readerResummarizeInbox(reader ReaderService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		response, err := reader.ResummarizeInboxJob(c.Request.Context(), c.Param("id"))
+		response, err := reader.ResummarizeInbox(c.Request.Context(), c.Param("id"))
 		if err != nil {
 			writeError(c, err)
 			return
 		}
 		c.JSON(http.StatusAccepted, response)
-	}
-}
-
-func readerGetInboxJob(reader ReaderService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		response, err := reader.GetInboxJob(c.Request.Context(), c.Param("job_id"))
-		if err != nil {
-			writeError(c, err)
-			return
-		}
-		c.JSON(http.StatusOK, response)
-	}
-}
-
-func readerCreateCategory(reader ReaderService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var request dto.ReaderCategoryRequest
-		if !bindJSONWithLimit(c, &request, defaultMaxJSONBodyBytes) {
-			return
-		}
-		response, err := reader.CreateCategory(c.Request.Context(), request)
-		if err != nil {
-			writeError(c, err)
-			return
-		}
-		c.JSON(http.StatusCreated, response)
-	}
-}
-
-func readerListCategories(reader ReaderService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		response, err := reader.ListCategories(c.Request.Context())
-		if err != nil {
-			writeError(c, err)
-			return
-		}
-		c.JSON(http.StatusOK, response)
-	}
-}
-
-func readerDeleteCategory(reader ReaderService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if err := reader.DeleteCategory(c.Request.Context(), c.Param("id")); err != nil {
-			writeError(c, err)
-			return
-		}
-		c.Status(http.StatusNoContent)
-	}
-}
-
-func readerSetCategoryMembership(reader ReaderService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var request dto.ReaderCategoryMembershipRequest
-		if !bindJSONWithLimit(c, &request, defaultMaxJSONBodyBytes) {
-			return
-		}
-		if err := reader.SetCategoryMembership(c.Request.Context(), c.Param("id"), request); err != nil {
-			writeError(c, err)
-			return
-		}
-		c.Status(http.StatusNoContent)
 	}
 }
 
@@ -753,14 +632,8 @@ func readerHome(reader ReaderService) gin.HandlerFunc {
 
 func readerFeed(reader ReaderService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		mode, snapshotID, after, limit := c.Query("mode"), c.Query("snapshot_id"), c.Query("after"), queryInt(c, "limit", 30)
-		var response dto.ReaderFeedResponse
-		var err error
-		if feedService, ok := reader.(readerFeedSourceService); ok {
-			response, err = feedService.FeedWithSources(c.Request.Context(), mode, snapshotID, after, readerFeedSources(c), limit)
-		} else {
-			response, err = reader.Feed(c.Request.Context(), mode, snapshotID, after, limit)
-		}
+		mode, after, limit := c.Query("mode"), c.Query("after"), queryInt(c, "limit", 30)
+		response, err := reader.FeedWithSources(c.Request.Context(), mode, after, readerFeedSources(c), limit)
 		if err != nil {
 			writeError(c, err)
 			return
@@ -832,43 +705,7 @@ func readerPatchMetadata(reader ReaderService) gin.HandlerFunc {
 			writeError(c, err)
 			return
 		}
-		// PatchLinkMetadata has the repository's TagsChanged result and makes the
-		// precise aggregate invalidation decision itself. Keep the generic write
-		// middleware from invalidating again, including for successful no-ops.
-		middleware.MarkAggregateInvalidationHandled(c)
 		c.Header("ETag", quoteRevision(response.MetadataRevision))
-		c.JSON(http.StatusOK, response)
-	}
-}
-
-func readerListContentHistory(reader ReaderService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		response, err := reader.ListContentHistory(c.Request.Context(), c.Param("link_id"), queryInt(c, "limit", 50))
-		if err != nil {
-			writeError(c, err)
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"items": response})
-	}
-}
-
-func readerRestoreContentHistory(reader ReaderService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		historyID, err := strconv.ParseInt(c.Param("history_id"), 10, 64)
-		if err != nil || historyID < 1 {
-			writeError(c, invalidReaderRequest("invalid_history_id", "history_id must be positive"))
-			return
-		}
-		var request dto.ReaderContentHistoryRestoreRequest
-		if !bindJSONWithLimit(c, &request, defaultMaxJSONBodyBytes) {
-			return
-		}
-		response, err := reader.RestoreContentHistory(c.Request.Context(), c.Param("link_id"), historyID, request.ExpectedContentRevision)
-		if err != nil {
-			writeError(c, err)
-			return
-		}
-		c.Header("ETag", quoteRevision(response.ContentRevision))
 		c.JSON(http.StatusOK, response)
 	}
 }

@@ -16,10 +16,6 @@ const lockLinkForDeleteSQL = `SELECT id
 	WHERE id = $1
 	FOR UPDATE`
 
-const terminalizeDeletedParseAttemptsSQL = `UPDATE parse_jobs
-	SET status='failed',error_msg='link_deleted',updated_at=NOW()
-	WHERE link_id=$1 AND status IN ('pending','processing')`
-
 const terminalizeDeletedTranslationAttemptsSQL = `UPDATE link_translations
 	SET status='failed',error_msg='link_deleted',current_river_job_id=NULL,updated_at=NOW()
 	WHERE link_id=$1 AND status IN ('pending','processing')`
@@ -47,13 +43,10 @@ func (r *PGXLinkRepository) DeleteLifecycle(ctx context.Context, id uuid.UUID) e
 	return nil
 }
 
-// LockLinkForDeleteTx establishes the canonical delete lock after taking the
-// representation-revision prelock. The durable adapter must keep this tx open,
-// cancel active River jobs, then call DeleteLockedLinkTx with the returned ID.
+// LockLinkForDeleteTx establishes the canonical delete lock. The durable adapter
+// must keep this tx open, cancel active River jobs, then call
+// DeleteLockedLinkTx with the returned ID.
 func (r *PGXLinkRepository) LockLinkForDeleteTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (uuid.UUID, error) {
-	if err := prelockLibraryFeedRevisions(ctx, tx); err != nil {
-		return uuid.Nil, err
-	}
 	var lockedID uuid.UUID
 	if err := tx.QueryRow(ctx, lockLinkForDeleteSQL, id).Scan(&lockedID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -73,9 +66,6 @@ func (r *PGXLinkRepository) DeleteLockedLinkTx(ctx context.Context, tx pgx.Tx, l
 }
 
 func terminalizeAndDeleteLockedLinkOn(ctx context.Context, db database.Querier, lockedID uuid.UUID) error {
-	if _, err := db.Exec(ctx, terminalizeDeletedParseAttemptsSQL, lockedID); err != nil {
-		return fmt.Errorf("terminalize deleted link parse attempts: %w", err)
-	}
 	if _, err := db.Exec(ctx, terminalizeDeletedTranslationAttemptsSQL, lockedID); err != nil {
 		return fmt.Errorf("terminalize deleted link translation attempts: %w", err)
 	}

@@ -16,12 +16,14 @@ import (
 
 func validThoughtWireInput(operationKind string) dto.ReaderThoughtOpRequest {
 	return dto.ReaderThoughtOpRequest{
-		OpID:          "op-1",
-		DeviceID:      "device-1",
-		OperationKind: operationKind,
-		AnnotationID:  "annotation-1",
-		HostKind:      "link",
-		HostID:        "link-1",
+		ContractVersion: model.ReaderThoughtContractVersion,
+		OpID:            "op-1",
+		DeviceID:        "device-1",
+		LogicalClock:    1,
+		OperationKind:   operationKind,
+		AnnotationID:    "annotation-1",
+		HostKind:        "link",
+		HostID:          "link-1",
 		Target: json.RawMessage(`{
             "kind": "saved-content",
             "host_id": "link-1",
@@ -53,10 +55,6 @@ func TestValidateThoughtWireAcceptsSupportedTargets(t *testing.T) {
 		{
 			name:   "inbox",
 			target: `{"kind":"inbox","host_id":"link-1","version":{"metadata_revision":5}}`,
-		},
-		{
-			name:   "legacy stale",
-			target: `{"kind":"legacy-stale","host_id":"link-1","version":{"source_key":"legacy-1"}}`,
 		},
 	}
 
@@ -128,8 +126,8 @@ func TestValidateThoughtWireRejectsInvalidTarget(t *testing.T) {
 			target: `{"kind":"inbox","host_id":"link-1","version":{}}`,
 		},
 		{
-			name:   "legacy stale missing source key",
-			target: `{"kind":"legacy-stale","host_id":"link-1","version":{}}`,
+			name:   "retired legacy stale target",
+			target: `{"kind":"legacy-stale","host_id":"link-1","version":{"source_key":"legacy-1"}}`,
 		},
 		{
 			name:   "unknown kind",
@@ -177,9 +175,9 @@ func TestValidateThoughtWireAcceptsArchiveThoughtBoundaries(t *testing.T) {
 	deleteWithArchivedHost.HostKind = "inbox"
 	deleteWithArchivedHost.HostID = "purged-inbox:legacy-42"
 	deleteWithArchivedHost.Target = json.RawMessage(`{
-        "kind": "legacy-stale",
+        "kind": "inbox",
         "host_id": "purged-inbox:legacy-42",
-        "version": {"source_key": "reader-v0"}
+        "version": {"metadata_revision": 1}
     }`)
 	deleteWithArchivedHost.Payload = json.RawMessage(`{}`)
 	if err := validateThoughtWire(deleteWithArchivedHost); err != nil {
@@ -322,13 +320,10 @@ func TestValidateThoughtWireEnforcesVersionedLamportClock(t *testing.T) {
 		}
 	}
 
-	legacy := validThoughtWireInput("update")
-	if err := validateThoughtWire(legacy); err != nil {
-		t.Fatalf("legacy clock zero should be accepted: %v", err)
-	}
-	legacy.LogicalClock = 1
-	if err := validateThoughtWire(legacy); err == nil {
-		t.Fatal("legacy nonzero logical_clock should be rejected")
+	missingVersion := validThoughtWireInput("update")
+	missingVersion.ContractVersion = 0
+	if err := validateThoughtWire(missingVersion); err == nil {
+		t.Fatal("missing contract_version should be rejected")
 	}
 
 	unsupported := validThoughtWireInput("update")

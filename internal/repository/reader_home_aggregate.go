@@ -49,8 +49,8 @@ const readerHomeListTodosSQL = `SELECT ` + readerTodoColumns + ` FROM reader_tod
 
 const readerHomeCountsSQL = `
 SELECT
-	(SELECT count(*)::int FROM reader_inbox WHERE status='pending' AND deleted_at IS NULL AND expired_at IS NULL),
-	(SELECT count(*)::int FROM reader_inbox WHERE status='pending' AND deleted_at IS NULL AND expired_at IS NOT NULL),
+	(SELECT count(*)::int FROM reader_inbox WHERE status='pending' AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())),
+	(SELECT count(*)::int FROM reader_inbox WHERE status='pending' AND deleted_at IS NULL AND expires_at IS NOT NULL AND expires_at <= NOW()),
 	(SELECT count(*)::int FROM links WHERE status='done' AND library_kind='reading' AND deleted_at IS NULL),
 	(SELECT count(*)::int FROM sites),
 	(SELECT count(*)::int FROM feed_subscriptions WHERE active=true),
@@ -203,8 +203,6 @@ func listHomeContinueReadingOn(ctx context.Context, db database.Querier, limit i
 		item.Key = "link:" + id.String()
 		item.Source = "reading"
 		item.LinkID = &id
-		item.ReasonCode = model.ReaderFeedReasonContinueReading
-		item.ReasonText = fmt.Sprintf("已读 %.0f%%，继续阅读", progress*100)
 		item.PublishedAt = &lastOpened
 		out = append(out, item)
 	}

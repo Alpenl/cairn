@@ -391,25 +391,6 @@ func TestTranslationServiceListClassifiesVerifiedSummaryBlockIdentity(t *testing
 	}
 }
 
-func TestTranslationServiceListReturnsRetiredDeepResearchHistory(t *testing.T) {
-	t.Parallel()
-
-	link := translationDoneLink()
-	dr := translationItem(link.ID, model.TranslationScopeSelection)
-	dr.BlockKey = "dr"
-	dr.SourceText = "retired analysis"
-	dr.SourceHash = hashTranslationSource(dr.SourceText)
-	dr.SourceContentRevision = nil
-	svc := NewService(ServiceOptions{
-		Translations: &translationListReaderStub{snapshot: translationListSnapshot(link, nil, dr)},
-	})
-
-	got, err := svc.List(context.Background(), link.ID)
-	if err != nil || len(got.Items) != 1 || got.Items[0].ID != dr.ID || got.Items[0].Stale {
-		t.Fatalf("List() = %+v, %v, want readable retired deep-research history", got, err)
-	}
-}
-
 func TestTranslationServiceListEnvelopeCarriesRevisionWhenEmpty(t *testing.T) {
 	t.Parallel()
 

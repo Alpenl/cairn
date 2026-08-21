@@ -221,12 +221,6 @@ func TestCreateLinkTranslationReturnsStableConflictIdentity(t *testing.T) {
 			wantCode: "source_block_conflict",
 			identity: httperr.ConflictIdentity{BlockKey: "summary", SourceHash: &sourceHash},
 		},
-		{
-			name:     "rolling schema transition",
-			code:     httperr.CodeTranslationSchemaTransition,
-			wantCode: "translation_schema_transition",
-			identity: httperr.ConflictIdentity{ContentRevision: &revision, BlockKey: "content"},
-		},
 	}
 
 	for _, tt := range tests {

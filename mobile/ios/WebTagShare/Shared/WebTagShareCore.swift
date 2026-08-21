@@ -141,7 +141,6 @@ struct SessionIdentity: Equatable {
 struct SubmitResponse: Equatable, Codable {
     let linkID: String
     let status: String
-    let jobID: String?
 }
 
 struct CredentialConfig: Equatable {
@@ -181,7 +180,6 @@ struct QueueEntry {
     var lastErrorCode: String?
     var lastHTTPStatus: Int?
     var linkID: String?
-    var jobID: String?
     var leaseOwner: String?
     var leaseExpiresAt: Date?
 }
@@ -194,7 +192,6 @@ struct QueueEnqueueResult {
 struct RecentResult {
     let url: String
     let linkID: String
-    let jobID: String?
     let status: String
     let createdAt: Date
     let identity: QueueIdentity
@@ -634,7 +631,7 @@ final class AppGroupQueueRepository {
         id, schema_version, url, idempotency_key, request_fingerprint, api_origin,
         client_data_namespace, identity_revision, state, created_at, first_failed_at,
         attempt_count, next_attempt_at, last_error_kind, last_error_code,
-        last_http_status, link_id, job_id, lease_owner, lease_expires_at
+        last_http_status, link_id, lease_owner, lease_expires_at
         """
     private var database: OpaquePointer?
     private let fileURL: URL
@@ -708,7 +705,7 @@ final class AppGroupQueueRepository {
             identity: identity, identityRevision: identityRevision,
             state: .pendingSubmit, createdAt: now, firstFailedAt: nil,
             attemptCount: 0, nextAttemptAt: nil, lastError: nil, lastErrorCode: nil,
-            lastHTTPStatus: nil, linkID: nil, jobID: nil, leaseOwner: nil, leaseExpiresAt: nil)
+            lastHTTPStatus: nil, linkID: nil, leaseOwner: nil, leaseExpiresAt: nil)
     }
 
     private func insertUnlocked(_ entry: QueueEntry, now: Date) throws {
@@ -890,15 +887,15 @@ final class AppGroupQueueRepository {
             }
             let recent = try prepare("""
                 INSERT OR REPLACE INTO recent_results
-                (url, link_id, job_id, status, created_at, api_origin,
+                (url, link_id, status, created_at, api_origin,
                  client_data_namespace, identity_revision)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """)
             defer { sqlite3_finalize(recent) }
-            bind(recent, 1, entry.url); bind(recent, 2, response.linkID); bindOptional(recent, 3, response.jobID)
-            bind(recent, 4, response.status); bind(recent, 5, now.timeIntervalSince1970)
-            bind(recent, 6, entry.identity.origin); bind(recent, 7, entry.identity.namespace)
-            bind(recent, 8, entry.identityRevision)
+            bind(recent, 1, entry.url); bind(recent, 2, response.linkID)
+            bind(recent, 3, response.status); bind(recent, 4, now.timeIntervalSince1970)
+            bind(recent, 5, entry.identity.origin); bind(recent, 6, entry.identity.namespace)
+            bind(recent, 7, entry.identityRevision)
             guard sqlite3_step(recent) == SQLITE_DONE else { throw CoreError.database }
             guard try deleteUnlocked(id: entry.id, owner: owner, identityRevision: entry.identityRevision, now: now) else {
                 throw CoreError.database
@@ -966,7 +963,7 @@ final class AppGroupQueueRepository {
         let active = try activeSessionSnapshotUnlocked()
         let statement: OpaquePointer
         if let identity, let active, identity == active.queueIdentity {
-            let exact = try prepare("SELECT url, link_id, job_id, status, created_at, api_origin, client_data_namespace, identity_revision, refresh_not_before, refresh_block_reason FROM recent_results WHERE api_origin=? AND client_data_namespace=? AND identity_revision=?")
+            let exact = try prepare("SELECT url, link_id, status, created_at, api_origin, client_data_namespace, identity_revision, refresh_not_before, refresh_block_reason FROM recent_results WHERE api_origin=? AND client_data_namespace=? AND identity_revision=?")
             bind(exact, 1, identity.origin); bind(exact, 2, identity.namespace); bind(exact, 3, active.revision)
             if sqlite3_step(exact) == SQLITE_ROW {
                 defer { sqlite3_finalize(exact) }
@@ -974,24 +971,23 @@ final class AppGroupQueueRepository {
             }
             sqlite3_finalize(exact)
         }
-        statement = try prepare("SELECT url, link_id, job_id, status, created_at, api_origin, client_data_namespace, identity_revision, refresh_not_before, refresh_block_reason FROM recent_results ORDER BY created_at DESC, identity_revision DESC LIMIT 1")
+        statement = try prepare("SELECT url, link_id, status, created_at, api_origin, client_data_namespace, identity_revision, refresh_not_before, refresh_block_reason FROM recent_results ORDER BY created_at DESC, identity_revision DESC LIMIT 1")
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
         return makeRecent(statement, requestedIdentity: identity, activeRevision: active?.revision)
     }
 
     private func makeRecent(_ statement: OpaquePointer, requestedIdentity identity: QueueIdentity?, activeRevision: Int64?) -> RecentResult {
-        let entryIdentity = QueueIdentity(origin: text(statement, 5), namespace: text(statement, 6))
-        let storedRevision = sqlite3_column_int64(statement, 7)
+        let entryIdentity = QueueIdentity(origin: text(statement, 4), namespace: text(statement, 5))
+        let storedRevision = sqlite3_column_int64(statement, 6)
         let identityMismatch = identity.map { $0 != entryIdentity || activeRevision != storedRevision } ?? false
         return RecentResult(url: identityMismatch ? "" : text(statement, 0),
                             linkID: identityMismatch ? "" : text(statement, 1),
-                            jobID: identityMismatch ? nil : textOptional(statement, 2),
-                            status: identityMismatch ? "identity_mismatch" : text(statement, 3),
-                            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
+                            status: identityMismatch ? "identity_mismatch" : text(statement, 2),
+                            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
                             identity: entryIdentity, identityRevision: storedRevision,
-                            refreshNotBefore: date(statement, 8),
-                            refreshBlockReason: textOptional(statement, 9), isIdentityMismatch: identityMismatch)
+                            refreshNotBefore: date(statement, 7),
+                            refreshBlockReason: textOptional(statement, 8), isIdentityMismatch: identityMismatch)
     }
 
     func activeIdentity() throws -> QueueIdentity? {
@@ -1135,7 +1131,7 @@ final class AppGroupQueueRepository {
             UPDATE queue_entries SET idempotency_key=?, api_origin=?, client_data_namespace=?, identity_revision=?,
              state=?, first_failed_at=NULL, attempt_count=0, next_attempt_at=NULL,
              last_error_kind=NULL, last_error_code=NULL, last_http_status=NULL,
-             link_id=NULL, job_id=NULL, lease_owner=NULL, lease_expires_at=NULL, updated_at=?
+             link_id=NULL, lease_owner=NULL, lease_expires_at=NULL, updated_at=?
              WHERE id=? AND api_origin=? AND client_data_namespace=? AND identity_revision=?
              AND (lease_owner IS NULL OR lease_expires_at<=?)
             """)
@@ -1211,7 +1207,7 @@ final class AppGroupQueueRepository {
                 UPDATE queue_entries SET idempotency_key=?, api_origin=?, client_data_namespace=?, identity_revision=?,
                  state=?, first_failed_at=NULL, attempt_count=0, next_attempt_at=NULL,
                  last_error_kind=NULL, last_error_code=NULL, last_http_status=NULL,
-                 link_id=NULL, job_id=NULL, lease_owner=NULL, lease_expires_at=NULL, updated_at=?
+                 link_id=NULL, lease_owner=NULL, lease_expires_at=NULL, updated_at=?
                  WHERE id=? AND api_origin=? AND client_data_namespace=? AND identity_revision=?
                    AND lease_owner IS NULL
                 """)
@@ -1408,11 +1404,11 @@ final class AppGroupQueueRepository {
         guard UUID(uuidString: response.linkID) == UUID(uuidString: capture.expectedLinkID) else {
             return .recentReplaced
         }
-        let statement = try prepare("UPDATE recent_results SET job_id=?, status=?, created_at=?, refresh_not_before=NULL, refresh_block_reason=NULL WHERE api_origin=? AND client_data_namespace=? AND identity_revision=? AND link_id=?")
+        let statement = try prepare("UPDATE recent_results SET status=?, created_at=?, refresh_not_before=NULL, refresh_block_reason=NULL WHERE api_origin=? AND client_data_namespace=? AND identity_revision=? AND link_id=?")
         defer { sqlite3_finalize(statement) }
-        bindOptional(statement, 1, response.jobID); bind(statement, 2, response.status); bind(statement, 3, now.timeIntervalSince1970)
-        bind(statement, 4, capture.identity.origin); bind(statement, 5, capture.identity.namespace)
-        bind(statement, 6, capture.identityRevision); bind(statement, 7, capture.expectedLinkID)
+        bind(statement, 1, response.status); bind(statement, 2, now.timeIntervalSince1970)
+        bind(statement, 3, capture.identity.origin); bind(statement, 4, capture.identity.namespace)
+        bind(statement, 5, capture.identityRevision); bind(statement, 6, capture.expectedLinkID)
         guard sqlite3_step(statement) == SQLITE_DONE else { throw CoreError.database }
         return sqlite3_changes(database) == 1 ? .applied : .recentReplaced
     }
@@ -1442,17 +1438,17 @@ final class AppGroupQueueRepository {
               identity_revision INTEGER NOT NULL DEFAULT 0,
               state TEXT NOT NULL, created_at REAL NOT NULL, first_failed_at REAL,
               attempt_count INTEGER NOT NULL, next_attempt_at REAL, last_error_kind TEXT,
-              last_error_code TEXT, last_http_status INTEGER, link_id TEXT, job_id TEXT,
+              last_error_code TEXT, last_http_status INTEGER, link_id TEXT,
               lease_owner TEXT, lease_expires_at REAL, updated_at REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS queue_due ON queue_entries(state, next_attempt_at, created_at);
             CREATE TABLE IF NOT EXISTS recent_result (
               id INTEGER PRIMARY KEY CHECK(id=1), url TEXT NOT NULL, link_id TEXT NOT NULL,
-              job_id TEXT, status TEXT NOT NULL, created_at REAL NOT NULL,
+              status TEXT NOT NULL, created_at REAL NOT NULL,
               api_origin TEXT NOT NULL, client_data_namespace TEXT NOT NULL,
               identity_revision INTEGER NOT NULL DEFAULT 0,
               refresh_not_before REAL, refresh_block_reason TEXT);
             CREATE TABLE IF NOT EXISTS recent_results (
-              url TEXT NOT NULL, link_id TEXT NOT NULL, job_id TEXT,
+              url TEXT NOT NULL, link_id TEXT NOT NULL,
               status TEXT NOT NULL, created_at REAL NOT NULL,
               api_origin TEXT NOT NULL, client_data_namespace TEXT NOT NULL,
               identity_revision INTEGER NOT NULL,
@@ -1475,14 +1471,15 @@ final class AppGroupQueueRepository {
         // partition. It remains inert and can never match a live activation.
         try execute("""
             INSERT OR IGNORE INTO recent_results
-              (url, link_id, job_id, status, created_at, api_origin,
+              (url, link_id, status, created_at, api_origin,
                client_data_namespace, identity_revision, refresh_not_before,
                refresh_block_reason)
-            SELECT url, link_id, job_id, status, created_at, api_origin,
+            SELECT url, link_id, status, created_at, api_origin,
                    client_data_namespace, identity_revision,
                    refresh_not_before, refresh_block_reason
             FROM recent_result WHERE identity_revision >= 0;
             """)
+        try removeLegacyTaskIDColumns()
         try execute(
             "DELETE FROM metadata WHERE key NOT IN " +
                 "('api_origin', 'client_data_namespace', 'representation_contract', " +
@@ -1519,8 +1516,8 @@ final class AppGroupQueueRepository {
             nextAttemptAt: date(statement, 12),
             lastError: identityMismatch ? .identityMismatch : ErrorCategory(rawValue: textOptional(statement, 13) ?? ""),
             lastErrorCode: textOptional(statement, 14), lastHTTPStatus: intOptional(statement, 15),
-            linkID: textOptional(statement, 16), jobID: textOptional(statement, 17),
-            leaseOwner: textOptional(statement, 18), leaseExpiresAt: date(statement, 19))
+            linkID: textOptional(statement, 16),
+            leaseOwner: textOptional(statement, 17), leaseExpiresAt: date(statement, 18))
     }
 
     private func addColumnIfMissing(table: String, column: String, definition: String) throws {
@@ -1530,6 +1527,110 @@ final class AppGroupQueueRepository {
             if text(statement, 1) == column { return }
         }
         try execute("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
+    }
+
+    /// Drops the old server task identifier from databases created by older
+    /// builds. SQLite table rebuilds keep this compatible with the iOS 16
+    /// deployment target, where ALTER TABLE ... DROP COLUMN is unavailable.
+    private func removeLegacyTaskIDColumns() throws {
+        try execute("BEGIN IMMEDIATE;")
+        do {
+            if try hasColumn(table: "queue_entries", column: "job_id") {
+                try execute("DROP INDEX IF EXISTS queue_due")
+                try execute("DROP TABLE IF EXISTS queue_entries_without_task_id")
+                try execute("""
+                    CREATE TABLE queue_entries_without_task_id (
+                      id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, url TEXT NOT NULL,
+                      idempotency_key TEXT NOT NULL, request_fingerprint TEXT NOT NULL,
+                      api_origin TEXT NOT NULL, client_data_namespace TEXT NOT NULL,
+                      identity_revision INTEGER NOT NULL DEFAULT 0,
+                      state TEXT NOT NULL, created_at REAL NOT NULL, first_failed_at REAL,
+                      attempt_count INTEGER NOT NULL, next_attempt_at REAL, last_error_kind TEXT,
+                      last_error_code TEXT, last_http_status INTEGER, link_id TEXT,
+                      lease_owner TEXT, lease_expires_at REAL, updated_at REAL NOT NULL)
+                    """)
+                try execute("""
+                    INSERT INTO queue_entries_without_task_id
+                      (id, schema_version, url, idempotency_key, request_fingerprint,
+                       api_origin, client_data_namespace, identity_revision, state,
+                       created_at, first_failed_at, attempt_count, next_attempt_at,
+                       last_error_kind, last_error_code, last_http_status, link_id,
+                       lease_owner, lease_expires_at, updated_at)
+                    SELECT id, schema_version, url, idempotency_key, request_fingerprint,
+                           api_origin, client_data_namespace, identity_revision, state,
+                           created_at, first_failed_at, attempt_count, next_attempt_at,
+                           last_error_kind, last_error_code, last_http_status, link_id,
+                           lease_owner, lease_expires_at, updated_at
+                    FROM queue_entries
+                    """)
+                try execute("DROP TABLE queue_entries")
+                try execute("ALTER TABLE queue_entries_without_task_id RENAME TO queue_entries")
+                try execute("CREATE INDEX IF NOT EXISTS queue_due ON queue_entries(state, next_attempt_at, created_at)")
+            }
+
+            if try hasColumn(table: "recent_result", column: "job_id") {
+                try execute("DROP TABLE IF EXISTS recent_result_without_task_id")
+                try execute("""
+                    CREATE TABLE recent_result_without_task_id (
+                      id INTEGER PRIMARY KEY CHECK(id=1), url TEXT NOT NULL, link_id TEXT NOT NULL,
+                      status TEXT NOT NULL, created_at REAL NOT NULL,
+                      api_origin TEXT NOT NULL, client_data_namespace TEXT NOT NULL,
+                      identity_revision INTEGER NOT NULL DEFAULT 0,
+                      refresh_not_before REAL, refresh_block_reason TEXT)
+                    """)
+                try execute("""
+                    INSERT INTO recent_result_without_task_id
+                      (id, url, link_id, status, created_at, api_origin,
+                       client_data_namespace, identity_revision, refresh_not_before,
+                       refresh_block_reason)
+                    SELECT id, url, link_id, status, created_at, api_origin,
+                           client_data_namespace, identity_revision, refresh_not_before,
+                           refresh_block_reason
+                    FROM recent_result
+                    """)
+                try execute("DROP TABLE recent_result")
+                try execute("ALTER TABLE recent_result_without_task_id RENAME TO recent_result")
+            }
+
+            if try hasColumn(table: "recent_results", column: "job_id") {
+                try execute("DROP TABLE IF EXISTS recent_results_without_task_id")
+                try execute("""
+                    CREATE TABLE recent_results_without_task_id (
+                      url TEXT NOT NULL, link_id TEXT NOT NULL,
+                      status TEXT NOT NULL, created_at REAL NOT NULL,
+                      api_origin TEXT NOT NULL, client_data_namespace TEXT NOT NULL,
+                      identity_revision INTEGER NOT NULL,
+                      refresh_not_before REAL, refresh_block_reason TEXT,
+                      migrated_to_revision INTEGER,
+                      PRIMARY KEY(api_origin, client_data_namespace, identity_revision))
+                    """)
+                try execute("""
+                    INSERT INTO recent_results_without_task_id
+                      (url, link_id, status, created_at, api_origin,
+                       client_data_namespace, identity_revision, refresh_not_before,
+                       refresh_block_reason, migrated_to_revision)
+                    SELECT url, link_id, status, created_at, api_origin,
+                           client_data_namespace, identity_revision, refresh_not_before,
+                           refresh_block_reason, migrated_to_revision
+                    FROM recent_results
+                    """)
+                try execute("DROP TABLE recent_results")
+                try execute("ALTER TABLE recent_results_without_task_id RENAME TO recent_results")
+            }
+            try execute("COMMIT;")
+        } catch {
+            try? execute("ROLLBACK;")
+            throw error
+        }
+    }
+
+    private func hasColumn(table: String, column: String) throws -> Bool {
+        let statement = try prepare("PRAGMA table_info(\(table))")
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if text(statement, 1) == column { return true }
+        }
+        return false
     }
 
     /// The copied row and its source receipt commit together. Retrying after a
@@ -1568,10 +1669,10 @@ final class AppGroupQueueRepository {
 
             let copy = try prepare("""
                 INSERT OR REPLACE INTO recent_results
-                  (url, link_id, job_id, status, created_at, api_origin,
+                  (url, link_id, status, created_at, api_origin,
                    client_data_namespace, identity_revision,
                    refresh_not_before, refresh_block_reason, migrated_to_revision)
-                SELECT url, link_id, job_id, status, created_at, ?, ?, ?, NULL, NULL, NULL
+                SELECT url, link_id, status, created_at, ?, ?, ?, NULL, NULL, NULL
                 FROM recent_results
                 WHERE api_origin=? AND client_data_namespace=? AND identity_revision=?
                   AND migrated_to_revision IS NULL
@@ -1945,9 +2046,7 @@ final class WebTagAPIClient: NSObject, URLSessionTaskDelegate {
               Self.isCanonicalUUID(linkID),
               let status = object["status"] as? String,
               ["pending", "processing", "done", "failed"].contains(status) else { throw CoreError.invalidResponse }
-        let jobID = object["job_id"] as? String
-        guard jobID == nil || Self.isCanonicalUUID(jobID!) else { throw CoreError.invalidResponse }
-        return SubmitResponse(linkID: linkID, status: status, jobID: jobID)
+        return SubmitResponse(linkID: linkID, status: status)
     }
 
     private static func isCanonicalUUID(_ value: String) -> Bool {

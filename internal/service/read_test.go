@@ -125,116 +125,6 @@ func TestLinkToResponseNormalizesMissingTagsToEmptyArray(t *testing.T) {
 	}
 }
 
-func TestJobReadServiceGetIncludesLinkOnlyWhenDone(t *testing.T) {
-	t.Parallel()
-
-	linkID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
-	jobID := uuid.MustParse("44444444-4444-4444-4444-444444444444")
-	now := time.Unix(0, 0).UTC()
-
-	linkStore := &readFakeLinkStore{
-		byID: map[uuid.UUID]*model.Link{
-			linkID: {
-				ID:        linkID,
-				URL:       "https://example.com/post",
-				Status:    model.LinkStatusDone,
-				CreatedAt: now,
-				UpdatedAt: now,
-			},
-		},
-	}
-	jobStore := &readFakeJobStore{
-		byID: map[uuid.UUID]*model.ParseJob{
-			jobID: {
-				ID:        jobID,
-				LinkID:    linkID,
-				Status:    model.JobStatusDone,
-				CreatedAt: now,
-				UpdatedAt: now,
-			},
-		},
-	}
-
-	service := NewJobReadService(jobStore, linkStore)
-	got, err := service.Get(context.Background(), jobID.String())
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-
-	if got.ID != jobID.String() || got.LinkID != linkID.String() || got.Status != string(model.JobStatusDone) {
-		t.Fatalf("job response = %#v, want ids/status preserved", got)
-	}
-	if got.ErrorCategory != nil {
-		t.Fatalf("job error category = %#v, want nil for done job (omitted)", got.ErrorCategory)
-	}
-	if got.Link == nil || got.Link.ID != linkID.String() {
-		t.Fatalf("job link = %#v, want embedded link", got.Link)
-	}
-
-	jobStore.byID[jobID] = &model.ParseJob{
-		ID:        jobID,
-		LinkID:    linkID,
-		Status:    model.JobStatusProcessing,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	got, err = service.Get(context.Background(), jobID.String())
-	if err != nil {
-		t.Fatalf("Get() second call error = %v", err)
-	}
-	if got.Link != nil {
-		t.Fatalf("job link = %#v, want nil when job is not done", got.Link)
-	}
-
-	errMsg := "analyzer call failed: status=502 body=temporary upstream failure"
-	jobStore.byID[jobID] = &model.ParseJob{
-		ID:        jobID,
-		LinkID:    linkID,
-		Status:    model.JobStatusFailed,
-		ErrorMsg:  &errMsg,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	got, err = service.Get(context.Background(), jobID.String())
-	if err != nil {
-		t.Fatalf("Get() third call error = %v", err)
-	}
-	if got.ErrorCategory == nil || *got.ErrorCategory != "upstream_http" {
-		t.Fatalf("job error category = %#v, want upstream_http", got.ErrorCategory)
-	}
-}
-
-func TestJobReadServiceListReturnsBatchStatuses(t *testing.T) {
-	t.Parallel()
-
-	jobID1 := uuid.MustParse("11111111-1111-1111-1111-111111111111")
-	jobID2 := uuid.MustParse("22222222-2222-2222-2222-222222222222")
-	linkID1 := uuid.MustParse("33333333-3333-3333-3333-333333333333")
-	linkID2 := uuid.MustParse("44444444-4444-4444-4444-444444444444")
-	now := time.Unix(0, 0).UTC()
-
-	jobStore := &readFakeJobStore{
-		byID: map[uuid.UUID]*model.ParseJob{
-			jobID1: {ID: jobID1, LinkID: linkID1, Status: model.JobStatusPending, CreatedAt: now, UpdatedAt: now},
-			jobID2: {ID: jobID2, LinkID: linkID2, Status: model.JobStatusFailed, CreatedAt: now, UpdatedAt: now},
-		},
-	}
-
-	service := NewJobReadService(jobStore, &readFakeLinkStore{})
-	got, err := service.List(context.Background(), []string{jobID1.String(), jobID2.String()})
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("len(got) = %d, want 2", len(got))
-	}
-	if got[0].ID != jobID1.String() || got[1].ID != jobID2.String() {
-		t.Fatalf("ids = [%s %s], want [%s %s]", got[0].ID, got[1].ID, jobID1, jobID2)
-	}
-}
-
 func TestDeriveLowConfidenceReason(t *testing.T) {
 	t.Parallel()
 
@@ -382,12 +272,6 @@ func TestClassifyErrorMessageAndStatusAwareDerivation(t *testing.T) {
 	}); got != "" {
 		t.Fatalf("deriveLinkErrorCategory(done) = %q, want empty (omitted)", got)
 	}
-	if got := deriveJobErrorCategory(model.ParseJob{
-		Status:   model.JobStatusDone,
-		ErrorMsg: doneErr,
-	}); got != "" {
-		t.Fatalf("deriveJobErrorCategory(done) = %q, want empty (omitted)", got)
-	}
 }
 
 func TestTagReadServiceListsCountsAndMapsResponse(t *testing.T) {
@@ -399,7 +283,7 @@ func TestTagReadServiceListsCountsAndMapsResponse(t *testing.T) {
 			{Tag: "AI", Count: 2},
 		},
 	}
-	service := NewTagReadService(store, nil)
+	service := NewTagReadService(store)
 
 	got, err := service.List(context.Background())
 	if err != nil {
@@ -423,7 +307,7 @@ func TestTagReadServiceListsCountsAndMapsResponse(t *testing.T) {
 func TestTagReadServiceReturnsEmptyArrayWhenNoTagsExist(t *testing.T) {
 	t.Parallel()
 
-	service := NewTagReadService(&readFakeTagStore{counts: nil}, nil)
+	service := NewTagReadService(&readFakeTagStore{counts: nil})
 	got, err := service.List(context.Background())
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
@@ -438,7 +322,7 @@ func TestTagReadServiceReturnsEmptyArrayWhenNoTagsExist(t *testing.T) {
 
 func TestTagReadServiceListsScopedCountsWithSeparateSiteCardinality(t *testing.T) {
 	store := &readFakeTagStore{scoped: []repository.ScopedTagCount{{Tag: "whiteboard", Count: 5, ReadingCount: 2, SiteCount: 3}}}
-	got, err := NewTagReadService(store, nil).ListScoped(context.Background(), "all")
+	got, err := NewTagReadService(store).ListScoped(context.Background(), "all")
 	if err != nil {
 		t.Fatalf("ListScoped() error = %v", err)
 	}
@@ -460,7 +344,7 @@ func TestTreeReadServiceBuildsNestedResponse(t *testing.T) {
 			{
 				ID:        parentID,
 				URL:       "https://example.com/",
-				Status:    model.LinkStatusSkeleton,
+				Status:    model.LinkStatusDone,
 				Domain:    &domain,
 				CreatedAt: now,
 				UpdatedAt: now,
@@ -477,7 +361,7 @@ func TestTreeReadServiceBuildsNestedResponse(t *testing.T) {
 		},
 	}
 
-	service := NewTreeReadService(store, nil)
+	service := NewTreeReadService(store)
 	got, err := service.Get(context.Background(), "example.com")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
@@ -507,7 +391,7 @@ func TestTreeReadServiceListDomainsSummarizesCounts(t *testing.T) {
 		},
 	}
 
-	service := NewTreeReadService(store, nil)
+	service := NewTreeReadService(store)
 	got, err := service.ListDomains(context.Background())
 	if err != nil {
 		t.Fatalf("ListDomains() error = %v", err)
@@ -529,7 +413,7 @@ func TestTreeReadServiceListDomainsScopedNormalizesAndRejectsInvalidScope(t *tes
 			Total:   2,
 		},
 	}
-	service := NewTreeReadService(store, nil)
+	service := NewTreeReadService(store)
 
 	got, err := service.ListDomainsScoped(context.Background(), "  READING ")
 	if err != nil {
@@ -598,31 +482,6 @@ func (s *readFakeLinkStore) ListDone(_ context.Context, filter repository.ListLi
 func (s *readFakeLinkStore) Delete(_ context.Context, id uuid.UUID) error {
 	s.deletedIDs = append(s.deletedIDs, id)
 	return s.deleteErr
-}
-
-type readFakeJobStore struct {
-	repotest.BaseJobStore
-	byID map[uuid.UUID]*model.ParseJob
-}
-
-func (s *readFakeJobStore) GetByID(_ context.Context, id uuid.UUID) (*model.ParseJob, error) {
-	if s.byID == nil {
-		return nil, nil
-	}
-	return s.byID[id], nil
-}
-
-func (s *readFakeJobStore) ListByIDs(_ context.Context, ids []uuid.UUID) ([]model.ParseJob, error) {
-	if s.byID == nil {
-		return nil, nil
-	}
-	out := make([]model.ParseJob, 0, len(ids))
-	for _, id := range ids {
-		if job, ok := s.byID[id]; ok && job != nil {
-			out = append(out, *job)
-		}
-	}
-	return out, nil
 }
 
 type readFakeTagStore struct {
@@ -833,10 +692,10 @@ func TestSplitAndValidateStatuses(t *testing.T) {
 			httpState: http.StatusBadRequest,
 		},
 		{
-			name:      "skeleton not allowed",
-			raw:       "skeleton",
+			name:      "unknown state not allowed",
+			raw:       "queued",
 			wantErr:   true,
-			wantMsg:   "unsupported status filter: skeleton (allowed: pending, processing, failed, done)",
+			wantMsg:   "unsupported status filter: queued (allowed: pending, processing, failed, done)",
 			wantSlug:  httperr.CodeUnsupportedStatusFilter,
 			httpState: http.StatusBadRequest,
 		},
@@ -1286,31 +1145,6 @@ func TestLinkReadServiceCursorSignedRoundTrip(t *testing.T) {
 	})
 	if _, err := other.decodeListCursor(token); err == nil {
 		t.Fatal("cross-key decode succeeded; want signature mismatch")
-	}
-}
-
-// TestLinkReadServiceCursorUnsignedBackwardCompat 守护"未配置签名密钥"
-// 时的字节级向后兼容：encodeListCursor 输出与签名启用前完全一致的
-// base64(nano_ts:uuid) 格式，老客户端 / 已发出的分页 link 不被破坏。
-func TestLinkReadServiceCursorUnsignedBackwardCompat(t *testing.T) {
-	t.Parallel()
-
-	service := NewLinkReadService(LinkReadServiceOptions{Links: &readFakeLinkStore{}})
-
-	id := uuid.MustParse("11111111-2222-3333-4444-555555555555")
-	when := time.Unix(1_700_000_000, 0).UTC()
-	want := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(when.UTC().UnixNano(), 10) + ":" + id.String()))
-
-	if got := service.encodeListCursor(when, id); got != want {
-		t.Fatalf("unsigned cursor format drift: got %q want %q", got, want)
-	}
-
-	cursor, err := service.decodeListCursor(want)
-	if err != nil {
-		t.Fatalf("decodeListCursor unsigned: %v", err)
-	}
-	if !cursor.CreatedAt.Equal(when) || cursor.ID != id {
-		t.Fatalf("decoded = (%v, %v), want (%v, %v)", cursor.CreatedAt, cursor.ID, when, id)
 	}
 }
 

@@ -22,7 +22,7 @@ func TestListDonePagesEveryLinkInHalfOpenCreatedRangeExactlyOnce(t *testing.T) {
 			fmt.Sprintf("https://today.example.com/in-range/%03d", index),
 			"today", "today.example.com")
 		createdAt := from.Add(time.Duration(index) * time.Minute)
-		if _, err := pool.Exec(ctx, `UPDATE links SET created_at = $1, library_kind = 'reading', library_kind_source = 'user' WHERE id = $2`, createdAt, id); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE links SET created_at = $1, library_kind = 'reading', library_kind_locked = true WHERE id = $2`, createdAt, id); err != nil {
 			t.Fatalf("set in-range created_at %d: %v", index, err)
 		}
 	}
@@ -33,7 +33,7 @@ func TestListDonePagesEveryLinkInHalfOpenCreatedRangeExactlyOnce(t *testing.T) {
 	} {
 		id := mustCreateDoneLink(t, links, ctx,
 			"https://today.example.com/"+name, "today", "today.example.com")
-		if _, err := pool.Exec(ctx, `UPDATE links SET created_at = $1, library_kind = 'reading', library_kind_source = 'user' WHERE id = $2`, createdAt, id); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE links SET created_at = $1, library_kind = 'reading', library_kind_locked = true WHERE id = $2`, createdAt, id); err != nil {
 			t.Fatalf("set %s created_at: %v", name, err)
 		}
 	}
@@ -43,7 +43,7 @@ func TestListDonePagesEveryLinkInHalfOpenCreatedRangeExactlyOnce(t *testing.T) {
 	wrongDomain := mustCreateDoneLink(t, links, ctx,
 		"https://other.example.com/wrong-domain", "today", "other.example.com")
 	for _, id := range []any{wrongTag, wrongDomain} {
-		if _, err := pool.Exec(ctx, `UPDATE links SET created_at = $1, library_kind = 'reading', library_kind_source = 'user' WHERE id = $2`, from.Add(time.Hour), id); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE links SET created_at = $1, library_kind = 'reading', library_kind_locked = true WHERE id = $2`, from.Add(time.Hour), id); err != nil {
 			t.Fatalf("set orthogonal fixture created_at: %v", err)
 		}
 	}

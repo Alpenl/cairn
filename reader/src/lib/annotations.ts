@@ -8,7 +8,6 @@
 import {
   annotationTargetKey,
   canonicalAnnotationTarget,
-  type LegacyStaleAnnotationTarget,
   type SavedContentAnnotationBlockKey,
   type SavedContentAnnotationTarget,
   type NoteAnnotationTarget,
@@ -58,11 +57,6 @@ export type AnnotationLocator =
       readonly id: string
       readonly blockKey: string
       readonly target: NoteAnnotationTarget
-    }
-  | {
-      readonly id: string
-      readonly blockKey: string
-      readonly target: LegacyStaleAnnotationTarget
     }
 
 /**

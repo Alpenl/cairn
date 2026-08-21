@@ -203,7 +203,6 @@ class SettingsCooldownTest {
     private fun recent(deadline: Long) = RecentResult(
         url = "https://example.com/article",
         linkId = "0199a1d2-7c41-7b3e-9f60-2b8c4d5e6f70",
-        jobId = null,
         status = "failed",
         createdAt = START,
         identity = QueueIdentity("https://webtag.example", "namespace"),

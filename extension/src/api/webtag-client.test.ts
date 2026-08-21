@@ -14,7 +14,7 @@
  *     验证超时计时器覆盖响应体消费阶段而非在 fetch resolve 后立即清除
  *   - 其它非 2xx HTTP 错误归一化为 other，并透传后端 error_code
  *   - baseURL 注入与尾斜杠规整、Bearer 头注入
- *   - 各方法（getTree/getLinks/getTags/getJob/ingest/testConnection）的 URL 与参数
+ *   - 各方法（getTree/getLinks/getTags/ingest/testConnection）的 URL 与参数
  *   - buildWebTagClientFromSettings：trim 地址/Token、空地址判未配置返回 null
  *
  * 二、generated wire 响应运行时校验（健壮性，遵循失败关闭原则）
@@ -22,8 +22,7 @@
  *   - getLinks：顶层 items 非数组、或 total/page/limit 缺失/非 number → other 错误；
  *     任一 Link 缺字段、tags 非 string[] 或 enum 非法 → 整体失败
  *   - getTags：响应非数组或任一 Tag 残缺 → 整体失败
- *   - getJob：全部 required 字段与 status enum 必须合法，非 null link 复用 Link guard
- *   - ingest/refreshLink：link_id、可选 job_id 与 status enum 严格校验
+ *   - ingest/refreshLink：持久身份与 status enum 严格校验
  *   - 200 携带后端错误体 → other 错误（不冒充合法数据）
  *   - 200 返回非 JSON（反代登录页）→ other 错误
  *   - 任何畸形响应都不抛异常
@@ -35,7 +34,7 @@ import {
   buildWebTagClientFromSettings,
   createWebTagClient,
 } from './webtag-client'
-import type { IngestRequest, Job, Link } from './types'
+import type { IngestRequest, Link } from './types'
 
 // ── fetch mock 基础设施 ──
 
@@ -117,18 +116,6 @@ function makeWireLink(overrides: Partial<Link> = {}): Link {
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     metadata_revision: 1,
-    ...overrides,
-  }
-}
-
-function makeWireJob(overrides: Partial<Job> = {}): Job {
-  return {
-    id: 'job-1',
-    link_id: 'link-1',
-    status: 'pending',
-    error_category: null,
-    error_msg: null,
-    link: null,
     ...overrides,
   }
 }
@@ -223,22 +210,11 @@ describe('请求构造', () => {
     expect(url.searchParams.has('status')).toBe(false)
   })
 
-  it('getJob 对 jobId 做 URL 编码', async () => {
-    fetchImpl = () =>
-      Promise.resolve(
-        jsonResponse(200, makeWireJob({ id: 'a b', status: 'done' })),
-      )
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    await client.getJob('a b')
-    expect(lastUrl()).toBe('http://x/api/jobs/a%20b')
-  })
-
   it('refreshLink 以 POST 请求 /api/links/{id}/refresh 并对 id 编码', async () => {
     fetchImpl = () =>
       Promise.resolve(
         jsonResponse(200, {
           link_id: 'l1',
-          job_id: 'job-9',
           status: 'pending',
         }),
       )
@@ -254,7 +230,6 @@ describe('请求构造', () => {
       Promise.resolve(
         jsonResponse(200, {
           link_id: 'l1',
-          job_id: 'job-9',
           status: 'pending',
         }),
       )
@@ -450,7 +425,7 @@ describe('成功响应归一化', () => {
     if (res.ok) expect(res.data.link_id).toBe('l1')
   })
 
-  it('Inbox SubmitResponse 可以没有 link_id 与 job_id', async () => {
+  it('Inbox SubmitResponse 可以没有 link_id', async () => {
     const response = {
       inbox_id: 'inbox-1',
       destination: 'inbox',
@@ -487,24 +462,6 @@ describe('成功响应归一化', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.kind).toBe('other')
-  })
-
-  it('接受带 durable proposal job_id 的 Inbox 响应', async () => {
-    fetchImpl = () =>
-      Promise.resolve(
-        jsonResponse(200, {
-          inbox_id: 'i1',
-          destination: 'inbox',
-          job_id: 'job-1',
-          status: 'pending',
-        }),
-      )
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-
-    await expect(client.ingest({ sources: [] })).resolves.toMatchObject({
-      ok: true,
-      data: { inbox_id: 'i1', job_id: 'job-1', destination: 'inbox' },
-    })
   })
 })
 
@@ -1231,100 +1188,6 @@ describe('运行时校验：getTags', () => {
   })
 })
 
-describe('运行时校验：getJob', () => {
-  it('缺 id 字段时返回 other 错误', async () => {
-    const { id: _id, ...jobWithoutId } = makeWireJob()
-    fetchImpl = () => Promise.resolve(jsonResponse(200, jobWithoutId))
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.getJob('j1')
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.error.kind).toBe('other')
-  })
-
-  it('缺 status 字段时返回 other 错误', async () => {
-    const { status: _status, ...jobWithoutStatus } = makeWireJob()
-    fetchImpl = () => Promise.resolve(jsonResponse(200, jobWithoutStatus))
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.getJob('j1')
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.error.kind).toBe('other')
-  })
-
-  it.each(['link_id', 'error_category', 'error_msg', 'link'] as const)(
-    '缺必需字段 %s 时返回 other 错误',
-    async (field) => {
-      const job: Record<string, unknown> = { ...makeWireJob() }
-      delete job[field]
-      fetchImpl = () => Promise.resolve(jsonResponse(200, job))
-      const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-
-      const res = await client.getJob('j1')
-
-      expect(res.ok).toBe(false)
-      if (!res.ok) expect(res.error.kind).toBe('other')
-    },
-  )
-
-  it('完整 JobResponse（link=null）可通过', async () => {
-    const job = makeWireJob()
-    fetchImpl = () => Promise.resolve(jsonResponse(200, job))
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-
-    const res = await client.getJob('j1')
-
-    expect(res).toEqual({ ok: true, data: job })
-  })
-
-  it('完整 JobResponse 的非 null Link 复用 Link guard 并通过', async () => {
-    const job = makeWireJob({ status: 'done', link: makeWireLink() })
-    fetchImpl = () => Promise.resolve(jsonResponse(200, job))
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-
-    const res = await client.getJob('j1')
-
-    expect(res).toEqual({ ok: true, data: job })
-  })
-
-  it('非法 Job status 时返回 other 错误', async () => {
-    fetchImpl = () =>
-      Promise.resolve(jsonResponse(200, { ...makeWireJob(), status: 'queued' }))
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-
-    const res = await client.getJob('j1')
-
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.error.kind).toBe('other')
-  })
-
-  it('内嵌 link.tags 为 null 时整个 Job 响应失败关闭', async () => {
-    fetchImpl = () =>
-      Promise.resolve(
-        jsonResponse(200, {
-          ...makeWireJob({ status: 'done' }),
-          link: { ...makeWireLink(), tags: null },
-        }),
-      )
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.getJob('j1')
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.error.kind).toBe('other')
-  })
-
-  it('link 非对象时失败关闭', async () => {
-    fetchImpl = () =>
-      Promise.resolve(
-        jsonResponse(200, {
-          ...makeWireJob(),
-          link: 'unexpected',
-        }),
-      )
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.getJob('j1')
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.error.kind).toBe('other')
-  })
-})
-
 describe('运行时校验：ingest', () => {
   it('缺 link_id 字段时返回 other 错误', async () => {
     fetchImpl = () => Promise.resolve(jsonResponse(200, { status: 'pending' }))
@@ -1345,19 +1208,6 @@ describe('运行时校验：ingest', () => {
   it('status 不在 generated Submit enum 时返回 other 错误', async () => {
     fetchImpl = () =>
       Promise.resolve(jsonResponse(200, { link_id: 'l1', status: 'queued' }))
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-
-    const res = await client.ingest({ sources: [] })
-
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.error.kind).toBe('other')
-  })
-
-  it('可选 job_id 存在但非 string 时返回 other 错误', async () => {
-    fetchImpl = () =>
-      Promise.resolve(
-        jsonResponse(200, { link_id: 'l1', job_id: null, status: 'pending' }),
-      )
     const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
 
     const res = await client.ingest({ sources: [] })
@@ -1429,7 +1279,6 @@ describe('运行时校验：refreshLink', () => {
       Promise.resolve(
         jsonResponse(200, {
           link_id: 'l1',
-          job_id: 'job-9',
           status: 'pending',
         }),
       )
@@ -1900,124 +1749,5 @@ describe('findByUrl — 精确已存检测与 feature-detect', () => {
     const res = await client.findByUrl('https://a.com/p')
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.error.kind).toBe('network-unreachable')
-  })
-})
-
-// ── exportLibrary（Task 7C / v1.1）──
-
-describe('exportLibrary — 全量导出', () => {
-  it('请求 GET /api/export 并带 Bearer 头', async () => {
-    fetchImpl = () => Promise.resolve(makeResponse({ bodyText: '[]' }))
-    const client = createWebTagClient({
-      baseURL: 'http://localhost:8080',
-      token: 'secret',
-    })
-    await client.exportLibrary()
-    expect(lastUrl()).toBe('http://localhost:8080/api/export')
-    expect((lastInit().headers as Record<string, string>).Authorization).toBe(
-      'Bearer secret',
-    )
-  })
-
-  it('成功 → 返回 blob 与 Content-Disposition 文件名（filename=）', async () => {
-    fetchImpl = () =>
-      Promise.resolve(
-        makeResponse({
-          bodyText: '[{"id":"1"}]',
-          headers: {
-            'Content-Disposition':
-              'attachment; filename="webtag-export-2026-06-11.json"',
-          },
-        }),
-      )
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.exportLibrary()
-    expect(res.ok).toBe(true)
-    if (res.ok) {
-      expect(res.data.filename).toBe('webtag-export-2026-06-11.json')
-      expect(res.data.blob).toBeInstanceOf(Blob)
-      expect(await res.data.blob.text()).toBe('[{"id":"1"}]')
-    }
-  })
-
-  it('成功但无 Content-Disposition → filename 为 null（调用方回退默认名）', async () => {
-    fetchImpl = () => Promise.resolve(makeResponse({ bodyText: '[]' }))
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.exportLibrary()
-    expect(res.ok).toBe(true)
-    if (res.ok) expect(res.data.filename).toBeNull()
-  })
-
-  it('解析 RFC 5987 的 filename*（UTF-8 编码）', async () => {
-    fetchImpl = () =>
-      Promise.resolve(
-        makeResponse({
-          bodyText: '[]',
-          headers: {
-            'Content-Disposition':
-              "attachment; filename*=UTF-8''webtag-%E5%AF%BC%E5%87%BA.json",
-          },
-        }),
-      )
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.exportLibrary()
-    expect(res.ok).toBe(true)
-    if (res.ok) expect(res.data.filename).toBe('webtag-导出.json')
-  })
-
-  it('剥离 filename 中的路径分隔符（防御响应头注入路径穿越）', async () => {
-    fetchImpl = () =>
-      Promise.resolve(
-        makeResponse({
-          bodyText: '[]',
-          headers: {
-            'Content-Disposition':
-              'attachment; filename="../../etc/passwd.json"',
-          },
-        }),
-      )
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.exportLibrary()
-    expect(res.ok).toBe(true)
-    if (res.ok) expect(res.data.filename).toBe('passwd.json')
-  })
-
-  it('404（旧后端无端点）→ other 且 status=404（调用方判 unsupported）', async () => {
-    fetchImpl = () =>
-      Promise.resolve(makeResponse({ status: 404, bodyText: 'not found' }))
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.exportLibrary()
-    expect(res.ok).toBe(false)
-    if (!res.ok) {
-      expect(res.error.kind).toBe('other')
-      expect(res.error.status).toBe(404)
-    }
-  })
-
-  it('401 → unauthorized', async () => {
-    fetchImpl = () =>
-      Promise.resolve(
-        jsonResponse(401, { error: { code: 401, message: 'no' } }),
-      )
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.exportLibrary()
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.error.kind).toBe('unauthorized')
-  })
-
-  it('网络层失败（TypeError）→ network-unreachable', async () => {
-    fetchImpl = () => Promise.reject(new TypeError('Failed to fetch'))
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.exportLibrary()
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.error.kind).toBe('network-unreachable')
-  })
-
-  it('AbortError（超时）→ timeout', async () => {
-    fetchImpl = () => Promise.reject(new DOMException('aborted', 'AbortError'))
-    const client = createWebTagClient({ baseURL: 'http://x', token: 't' })
-    const res = await client.exportLibrary()
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.error.kind).toBe('timeout')
   })
 })

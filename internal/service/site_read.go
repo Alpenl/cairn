@@ -18,11 +18,21 @@ import (
 const recentSiteWindow = 720 * time.Hour
 
 type SiteReadService struct {
-	sites repository.SiteReader
+	sites siteReadStore
 	now   func() time.Time
 }
 
-func NewSiteReadService(sites repository.SiteReader) *SiteReadService {
+type siteDetailReader interface {
+	GetSite(context.Context, uuid.UUID) (*repository.SiteDetail, error)
+}
+
+type siteReadStore interface {
+	siteDetailReader
+	ListSites(context.Context, repository.SiteListFilter) ([]repository.SiteListItem, int, error)
+	ListRelatedReadings(context.Context, []string, []string, int) ([]repository.RelatedReading, error)
+}
+
+func NewSiteReadService(sites siteReadStore) *SiteReadService {
 	return &SiteReadService{sites: sites, now: time.Now}
 }
 func (s *SiteReadService) List(ctx context.Context, view, tags, rawRecentCutoff string, page, limit int) (dto.PaginatedSitesResponse, error) {
@@ -39,7 +49,7 @@ func (s *SiteReadService) List(ctx context.Context, view, tags, rawRecentCutoff 
 	if view == "" {
 		view = "all"
 	}
-	if view != "all" && view != "pinned" && view != "recent" && view != "review" {
+	if view != "all" && view != "pinned" && view != "recent" {
 		return dto.PaginatedSitesResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidSiteView, "unsupported site view")
 	}
 	cutoff, err := s.recentCutoff(view, rawRecentCutoff, page)
@@ -102,30 +112,23 @@ func (s *SiteReadService) Get(ctx context.Context, rawID string) (dto.SiteDetail
 	out := dto.SiteDetailResponse{
 		SiteListItemResponse: siteListDTO(detail.SiteListItem),
 		UserNote:             detail.UserNote,
-		GroupingLocked:       detail.GroupingLocked,
-		TagsWithSource:       make([]dto.SiteTagResponse, 0, len(detail.Tags)),
 		Entries:              make([]dto.SiteEntryResponse, 0, len(detail.Entries)),
 		RelatedReadings:      make([]dto.RelatedReadingResponse, 0),
 	}
-	for _, tag := range detail.Tags {
-		out.TagsWithSource = append(out.TagsWithSource, dto.SiteTagResponse{Tag: tag.Tag, Source: string(tag.Source)})
-	}
 	for _, entry := range detail.Entries {
-		out.Entries = append(out.Entries, dto.SiteEntryResponse{ID: entry.ID.String(), LinkID: entry.LinkID.String(), Name: entry.EntryName, NameSource: string(entry.EntryNameSource), Purpose: entry.Purpose, PurposeSource: string(entry.PurposeSource), URL: entry.NormalizedURL, FirstCollectedAt: entry.FirstCollectedAt, LastRecollectedAt: entry.LastRecollectedAt})
+		out.Entries = append(out.Entries, dto.SiteEntryResponse{ID: entry.ID.String(), LinkID: entry.LinkID.String(), Name: entry.EntryName, Purpose: entry.Purpose, URL: entry.NormalizedURL, FirstCollectedAt: entry.FirstCollectedAt, LastRecollectedAt: entry.LastRecollectedAt})
 	}
-	if related, ok := s.sites.(repository.SiteRelatedReader); ok {
-		hosts := relatedSiteHosts(detail)
-		tags := make([]string, 0, len(detail.Tags))
-		for _, tag := range detail.Tags {
-			tags = append(tags, tag.NormalizedTag)
-		}
-		items, relatedErr := related.ListRelatedReadings(ctx, hosts, tags, 6)
-		if relatedErr != nil {
-			return dto.SiteDetailResponse{}, relatedErr
-		}
-		for _, item := range items {
-			out.RelatedReadings = append(out.RelatedReadings, dto.RelatedReadingResponse{ID: item.ID.String(), Title: item.Title, URL: item.URL, CreatedAt: item.CreatedAt})
-		}
+	hosts := relatedSiteHosts(detail)
+	tags := make([]string, 0, len(detail.Tags))
+	for _, tag := range detail.Tags {
+		tags = append(tags, tag.NormalizedTag)
+	}
+	items, err := s.sites.ListRelatedReadings(ctx, hosts, tags, 6)
+	if err != nil {
+		return dto.SiteDetailResponse{}, err
+	}
+	for _, item := range items {
+		out.RelatedReadings = append(out.RelatedReadings, dto.RelatedReadingResponse{ID: item.ID.String(), Title: item.Title, URL: item.URL, CreatedAt: item.CreatedAt})
 	}
 	return out, nil
 }
@@ -152,7 +155,7 @@ func relatedSiteHosts(detail *repository.SiteDetail) []string {
 	return out
 }
 func siteListDTO(item repository.SiteListItem) dto.SiteListItemResponse {
-	out := dto.SiteListItemResponse{ID: item.ID.String(), Name: item.Name, Intro: item.Intro, DisplayHost: item.DisplayHost, HomepageURL: item.HomepageURL, IconURL: item.IconURL, Tags: append([]string{}, item.Tags...), EntryCount: item.EntryCount, Pinned: item.Pinned, NeedsReview: item.NeedsReview, Revision: item.Revision, FirstCollectedAt: item.FirstCollectedAt, LastCollectedAt: item.LastCollectedAt}
+	out := dto.SiteListItemResponse{ID: item.ID.String(), Name: item.Name, Intro: item.Intro, DisplayHost: item.DisplayHost, HomepageURL: item.HomepageURL, IconURL: item.IconURL, Tags: append([]string{}, item.Tags...), EntryCount: item.EntryCount, Pinned: item.Pinned, Revision: item.Revision, FirstCollectedAt: item.FirstCollectedAt, LastCollectedAt: item.LastCollectedAt}
 	if item.PrimaryEntryID != nil && item.PrimaryEntryURL != nil {
 		out.PrimaryEntry = &dto.SitePrimaryEntryResponse{ID: item.PrimaryEntryID.String(), URL: *item.PrimaryEntryURL}
 	}

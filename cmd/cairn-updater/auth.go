@@ -16,9 +16,9 @@ const MinimumDeployTokenLength = 32
 
 // authenticator checks the single credential the deployment API accepts.
 //
-// It is deliberately the only credential. A Reader session cookie, the
-// application's ADMIN_AUTH_TOKEN, and an Extension token all prove something
-// about the application, and the entire point of this process is that owning
+// It is deliberately the only credential. A Reader session cookie or an
+// installation API token proves something about the application, and the
+// entire point of this process is that owning
 // the application does not grant the authority to replace it. There is no
 // "open mode", no localhost exemption, and no empty-token development path: the
 // constructor refuses to build an authenticator without a token, so a

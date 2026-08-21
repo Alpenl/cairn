@@ -2,13 +2,34 @@ package migrate
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
 
-func TestFreshSchemaContainsInstallationContracts(t *testing.T) {
+func TestMigrationPlanHasOneCurrentHead(t *testing.T) {
 	t.Parallel()
 
+	plan := Steps()
+	if len(plan) != 1 || plan[0].ID != CurrentSchemaMigrationID {
+		t.Fatalf("migration plan IDs = %v, want [%s]", stepIDs(plan), CurrentSchemaMigrationID)
+	}
+	if len(plan[0].SQL) != 4 {
+		t.Fatalf("current migration has %d statements, want schema cleanup plus two seed statements", len(plan[0].SQL))
+	}
+	if plan[0].SQL[0] != currentInstallSchemaSQL {
+		t.Fatal("current migration does not install the generated application schema")
+	}
+	if plan[0].OnlineUpdate.Compatibility != OnlineUpdateIncompatible ||
+		strings.TrimSpace(plan[0].OnlineUpdate.Note) == "" {
+		t.Fatalf("current migration online review = %+v, want an explained incompatibility", plan[0].OnlineUpdate)
+	}
+}
+
+func TestFreshSchemaContainsCurrentContracts(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join(steps[0].SQL, "\n")
 	for _, want := range []string{
 		"CREATE TABLE public.installation_state",
 		"CREATE TABLE public.links",
@@ -16,121 +37,198 @@ func TestFreshSchemaContainsInstallationContracts(t *testing.T) {
 		"CREATE TABLE public.link_url_identities",
 		"CREATE TABLE public.feed_subscriptions",
 		"CREATE TABLE public.sites",
-		"CREATE TABLE public.reader_inbox_jobs",
 		"CREATE TABLE public.reader_thought_supersession_events",
-		"CREATE TABLE public.reader_content_history",
-		"CREATE FUNCTION public.reader_cleanup_content_history(p_batch_size integer DEFAULT 100, p_keep_per_link integer DEFAULT 20)",
 		"CREATE FUNCTION public.advance_link_metadata_revision() RETURNS trigger",
 		"CONSTRAINT chk_links_metadata_revision_safe",
+		"parse_generation bigint DEFAULT 1 NOT NULL",
+		"CONSTRAINT chk_links_parse_generation_safe",
+		"library_kind_locked boolean DEFAULT false NOT NULL",
+		"CONSTRAINT chk_links_library_kind_lock",
 		"CREATE TRIGGER links_metadata_revision_bump",
 		"CREATE INDEX idx_reader_inbox_pending_expiry",
 		"CREATE UNIQUE INDEX idx_link_translations_saved_revision_unique",
-		"CREATE UNIQUE INDEX idx_link_translations_legacy_source_unique",
+		"CREATE UNIQUE INDEX idx_link_translations_summary_source_unique",
 		"CREATE INDEX idx_reader_thoughts_search_trgm",
 		"CREATE INDEX idx_reader_thought_tombstones_search_trgm",
 		"INSERT INTO public.installation_state (singleton) VALUES (true)",
-		"INSERT INTO public.library_read_revision (singleton) VALUES (true)",
-		"INSERT INTO public.global_read_revision (singleton) VALUES (true)",
-		"INSERT INTO public.feed_read_revision (singleton) VALUES (true)",
 		"https://www.ruanyifeng.com/blog/atom.xml",
 	} {
-		if !strings.Contains(singleInstallSchemaSQL, want) {
+		if !strings.Contains(body, want) {
 			t.Errorf("fresh schema missing %q", want)
 		}
 	}
 }
 
-func TestFreshSchemaExcludesCommercialAndIsolationStructures(t *testing.T) {
+func TestFreshSchemaExcludesRetiredAndExternallyOwnedObjects(t *testing.T) {
 	t.Parallel()
 
-	lowered := strings.ToLower(singleInstallSchemaSQL)
+	lowered := strings.ToLower(currentInstallSchemaSQL)
 	for _, forbidden := range []string{
+		"schema_migrations",
+		"create type public.river_job_state",
+		"create function public.river_job_state_in_bitmask",
+		"create sequence public.river_job_id_seq",
+		"create table public.river_job",
 		"tenant_id",
 		"create table public.tenants",
 		"create table public.api_keys",
 		"create table public.usage_events",
-		"create table public.feed_bootstraps",
-		"create table public.tenant_read_revision",
-		"create table public.tenant_feed_revision",
 		"enable row level security",
 		"force row level security",
 		"create policy",
-		"app.tenant_id",
-		"app.billing_scope",
 		"stripe",
-		"subscription_status",
-	} {
-		if strings.Contains(lowered, forbidden) {
-			t.Errorf("fresh schema contains forbidden commercial/isolation fragment %q", forbidden)
-		}
-	}
-}
-
-// TestFreshSchemaKeepsNoLexemeIndexForSubstringThoughtSearch pins the reason the
-// tsvector index was dropped: thought search is a `%query%` ILIKE contract, and
-// no substring predicate can consume to_tsvector output. Reintroducing it would
-// re-add write amplification on every thought for a reader that cannot use it.
-func TestFreshSchemaKeepsNoLexemeIndexForSubstringThoughtSearch(t *testing.T) {
-	t.Parallel()
-
-	for _, forbidden := range []string{
+		"create extension if not exists vector",
+		"public.vector(1536)",
+		"vector_cosine_ops",
+		"create table public.reader_inbox_jobs",
+		"create table public.parse_jobs",
+		"create table public.reader_categories",
+		"create table public.reader_categorizables",
+		"create table public.concept",
+		"create table public.concept_alias",
+		"create table public.concept_merge_proposal",
+		"create table public.link_concept",
+		"create table public.library_classification_rules",
+		"create table public.library_review_items",
+		"create table public.reader_content_history",
+		"create table public.feed_lifecycle_repair_audit",
+		"create table public.reader_tag_activity",
+		"create table public.reader_domain_activity",
+		"create table public.library_read_revision",
+		"create table public.global_read_revision",
+		"create table public.feed_read_revision",
+		"idx_link_translations_missing_reconcile",
+		"idx_river_job_translation_terminal_history",
 		"idx_reader_thought_search ",
 		"to_tsvector('simple'::regconfig, body)",
+		"proposal_signals",
+		"expiry_lease_id",
+		"expiry_lease_until",
+		"'discarded'::text",
+		"library_kind_source",
+		"predicted_library_kind",
+		"classification_confidence",
+		"requested_library_kind",
+		"name_source",
+		"intro_source",
+		"homepage_source",
+		"icon_source",
+		"primary_source",
+		"grouping_locked",
+		"entry_name_source",
+		"purpose_source",
+		"guard_representation_write_gate",
+		"lock_representation_write_gate_shared",
+		"lock_representation_write_gate_exclusive",
 	} {
-		if strings.Contains(singleInstallSchemaSQL, forbidden) {
-			t.Errorf("fresh schema still carries unusable thought-search index fragment %q", forbidden)
+		if strings.Contains(lowered, forbidden) {
+			t.Errorf("fresh schema contains retired fragment %q", forbidden)
 		}
-	}
-	// Address the step by ID rather than by position: it stopped being the last
-	// one the moment another step was appended, and a positional lookup would
-	// then assert against whatever unrelated migration happens to be at the tail.
-	var trigram *Step
-	for i := range steps {
-		if steps[i].ID == readerThoughtSearchTrigramMigrationID {
-			trigram = &steps[i]
-			break
-		}
-	}
-	if trigram == nil {
-		t.Fatalf("migration plan has no %s step", readerThoughtSearchTrigramMigrationID)
-	}
-	body := strings.Join(trigram.SQL, "\n")
-	for _, want := range []string{
-		"CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_reader_thoughts_search_trgm",
-		"CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_reader_thought_tombstones_search_trgm",
-		"DROP INDEX CONCURRENTLY IF EXISTS public.idx_reader_thought_search",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("trigram search migration missing %q", want)
-		}
-	}
-	if !trigram.NonTransactional {
-		t.Error("CONCURRENTLY index migration must be NonTransactional")
 	}
 }
 
-func TestFreshSchemaLeavesRiverObjectsToRiverMigrations(t *testing.T) {
+func TestProductionUpgradeIsOneOrderedEdge(t *testing.T) {
 	t.Parallel()
 
-	for _, forbidden := range []string{
-		"CREATE TYPE public.river_job_state",
-		"CREATE FUNCTION public.river_job_state_in_bitmask",
-		"CREATE SEQUENCE public.river_job_id_seq",
-		"CREATE TABLE public.river_job",
-	} {
-		if strings.Contains(singleInstallSchemaSQL, forbidden) {
-			t.Errorf("application schema duplicates River-owned object %q", forbidden)
+	wantNames := []string{
+		"obsolete subsystems and protocol constraints",
+		"Reader Inbox state",
+		"parse state",
+		"representation revisions and write gate",
+		"Site provenance",
+		"Reader Category",
+	}
+	gotNames := make([]string, 0, len(productionUpgradeSegments))
+	for _, segment := range productionUpgradeSegments {
+		gotNames = append(gotNames, segment.Name)
+		if len(segment.SQL) == 0 {
+			t.Errorf("production upgrade segment %q has no SQL", segment.Name)
 		}
 	}
-	if len(steps) != 10 || steps[1].ID != translationTerminalHistoryIndexMigrationID ||
-		steps[2].ID != readerThoughtTombstoneSnapshotMigrationID || steps[3].ID != integrityRepairMigrationID ||
-		steps[4].ID != historicalRepairMigrationID || steps[5].ID != conceptMergeAuditRepairMigrationID ||
-		steps[6].ID != lifecycleRepairMigrationID || steps[7].ID != readerThoughtSearchTrigramMigrationID ||
-		steps[8].ID != ReaderTodoProjectionLedgerMigrationID || steps[9].ID != ReaderInboxCaptureDocumentMigrationID {
-		t.Fatalf("migration plan IDs = %v, want fresh schema and all ordered forward repairs", stepIDs(steps))
+	if !slices.Equal(gotNames, wantNames) {
+		t.Fatalf("production upgrade segments = %v, want %v", gotNames, wantNames)
 	}
-	if got := strings.Join(steps[1].SQL, "\n"); !strings.Contains(got, "idx_river_job_translation_terminal_history") {
-		t.Fatalf("River tail migration SQL = %q", got)
+
+	body := strings.ToLower(strings.Join(productionUpgradeSQL(), "\n"))
+	for _, want := range []string{
+		"drop extension if exists vector",
+		"drop table if exists public.reader_inbox_jobs",
+		"drop table if exists public.parse_jobs",
+		"public.library_read_revision",
+		"drop function if exists public.guard_representation_write_gate",
+		"drop column if exists name_source",
+		"drop table if exists public.reader_categories",
+		"delete from public.schema_migrations",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("production upgrade missing %q", want)
+		}
+	}
+	for _, version := range ProductionBaselineVersions() {
+		if !strings.Contains(body, "'"+strings.ToLower(version)+"'") {
+			t.Errorf("production upgrade does not retire ledger version %q", version)
+		}
+	}
+}
+
+func TestProductionBaselineIsExactAndDefensivelyCopied(t *testing.T) {
+	t.Parallel()
+
+	want := []string{
+		"f03e51d6911b",
+		"b671c9d2e411",
+		"reader2026081301",
+		"integrity2026081401",
+		"historical2026081401",
+		"conceptaudit2026081401",
+		"lifecycle2026081401",
+		"readersearch2026081701",
+		"readertodoprojection2026081701",
+		ProductionBaselineMigrationID,
+	}
+	got := ProductionBaselineVersions()
+	if !slices.Equal(got, want) {
+		t.Fatalf("production baseline = %v, want %v", got, want)
+	}
+	got[0] = "mutated"
+	if slices.Equal(got, ProductionBaselineVersions()) {
+		t.Fatal("ProductionBaselineVersions returned mutable package state")
+	}
+}
+
+func TestGeneratedSchemaSnapshotsHaveSeparateOwnership(t *testing.T) {
+	t.Parallel()
+
+	fullRaw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatalf("read schema.sql: %v", err)
+	}
+	installRaw, err := os.ReadFile("install_schema.sql")
+	if err != nil {
+		t.Fatalf("read install_schema.sql: %v", err)
+	}
+	full := strings.ToLower(string(fullRaw))
+	install := strings.ToLower(string(installRaw))
+	for _, want := range []string{
+		"create table public.installation_state",
+		"create table public.links",
+		"create table public.reader_thought_supersession_events",
+	} {
+		if !strings.Contains(full, want) || !strings.Contains(install, want) {
+			t.Errorf("generated snapshots do not both contain %q", want)
+		}
+	}
+	for _, ownedElsewhere := range []string{
+		"create table public.schema_migrations",
+		"create table public.river_job",
+		"create type public.river_job_state",
+	} {
+		if !strings.Contains(full, ownedElsewhere) {
+			t.Errorf("full schema missing externally managed object %q", ownedElsewhere)
+		}
+		if strings.Contains(install, ownedElsewhere) {
+			t.Errorf("application install schema duplicates externally managed object %q", ownedElsewhere)
+		}
 	}
 }
 
@@ -140,73 +238,4 @@ func stepIDs(plan []Step) []string {
 		ids[index] = step.ID
 	}
 	return ids
-}
-
-func TestRepresentationRevisionTriggersIgnoreEmptyTransitionTables(t *testing.T) {
-	t.Parallel()
-
-	for _, functionName := range []string{
-		"bump_feed_revision_trigger",
-		"bump_global_revision_trigger",
-		"bump_library_revision_trigger",
-	} {
-		body := schemaFunctionDefinition(t, functionName)
-		for _, want := range []string{
-			"IF TG_OP = 'INSERT' THEN",
-			"IF EXISTS (SELECT 1 FROM new_rows) THEN",
-			"ELSIF TG_OP = 'DELETE' THEN",
-			"IF EXISTS (SELECT 1 FROM old_rows) THEN",
-		} {
-			if !strings.Contains(body, want) {
-				t.Errorf("%s missing branch %q", functionName, want)
-			}
-		}
-	}
-}
-
-func schemaFunctionDefinition(t *testing.T, name string) string {
-	t.Helper()
-	startMarker := "CREATE FUNCTION public." + name + "() RETURNS trigger"
-	start := strings.Index(singleInstallSchemaSQL, startMarker)
-	if start < 0 {
-		t.Fatalf("fresh schema missing function %s", name)
-	}
-	end := strings.Index(singleInstallSchemaSQL[start:], "$$;")
-	if end < 0 {
-		t.Fatalf("fresh schema function %s has no terminator", name)
-	}
-	return singleInstallSchemaSQL[start : start+end]
-}
-
-func TestGeneratedSchemaSnapshotMatchesPublicShape(t *testing.T) {
-	t.Parallel()
-
-	raw, err := os.ReadFile("schema.sql")
-	if err != nil {
-		t.Fatalf("read schema.sql: %v", err)
-	}
-	schema := strings.ToLower(string(raw))
-	for _, want := range []string{
-		"create table public.installation_state",
-		"create table public.links",
-		"create table public.reader_thought_supersession_events",
-		"create index idx_river_job_translation_terminal_history",
-		"create function public.reader_cleanup_content_history(p_batch_size integer default 100, p_keep_per_link integer default 20)",
-	} {
-		if !strings.Contains(schema, want) {
-			t.Errorf("schema.sql missing %q", want)
-		}
-	}
-	for _, forbidden := range []string{
-		"tenant_id",
-		"create table public.tenants",
-		"create table public.api_keys",
-		"create table public.usage_events",
-		"create policy",
-		"row level security",
-	} {
-		if strings.Contains(schema, forbidden) {
-			t.Errorf("schema.sql contains forbidden fragment %q", forbidden)
-		}
-	}
 }

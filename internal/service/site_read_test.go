@@ -95,11 +95,11 @@ func TestSiteReadServiceGetPreservesAggregateFields(t *testing.T) {
 	homepageURL := "https://example.com/"
 	store := &siteReadFake{detail: &repository.SiteDetail{
 		SiteListItem: repository.SiteListItem{
-			Site:        model.Site{ID: siteID, Name: "Example", Intro: "Useful tools", HomepageURL: &homepageURL, UserNote: "keep", GroupingLocked: true, Revision: 4, FirstCollectedAt: now, LastCollectedAt: now, PrimaryEntryID: &entryID},
+			Site:        model.Site{ID: siteID, Name: "Example", Intro: "Useful tools", HomepageURL: &homepageURL, UserNote: "keep", Revision: 4, FirstCollectedAt: now, LastCollectedAt: now, PrimaryEntryID: &entryID},
 			DisplayHost: "example.com", Tags: []string{"go", "tools"}, EntryCount: 3, PrimaryEntryURL: &primaryURL,
 		},
-		Tags:    []model.SiteTag{{Tag: "go", Source: model.FieldSourceAuto}},
-		Entries: []model.SiteEntry{{ID: entryID, LinkID: linkID, EntryName: "Tools", EntryNameSource: model.FieldSourceUser, Purpose: "Work", PurposeSource: model.FieldSourceAuto, NormalizedURL: primaryURL, FirstCollectedAt: now}},
+		Tags:    []model.SiteTag{{Tag: "go"}},
+		Entries: []model.SiteEntry{{ID: entryID, LinkID: linkID, EntryName: "Tools", Purpose: "Work", NormalizedURL: primaryURL, FirstCollectedAt: now}},
 	}}
 
 	got, err := NewSiteReadService(store).Get(context.Background(), siteID.String())
@@ -115,7 +115,7 @@ func TestSiteReadServiceGetPreservesAggregateFields(t *testing.T) {
 	if got.HomepageURL == nil || *got.HomepageURL != homepageURL {
 		t.Fatalf("HomepageURL = %#v", got.HomepageURL)
 	}
-	if got.UserNote != "keep" || !got.GroupingLocked || len(got.TagsWithSource) != 1 || len(got.Entries) != 1 {
+	if got.UserNote != "keep" || len(got.Entries) != 1 {
 		t.Fatalf("detail metadata = %#v", got)
 	}
 }
@@ -140,7 +140,7 @@ func TestSiteReadServiceGetSerializesEmptyDetailCollectionsAsArrays(t *testing.T
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"tags", "tags_with_source", "entries", "related_readings"} {
+	for _, key := range []string{"tags", "entries", "related_readings"} {
 		if _, ok := decoded[key].([]any); !ok {
 			t.Fatalf("%s must serialize as an array, got %s", key, body)
 		}
@@ -151,11 +151,11 @@ func TestSiteReadServiceListValidatesViewAndNormalizesPaging(t *testing.T) {
 	t.Parallel()
 	store := &siteReadFake{total: 2}
 	service := NewSiteReadService(store)
-	_, err := service.List(context.Background(), "review", " go, tools ,,", "", 0, 200)
+	_, err := service.List(context.Background(), "pinned", " go, tools ,,", "", 0, 200)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if store.listFilter.View != "review" || store.listFilter.Limit != 100 || store.listFilter.Offset != 0 || len(store.listFilter.Tags) != 2 {
+	if store.listFilter.View != "pinned" || store.listFilter.Limit != 100 || store.listFilter.Offset != 0 || len(store.listFilter.Tags) != 2 {
 		t.Fatalf("filter = %#v", store.listFilter)
 	}
 	_, err = service.List(context.Background(), "unknown", "", "", 1, 10)

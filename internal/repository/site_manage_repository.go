@@ -17,33 +17,31 @@ const (
 	lockSiteEntrySQL         = "SELECT link_id FROM site_entries WHERE site_id = $1 AND id = $2 FOR UPDATE"
 	updateSiteEntrySQL       = `UPDATE site_entries
 SET entry_name = COALESCE($1, entry_name),
-    entry_name_source = CASE WHEN $1 IS NULL THEN entry_name_source ELSE 'user' END,
     purpose = COALESCE($2, purpose),
-    purpose_source = CASE WHEN $2 IS NULL THEN purpose_source ELSE 'user' END,
     updated_at = NOW()
 WHERE site_id = $3 AND id = $4`
-	updateSiteManagementRevisionSQL = "UPDATE sites SET embedding = NULL, embedding_model = NULL, revision = revision + 1, updated_at = NOW() WHERE id = $1 AND revision = $2"
-	setManagedPrimaryEntrySQL       = "UPDATE sites SET primary_entry_id = $1, primary_source = 'user', revision = revision + 1, updated_at = NOW() WHERE id = $2 AND revision = $3"
+	updateSiteManagementRevisionSQL = "UPDATE sites SET revision = revision + 1, updated_at = NOW() WHERE id = $1 AND revision = $2"
+	setManagedPrimaryEntrySQL       = "UPDATE sites SET primary_entry_id = $1, revision = revision + 1, updated_at = NOW() WHERE id = $2 AND revision = $3"
 	findFallbackPrimaryEntrySQL     = "SELECT id FROM site_entries WHERE site_id = $1 AND id <> $2 ORDER BY first_collected_at, id LIMIT 1"
 	countSiteEntriesSQL             = "SELECT count(*) FROM site_entries WHERE site_id = $1"
-	clearManagedPrimaryEntrySQL     = "UPDATE sites SET primary_entry_id = $1, primary_source = 'user', embedding = NULL, embedding_model = NULL, revision = revision + 1, updated_at = NOW() WHERE id = $2 AND revision = $3"
+	clearManagedPrimaryEntrySQL     = "UPDATE sites SET primary_entry_id = $1, revision = revision + 1, updated_at = NOW() WHERE id = $2 AND revision = $3"
 	deleteManagedLinkSQL            = "DELETE FROM links WHERE id = $1"
 	deleteManagedSiteSQL            = "DELETE FROM sites WHERE id = $1"
 	deleteManagedSiteLinksSQL       = "DELETE FROM links WHERE id IN (SELECT link_id FROM site_entries WHERE site_id = $1)"
 	mergeSourceEntriesSQL           = "SELECT id, link_id, normalized_url FROM site_entries WHERE site_id=$1 FOR UPDATE"
 	mergeTargetURLExistsSQL         = "SELECT EXISTS(SELECT 1 FROM site_entries WHERE site_id=$1 AND normalized_url=$2)"
 	mergeMoveEntrySQL               = "UPDATE site_entries SET site_id=$1, updated_at=NOW() WHERE id=$2"
-	mergeUserTagsSQL                = "INSERT INTO site_tags (site_id, tag, normalized_tag, source, concept_id, created_at, updated_at) SELECT $1, tag, normalized_tag, 'user', concept_id, NOW(), NOW() FROM site_tags WHERE site_id=$2 AND source='user' ON CONFLICT (site_id, normalized_tag) DO UPDATE SET source='user', updated_at=NOW()"
-	mergeIdentitiesSQL              = "UPDATE site_identities SET site_id=$1, source='manual_merge', locked=true, updated_at=NOW() WHERE site_id=$2"
-	mergeTargetSQL                  = "UPDATE sites SET name=COALESCE($1,name), name_source=CASE WHEN $1 IS NULL THEN name_source ELSE 'user' END, intro=COALESCE($2,intro), intro_source=CASE WHEN $2 IS NULL THEN intro_source ELSE 'user' END, homepage_url=COALESCE($3,homepage_url), homepage_source=CASE WHEN $3 IS NULL THEN homepage_source ELSE 'user' END, icon_url=COALESCE($4,icon_url), icon_source=CASE WHEN $4 IS NULL THEN icon_source ELSE 'user' END, user_note=COALESCE($5,user_note), grouping_locked=true, embedding=NULL, embedding_model=NULL, revision=revision+1, updated_at=NOW(), last_collected_at=NOW() WHERE id=$6 AND revision=$7"
+	mergeTagsSQL                    = "INSERT INTO site_tags (site_id, tag, normalized_tag, created_at, updated_at) SELECT $1, tag, normalized_tag, NOW(), NOW() FROM site_tags WHERE site_id=$2 ON CONFLICT (site_id, normalized_tag) DO UPDATE SET tag=EXCLUDED.tag, updated_at=NOW()"
+	mergeIdentitiesSQL              = "UPDATE site_identities SET site_id=$1, updated_at=NOW() WHERE site_id=$2"
+	mergeTargetSQL                  = "UPDATE sites SET name=COALESCE($1,name), intro=COALESCE($2,intro), homepage_url=COALESCE($3,homepage_url), icon_url=COALESCE($4,icon_url), user_note=COALESCE($5,user_note), revision=revision+1, updated_at=NOW(), last_collected_at=NOW() WHERE id=$6 AND revision=$7"
 	splitCountEntriesSQL            = "SELECT count(*) FROM site_entries WHERE site_id=$1"
 	splitLockSelectedEntriesSQL     = "SELECT id FROM site_entries WHERE site_id=$1 AND id=ANY($2::uuid[]) FOR UPDATE"
-	splitInsertSiteSQL              = "INSERT INTO sites (site_key, name, name_source, intro, intro_source, homepage_url, homepage_source, icon_url, icon_source, user_note, primary_entry_id, primary_source, grouping_locked, first_collected_at, last_collected_at, created_at, updated_at) VALUES ($1,$2,'user',COALESCE($3,''),'user',$4,CASE WHEN $4 IS NULL THEN NULL ELSE 'user' END,$5,CASE WHEN $5 IS NULL THEN NULL ELSE 'user' END,COALESCE($6,''),NULL,'user',true,NOW(),NOW(),NOW(),NOW()) RETURNING id"
+	splitInsertSiteSQL              = "INSERT INTO sites (site_key, name, intro, homepage_url, icon_url, user_note, primary_entry_id, first_collected_at, last_collected_at, created_at, updated_at) VALUES ($1,$2,COALESCE($3,''),$4,$5,COALESCE($6,''),NULL,NOW(),NOW(),NOW(),NOW()) RETURNING id"
 	splitMoveEntriesSQL             = "UPDATE site_entries SET site_id=$1, updated_at=NOW() WHERE site_id=$2 AND id=ANY($3::uuid[])"
-	splitSetPrimarySQL              = "UPDATE sites SET primary_entry_id=$1, primary_source='user', revision=revision+1, updated_at=NOW() WHERE id=$2"
-	splitUpdateSourceSQL            = "UPDATE sites SET primary_entry_id=CASE WHEN primary_entry_id=ANY($1::uuid[]) THEN (SELECT id FROM site_entries WHERE site_id=$2 ORDER BY first_collected_at,id LIMIT 1) ELSE primary_entry_id END, grouping_locked=true, embedding=NULL, embedding_model=NULL, revision=revision+1, updated_at=NOW() WHERE id=$2 AND revision=$3"
-	splitCopyUserTagsSQL            = "INSERT INTO site_tags (site_id,tag,normalized_tag,source,concept_id,created_at,updated_at) SELECT $1,tag,normalized_tag,'user',concept_id,NOW(),NOW() FROM site_tags WHERE site_id=$2 AND source='user' ON CONFLICT (site_id,normalized_tag) DO NOTHING"
-	splitMoveIdentitySQL            = "UPDATE site_identities SET site_id=$1, source='manual_split', locked=true, updated_at=NOW() WHERE site_id=$2 AND identity_key=$3"
+	splitSetPrimarySQL              = "UPDATE sites SET primary_entry_id=$1, revision=revision+1, updated_at=NOW() WHERE id=$2"
+	splitUpdateSourceSQL            = "UPDATE sites SET primary_entry_id=CASE WHEN primary_entry_id=ANY($1::uuid[]) THEN (SELECT id FROM site_entries WHERE site_id=$2 ORDER BY first_collected_at,id LIMIT 1) ELSE primary_entry_id END, revision=revision+1, updated_at=NOW() WHERE id=$2 AND revision=$3"
+	splitCopyTagsSQL                = "INSERT INTO site_tags (site_id,tag,normalized_tag,created_at,updated_at) SELECT $1,tag,normalized_tag,NOW(),NOW() FROM site_tags WHERE site_id=$2 ON CONFLICT (site_id,normalized_tag) DO NOTHING"
+	splitMoveIdentitySQL            = "UPDATE site_identities SET site_id=$1, updated_at=NOW() WHERE site_id=$2 AND identity_key=$3"
 )
 
 func (r *PGXSiteRepository) beginManagementTx(ctx context.Context) (pgx.Tx, error) {
@@ -83,9 +81,6 @@ func (r *PGXSiteRepository) UpdateSiteEntry(ctx context.Context, params UpdateSi
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockRepresentationWriteGateShared(ctx, tx); err != nil {
-		return false, err
-	}
 	revision, _, err := lockManagedSite(ctx, tx, params.SiteID)
 	if err != nil {
 		return false, err
@@ -115,9 +110,6 @@ func (r *PGXSiteRepository) SetSitePrimaryEntry(ctx context.Context, params SetS
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockRepresentationWriteGateShared(ctx, tx); err != nil {
-		return false, err
-	}
 	revision, _, err := lockManagedSite(ctx, tx, params.SiteID)
 	if err != nil {
 		return false, err
@@ -151,9 +143,6 @@ func (r *PGXSiteRepository) DeleteSiteEntry(ctx context.Context, params DeleteSi
 		return SiteEntryDeleteResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockLibraryFeedRevisions(ctx, tx); err != nil {
-		return SiteEntryDeleteResult{}, err
-	}
 	revision, primary, err := lockManagedSite(ctx, tx, params.SiteID)
 	if err != nil {
 		return SiteEntryDeleteResult{}, err
@@ -214,9 +203,6 @@ func (r *PGXSiteRepository) DeleteSite(ctx context.Context, params DeleteSitePar
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockLibraryFeedRevisions(ctx, tx); err != nil {
-		return false, err
-	}
 	revision, _, err := lockManagedSite(ctx, tx, params.ID)
 	if err != nil {
 		return false, err
@@ -259,9 +245,6 @@ func (r *PGXSiteRepository) ExecuteSiteMerge(ctx context.Context, params Execute
 		return SiteMergeResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockLibraryFeedRevisions(ctx, tx); err != nil {
-		return SiteMergeResult{}, err
-	}
 	expected := map[uuid.UUID]int64{params.TargetID: params.TargetRevision}
 	ids := make([]uuid.UUID, 0, len(params.Sources)+1)
 	ids = append(ids, params.TargetID)
@@ -332,7 +315,7 @@ func (r *PGXSiteRepository) ExecuteSiteMerge(ctx context.Context, params Execute
 			}
 			result.MovedEntries++
 		}
-		if _, tagErr := tx.Exec(ctx, mergeUserTagsSQL, params.TargetID, source.ID); tagErr != nil {
+		if _, tagErr := tx.Exec(ctx, mergeTagsSQL, params.TargetID, source.ID); tagErr != nil {
 			return SiteMergeResult{}, fmt.Errorf("merge user tags: %w", tagErr)
 		}
 		if _, identityErr := tx.Exec(ctx, mergeIdentitiesSQL, params.TargetID, source.ID); identityErr != nil {
@@ -370,9 +353,6 @@ func (r *PGXSiteRepository) ExecuteSiteSplit(ctx context.Context, params Execute
 		return SiteSplitResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockRepresentationWriteGateShared(ctx, tx); err != nil {
-		return SiteSplitResult{}, err
-	}
 	revision, _, err := lockManagedSite(ctx, tx, params.SourceID)
 	if err != nil {
 		return SiteSplitResult{}, err
@@ -419,7 +399,7 @@ func (r *PGXSiteRepository) ExecuteSiteSplit(ctx context.Context, params Execute
 		}
 		return SiteSplitResult{}, ErrRevisionConflict
 	}
-	if _, err := tx.Exec(ctx, splitCopyUserTagsSQL, newID, params.SourceID); err != nil {
+	if _, err := tx.Exec(ctx, splitCopyTagsSQL, newID, params.SourceID); err != nil {
 		return SiteSplitResult{}, fmt.Errorf("copy split tags: %w", err)
 	}
 	if params.IdentityKeyForNewSite != nil {
@@ -436,7 +416,3 @@ func (r *PGXSiteRepository) ExecuteSiteSplit(ctx context.Context, params Execute
 	}
 	return SiteSplitResult{SourceID: params.SourceID, SourceRevision: params.SourceRevision + 1, NewSiteID: newID, NewRevision: 1, MovedEntries: len(params.EntryIDs)}, nil
 }
-
-var _ SiteManagementWriter = (*PGXSiteRepository)(nil)
-var _ SiteMergeWriter = (*PGXSiteRepository)(nil)
-var _ SiteSplitWriter = (*PGXSiteRepository)(nil)

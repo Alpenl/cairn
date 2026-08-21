@@ -37,7 +37,7 @@ func TestReaderAIHandlerPreservesMachineReadableErrors(t *testing.T) {
 	}{
 		{name: "timeout", status: http.StatusGatewayTimeout, code: "ai_timeout"},
 		{name: "canceled", status: 499, code: "ai_request_canceled"},
-		{name: "rate limit", status: http.StatusTooManyRequests, code: "rate_limit_exceeded"},
+		{name: "refresh cooldown", status: http.StatusTooManyRequests, code: "cooldown_active"},
 	}
 
 	for _, tt := range tests {

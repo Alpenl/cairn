@@ -58,6 +58,11 @@ func (s *readerHostLifecycleHTTPStore) RestoreInbox(ctx context.Context, id uuid
 	return err
 }
 
+func (s *readerHostLifecycleHTTPStore) DiscardInbox(ctx context.Context, id uuid.UUID) error {
+	_, err := s.SoftDeleteHost(ctx, model.ReaderHostInbox, id)
+	return err
+}
+
 func (s *readerHostLifecycleHTTPStore) PurgeHost(context.Context, model.ReaderHostKind, uuid.UUID, uuid.UUID) error {
 	switch s.state {
 	case "live":

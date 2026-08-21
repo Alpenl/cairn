@@ -4,7 +4,7 @@ set -euo pipefail
 repository=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repository"
 
-image=${PG_IMAGE:-pgvector/pgvector:pg16}
+image=${PG_IMAGE:-postgres:16}
 container_name="cairn-migrate-dbintegration-$$"
 database_name=cairn_migrate_test
 database_password=migrate_test_pw

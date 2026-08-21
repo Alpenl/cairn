@@ -23,10 +23,9 @@ type failAfterFeedLifecycleCancel struct {
 func (q *failAfterFeedLifecycleCancel) EnqueueTx(
 	ctx context.Context,
 	tx pgx.Tx,
-	linkID uuid.UUID,
-	jobID uuid.UUID,
+	attempt model.ParseAttempt,
 ) error {
-	return q.delegate.EnqueueTx(ctx, tx, linkID, jobID)
+	return q.delegate.EnqueueTx(ctx, tx, attempt)
 }
 
 func (q *failAfterFeedLifecycleCancel) CancelAllActiveTx(
@@ -45,14 +44,13 @@ type readerFeedLifecycleFixture struct {
 	queue         *worker.RiverQueue
 	feedItemID    uuid.UUID
 	linkID        uuid.UUID
-	parseJobID    uuid.UUID
+	parseAttempt  model.ParseAttempt
 	translationID uuid.UUID
 }
 
 func TestReaderFeedLastUnsaveCancelsInflightLifecycleAtomically(t *testing.T) {
 	pool := StartPostgres(t)
 	fixture := seedReaderFeedInflightLifecycle(t, pool, "cancel")
-	fixture.reader.BindLinkLifecycleQueue(fixture.queue)
 
 	result, err := fixture.reader.FeedbackFeed(
 		t.Context(),
@@ -62,8 +60,8 @@ func TestReaderFeedLastUnsaveCancelsInflightLifecycleAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FeedbackFeed(unsave) error = %v", err)
 	}
-	if result.Saved || result.Association == nil || result.Association.LinkID != fixture.linkID {
-		t.Fatalf("FeedbackFeed(unsave) = %#v, want removed association for %s", result, fixture.linkID)
+	if result.LinkID != nil {
+		t.Fatalf("FeedbackFeed(unsave) = %#v, want no separate Analyze Link", result)
 	}
 	if got := countReaderFeedSaves(t, pool, fixture.feedItemID, fixture.linkID); got != 0 {
 		t.Fatalf("Feed associations after unsave = %d, want 0", got)
@@ -76,10 +74,13 @@ func TestReaderFeedLastUnsaveRollsBackAfterLifecycleCancellationFailure(t *testi
 	pool := StartPostgres(t)
 	fixture := seedReaderFeedInflightLifecycle(t, pool, "cancel-rollback")
 	wantErr := errors.New("injected Feed lifecycle cancellation failure")
-	fixture.reader.BindLinkLifecycleQueue(&failAfterFeedLifecycleCancel{
-		delegate: fixture.queue,
-		err:      wantErr,
-	})
+	fixture.reader = repository.NewPGXReaderVNextRepositoryWithLinkLifecycle(
+		pool,
+		&failAfterFeedLifecycleCancel{
+			delegate: fixture.queue,
+			err:      wantErr,
+		},
+	)
 
 	_, err := fixture.reader.FeedbackFeed(
 		t.Context(),
@@ -93,15 +94,15 @@ func TestReaderFeedLastUnsaveRollsBackAfterLifecycleCancellationFailure(t *testi
 	if got := countReaderFeedSaves(t, pool, fixture.feedItemID, fixture.linkID); got != 1 {
 		t.Fatalf("Feed associations after rollback = %d, want 1", got)
 	}
-	var feedbackAction string
+	var hiddenCount int
 	if err := pool.QueryRow(t.Context(),
-		`SELECT action FROM reader_feed_feedback WHERE item_key=$1`,
+		`SELECT count(*) FROM reader_feed_hides WHERE item_key=$1`,
 		"subscription:"+fixture.feedItemID.String(),
-	).Scan(&feedbackAction); err != nil {
-		t.Fatalf("read Feed feedback after rollback: %v", err)
+	).Scan(&hiddenCount); err != nil {
+		t.Fatalf("read Feed hide after rollback: %v", err)
 	}
-	if feedbackAction != "save" {
-		t.Fatalf("Feed feedback after rollback = %q, want save", feedbackAction)
+	if hiddenCount != 0 {
+		t.Fatalf("Feed hide count after rollback = %d, want 0", hiddenCount)
 	}
 
 	assertReaderFeedLifecycleActive(t, pool, fixture)
@@ -114,8 +115,8 @@ func seedReaderFeedInflightLifecycle(
 ) readerFeedLifecycleFixture {
 	t.Helper()
 	ctx := t.Context()
-	reader := repository.NewPGXReaderVNextRepository(pool)
 	queue := newRiverQueue(t, pool, newRecordingProcessor(pool))
+	reader := repository.NewPGXReaderVNextRepositoryWithLinkLifecycle(pool, queue)
 	feedItemID := seedReaderFeedSaveItem(
 		t,
 		pool,
@@ -123,15 +124,20 @@ func seedReaderFeedInflightLifecycle(
 		suffix,
 	)
 	saved, err := reader.FeedbackFeed(ctx, "subscription:"+feedItemID.String(), "save")
-	if err != nil || saved.Association == nil || !saved.Association.CreatedLink {
+	if err != nil || saved.LinkID == nil {
 		t.Fatalf("seed Feed save = %#v, %v", saved, err)
 	}
-	linkID := saved.Association.LinkID
+	linkID := *saved.LinkID
 
-	commands := dbLinkCommands(pool, repository.NewPGXLinkRepository(pool), queue)
+	links := repository.NewPGXLinkRepository(pool)
+	commands := dbLinkCommands(pool, links, queue)
 	requeued, err := commands.RequeueLink(ctx, service.RequeueLinkCommand{LinkID: linkID})
-	if err != nil || requeued.Job == nil {
+	if err != nil || !requeued.Enqueued {
 		t.Fatalf("RequeueLink() = %#v, %v", requeued, err)
+	}
+	link, err := links.GetByID(ctx, linkID)
+	if err != nil || link == nil {
+		t.Fatalf("GetByID(requeued) = %#v, %v", link, err)
 	}
 
 	translationID := schedulePendingTranslation(
@@ -147,7 +153,7 @@ func seedReaderFeedInflightLifecycle(
 		queue:         queue,
 		feedItemID:    feedItemID,
 		linkID:        linkID,
-		parseJobID:    requeued.Job.ID,
+		parseAttempt:  parseAttemptForLink(link),
 		translationID: translationID,
 	}
 	assertReaderFeedLifecycleActive(t, pool, fixture)
@@ -172,18 +178,7 @@ func assertReaderFeedLifecycleDeleted(
 		t.Fatal("last Feed unsave did not move the Link to Trash")
 	}
 
-	var parseStatus model.JobStatus
-	var parseReason string
-	if err := pool.QueryRow(ctx,
-		`SELECT status,COALESCE(error_msg,'') FROM parse_jobs WHERE id=$1`,
-		fixture.parseJobID,
-	).Scan(&parseStatus, &parseReason); err != nil {
-		t.Fatalf("read parse attempt after Feed unsave: %v", err)
-	}
-	if parseStatus != model.JobStatusFailed || parseReason != "link_deleted" {
-		t.Fatalf("parse attempt after Feed unsave = %s/%q, want failed/link_deleted", parseStatus, parseReason)
-	}
-	assertReaderFeedRiverCancellation(t, pool, "parse_link", "parse_job_id", fixture.parseJobID, true)
+	assertReaderFeedParseRiverCancellation(t, pool, fixture.parseAttempt, true)
 
 	var translationStatus model.TranslationStatus
 	var translationReason string
@@ -215,30 +210,21 @@ func assertReaderFeedLifecycleActive(
 	ctx := t.Context()
 	var (
 		linkStatus model.LinkStatus
+		generation int64
 		trashed    bool
 	)
 	if err := pool.QueryRow(ctx,
-		`SELECT status,deleted_at IS NOT NULL FROM links WHERE id=$1`,
+		`SELECT status,parse_generation,deleted_at IS NOT NULL FROM links WHERE id=$1`,
 		fixture.linkID,
-	).Scan(&linkStatus, &trashed); err != nil {
+	).Scan(&linkStatus, &generation, &trashed); err != nil {
 		t.Fatalf("read active Feed Link: %v", err)
 	}
-	if linkStatus != model.LinkStatusPending || trashed {
-		t.Fatalf("active Feed Link = status %s trashed %v, want pending/false", linkStatus, trashed)
+	if linkStatus != model.LinkStatusPending || generation != fixture.parseAttempt.Generation || trashed {
+		t.Fatalf("active Feed Link = status %s generation %d trashed %v, want pending/%d/false",
+			linkStatus, generation, trashed, fixture.parseAttempt.Generation)
 	}
 
-	var parseStatus model.JobStatus
-	var parseReason string
-	if err := pool.QueryRow(ctx,
-		`SELECT status,COALESCE(error_msg,'') FROM parse_jobs WHERE id=$1`,
-		fixture.parseJobID,
-	).Scan(&parseStatus, &parseReason); err != nil {
-		t.Fatalf("read active parse attempt: %v", err)
-	}
-	if parseStatus != model.JobStatusPending || parseReason != "" {
-		t.Fatalf("active parse attempt = %s/%q, want pending/empty", parseStatus, parseReason)
-	}
-	assertReaderFeedRiverCancellation(t, pool, "parse_link", "parse_job_id", fixture.parseJobID, false)
+	assertReaderFeedParseRiverCancellation(t, pool, fixture.parseAttempt, false)
 
 	var translationStatus model.TranslationStatus
 	var translationReason string
@@ -259,6 +245,30 @@ func assertReaderFeedLifecycleActive(
 		)
 	}
 	assertReaderFeedRiverCancellation(t, pool, "translate_link_v2", "translation_id", fixture.translationID, false)
+}
+
+func assertReaderFeedParseRiverCancellation(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	attempt model.ParseAttempt,
+	wantCancelled bool,
+) {
+	t.Helper()
+	var (
+		state  string
+		marked bool
+	)
+	if err := pool.QueryRow(t.Context(), `SELECT state::text,metadata ? 'cancel_attempted_at'
+		FROM river_job
+		WHERE kind='parse_link' AND args->>'link_id'=$1 AND args->>'parse_generation'=$2::bigint::text`,
+		attempt.LinkID.String(), attempt.Generation).Scan(&state, &marked); err != nil {
+		t.Fatalf("read River parse attempt %s/%d: %v", attempt.LinkID, attempt.Generation, err)
+	}
+	cancelled := state == "cancelled" || marked
+	if cancelled != wantCancelled {
+		t.Fatalf("River parse attempt %s/%d = state %q marked %v, want cancelled/marked %v",
+			attempt.LinkID, attempt.Generation, state, marked, wantCancelled)
+	}
 }
 
 func assertReaderFeedRiverCancellation(

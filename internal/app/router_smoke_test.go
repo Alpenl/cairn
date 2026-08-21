@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"io"
 
 	"github.com/gin-gonic/gin"
 
@@ -16,14 +15,13 @@ func NewRouter() *gin.Engine {
 		LinksWrite: smokeLinkWriteService{},
 		LinksRead:  smokeLinkReadService{},
 		Ingest:     smokeIngestService{},
-		Jobs:       smokeJobService{},
 		Tags:       smokeTagService{},
 		Tree:       smokeTreeService{},
 		Feeds:      smokeFeedService{},
-	}, nil, nil, nil, nil, RouterOptions{AppEnv: "dev"})
+	}, nil, nil, RouterOptions{})
 }
 
-// Embedding the narrow handler interface supplies a zero-behavior method set;
+// Including the narrow handler interface supplies a zero-behavior method set;
 // smoke tests only enumerate routes and never invoke these methods.
 type smokeFeedService struct{ handler.FeedService }
 
@@ -34,9 +32,6 @@ func (smokeLinkWriteService) Submit(context.Context, dto.LinkCreateRequest) (dto
 }
 func (smokeLinkWriteService) Refresh(context.Context, string) (dto.SubmitResponse, error) {
 	return dto.SubmitResponse{}, nil
-}
-func (smokeLinkWriteService) Batch(context.Context, dto.BatchCreateRequest) (dto.BatchSubmitResponse, error) {
-	return dto.BatchSubmitResponse{}, nil
 }
 
 type smokeLinkContentService struct{}
@@ -66,26 +61,11 @@ func (smokeLinkReadService) GetWithContent(context.Context, string, bool) (dto.L
 	return dto.LinkResponse{}, nil
 }
 func (smokeLinkReadService) Delete(context.Context, string) error { return nil }
-func (smokeLinkReadService) Export(context.Context, io.Writer) error {
-	return nil
-}
-func (smokeLinkReadService) ExportConcepts(context.Context, io.Writer) error {
-	return nil
-}
 
 type smokeIngestService struct{}
 
 func (smokeIngestService) Ingest(context.Context, dto.IngestRequest) (dto.SubmitResponse, error) {
 	return dto.SubmitResponse{}, nil
-}
-
-type smokeJobService struct{}
-
-func (smokeJobService) Get(context.Context, string) (dto.JobResponse, error) {
-	return dto.JobResponse{}, nil
-}
-func (smokeJobService) List(context.Context, []string) ([]dto.JobResponse, error) {
-	return nil, nil
 }
 
 type smokeTagService struct{}

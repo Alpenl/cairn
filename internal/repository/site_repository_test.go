@@ -26,7 +26,6 @@ func TestAggregateSiteCreatesIdentityEntryAndPrimary(t *testing.T) {
 	var nilText *string
 
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(findSiteIdentityForUpdateSQL)).WithArgs(params.IdentityKey).WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery(regexp.QuoteMeta(insertSiteSQL)).WithArgs(params.IdentityKey, params.Name, params.Intro, nilText, nilText).WillReturnRows(mock.NewRows([]string{"id", "created"}).AddRow(siteID, true))
 	mock.ExpectQuery(regexp.QuoteMeta(insertSiteIdentitySQL)).WithArgs(params.IdentityKey, siteID).WillReturnRows(mock.NewRows([]string{"site_id"}).AddRow(siteID))
@@ -58,7 +57,6 @@ func TestAggregateSiteUsesExistingIdentityBinding(t *testing.T) {
 	params := AggregateSiteParams{LinkID: linkID, IdentityKey: "v1:github:owner/repo", NormalizedURL: "https://github.com/owner/repo", Name: "Ignored candidate", EntryName: "Repository"}
 
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(findSiteIdentityForUpdateSQL)).WithArgs(params.IdentityKey).WillReturnRows(mock.NewRows([]string{"site_id"}).AddRow(siteID))
 	mock.ExpectQuery(regexp.QuoteMeta(findSiteEntryByNormalizedURLSQL)).WithArgs(siteID, params.NormalizedURL, linkID).WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery(regexp.QuoteMeta(insertSiteEntrySQL)).WithArgs(siteID, linkID, params.EntryName, params.Purpose, params.NormalizedURL).WillReturnRows(mock.NewRows([]string{"id", "site_id", "created"}).AddRow(entryID, siteID, false))
@@ -89,7 +87,6 @@ func TestAggregateSiteRemovesNewCandidateWhenIdentityWasBoundConcurrently(t *tes
 	var nilText *string
 
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(findSiteIdentityForUpdateSQL)).WithArgs(params.IdentityKey).WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery(regexp.QuoteMeta(insertSiteSQL)).WithArgs(params.IdentityKey, params.Name, params.Intro, nilText, nilText).WillReturnRows(mock.NewRows([]string{"id", "created"}).AddRow(candidateID, true))
 	mock.ExpectQuery(regexp.QuoteMeta(insertSiteIdentitySQL)).WithArgs(params.IdentityKey, candidateID).WillReturnRows(mock.NewRows([]string{"site_id"}).AddRow(boundSiteID))
@@ -97,7 +94,7 @@ func TestAggregateSiteRemovesNewCandidateWhenIdentityWasBoundConcurrently(t *tes
 	mock.ExpectQuery(regexp.QuoteMeta(findSiteEntryByNormalizedURLSQL)).WithArgs(boundSiteID, params.NormalizedURL, linkID).WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery(regexp.QuoteMeta(insertSiteEntrySQL)).WithArgs(boundSiteID, linkID, params.EntryName, params.Purpose, params.NormalizedURL).WillReturnRows(mock.NewRows([]string{"id", "site_id", "created"}).AddRow(entryID, boundSiteID, true))
 	mock.ExpectExec(regexp.QuoteMeta(setPrimarySiteEntrySQL)).WithArgs(entryID, boundSiteID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectExec(regexp.QuoteMeta(invalidateSiteEmbeddingSQL)).WithArgs(boundSiteID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec(regexp.QuoteMeta(bumpSiteRevisionSQL)).WithArgs(boundSiteID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
 	got, err := repo.Aggregate(context.Background(), params)
@@ -119,22 +116,17 @@ func TestCompleteSiteParseClearsReadingAssetsBeforeMakingLinkDone(t *testing.T) 
 	}
 	defer mock.Close()
 	repo := NewPGXLinkRepository(mock)
-	linkID, jobID, siteID, entryID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	linkID, siteID, entryID := uuid.New(), uuid.New(), uuid.New()
 	name, intro, entryName, purpose := "Example", "An example service", "Home", "Use it online"
-	reason, explanation, version := "ai_site_resolution", "交互工具为主", "library-v1"
-	confidence := float32(.9)
 	params := CompleteSiteParseParams{
-		Analysis:                           UpdateLinkAnalysisParams{ID: linkID, Title: &entryName, Tags: []string{"tool"}, FetcherType: stringPtr("http"), Domain: stringPtr("example.com"), ContentType: stringPtr("homepage"), ExpectedMetadataRevision: 1},
-		Classification:                     UpdateLibraryClassificationParams{ID: linkID, Kind: "site", Source: "auto", PredictedKind: libraryKindTestRef("site"), Confidence: &confidence, Reason: &reason, Explanation: &explanation, ClassifierVersion: &version},
-		Site:                               AggregateSiteParams{LinkID: linkID, IdentityKey: "v1:host:example.com", NormalizedURL: "https://example.com", Name: name, Intro: intro, EntryName: entryName, Purpose: purpose},
-		ExpectedRequestedLibraryKind:       model.RequestedLibraryKindAuto,
-		ExpectedRequestedLibraryKindSource: model.RequestedLibraryKindSourceAuto,
+		Analysis:       UpdateLinkAnalysisParams{ID: linkID, Title: &entryName, Tags: []string{"tool"}, FetcherType: stringPtr("http"), Domain: stringPtr("example.com"), ContentType: stringPtr("homepage"), ExpectedParseGeneration: 1, ExpectedMetadataRevision: 1},
+		Classification: UpdateLibraryClassificationParams{ID: linkID, Kind: "site"},
+		Site:           AggregateSiteParams{LinkID: linkID, IdentityKey: "v1:host:example.com", NormalizedURL: "https://example.com", Name: name, Intro: intro, EntryName: entryName, Purpose: purpose},
 	}
 	var nilText *string
 	var nilInt *int
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
-	mock.ExpectExec(regexp.QuoteMeta(completeSiteLinkSQL)).WithArgs(linkID, &entryName, []string{"tool"}, stringPtr("http"), false, nilText, stringPtr("example.com"), stringPtr("homepage"), nilInt, nilText, nil, model.LibraryKindSourceAuto, false, params.Classification.PredictedKind, &confidence, &reason, &explanation, &version, model.RequestedLibraryKindAuto, model.RequestedLibraryKindSourceAuto).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec(regexp.QuoteMeta(completeSiteLinkSQL)).WithArgs(linkID, &entryName, []string{"tool"}, stringPtr("http"), false, nilText, stringPtr("example.com"), stringPtr("homepage"), nilInt, nilText, nil, false, (*model.LibraryKind)(nil), false, int64(1), int64(1)).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(deleteSiteTranslationsSQL)).WithArgs(linkID).WillReturnResult(pgxmock.NewResult("DELETE", 2))
 	mock.ExpectQuery(regexp.QuoteMeta(findSiteIdentityForUpdateSQL)).WithArgs(params.Site.IdentityKey).WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery(regexp.QuoteMeta(insertSiteSQL)).WithArgs(params.Site.IdentityKey, name, intro, nilText, nilText).WillReturnRows(mock.NewRows([]string{"id", "created"}).AddRow(siteID, true))
@@ -142,9 +134,8 @@ func TestCompleteSiteParseClearsReadingAssetsBeforeMakingLinkDone(t *testing.T) 
 	mock.ExpectQuery(regexp.QuoteMeta(findSiteEntryByNormalizedURLSQL)).WithArgs(siteID, params.Site.NormalizedURL, linkID).WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery(regexp.QuoteMeta(insertSiteEntrySQL)).WithArgs(siteID, linkID, entryName, purpose, params.Site.NormalizedURL).WillReturnRows(mock.NewRows([]string{"id", "site_id", "created"}).AddRow(entryID, siteID, true))
 	mock.ExpectExec(regexp.QuoteMeta(setPrimarySiteEntrySQL)).WithArgs(entryID, siteID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectExec(regexp.QuoteMeta(completeParseJobStateSQL)).WithArgs(jobID, linkID, int64(1)).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
-	got, err := repo.CompleteSiteParse(context.Background(), params, jobID)
+	got, err := repo.CompleteSiteParse(context.Background(), params)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,16 +150,16 @@ func TestCompleteSiteParseClearsReadingAssetsBeforeMakingLinkDone(t *testing.T) 
 func TestCompleteSiteLinkSQLPurgesAllCapturedBodyFields(t *testing.T) {
 	t.Parallel()
 	for _, fragment := range []string{
-		"content = NULL",
-		"content_document = NULL",
-		"content_format = 'plain'",
-		"content_revision = content_revision + 1",
-		"input_text = NULL",
-		"input_html = NULL",
-		"input_images = NULL",
-		"source_metadata = NULL",
-		"payload_purge_due_at = NULL",
-		"payload_purged_at = NOW()",
+		"content=NULL",
+		"content_document=NULL",
+		"content_format='plain'",
+		"content_revision=link.content_revision+1",
+		"input_text=NULL",
+		"input_html=NULL",
+		"input_images=NULL",
+		"source_metadata=NULL",
+		"payload_purge_due_at=NULL",
+		"payload_purged_at=NOW()",
 	} {
 		if !strings.Contains(completeSiteLinkSQL, fragment) {
 			t.Fatalf("completeSiteLinkSQL must include %q: %s", fragment, completeSiteLinkSQL)
@@ -249,7 +240,5 @@ func TestUpdateSiteProfileUsesInstallScopedRevisionCAS(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-func libraryKindTestRef(kind model.LibraryKind) *model.LibraryKind { return &kind }
 
 func stringPtr(value string) *string { return &value }

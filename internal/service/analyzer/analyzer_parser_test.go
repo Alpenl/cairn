@@ -289,7 +289,7 @@ func TestParseAnalysisResponseSkipsInvalidJSONCandidatesAndFindsValidObject(t *t
 		MaxTagChars:     10,
 	})
 
-	raw := "示例：{\"summary\":\"太长太长太长\",\"tags\":[\"Go\"]}\n最终：{\"summary\":\"可用结果\",\"tags\":[\"Go\",\"JSON\"]}"
+	raw := "示例：{\"summary\":\"\",\"tags\":[\"Go\"]}\n最终：{\"summary\":\"可用结果\",\"tags\":[\"Go\",\"JSON\"]}"
 	got, err := analyzer.parseAnalysisResponse(raw)
 	if err != nil {
 		t.Fatalf("parseAnalysisResponse() error = %v, want success", err)

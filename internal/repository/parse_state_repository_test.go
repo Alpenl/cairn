@@ -13,7 +13,7 @@ import (
 	"webtag/internal/model"
 )
 
-func TestMarkParseProcessingCommitsLinkAndExactJobTogether(t *testing.T) {
+func TestMarkParseProcessingCommitsCurrentGeneration(t *testing.T) {
 	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -21,19 +21,16 @@ func TestMarkParseProcessingCommitsLinkAndExactJobTogether(t *testing.T) {
 	}
 	defer mock.Close()
 	repo := NewPGXLinkRepository(mock)
-	linkID, jobID := uuid.New(), uuid.New()
+	linkID := uuid.New()
+	attempt := model.ParseAttempt{LinkID: linkID, Generation: 4, ExpectedMetadataRevision: 2}
 
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
-	mock.ExpectExec(regexp.QuoteMeta(updateLinkStateSQL)).
-		WithArgs(linkID, model.LinkStatusProcessing, (*string)(nil)).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectExec(regexp.QuoteMeta(updateRunnableParseJobStateSQL)).
-		WithArgs(jobID, model.JobStatusProcessing, (*string)(nil), linkID).
+	mock.ExpectExec(regexp.QuoteMeta(markParseProcessingSQL)).
+		WithArgs(linkID, int64(4)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
-	if err := repo.MarkParseProcessing(context.Background(), linkID, jobID); err != nil {
+	if err := repo.MarkParseProcessing(context.Background(), attempt); err != nil {
 		t.Fatalf("MarkParseProcessing() error = %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -41,7 +38,7 @@ func TestMarkParseProcessingCommitsLinkAndExactJobTogether(t *testing.T) {
 	}
 }
 
-func TestMarkParseFailedRollsBackLinkWhenExactJobUpdateFails(t *testing.T) {
+func TestMarkParseFailedRejectsStaleGeneration(t *testing.T) {
 	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -49,23 +46,19 @@ func TestMarkParseFailedRollsBackLinkWhenExactJobUpdateFails(t *testing.T) {
 	}
 	defer mock.Close()
 	repo := NewPGXLinkRepository(mock)
-	linkID, jobID := uuid.New(), uuid.New()
+	linkID := uuid.New()
+	attempt := model.ParseAttempt{LinkID: linkID, Generation: 3, ExpectedMetadataRevision: 2}
 	message := "network: fetch failed"
-	wantErr := errors.New("job update failed")
 
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	mock.ExpectExec(regexp.QuoteMeta(updateFailedSiteCandidateSQL)).
-		WithArgs(linkID, model.LinkStatusFailed, &message).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectExec(regexp.QuoteMeta(updateRunnableParseJobStateSQL)).
-		WithArgs(jobID, model.JobStatusFailed, &message, linkID).
-		WillReturnError(wantErr)
+		WithArgs(linkID, int64(3), message).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectRollback()
 
-	err = repo.MarkParseFailed(context.Background(), linkID, jobID, message)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("MarkParseFailed() error = %v, want %v", err, wantErr)
+	err = repo.MarkParseFailed(context.Background(), attempt, message)
+	if !errors.Is(err, ErrParseAttemptNotRunnable) {
+		t.Fatalf("MarkParseFailed() error = %v, want ErrParseAttemptNotRunnable", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)
@@ -82,7 +75,7 @@ func TestSiteCandidatePredicateGuardsEveryPayloadColumn(t *testing.T) {
 	t.Parallel()
 
 	// 谓词内容——改坏它会让 reading 链接的正文被误清，属高危变更。
-	const wantPredicate = "(library_kind = 'site' OR predicted_library_kind = 'site')"
+	const wantPredicate = "library_kind = 'site'"
 	if SQLSiteCandidatePredicate != wantPredicate {
 		t.Fatalf("SQLSiteCandidatePredicate = %q, want %q", SQLSiteCandidatePredicate, wantPredicate)
 	}
@@ -98,12 +91,12 @@ func TestSiteCandidatePredicateGuardsEveryPayloadColumn(t *testing.T) {
 	// （其余列被整列覆写成该列的值）。两者都是静默的数据损坏，正是本不变量
 	// 要防的事，因此这里逐列钉死。
 	for _, tc := range []struct{ column, want string }{
-		{"input_text", "input_text = CASE WHEN (library_kind = 'site' OR predicted_library_kind = 'site') THEN NULL ELSE input_text END"},
-		{"input_html", "input_html = CASE WHEN (library_kind = 'site' OR predicted_library_kind = 'site') THEN NULL ELSE input_html END"},
-		{"input_images", "input_images = CASE WHEN (library_kind = 'site' OR predicted_library_kind = 'site') THEN NULL ELSE input_images END"},
-		{"source_metadata", "source_metadata = CASE WHEN (library_kind = 'site' OR predicted_library_kind = 'site') THEN NULL ELSE source_metadata END"},
-		{"payload_purge_due_at", "payload_purge_due_at = CASE WHEN (library_kind = 'site' OR predicted_library_kind = 'site') THEN NULL ELSE payload_purge_due_at END"},
-		{"payload_purged_at", "payload_purged_at = CASE WHEN (library_kind = 'site' OR predicted_library_kind = 'site') THEN NOW() ELSE payload_purged_at END"},
+		{"input_text", "input_text = CASE WHEN library_kind = 'site' THEN NULL ELSE input_text END"},
+		{"input_html", "input_html = CASE WHEN library_kind = 'site' THEN NULL ELSE input_html END"},
+		{"input_images", "input_images = CASE WHEN library_kind = 'site' THEN NULL ELSE input_images END"},
+		{"source_metadata", "source_metadata = CASE WHEN library_kind = 'site' THEN NULL ELSE source_metadata END"},
+		{"payload_purge_due_at", "payload_purge_due_at = CASE WHEN library_kind = 'site' THEN NULL ELSE payload_purge_due_at END"},
+		{"payload_purged_at", "payload_purged_at = CASE WHEN library_kind = 'site' THEN NOW() ELSE payload_purged_at END"},
 	} {
 		if !strings.Contains(updateFailedSiteCandidateSQL, tc.want) {
 			t.Errorf("updateFailedSiteCandidateSQL 未按预期保护 %s 列。\n缺少片段：%s\n实际 SQL：%s",
@@ -112,7 +105,7 @@ func TestSiteCandidatePredicateGuardsEveryPayloadColumn(t *testing.T) {
 	}
 }
 
-func TestCompleteParseRollsBackAnalysisWhenExactJobCompletionFails(t *testing.T) {
+func TestCompleteReadingParseRollsBackAnalysisWhenLibrarySelectionChanged(t *testing.T) {
 	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -120,93 +113,27 @@ func TestCompleteParseRollsBackAnalysisWhenExactJobCompletionFails(t *testing.T)
 	}
 	defer mock.Close()
 	repo := NewPGXLinkRepository(mock)
-	linkID, jobID := uuid.New(), uuid.New()
-	wantErr := errors.New("job completion failed")
+	linkID := uuid.New()
 
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
-	expectAnyLinkAnalysisForParseUpdate(mock)
-	mock.ExpectExec(regexp.QuoteMeta(completeParseJobStateSQL)).
-		WithArgs(jobID, linkID, int64(1)).
-		WillReturnError(wantErr)
-	mock.ExpectRollback()
-
-	err = repo.CompleteParse(context.Background(), UpdateLinkAnalysisParams{
-		ID: linkID, Status: model.LinkStatusDone, ExpectedMetadataRevision: 1,
-	}, jobID)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("CompleteParse() error = %v, want %v", err, wantErr)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet mock expectations: %v", err)
-	}
-}
-
-func TestCompleteParseRollsBackWhenPersistedJobMetadataRevisionDoesNotMatch(t *testing.T) {
-	t.Parallel()
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock.NewPool() error = %v", err)
-	}
-	defer mock.Close()
-	repo := NewPGXLinkRepository(mock)
-	linkID, jobID := uuid.New(), uuid.New()
-	const expectedMetadataRevision int64 = 7
-
-	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
-	expectAnyLinkAnalysisForParseUpdate(mock)
-	// A zero-row terminal UPDATE is how PostgreSQL reports either a stale job
-	// state or a stored metadata lease that differs from the caller's value.
-	// The transaction must roll back the preceding link analysis in either case.
-	mock.ExpectExec(regexp.QuoteMeta(completeParseJobStateSQL)).
-		WithArgs(jobID, linkID, expectedMetadataRevision).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
-	mock.ExpectRollback()
-
-	err = repo.CompleteParse(context.Background(), UpdateLinkAnalysisParams{
-		ID: linkID, Status: model.LinkStatusDone, ExpectedMetadataRevision: expectedMetadataRevision,
-	}, jobID)
-	if !errors.Is(err, ErrParseJobNotRunnable) {
-		t.Fatalf("CompleteParse() error = %v, want ErrParseJobNotRunnable", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet mock expectations: %v", err)
-	}
-}
-
-func TestCompleteReadingParseRollsBackAnalysisWhenRequestedIntentChanged(t *testing.T) {
-	t.Parallel()
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock.NewPool() error = %v", err)
-	}
-	defer mock.Close()
-	repo := NewPGXLinkRepository(mock)
-	linkID, jobID := uuid.New(), uuid.New()
-
-	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	expectAnyLinkAnalysisForParseUpdate(mock)
 	mock.ExpectExec(regexp.QuoteMeta(updateLibraryClassificationForCompletionSQL)).
 		WithArgs(
-			linkID, model.LibraryKindReading, model.LibraryKindSourceAuto, false,
-			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			model.RequestedLibraryKindAuto, model.RequestedLibraryKindSourceAuto,
+			linkID, model.LibraryKindReading, false,
+			(*model.LibraryKind)(nil), false,
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
-	mock.ExpectQuery(regexp.QuoteMeta(selectLibraryIntentForCompletionSQL)).
-		WithArgs(linkID).
-		WillReturnRows(mock.NewRows([]string{"requested_library_kind", "requested_library_kind_source", "library_kind_locked"}).
-			AddRow(model.RequestedLibraryKindSite, model.RequestedLibraryKindSourceUser, false))
+	mock.ExpectQuery(regexp.QuoteMeta(selectLibrarySelectionChangedSQL)).
+		WithArgs(linkID, (*model.LibraryKind)(nil), false).
+		WillReturnRows(mock.NewRows([]string{"changed"}).AddRow(true))
 	mock.ExpectRollback()
 
 	_, err = repo.CompleteReadingParse(context.Background(), CompleteReadingParseParams{
 		Analysis:       UpdateLinkAnalysisParams{ID: linkID, Status: model.LinkStatusDone, ExpectedMetadataRevision: 1},
-		Classification: UpdateLibraryClassificationParams{ID: linkID, Kind: model.LibraryKindReading, Source: model.LibraryKindSourceAuto},
-	}, jobID)
-	if !errors.Is(err, ErrLibraryIntentChanged) {
-		t.Fatalf("CompleteReadingParse() error = %v, want ErrLibraryIntentChanged", err)
+		Classification: UpdateLibraryClassificationParams{ID: linkID, Kind: model.LibraryKindReading},
+	})
+	if !errors.Is(err, ErrLibrarySelectionChanged) {
+		t.Fatalf("CompleteReadingParse() error = %v, want ErrLibrarySelectionChanged", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)
@@ -221,17 +148,16 @@ func TestCompleteReadingParseDetachesExistingSiteEntryAtomically(t *testing.T) {
 	}
 	defer mock.Close()
 	repo := NewPGXLinkRepository(mock)
-	linkID, jobID, siteID, entryID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	linkID, siteID, entryID := uuid.New(), uuid.New(), uuid.New()
+	expectedKind := model.LibraryKindSite
 	const siteRevision int64 = 7
 
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	expectAnyLinkAnalysisForParseUpdate(mock)
 	mock.ExpectExec(regexp.QuoteMeta(updateLibraryClassificationForCompletionSQL)).
 		WithArgs(
-			linkID, model.LibraryKindReading, model.LibraryKindSourceUser, true,
-			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			model.RequestedLibraryKindReading, model.RequestedLibraryKindSourceUser,
+			linkID, model.LibraryKindReading, true,
+			&expectedKind, true,
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery(regexp.QuoteMeta(lockEntryByLinkSQL)).WithArgs(linkID).
@@ -248,17 +174,14 @@ func TestCompleteReadingParseDetachesExistingSiteEntryAtomically(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(clearReadingPayloadPurgeDeadlineSQL)).WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectExec(regexp.QuoteMeta(completeParseJobStateSQL)).WithArgs(jobID, linkID, int64(1)).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
 	_, err = repo.CompleteReadingParse(context.Background(), CompleteReadingParseParams{
-		Analysis:                           UpdateLinkAnalysisParams{ID: linkID, Status: model.LinkStatusDone, ExpectedMetadataRevision: 1},
-		Classification:                     UpdateLibraryClassificationParams{ID: linkID, Kind: model.LibraryKindReading, Source: model.LibraryKindSourceUser, Locked: true},
-		ExpectedRequestedLibraryKind:       model.RequestedLibraryKindReading,
-		ExpectedRequestedLibraryKindSource: model.RequestedLibraryKindSourceUser,
-		DetachSiteEntry:                    true,
-	}, jobID)
+		Analysis:                  UpdateLinkAnalysisParams{ID: linkID, Status: model.LinkStatusDone, ExpectedMetadataRevision: 1},
+		Classification:            UpdateLibraryClassificationParams{ID: linkID, Kind: model.LibraryKindReading, Locked: true},
+		ExpectedLibraryKind:       &expectedKind,
+		ExpectedLibraryKindLocked: true,
+	})
 	if err != nil {
 		t.Fatalf("CompleteReadingParse() error = %v", err)
 	}
@@ -275,7 +198,7 @@ func expectAnyLinkAnalysisForParseUpdate(mock pgxmock.PgxPoolIface) {
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 		).
 		WillReturnRows(mock.NewRows([]string{"metadata_revision", "metadata_applied"}).AddRow(int64(1), true))
 }

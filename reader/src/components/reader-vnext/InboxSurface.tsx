@@ -2,11 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
 import type {
-  ReaderCategoryResponse,
-  ReaderInboxBulkResponse,
-  ReaderInboxConfirmAIProposalsResponse,
-  ReaderInboxJobResponse,
-  ReaderInboxListItemResponse,
+	ReaderInboxBulkResponse,
+	ReaderInboxConfirmAIProposalsResponse,
+	ReaderInboxListItemResponse,
   ReaderInboxPartition,
   ReaderInboxResponse,
 } from '../../lib/api/types'
@@ -53,9 +51,8 @@ function parseTags(value: string): string[] {
 }
 
 function statusLabel(status: ReaderInboxListItemResponse['status']): string {
-  if (status === 'pending') return '待处理'
-  if (status === 'discarded') return '已丢弃'
-  return '已入库'
+	if (status === 'pending') return '待处理'
+	return '已入库'
 }
 
 const SOURCE_ICONS: Partial<Record<string, IconName>> = {
@@ -171,19 +168,11 @@ function mergeInboxItems(
     if (!previous) incomingIDs.push(item.id)
     incomingByID.set(item.id, preferNewerInbox(previous, item))
   }
-  return [
-    ...incomingIDs.map((id) => preferNewerInbox(currentByID.get(id), incomingByID.get(id)!)),
-    ...current.filter((item) =>
-      (item.status === 'discarded' || preserveIDs?.has(item.id)) && !incomingByID.has(item.id)),
-  ]
-}
-
-function updateInboxStatus(
-  items: ReaderInboxListItemResponse[],
-  ids: ReadonlySet<string>,
-  status: ReaderInboxListItemResponse['status'],
-): ReaderInboxListItemResponse[] {
-  return items.map((item) => ids.has(item.id) ? { ...item, status } : item)
+	return [
+		...incomingIDs.map((id) => preferNewerInbox(currentByID.get(id), incomingByID.get(id)!)),
+		...current.filter((item) =>
+			preserveIDs?.has(item.id) && !incomingByID.has(item.id)),
+	]
 }
 
 interface InboxBulkResult {
@@ -247,7 +236,6 @@ type InboxRequestChannel =
   | 'aggregate'
   | 'target'
   | 'mutation'
-  | `category:${string}`
   | `detail:${string}`
 
 type InboxRequestToken = SurfaceRequestToken<InboxRequestChannel>
@@ -265,10 +253,6 @@ type InboxActionKey =
 
 function inboxPageChannel(partition: ReaderInboxPartition): InboxRequestChannel {
   return partition === 'expired' ? 'page:expired' : 'page:active'
-}
-
-function inboxCategoryChannel(inboxID: string, categoryID: string): InboxRequestChannel {
-  return `category:${inboxID}:${categoryID}`
 }
 
 function inboxDetailChannel(inboxID: string): InboxRequestChannel {
@@ -361,7 +345,6 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     expired: emptyInboxPartitionPage(),
   }))
   const [inboxCounts, setInboxCounts] = useState<InboxCounts>({ activeCount: 0, expiredCount: 0 })
-  const [categories, setCategories] = useState<ReaderCategoryResponse[]>([])
   // The list is a card projection, so the editor's record is fetched per item
   // and cached by ID. Keying by ID is also what makes a late detail response
   // unable to land in another item's editor.
@@ -377,11 +360,8 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   const [createBody, setCreateBody] = useState('')
   const [previewBody, setPreviewBody] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
-  const [newCategory, setNewCategory] = useState('')
-  const [membershipsByInbox, setMembershipsByInbox] = useState<Record<string, Set<string>>>({})
   const [loadingTarget, setLoadingTarget] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [job, setJob] = useState<ReaderInboxJobResponse | null>(null)
   const [bulkResult, setBulkResult] = useState<InboxBulkResult | null>(null)
   // 谁在发请求：这块 Surface 的身份 = client + 深链目标。两者任一变化，此前取出
   // 的所有 token 立即失效，旧命名空间的回包画不到新身份上。
@@ -493,14 +473,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   const summary = selectedDraft?.summary ?? ''
   const tags = selectedDraft?.tags ?? ''
   const body = selectedDraft?.body ?? ''
-  const memberships = useMemo(
-    () => selectedDetail
-      ? membershipsByInbox[selectedDetail.id] ?? new Set(selectedDetail.category_ids)
-      : new Set<string>(),
-    [membershipsByInbox, selectedDetail],
-  )
   const pendingItems = useMemo(() => items.filter((item) => item.status === 'pending'), [items])
-  const discardedCount = items.filter((item) => item.status === 'discarded').length
   const selectedPendingItems = useMemo(
     () => pendingItems.filter((item) => selectedIDs.has(item.id)),
     [pendingItems, selectedIDs],
@@ -584,10 +557,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     }))
     setError(null)
     try {
-      const [inboxResult, categoryResult] = await Promise.all([
-        client.listInbox({ partition: target, after: cursor, limit: 50 }),
-        append ? Promise.resolve(null) : client.listCategories(),
-      ])
+      const inboxResult = await client.listInbox({ partition: target, after: cursor, limit: 50 })
       if (
         !gate.isCurrent(pageToken) ||
         inboxLifecycleGenerationRef.current !== lifecycleGeneration
@@ -640,8 +610,6 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
           setSelectedID((current) => requested?.id ?? current ?? mergedItems[0]?.id ?? null)
         }
       }
-      if (categoryResult && !categoryResult.ok) setError(readerErrorMessage(categoryResult.error))
-      else if (categoryResult?.ok) setCategories(categoryResult.data.items)
     } finally {
       // 释放自己置上的 loading 不看身份：身份刚被撤销时这段代码仍然必须能把
       // 加载态收掉，否则界面永远停在加载中。它仍然检查 owner 与代次。
@@ -658,20 +626,17 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     listItemAppliedGenerationRef.current.clear()
     if (clientChanged) {
       partitionRef.current = 'active'
-      setPartition('active')
-      setInboxPages({ active: emptyInboxPartitionPage(), expired: emptyInboxPartitionPage() })
-      setInboxCounts({ activeCount: 0, expiredCount: 0 })
-      setCategories([])
-      // Detail records belong to the identity that fetched them; a replacement
+		setPartition('active')
+		setInboxPages({ active: emptyInboxPartitionPage(), expired: emptyInboxPartitionPage() })
+		setInboxCounts({ activeCount: 0, expiredCount: 0 })
+		// Detail records belong to the identity that fetched them; a replacement
       // client must not read another identity's cached capture. The mirror ref
       // follows the state instead of being cleared here, so the render that
       // still holds the previous list does not read this as a cache miss.
-      setDetails({})
-      setSelectedID(null)
-      setSelectedIDs(new Set())
-      setMembershipsByInbox({})
-      setJob(null)
-      setError(null)
+		setDetails({})
+		setSelectedID(null)
+		setSelectedIDs(new Set())
+		setError(null)
       setBulkResult(null)
     } else {
       const target = partitionRef.current
@@ -804,9 +769,6 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       ...current,
       [selectedDetail.id]: mergeDraftAfterServerRefresh(selectedDetail, current[selectedDetail.id]),
     }))
-    setMembershipsByInbox((current) => current[selectedDetail.id]
-      ? current
-      : { ...current, [selectedDetail.id]: new Set(selectedDetail.category_ids) })
   }, [selectedDetail])
 
   const reloadInbox = useCallback((target: ReaderInboxPartition = partitionRef.current) => {
@@ -832,50 +794,41 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     onDraftStateChange?.({ dirty: false, saving: false })
   }, [onDraftStateChange])
 
-  useEffect(() => {
-    const jobID = selectedDetail?.job_id
-    if (!jobID) {
-      setJob(null)
-      return
-    }
-    let active = true
-    let timer: number | null = null
-    const poll = async () => {
-      const result = await client.getInboxJob(jobID)
-      if (!active || !client.isIdentityCurrent()) return
-      if (!result.ok) {
-        setError(readerErrorMessage(result.error))
-        return
-      }
-      setJob(result.data)
-      if (result.data.status === 'completed') {
-        const lifecycleGeneration = inboxLifecycleGenerationRef.current
-        const refreshed = await client.getInbox(selectedDetail?.id ?? '')
-        if (
-          !active ||
-          !client.isIdentityCurrent() ||
-          inboxLifecycleGenerationRef.current !== lifecycleGeneration
-        ) return
-        if (refreshed.ok) {
-          advanceInboxLifecycle([refreshed.data.id])
-          upsertAuthoritativeInbox(refreshed.data)
-          setDrafts((current) => mergeDraftsAfterServerRefresh(current, [refreshed.data]))
-        }
-        else setError(readerErrorMessage(refreshed.error))
-        return
-      }
-      if (result.data.status === 'failed') {
-        setError(result.data.error || '摘要任务失败，请稍后重试。')
-        return
-      }
-      timer = window.setTimeout(() => { void poll() }, 1500)
-    }
+	useEffect(() => {
+		const inboxID = selectedDetail?.id
+		const proposalStatus = selectedDetail?.proposal_status
+		if (!inboxID || (proposalStatus !== 'pending' && proposalStatus !== 'running')) return
+		let active = true
+		let timer: number | null = null
+		const poll = async () => {
+			const lifecycleGeneration = inboxLifecycleGenerationRef.current
+			const result = await client.getInbox(inboxID)
+			if (
+				!active ||
+				!client.isIdentityCurrent() ||
+				inboxLifecycleGenerationRef.current !== lifecycleGeneration
+			) return
+			if (!result.ok) {
+				setError(readerErrorMessage(result.error))
+				return
+			}
+			advanceInboxLifecycle([result.data.id])
+			upsertAuthoritativeInbox(result.data)
+			setDrafts((current) => mergeDraftsAfterServerRefresh(current, [result.data]))
+			if (result.data.proposal_status === 'failed') {
+				setError('摘要任务失败，请稍后重试。')
+				return
+			}
+			if (result.data.proposal_status === 'pending' || result.data.proposal_status === 'running') {
+				timer = window.setTimeout(() => { void poll() }, 1500)
+			}
+		}
     void poll()
     return () => {
       active = false
       if (timer !== null) window.clearTimeout(timer)
     }
-  }, [advanceInboxLifecycle, client, selectedDetail?.id, selectedDetail?.job_id, upsertAuthoritativeInbox])
+	}, [advanceInboxLifecycle, client, selectedDetail?.id, selectedDetail?.proposal_status, upsertAuthoritativeInbox])
 
   // Takes the ID rather than a record: the reread's whole job is to replace
   // whatever the caller was holding, and the caller may only hold a card.
@@ -896,10 +849,6 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     setDrafts((current) => ({
       ...current,
       [inboxID]: mergeDraftAfterConflict(refreshed.data, current[inboxID]),
-    }))
-    setMembershipsByInbox((current) => ({
-      ...current,
-      [inboxID]: current[inboxID] ?? new Set(refreshed.data.category_ids),
     }))
     return refreshed.data
   }, [advanceInboxLifecycle, beginInboxRefresh, client, gate, upsertAuthoritativeInbox])
@@ -1091,16 +1040,17 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         const target: ReaderInboxPartition = selected.expired ? 'expired' : 'active'
         advanceInboxLifecycle([selected.id])
         adjustInboxCounts(selected.expired ? 0 : -1, selected.expired ? -1 : 0)
-        updatePartitionAndEvictOther(target, ids, (current) => ({
-          ...current,
-          items: updateInboxStatus(current.items, ids, 'discarded'),
-        }))
+		updatePartitionAndEvictOther(target, ids, (current) => ({
+			...current,
+			items: current.items.filter((item) => !ids.has(item.id)),
+		}))
         setSelectedIDs((current) => {
           const next = new Set(current)
           next.delete(selected.id)
           return next
         })
-        setBulkResult(null)
+		setBulkResult(null)
+		setSelectedID((current) => current === selected.id ? null : current)
         refreshPendingInboxCount()
         void load(target)
       }
@@ -1112,7 +1062,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   const restore = useCallback(async () => {
     const requestToken = gate.capture('mutation')
     if (!gate.isCurrent(requestToken)) return
-    if (!selected || (selected.status !== 'discarded' && !selected.expired)) return
+	if (!selected || !selected.expired) return
     const actionToken = beginInboxAction('restore')
     if (!actionToken) return
     setError(null)
@@ -1217,13 +1167,9 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
         })
         updatePartitionAndEvictOther(partition, idSet, (current) => ({
           ...current,
-          items: action === 'confirm'
-            ? current.items.filter((item) => !idSet.has(item.id))
-            : updateInboxStatus(current.items, idSet, 'discarded'),
-        }))
-        if (action === 'confirm') {
-          setSelectedID((current) => current && idSet.has(current) ? null : current)
-        }
+			items: current.items.filter((item) => !idSet.has(item.id)),
+		}))
+		setSelectedID((current) => current && idSet.has(current) ? null : current)
         refreshPendingInboxCount()
         void load(partition)
       }
@@ -1321,7 +1267,6 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
     setPartition(next)
     setSelectedID(null)
     setSelectedIDs(new Set())
-    setJob(null)
     setError(null)
     setBulkResult(null)
   }, [dirty, partition, saveMetadata, saving])
@@ -1337,66 +1282,15 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
       const result = await client.resummarizeInbox(selected.id)
       if (!gate.isCurrent(requestToken)) return
       if (!result.ok) setError(readerErrorMessage(result.error))
-      else {
-        advanceInboxLifecycle([selected.id])
-        setJob(result.data)
-        setDetails((current) => current[selected.id]
-          ? { ...current, [selected.id]: { ...current[selected.id], job_id: result.data.job_id } }
-          : current)
-      }
+		else {
+			advanceInboxLifecycle([selected.id])
+			upsertAuthoritativeInbox(result.data)
+			setDrafts((current) => mergeDraftsAfterServerRefresh(current, [result.data]))
+		}
     } finally {
       finishInboxAction(actionToken)
     }
-  }, [advanceInboxLifecycle, beginInboxAction, client, finishInboxAction, gate, selected])
-
-  const addCategory = useCallback(async () => {
-    const requestToken = gate.capture('mutation')
-    if (!gate.isCurrent(requestToken)) return
-    if (!newCategory.trim()) return
-    const result = await client.createCategory({ name: newCategory.trim() })
-    if (!gate.isCurrent(requestToken)) return
-    if (!result.ok) setError(readerErrorMessage(result.error))
-    else {
-      setCategories((current) => [...current, result.data])
-      setNewCategory('')
-    }
-  }, [client, gate, newCategory])
-
-  const toggleCategory = useCallback(async (category: ReaderCategoryResponse) => {
-    if (!selectedDetail) return
-    const inboxID = selectedDetail.id
-    const present = memberships.has(category.id)
-    const initialCategoryIDs = selectedDetail.category_ids
-    // 每个 (条目, 分类) 对各占一条通道：连点同一个 chip 时后发顶掉先发，
-    // 而给另一个条目打标签不该让这一条失效。
-    const requestToken = gate.begin(inboxCategoryChannel(inboxID, category.id))
-    if (!gate.isCurrent(requestToken)) return
-    const result = await client.setCategoryMembership(category.id, { host_kind: 'inbox', host_id: inboxID, present: !present })
-    if (!gate.isCurrent(requestToken)) return
-    if (!result.ok) setError(readerErrorMessage(result.error))
-    else {
-      advanceInboxLifecycle([inboxID])
-      setMembershipsByInbox((current) => {
-        const next = new Set(current[inboxID] ?? initialCategoryIDs)
-        if (present) next.delete(category.id)
-        else next.add(category.id)
-        return { ...current, [inboxID]: next }
-      })
-      // Category memberships are detail-only state; the queue card never
-      // rendered them, so only the cached detail record moves.
-      setDetails((current) => current[inboxID]
-        ? {
-            ...current,
-            [inboxID]: {
-              ...current[inboxID],
-              category_ids: present
-                ? current[inboxID].category_ids.filter((id) => id !== category.id)
-                : [...new Set([...current[inboxID].category_ids, category.id])],
-            },
-          }
-        : current)
-    }
-  }, [advanceInboxLifecycle, client, gate, memberships, selectedDetail])
+	}, [advanceInboxLifecycle, beginInboxAction, client, finishInboxAction, gate, selected, upsertAuthoritativeInbox])
 
   const adoptSuggestedTag = useCallback((tag: string) => {
     updateSelectedDraft({ tags: parseTags([...parseTags(tags), tag].join(', ')).join(', ') })
@@ -1405,7 +1299,7 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
   return (
     <SurfaceShell
       title="收件箱"
-      subtitle={`活跃 ${inboxCounts.activeCount} 项 · 已过期 ${inboxCounts.expiredCount} 项${discardedCount > 0 ? ` · ${discardedCount} 项已丢弃` : ''}`}
+		subtitle={`活跃 ${inboxCounts.activeCount} 项 · 已过期 ${inboxCounts.expiredCount} 项`}
       active="pending"
       onNavigate={onNavigate}
       capabilityPolicy={capabilityPolicy}
@@ -1581,12 +1475,10 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                   {dirty && <span className="inbox-unsaved">未保存</span>}
                 </div>
                 <div className="inbox-detail-actions">
-                  {selected.status === 'discarded' ? (
-                    <button className="rvx-button primary" type="button" disabled={saving} onClick={() => void restore()}><Icon name="refresh" size={15} />恢复到收件箱</button>
-                  ) : selected.status === 'pending' ? (
-                    <>
-                      {selected.expired && <button className="rvx-icon-button" type="button" title="恢复有效期" aria-label="恢复有效期" disabled={saving} onClick={() => void restore()}><Icon name="refresh" size={16} /></button>}
-                      <button className="rvx-icon-button" type="button" title="重新生成摘要" aria-label="重新生成摘要" disabled={saving} onClick={() => void resummarize()}><Icon name="sparkles" size={16} /></button>
+					{selected.status === 'pending' ? (
+						<>
+							{selected.expired && <button className="rvx-icon-button" type="button" title="恢复有效期" aria-label="恢复有效期" disabled={saving} onClick={() => void restore()}><Icon name="refresh" size={16} /></button>}
+							<button className="rvx-icon-button" type="button" title="重新生成摘要" aria-label="重新生成摘要" disabled={saving || selectedDetail.proposal_status === 'pending' || selectedDetail.proposal_status === 'running'} onClick={() => void resummarize()}><Icon name="sparkles" size={16} /></button>
                       <button className="rvx-icon-button danger" type="button" title="丢弃" aria-label="丢弃" disabled={saving} onClick={() => void discard()}><Icon name="trash" size={16} /></button>
                       <button className="rvx-button primary" type="button" disabled={saving || !title.trim()} onClick={() => void confirm()}><Icon name="check" size={15} />确认入库</button>
                     </>
@@ -1626,7 +1518,9 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                         <span><Icon name="sparkles" size={13} />摘要</span>
                         <textarea value={summary} disabled={saving} onChange={(event) => updateSelectedDraft({ summary: event.target.value })} rows={3} placeholder="暂无摘要" />
                       </label>
-                      {selectedDetail.job_id && <p className="inbox-job"><Icon name={job?.status === 'failed' ? 'alert' : 'loader'} size={13} />摘要任务 {job?.status ?? 'queued'} · {selectedDetail.job_id}</p>}
+					{(selectedDetail.proposal_status === 'pending' || selectedDetail.proposal_status === 'running' || selectedDetail.proposal_status === 'failed') && (
+						<p className="inbox-job"><Icon name={selectedDetail.proposal_status === 'failed' ? 'alert' : 'loader'} size={13} />{selectedDetail.proposal_status === 'pending' ? '摘要等待中' : selectedDetail.proposal_status === 'running' ? '正在生成摘要' : '摘要生成失败'}</p>
+					)}
                     </section>
 
                     <section id="inbox-note" className="inbox-editor-section" data-toc-heading tabIndex={-1}>
@@ -1665,10 +1559,6 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                           <div className="rvx-chip-row">{selectedDetail.suggested_tags.filter((tag) => !parseTags(tags).includes(tag)).map((tag) => <button key={tag} type="button" className="rvx-tag-chip" disabled={saving} onClick={() => adoptSuggestedTag(tag)}>采用 #{tag}</button>)}</div>
                         </div>
                       )}
-                      <div className="inbox-categories">
-                        <span>分类</span>
-                        <div>{categories.map((category) => <button key={category.id} type="button" disabled={saving} className={'rvx-tag-chip' + (memberships.has(category.id) ? ' active' : '')} onClick={() => void toggleCategory(category)}>{category.name}</button>)}<input value={newCategory} disabled={saving} onChange={(event) => setNewCategory(event.target.value)} placeholder="新分类" onKeyDown={(event) => { if (event.key === 'Enter') void addCategory() }} /></div>
-                      </div>
                     </section>
                   </article>
 

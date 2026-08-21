@@ -8,78 +8,10 @@ import (
 
 	"webtag/internal/fetcher"
 	"webtag/internal/model"
-	"webtag/internal/observability"
 	"webtag/internal/repository"
 	"webtag/internal/service/urlmeta"
 	"webtag/internal/textutil"
 )
-
-// escalationMinBodyChars mirrors the fetcher Manager's defaultMinBodyChars
-// (internal/fetcher/manager.go) — the deep-fetch threshold below which a body
-// is considered too thin. The escalation ladder (escalateIfThin) uses it as
-// the body-length leg of its thin判定 so a light result that produced a body
-// but stayed under the full-mode floor still triggers a deep re-fetch. Kept as
-// a service-local const because the fetcher field is unexported; the two are
-// expected to move together if the production floor ever changes.
-const escalationMinBodyChars = 200
-
-const (
-	escalationOutcomeRecovered = "recovered"
-	escalationOutcomeStillThin = "still_thin"
-)
-
-// isThinContent reports whether a fetched Content is "thin" for the purposes
-// of the Phase 10 escalation ladder. It reuses the existing thin signals the
-// pipeline already trusts:
-//
-//   - fetcher_type carries the "+thin" suffix — the canonical marker the
-//     Manager / LightFetcher attach when they returned a result but had to fall
-//     back to a title-only / truncated body (manager.go appends "+thin"); this
-//     is also exactly what evaluateLowConfidence maps to low_confidence_reason
-//     = thin_content.
-//   - the trimmed body is shorter than escalationMinBodyChars runes (including
-//     an empty body) — covers light results that produced *some* body but stayed
-//     under the full-mode floor without the fetcher tagging "+thin".
-//
-// It does NOT treat search_fallback / fetch_quality / title_quality as thin:
-// those are separate low-confidence reasons the escalation ladder is not
-// responsible for (a deep re-fetch would not help a generic-title page).
-func isThinContent(content fetcher.Content) bool {
-	if strings.Contains(strings.ToLower(strings.TrimSpace(content.FetcherType)), "thin") {
-		return true
-	}
-	body := strings.TrimSpace(content.Body)
-	return textutil.Count(body) < escalationMinBodyChars
-}
-
-// isExplicitLight reports whether a link explicitly pinned the light/省 token
-// fetch path via SourceMetadata["parse_depth"] == "light" (case-insensitive,
-// whitespace-trimmed). The escalation ladder respects this as "user intent":
-// a link that asked for light stays light even when the result is thin. Only
-// PreferLight-by-default runs (no explicit parse_depth) are eligible for an
-// automatic deep re-fetch. Mirrors the parse_depth parsing in shouldUseLight so
-// the two read the metadata identically.
-func isExplicitLight(link *model.Link) bool {
-	if link == nil {
-		return false
-	}
-	return isExplicitLightMetadata(link.SourceMetadata)
-}
-
-func isExplicitLightMetadata(metadata map[string]any) bool {
-	if len(metadata) == 0 {
-		return false
-	}
-	raw, ok := metadata["parse_depth"]
-	if !ok {
-		return false
-	}
-	v, isStr := raw.(string)
-	if !isStr {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(v), "light")
-}
 
 func evaluateLowConfidence(content fetcher.Content, title string, titleReliable bool) *string {
 	fetcherType := strings.ToLower(strings.TrimSpace(content.FetcherType))
@@ -138,17 +70,10 @@ func normalizeMetricLabel(value string) string {
 // auto-creates missing placeholder rows. Instead it returns the nearest
 // already-existing ancestor link so parsed links keep a real parent/child
 // relation when the user explicitly saved both URLs, while standalone links
-// simply stay as roots. This removes the previous skeleton-row fan-out from
-// the ingest path and keeps the links table limited to user-visible records.
-func ensureParent(ctx context.Context, tree AncestorLinkLookup, metrics *observability.Metrics, rawURL string) (*uuid.UUID, error) {
+// simply stay as roots. Missing ancestors are never materialized as rows, so
+// the links table stays limited to user-visible records.
+func ensureParent(ctx context.Context, tree AncestorLinkLookup, rawURL string) (*uuid.UUID, error) {
 	ancestors := urlmeta.AncestorURLs(rawURL, 32)
-	// Record the depth before any DB work so the histogram captures
-	// every ingest, including those that fail later in the function.
-	// The histogram still tracks how deep real-world URLs are even
-	// though the pipeline no longer auto-materializes every level.
-	if metrics != nil {
-		metrics.EnsureParentPathDepth.Observe(float64(len(ancestors)))
-	}
 	if len(ancestors) == 0 || tree == nil {
 		return nil, nil
 	}

@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"regexp"
@@ -16,23 +15,6 @@ import (
 	"webtag/internal/model"
 	"webtag/internal/readertext"
 )
-
-func TestFeedCursorRequiresSnapshotIdentity(t *testing.T) {
-	legacy := base64.RawURLEncoding.EncodeToString([]byte("offset:30"))
-	if _, err := feedCursor(legacy); !errors.Is(err, ErrInvalidReaderCursor) {
-		t.Fatalf("feedCursor() error = %v, want ErrInvalidReaderCursor", err)
-	}
-
-	snapshotID := uuid.NewString()
-	encoded := base64.RawURLEncoding.EncodeToString([]byte("snapshot:" + snapshotID + ":30"))
-	cursor, err := feedCursor(encoded)
-	if err != nil {
-		t.Fatalf("feedCursor() error = %v", err)
-	}
-	if cursor.SnapshotID != snapshotID || cursor.Offset != 30 {
-		t.Fatalf("feedCursor() = %+v, want snapshot %s offset 30", cursor, snapshotID)
-	}
-}
 
 func TestRestoreNoteScansOnlyMatchingLifecycleTombstones(t *testing.T) {
 	mock, err := pgxmock.NewPool()
@@ -57,8 +39,8 @@ func TestRestoreNoteScansOnlyMatchingLifecycleTombstones(t *testing.T) {
 	mock.ExpectCommit()
 
 	repo := NewPGXReaderVNextRepository(mock)
-	if err := repo.RestoreNote(context.Background(), noteID); err != nil {
-		t.Fatalf("RestoreNote() error = %v", err)
+	if _, err := repo.RestoreHost(context.Background(), model.ReaderHostNote, noteID); err != nil {
+		t.Fatalf("RestoreHost(note) error = %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -140,20 +122,3 @@ func TestPatchTodoNoteRejectsDirtyDraftBeforePublishedWrite(t *testing.T) {
 }
 
 func boolPointer(value bool) *bool { return &value }
-
-func TestSetCategoryMembershipRejectsUnsupportedHostBeforeDatabaseAccess(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mock.Close()
-
-	repo := NewPGXReaderVNextRepository(mock)
-	err = repo.SetCategoryMembership(context.Background(), uuid.New(), "thought", "thought-1", true)
-	if !errors.Is(err, ErrInvalidReaderCategoryMembership) {
-		t.Fatalf("SetCategoryMembership() error = %v, want ErrInvalidReaderCategoryMembership", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}

@@ -919,92 +919,18 @@ func TestSearchPublishedNotesExcludesDraftProjection(t *testing.T) {
 	}
 }
 
-func TestResummarizeInboxReturnsRevisionConflictWhenNoPendingRowMatches(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock.NewPool() error = %v", err)
-	}
-	defer mock.Close()
-
-	inboxID := uuid.New()
-	jobID := uuid.New()
-	mock.ExpectExec("UPDATE reader_inbox").
-		WithArgs("new summary", []string{"reader"}, jobID, inboxID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
-
-	repo := NewPGXReaderVNextRepository(mock)
-	err = repo.ResummarizeInbox(context.Background(), inboxID, jobID, "new summary", []string{"reader"}, 3)
-	if !errors.Is(err, ErrRevisionConflict) {
-		t.Fatalf("ResummarizeInbox() error = %v, want ErrRevisionConflict", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("pgxmock expectations: %v", err)
-	}
-}
-
-func TestResummarizeInboxSucceedsWhenPendingRevisionMatches(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock.NewPool() error = %v", err)
-	}
-	defer mock.Close()
-
-	inboxID := uuid.New()
-	jobID := uuid.New()
-	mock.ExpectExec("UPDATE reader_inbox").
-		WithArgs("new summary", []string{"reader"}, jobID, inboxID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-
-	repo := NewPGXReaderVNextRepository(mock)
-	if err := repo.ResummarizeInbox(context.Background(), inboxID, jobID, "new summary", []string{"reader"}, 3); err != nil {
-		t.Fatalf("ResummarizeInbox() error = %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("pgxmock expectations: %v", err)
-	}
-}
-
-func readerInboxExpiryColumnsForTest() []string {
+func readerInboxColumnsForTest() []string {
 	return []string{
-		"id", "url", "identity_key", "source_kind", "title", "body", "body_document", "body_format", "note", "summary", "suggested_tags", "proposal_signals", "proposal_status", "tags", "category_ids",
-		"status", "metadata_revision", "job_id", "expires_at", "expired_at", "deleted_at", "created_at", "updated_at",
+		"id", "url", "identity_key", "source_kind", "title", "body", "body_document", "body_format", "note", "summary", "suggested_tags", "proposal_status", "tags",
+		"status", "metadata_revision", "expires_at", "expired", "deleted_at", "created_at", "updated_at",
 	}
 }
 
-func readerInboxExpiryRowForTest(id uuid.UUID, expiresAt, expiredAt any, now time.Time) []any {
+func readerInboxRowForTest(id uuid.UUID, expiresAt any, expired bool, deletedAt any, now time.Time) []any {
 	return []any{
-		id, "https://example.com/inbox", nil, "url", nil, "body", nil, "plain", "", nil,
-		[]string{"suggested"}, []byte(`{}`), "pending", []string{"tag"}, []uuid.UUID{}, "pending", int64(1), nil,
-		expiresAt, expiredAt, nil, now.Add(-time.Hour), now,
-	}
-}
-
-func TestClaimExpiredInboxUsesDeadlineAndRecoverableLease(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock.NewPool() error = %v", err)
-	}
-	defer mock.Close()
-
-	now := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
-	leaseUntil := now.Add(5 * time.Minute)
-	leaseID := uuid.New()
-	inboxID := uuid.New()
-	expiresAt := now.Add(-time.Minute)
-	mock.ExpectQuery("(?s)WITH candidates.*expires_at IS NOT NULL.*expired_at IS NULL.*expiry_lease_until IS NULL.*FOR UPDATE SKIP LOCKED.*UPDATE reader_inbox AS inbox.*SET expiry_lease_id=\\$2, expiry_lease_until=\\$4.*RETURNING "+regexp.QuoteMeta(readerInboxColumnsQualified)).
-		WithArgs(now, leaseID, 1, leaseUntil).
-		WillReturnRows(mock.NewRows(readerInboxExpiryColumnsForTest()).AddRow(readerInboxExpiryRowForTest(inboxID, expiresAt, nil, now)...))
-
-	repo := NewPGXReaderVNextRepository(mock)
-	items, err := repo.ClaimExpiredInbox(context.Background(), leaseID, now, leaseUntil, 1)
-	if err != nil {
-		t.Fatalf("ClaimExpiredInbox() error = %v", err)
-	}
-	if len(items) != 1 || items[0].ID != inboxID || items[0].Expired || items[0].ExpiresAt == nil || !items[0].ExpiresAt.Equal(expiresAt) {
-		t.Fatalf("claimed items = %+v, want one leased but not-yet-materialized expired pending item", items)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("pgxmock expectations: %v", err)
+		id, "https://example.com/inbox", "https://example.com/inbox", "url", nil, "body", nil, "plain", "", nil,
+		[]string{"suggested"}, "completed", []string{"tag"}, "pending", int64(1),
+		expiresAt, expired, deletedAt, now.Add(-time.Hour), now,
 	}
 }
 
@@ -1016,7 +942,7 @@ func readerInboxListRowForTest(id uuid.UUID, preview string, expired bool, now t
 	return []any{id, "https://example.com/inbox", "url", nil, preview, []string{"tag"}, "pending", int64(1), expired, now}
 }
 
-func TestListInboxSeparatesMaterializedExpiryPartitionsAndReturnsBothCounts(t *testing.T) {
+func TestListInboxDerivesExpiryPartitionsFromServerTimeAndReturnsBothCounts(t *testing.T) {
 	tests := []struct {
 		name         string
 		partition    model.ReaderInboxPartition
@@ -1025,8 +951,8 @@ func TestListInboxSeparatesMaterializedExpiryPartitionsAndReturnsBothCounts(t *t
 		activeCount  int
 		expiredCount int
 	}{
-		{name: "active", partition: model.ReaderInboxPartitionActive, partitionSQL: "expired_at IS NULL", activeCount: 1, expiredCount: 2},
-		{name: "expired", partition: model.ReaderInboxPartitionExpired, wantExpired: true, partitionSQL: "expired_at IS NOT NULL", activeCount: 1, expiredCount: 2},
+		{name: "active", partition: model.ReaderInboxPartitionActive, partitionSQL: "(expires_at IS NULL OR expires_at > NOW())", activeCount: 1, expiredCount: 2},
+		{name: "expired", partition: model.ReaderInboxPartitionExpired, wantExpired: true, partitionSQL: "expires_at IS NOT NULL AND expires_at <= NOW()", activeCount: 1, expiredCount: 2},
 	}
 
 	for _, test := range tests {
@@ -1043,7 +969,7 @@ func TestListInboxSeparatesMaterializedExpiryPartitionsAndReturnsBothCounts(t *t
 				WithArgs(2).
 				WillReturnRows(mock.NewRows(readerInboxListColumnsForTest()).
 					AddRow(readerInboxListRowForTest(inboxID, "card preview", test.wantExpired, now)...))
-			mock.ExpectQuery("(?s)SELECT\\s+count\\(\\*\\) FILTER \\(WHERE expired_at IS NULL\\)::int,\\s+count\\(\\*\\) FILTER \\(WHERE expired_at IS NOT NULL\\)::int\\s+FROM reader_inbox\\s+WHERE status='pending' AND deleted_at IS NULL").
+			mock.ExpectQuery("(?s)SELECT\\s+count\\(\\*\\) FILTER \\(WHERE expires_at IS NULL OR expires_at > NOW\\(\\)\\)::int,\\s+count\\(\\*\\) FILTER \\(WHERE expires_at IS NOT NULL AND expires_at <= NOW\\(\\)\\)::int\\s+FROM reader_inbox\\s+WHERE status='pending' AND deleted_at IS NULL").
 				WillReturnRows(mock.NewRows([]string{"active_count", "expired_count"}).AddRow(test.activeCount, test.expiredCount))
 
 			repo := NewPGXReaderVNextRepository(mock)
@@ -1069,7 +995,7 @@ func TestListInboxRejectsInvalidPartition(t *testing.T) {
 	}
 }
 
-func TestRestoreInboxRenewsMaterializedExpiredLiveRowOnlyOnce(t *testing.T) {
+func TestRestoreInboxRenewsExpiredLiveRowOnlyOnce(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatalf("pgxmock.NewPool() error = %v", err)
@@ -1084,21 +1010,21 @@ func TestRestoreInboxRenewsMaterializedExpiredLiveRowOnlyOnce(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(lockQuery).
 		WithArgs(inboxID).
-		WillReturnRows(mock.NewRows(readerInboxExpiryColumnsForTest()).
-			AddRow(readerInboxExpiryRowForTest(inboxID, past, past, past)...))
-	mock.ExpectQuery("(?s)UPDATE reader_inbox.*status=CASE WHEN status='discarded' THEN 'pending' ELSE status END.*expires_at=CASE WHEN \\$2 THEN NOW\\(\\) \\+ INTERVAL '30 days' ELSE expires_at END.*expired_at=CASE WHEN \\$2 THEN NULL ELSE expired_at END.*expiry_lease_id=NULL.*expiry_lease_until=NULL.*RETURNING "+regexp.QuoteMeta(readerInboxColumns)).
+		WillReturnRows(mock.NewRows(readerInboxColumnsForTest()).
+			AddRow(readerInboxRowForTest(inboxID, past, true, nil, past)...))
+	mock.ExpectQuery("(?s)UPDATE reader_inbox.*SET deleted_at=NULL,.*expires_at=CASE WHEN \\$2 THEN NOW\\(\\) \\+ INTERVAL '30 days' ELSE expires_at END,.*updated_at=NOW\\(\\).*WHERE id=\\$1.*RETURNING "+regexp.QuoteMeta(readerInboxColumns)).
 		WithArgs(inboxID, true).
-		WillReturnRows(mock.NewRows(readerInboxExpiryColumnsForTest()).
-			AddRow(readerInboxExpiryRowForTest(inboxID, renewed, nil, renewed)...))
+		WillReturnRows(mock.NewRows(readerInboxColumnsForTest()).
+			AddRow(readerInboxRowForTest(inboxID, renewed, false, nil, renewed)...))
 	mock.ExpectCommit()
 
-	// Once expired_at is cleared, a retry must not move the new deadline or
+	// Once the deadline is renewed, a retry must not move it again or
 	// invoke the thought lifecycle machinery for an already-live item.
 	mock.ExpectBegin()
 	mock.ExpectQuery(lockQuery).
 		WithArgs(inboxID).
-		WillReturnRows(mock.NewRows(readerInboxExpiryColumnsForTest()).
-			AddRow(readerInboxExpiryRowForTest(inboxID, renewed, nil, renewed)...))
+		WillReturnRows(mock.NewRows(readerInboxColumnsForTest()).
+			AddRow(readerInboxRowForTest(inboxID, renewed, false, nil, renewed)...))
 	mock.ExpectCommit()
 
 	repo := NewPGXReaderVNextRepository(mock)
@@ -1113,7 +1039,7 @@ func TestRestoreInboxRenewsMaterializedExpiredLiveRowOnlyOnce(t *testing.T) {
 	}
 }
 
-func TestConfirmAIProposalsUsesBoundedCurrentJobSelectionForRequestedPartition(t *testing.T) {
+func TestConfirmAIProposalsUsesBoundedCurrentProposalSelectionForRequestedPartition(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatalf("pgxmock.NewPool() error = %v", err)
@@ -1121,11 +1047,10 @@ func TestConfirmAIProposalsUsesBoundedCurrentJobSelectionForRequestedPartition(t
 	defer mock.Close()
 
 	mock.ExpectBegin()
-	expectLibraryFeedRevisionPrelock(mock)
-	mock.ExpectQuery("(?s)SELECT " + regexp.QuoteMeta(readerInboxColumnsQualified) + ".*FROM reader_inbox inbox.*JOIN reader_inbox_jobs job.*job.id=inbox.job_id AND job.inbox_id=inbox.id.*inbox.status='pending'.*inbox.deleted_at IS NULL.*inbox.expired_at IS NOT NULL.*btrim\\(COALESCE\\(inbox.title,''\\)\\) <> ''.*job.status='completed'.*job.expected_metadata_revision=inbox.metadata_revision.*ORDER BY inbox.created_at ASC,inbox.id ASC.*LIMIT \\$1.*FOR UPDATE OF inbox,job").
+	mock.ExpectQuery("(?s)SELECT " + regexp.QuoteMeta(readerInboxColumnsQualified) + ".*FROM reader_inbox inbox.*inbox.status='pending'.*inbox.deleted_at IS NULL.*inbox.expires_at IS NOT NULL AND inbox.expires_at <= NOW\\(\\).*btrim\\(COALESCE\\(inbox.title,''\\)\\) <> ''.*inbox.proposal_status='completed'.*ORDER BY inbox.created_at ASC,inbox.id ASC.*LIMIT \\$1.*FOR UPDATE OF inbox").
 		WithArgs(readerInboxAIProposalBatchSize).
-		WillReturnRows(mock.NewRows(readerInboxExpiryColumnsForTest()))
-	mock.ExpectQuery("(?s)SELECT count\\(\\*\\)::int.*FROM reader_inbox inbox.*JOIN reader_inbox_jobs job.*job.id=inbox.job_id AND job.inbox_id=inbox.id.*inbox.expired_at IS NOT NULL.*job.status='completed'.*job.expected_metadata_revision=inbox.metadata_revision").
+		WillReturnRows(mock.NewRows(readerInboxColumnsForTest()))
+	mock.ExpectQuery("(?s)SELECT count\\(\\*\\)::int.*FROM reader_inbox inbox.*inbox.expires_at IS NOT NULL AND inbox.expires_at <= NOW\\(\\).*inbox.proposal_status='completed'").
 		WillReturnRows(mock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectCommit()
 
@@ -1135,32 +1060,6 @@ func TestConfirmAIProposalsUsesBoundedCurrentJobSelectionForRequestedPartition(t
 	}
 	if result.Items == nil || len(result.Items) != 0 || result.RemainingCount != 0 {
 		t.Fatalf("ConfirmAIProposals() = %#v, want an empty atomic batch", result)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("pgxmock expectations: %v", err)
-	}
-}
-
-func TestFinalizeExpiredInboxRequiresOwningLease(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock.NewPool() error = %v", err)
-	}
-	defer mock.Close()
-
-	now := time.Date(2026, 8, 10, 11, 0, 0, 0, time.UTC)
-	leaseID := uuid.New()
-	mock.ExpectExec("(?s)UPDATE reader_inbox.*SET expired_at=\\$2, expiry_lease_id=NULL, expiry_lease_until=NULL.*expiry_lease_id=\\$1.*expires_at <= \\$2.*expired_at IS NULL").
-		WithArgs(leaseID, now).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
-
-	repo := NewPGXReaderVNextRepository(mock)
-	count, err := repo.FinalizeExpiredInbox(context.Background(), leaseID, now)
-	if err != nil {
-		t.Fatalf("FinalizeExpiredInbox() error = %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("FinalizeExpiredInbox() count = %d, want 2", count)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("pgxmock expectations: %v", err)

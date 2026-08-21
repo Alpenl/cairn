@@ -119,10 +119,6 @@ func loadFetcherConfig() (FetcherConfig, error) {
 	if err != nil {
 		return FetcherConfig{}, err
 	}
-	preferLight, err := envBool("FETCH_PREFER_LIGHT", false)
-	if err != nil {
-		return FetcherConfig{}, err
-	}
 	// PARSE_MODE 默认 grok_direct：普通网页优先本地完整抓取，X/Twitter
 	// 优先由联网 Grok 自抓 URL，本地抓取失败时也用 URL 直连兜底。
 	// 显式设为 fetcher 会关闭 URL 直连分析。
@@ -139,7 +135,6 @@ func loadFetcherConfig() (FetcherConfig, error) {
 	return FetcherConfig{
 		RetryAttempts: retryAttempts,
 		RetryDelayMS:  retryDelayMS,
-		PreferLight:   preferLight,
 		URLDirect:     urlDirect,
 	}, nil
 }
@@ -157,47 +152,12 @@ func loadAnalyzerConfig() (AnalyzerConfig, error) {
 	if err != nil {
 		return AnalyzerConfig{}, err
 	}
-	allowUnsafe, err := envBool("AI_ALLOW_UNSAFE_TARGETS", false)
-	if err != nil {
-		return AnalyzerConfig{}, err
-	}
-	disableStructured, err := envBool("AI_DISABLE_STRUCTURED_OUTPUT", false)
-	if err != nil {
-		return AnalyzerConfig{}, err
-	}
 	return AnalyzerConfig{
-		BaseURL:                 strings.TrimSpace(os.Getenv("AI_BASE_URL")),
-		APIKey:                  strings.TrimSpace(os.Getenv("AI_API_KEY")),
-		Model:                   strings.TrimSpace(os.Getenv("AI_MODEL")),
-		AllowUnsafeTargets:      allowUnsafe,
-		RetryAttempts:           retryAttempts,
-		RetryDelayMS:            retryDelayMS,
-		RequestTimeoutMS:        requestTimeoutMS,
-		DisableStructuredOutput: disableStructured,
-	}, nil
-}
-
-// loadEmbeddingConfig reads the EMBEDDING_* knobs. BaseURL / APIKey
-// default to inheriting the analyzer's already-parsed values so a
-// same-provider deployment only needs EMBEDDING_MODEL. AllowUnsafeTargets
-// is shared with the analyzer transport — the embedding SSRF gate is the
-// same allow-list gated by AI_ALLOW_UNSAFE_TARGETS — so it is copied from
-// the analyzer config rather than read from a separate env. Retry / timeout
-// knobs default to the analyzer's parsed values to keep behaviour aligned
-// without introducing a parallel set of env names.
-func loadEmbeddingConfig(analyzer AnalyzerConfig) (EmbeddingConfig, error) {
-	dimensions, err := envInt("EMBEDDING_DIMENSIONS", 1536)
-	if err != nil {
-		return EmbeddingConfig{}, err
-	}
-	return EmbeddingConfig{
-		Model:              envString("EMBEDDING_MODEL", ""),
-		BaseURL:            envString("EMBEDDING_BASE_URL", analyzer.BaseURL),
-		APIKey:             envString("EMBEDDING_API_KEY", analyzer.APIKey),
-		Dimensions:         dimensions,
-		AllowUnsafeTargets: analyzer.AllowUnsafeTargets,
-		RetryAttempts:      analyzer.RetryAttempts,
-		RetryDelayMS:       analyzer.RetryDelayMS,
-		RequestTimeoutMS:   analyzer.RequestTimeoutMS,
+		BaseURL:          strings.TrimSpace(os.Getenv("AI_BASE_URL")),
+		APIKey:           strings.TrimSpace(os.Getenv("AI_API_KEY")),
+		Model:            strings.TrimSpace(os.Getenv("AI_MODEL")),
+		RetryAttempts:    retryAttempts,
+		RetryDelayMS:     retryDelayMS,
+		RequestTimeoutMS: requestTimeoutMS,
 	}, nil
 }

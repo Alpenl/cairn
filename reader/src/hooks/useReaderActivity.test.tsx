@@ -8,7 +8,6 @@ import { resourceStore } from '../lib/cache/store'
 import { makeLink } from '../test/fixtures'
 import {
   compareReaderActivityLastAtDesc,
-  normalizeReaderActivityPayload,
   useReaderActivity,
 } from './useReaderActivity'
 
@@ -40,15 +39,6 @@ afterEach(() => {
 })
 
 describe('useReaderActivity', () => {
-  it('旧后端没有 activity 能力时返回本地降级标记', () => {
-    const { result } = renderHook(() => useReaderActivity(makeClient()))
-
-    expect(result.current.source).toBe('local')
-    expect(result.current.degraded).toBe(true)
-    expect(result.current.tagLastAt.size).toBe(0)
-    expect(result.current.domainLastAt.size).toBe(0)
-  })
-
   it('server activity 优先提供标签和域名最近时间', async () => {
     const response: ReaderActivityResponse = {
       kind: 'all',
@@ -77,24 +67,6 @@ describe('useReaderActivity', () => {
     expect(getReaderActivity).toHaveBeenCalledWith(100, { kind: 'all' })
   })
 
-  it('旧后端 created_at 可转换为 lastAt，且重复事件取最新时间', () => {
-    const normalized = normalizeReaderActivityPayload({
-      tags: [
-        { tag: 'legacy', created_at: '2026-08-10T01:00:00Z' },
-        { tag: 'legacy', last_at: '2026-08-10T03:00:00Z', created_at: '2026-08-10T02:00:00Z' },
-      ],
-      domains: [{ domain: 'legacy.example', created_at: '2026-08-10T02:00:00Z' }],
-    })
-
-    expect(normalized).toEqual({
-      tags: [
-        { tag: 'legacy', last_at: '2026-08-10T01:00:00Z' },
-        { tag: 'legacy', last_at: '2026-08-10T03:00:00Z' },
-      ],
-      domains: [{ domain: 'legacy.example', last_at: '2026-08-10T02:00:00Z' }],
-    })
-  })
-
   it('请求失败时使用传入链接的 created_at，并按时间和名称稳定排序', async () => {
     const links = [
       makeLink({ id: 'old', tags: ['zeta'], domain: 'z.example', created_at: '2026-08-10T01:00:00Z' }),
@@ -102,8 +74,8 @@ describe('useReaderActivity', () => {
     ]
     const getReaderActivity = vi.fn(async () => err<ReaderActivityResponse>({
       kind: 'other',
-      status: 404,
-      message: 'old backend',
+      status: 503,
+      message: 'activity unavailable',
     }))
     const { result } = renderHook(() => useReaderActivity(makeClient(getReaderActivity), links))
 
@@ -118,7 +90,7 @@ describe('useReaderActivity', () => {
       makeLink({ id: 'offset-older', tags: ['shared'], created_at: '2026-08-10T03:00:00+01:00' }),
       makeLink({ id: 'utc-newer', tags: ['shared'], created_at: '2026-08-10T02:30:00Z' }),
     ]
-    const { result } = renderHook(() => useReaderActivity(makeClient(), links))
+    const { result } = renderHook(() => useReaderActivity(makeClient(), links, { enabled: false }))
 
     expect(result.current.tagLastAt.get('shared')).toBe('2026-08-10T02:30:00Z')
   })
@@ -143,15 +115,15 @@ describe('useReaderActivity', () => {
   it('activity 请求失败时由组件保留本地 lastAt 近似', async () => {
     const getReaderActivity = vi.fn(async () => err<ReaderActivityResponse>({
       kind: 'other',
-      status: 404,
-      message: 'old backend',
+      status: 503,
+      message: 'activity unavailable',
     }))
     const { result } = renderHook(() => useReaderActivity(makeClient(getReaderActivity)))
 
     await waitFor(() => expect(getReaderActivity).toHaveBeenCalled())
     expect(result.current.source).toBe('local')
     expect(result.current.degraded).toBe(true)
-    expect(result.current.error?.status).toBe(404)
+    expect(result.current.error?.status).toBe(503)
   })
 
   it('等价时区时间按相同时间处理，非法值稳定落后', () => {
@@ -294,25 +266,5 @@ describe('useReaderActivity', () => {
     ))
     await waitFor(() => expect(domain.result.current.domainLastAt.has('domain.example')).toBe(true))
     expect(domain.result.current.tagLastAt.has('retained-tag')).toBe(false)
-  })
-
-  it('缺少分页 kind 标记的旧后端响应只作为本地 created_at 降级', async () => {
-    const links = [makeLink({
-      id: 'legacy-pagination-fallback',
-      tags: ['local-authority-label'],
-      created_at: '2026-08-10T05:00:00Z',
-    })]
-    const getReaderActivity = vi.fn(async () => ok({
-      tags: [{ tag: 'legacy-server-row', last_at: '2026-08-10T06:00:00Z' }],
-      domains: [],
-    })) as IdentityBoundReaderClient['getReaderActivity']
-
-    const { result } = renderHook(() => useReaderActivity(makeClient(getReaderActivity), links))
-
-    await waitFor(() => expect(getReaderActivity).toHaveBeenCalled())
-    expect(result.current.source).toBe('local')
-    expect(result.current.degraded).toBe(true)
-    expect(result.current.tagLastAt.has('legacy-server-row')).toBe(false)
-    expect(result.current.tagLastAt.get('local-authority-label')).toBe('2026-08-10T05:00:00Z')
-  })
+	})
 })

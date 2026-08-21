@@ -15,11 +15,6 @@ import type {
 	ConversionPreviewResponse as WireConversionPreviewResponse,
 	ConversionExecuteRequest as WireConversionExecuteRequest,
 	ConversionExecuteResponse as WireConversionExecuteResponse,
-	ClassificationRuleCreateRequest as WireClassificationRuleCreateRequest,
-	ClassificationRuleUpdateRequest as WireClassificationRuleUpdateRequest,
-	ClassificationRuleResponse as WireClassificationRuleResponse,
-	LibraryReviewResolveRequest as WireLibraryReviewResolveRequest,
-	LibraryReviewResponse as WireLibraryReviewResponse,
 	GroupedSearchResponse as WireGroupedSearchResponse,
 	ReaderThoughtSearchResponse as WireReaderThoughtSearchResponse,
 	ReaderNoteSearchResponse as WireReaderNoteSearchResponse,
@@ -58,7 +53,6 @@ import type {
   ReaderThoughtConflictOperationResponse as WireReaderThoughtSupersessionOperationResponse,
   ReaderThoughtConflictResponse as WireReaderThoughtSupersessionEventResponse,
   ReaderThoughtConflictsResponse as WireReaderThoughtSupersessionEventsResponse,
-  ReaderThoughtReattachRequest as WireReaderThoughtReattachRequest,
   ReaderNoteCreateRequest as WireReaderNoteCreateRequest,
   ReaderNoteDraftRequest as WireReaderNoteDraftRequest,
   ReaderNotePublishRequest as WireReaderNotePublishRequest,
@@ -80,30 +74,19 @@ import type {
   ReaderInboxBulkItemResponse as WireReaderInboxBulkItemResponse,
   ReaderInboxBulkResponse as WireReaderInboxBulkResponse,
   ReaderInboxConfirmAiProposalsResponse as WireReaderInboxConfirmAIProposalsResponse,
-  ReaderInboxJobResponse as WireReaderInboxJobResponse,
   ReaderConfirmResponse as WireReaderConfirmResponse,
-  ReaderCategoryRequest as WireReaderCategoryRequest,
-  ReaderCategoryResponse as WireReaderCategoryResponse,
-  ReaderCategoriesResponse as WireReaderCategoriesResponse,
-  ReaderCategoryMembershipRequest as WireReaderCategoryMembershipRequest,
   ReaderTodoCreateRequest as WireReaderTodoCreateRequest,
   ReaderTodoPatchRequest as WireReaderTodoPatchRequest,
   ReaderTodoResponse as WireReaderTodoResponse,
   ReaderTodosResponse as WireReaderTodosResponse,
   ReaderEngagementRequest as WireReaderEngagementRequest,
   ReaderEngagementResponse as WireReaderEngagementResponse,
-  ReaderFeedAction as WireReaderFeedAction,
   ReaderFeedResponse as WireReaderFeedResponse,
-  ReaderFeedSectionResponse as WireReaderFeedSectionResponse,
-  ReaderFeedSourceResponse as WireReaderFeedSourceResponse,
   ReaderFeedFeedbackRequest as WireReaderFeedFeedbackRequest,
   ReaderFeedFeedbackResponse as WireReaderFeedFeedbackResponse,
   ReaderHomeResponse as WireReaderHomeResponse,
   ReaderLinkMetadataRequest as WireReaderLinkMetadataRequest,
   ReaderLinkMetadataResponse as WireReaderLinkMetadataResponse,
-  ReaderContentHistoryResponse as WireReaderContentHistoryResponse,
-  ReaderContentHistoryRestoreRequest as WireReaderContentHistoryRestoreRequest,
-  ReaderContentHistoryRestoreResponse as WireReaderContentHistoryRestoreResponse,
   ReaderRelatedTagsResponse as WireReaderRelatedTagsResponse,
   ReaderActivityResponse as WireReaderActivityResponse,
   ReaderTagActivityResponse as WireReaderTagActivityResponse,
@@ -124,11 +107,6 @@ export type ConversionPreviewRequest = WireConversionPreviewRequest
 export type ConversionPreviewResponse = WireConversionPreviewResponse
 export type ConversionExecuteRequest = WireConversionExecuteRequest
 export type ConversionExecuteResponse = WireConversionExecuteResponse
-export type ClassificationRuleCreateRequest = WireClassificationRuleCreateRequest
-export type ClassificationRuleUpdateRequest = WireClassificationRuleUpdateRequest
-export type ClassificationRuleResponse = WireClassificationRuleResponse
-export type LibraryReviewResolveRequest = WireLibraryReviewResolveRequest
-export type LibraryReviewResponse = WireLibraryReviewResponse
 export type GroupedSearchResponse = WireGroupedSearchResponse
 export type SiteSearchResultResponse = WireGroupedSearchResponse['sites']['items'][number]
 export type ReaderThoughtSearchResponse = WireReaderThoughtSearchResponse
@@ -151,7 +129,7 @@ export type SiteSplitRequest = WireSiteSplitRequest
 export type SiteSplitPreviewResponse = WireSiteSplitPreviewResponse
 export type SiteSplitExecuteResponse = WireSiteSplitExecuteResponse
 export interface ListSitesParams {
-  view?: 'all' | 'pinned' | 'recent' | 'review'
+  view?: 'all' | 'pinned' | 'recent'
   tags?: string
   recentCutoff?: string
   page?: number
@@ -179,7 +157,6 @@ export type ReaderThoughtsResponse = WireReaderThoughtsResponse
 export type ReaderThoughtSupersessionOperationResponse = WireReaderThoughtSupersessionOperationResponse
 export type ReaderThoughtSupersessionEventResponse = WireReaderThoughtSupersessionEventResponse
 export type ReaderThoughtSupersessionEventsResponse = WireReaderThoughtSupersessionEventsResponse
-export type ReaderThoughtReattachRequest = WireReaderThoughtReattachRequest
 export type ReaderNoteCreateRequest = WireReaderNoteCreateRequest
 export type ReaderNoteDraftRequest = WireReaderNoteDraftRequest
 export type ReaderNotePublishRequest = WireReaderNotePublishRequest
@@ -204,12 +181,7 @@ export type ReaderInboxBulkRequest = WireReaderInboxBulkRequest
 export type ReaderInboxBulkItemResponse = WireReaderInboxBulkItemResponse
 export type ReaderInboxBulkResponse = WireReaderInboxBulkResponse
 export type ReaderInboxConfirmAIProposalsResponse = WireReaderInboxConfirmAIProposalsResponse
-export type ReaderInboxJobResponse = WireReaderInboxJobResponse
 export type ReaderConfirmResponse = WireReaderConfirmResponse
-export type ReaderCategoryRequest = WireReaderCategoryRequest
-export type ReaderCategoryResponse = WireReaderCategoryResponse
-export type ReaderCategoriesResponse = WireReaderCategoriesResponse
-export type ReaderCategoryMembershipRequest = WireReaderCategoryMembershipRequest
 export type ReaderTodoCreateRequest = WireReaderTodoCreateRequest
 export type ReaderTodoPatchRequest = WireReaderTodoPatchRequest
 export type ReaderTodoResponse = WireReaderTodoResponse
@@ -221,21 +193,13 @@ type ReaderHomeTodoResponseMetadata = {
 export type ReaderTodosResponse = WireReaderTodosResponse & ReaderHomeTodoResponseMetadata
 export type ReaderEngagementRequest = WireReaderEngagementRequest
 export type ReaderEngagementResponse = WireReaderEngagementResponse
-export type ReaderFeedAction = WireReaderFeedAction
-// /api/reader-feed returns the ranked item intersection. Home intentionally
-// uses the base ReaderFeedItemResponse generated type through ReaderHomeResponse.
 export type ReaderFeedItemResponse = WireReaderFeedResponse['items'][number]
 export type ReaderFeedResponse = WireReaderFeedResponse
-export type ReaderFeedSectionResponse = WireReaderFeedSectionResponse
-export type ReaderFeedSourceResponse = WireReaderFeedSourceResponse
 export type ReaderFeedFeedbackRequest = WireReaderFeedFeedbackRequest
 export type ReaderFeedFeedbackResponse = WireReaderFeedFeedbackResponse
 export type ReaderHomeResponse = WireReaderHomeResponse & ReaderHomeTodoResponseMetadata
 export type ReaderLinkMetadataRequest = WireReaderLinkMetadataRequest
 export type ReaderLinkMetadataResponse = WireReaderLinkMetadataResponse
-export type ReaderContentHistoryResponse = WireReaderContentHistoryResponse
-export type ReaderContentHistoryRestoreRequest = WireReaderContentHistoryRestoreRequest
-export type ReaderContentHistoryRestoreResponse = WireReaderContentHistoryRestoreResponse
 export type ReaderRelatedTagsResponse = WireReaderRelatedTagsResponse
 export type ReaderActivityResponse = WireReaderActivityResponse
 export type ReaderTagActivityResponse = WireReaderTagActivityResponse

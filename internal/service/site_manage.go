@@ -17,17 +17,21 @@ import (
 )
 
 type SiteManagementService struct {
-	reader      repository.SiteReader
-	writer      repository.SiteProfileWriter
-	profileTags repository.SiteProfileTagWriter
-	management  repository.SiteManagementWriter
+	reader *SiteReadService
+	writer siteManagementWriter
 }
 
-func NewSiteManagementService(reader repository.SiteReader, writer repository.SiteProfileWriter) *SiteManagementService {
-	service := &SiteManagementService{reader: reader, writer: writer}
-	service.profileTags, _ = writer.(repository.SiteProfileTagWriter)
-	service.management, _ = writer.(repository.SiteManagementWriter)
-	return service
+type siteManagementWriter interface {
+	UpdateSiteProfile(context.Context, repository.UpdateSiteProfileParams) (bool, error)
+	UpdateSiteProfileAndTags(context.Context, repository.UpdateSiteProfileParams) (bool, error)
+	UpdateSiteEntry(context.Context, repository.UpdateSiteEntryParams) (bool, error)
+	SetSitePrimaryEntry(context.Context, repository.SetSitePrimaryEntryParams) (bool, error)
+	DeleteSiteEntry(context.Context, repository.DeleteSiteEntryParams) (repository.SiteEntryDeleteResult, error)
+	DeleteSite(context.Context, repository.DeleteSiteParams) (bool, error)
+}
+
+func NewSiteManagementService(reader siteReadStore, writer siteManagementWriter) *SiteManagementService {
+	return &SiteManagementService{reader: NewSiteReadService(reader), writer: writer}
 }
 
 func (s *SiteManagementService) Update(ctx context.Context, rawID, ifMatch string, request dto.SiteUpdateRequest) (dto.SiteDetailResponse, error) {
@@ -46,10 +50,7 @@ func (s *SiteManagementService) Update(ctx context.Context, rawID, ifMatch strin
 	params.ID, params.Revision = id, revision
 	var updated bool
 	if len(params.TagAdds) > 0 || len(params.TagRemovals) > 0 {
-		if s.profileTags == nil {
-			return dto.SiteDetailResponse{}, httperr.NewWithCode(http.StatusServiceUnavailable, "site_library_unavailable", "site tag management is not configured")
-		}
-		updated, err = s.profileTags.UpdateSiteProfileAndTags(ctx, params)
+		updated, err = s.writer.UpdateSiteProfileAndTags(ctx, params)
 	} else {
 		updated, err = s.writer.UpdateSiteProfile(ctx, params)
 	}
@@ -59,7 +60,7 @@ func (s *SiteManagementService) Update(ctx context.Context, rawID, ifMatch strin
 	if !updated {
 		return dto.SiteDetailResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeSiteRevisionConflict, "site was changed by another request")
 	}
-	return NewSiteReadService(s.reader).Get(ctx, rawID)
+	return s.reader.Get(ctx, rawID)
 }
 
 func (s *SiteManagementService) UpdateEntry(ctx context.Context, rawSiteID, rawEntryID, ifMatch string, request dto.SiteEntryUpdateRequest) (dto.SiteDetailResponse, error) {
@@ -67,18 +68,15 @@ func (s *SiteManagementService) UpdateEntry(ctx context.Context, rawSiteID, rawE
 	if err != nil {
 		return dto.SiteDetailResponse{}, err
 	}
-	if s.management == nil {
-		return dto.SiteDetailResponse{}, httperr.NewWithCode(http.StatusServiceUnavailable, "site_library_unavailable", "site management is not configured")
-	}
 	params, err := normalizeSiteEntryUpdate(request)
 	if err != nil {
 		return dto.SiteDetailResponse{}, err
 	}
 	params.SiteID, params.EntryID, params.Revision = siteID, entryID, revision
-	if _, err := s.management.UpdateSiteEntry(ctx, params); err != nil {
+	if _, err := s.writer.UpdateSiteEntry(ctx, params); err != nil {
 		return dto.SiteDetailResponse{}, mapSiteManagementError(err)
 	}
-	return NewSiteReadService(s.reader).Get(ctx, rawSiteID)
+	return s.reader.Get(ctx, rawSiteID)
 }
 
 func (s *SiteManagementService) SetPrimaryEntry(ctx context.Context, rawSiteID, rawEntryID, ifMatch string) (dto.SiteDetailResponse, error) {
@@ -86,13 +84,10 @@ func (s *SiteManagementService) SetPrimaryEntry(ctx context.Context, rawSiteID, 
 	if err != nil {
 		return dto.SiteDetailResponse{}, err
 	}
-	if s.management == nil {
-		return dto.SiteDetailResponse{}, httperr.NewWithCode(http.StatusServiceUnavailable, "site_library_unavailable", "site management is not configured")
-	}
-	if _, err := s.management.SetSitePrimaryEntry(ctx, repository.SetSitePrimaryEntryParams{SiteID: siteID, EntryID: entryID, Revision: revision}); err != nil {
+	if _, err := s.writer.SetSitePrimaryEntry(ctx, repository.SetSitePrimaryEntryParams{SiteID: siteID, EntryID: entryID, Revision: revision}); err != nil {
 		return dto.SiteDetailResponse{}, mapSiteManagementError(err)
 	}
-	return NewSiteReadService(s.reader).Get(ctx, rawSiteID)
+	return s.reader.Get(ctx, rawSiteID)
 }
 
 func (s *SiteManagementService) DeleteEntry(ctx context.Context, rawSiteID, rawEntryID, ifMatch string) (dto.SiteEntryDeleteResponse, error) {
@@ -100,10 +95,7 @@ func (s *SiteManagementService) DeleteEntry(ctx context.Context, rawSiteID, rawE
 	if err != nil {
 		return dto.SiteEntryDeleteResponse{}, err
 	}
-	if s.management == nil {
-		return dto.SiteEntryDeleteResponse{}, httperr.NewWithCode(http.StatusServiceUnavailable, "site_library_unavailable", "site management is not configured")
-	}
-	result, err := s.management.DeleteSiteEntry(ctx, repository.DeleteSiteEntryParams{SiteID: siteID, EntryID: entryID, Revision: revision})
+	result, err := s.writer.DeleteSiteEntry(ctx, repository.DeleteSiteEntryParams{SiteID: siteID, EntryID: entryID, Revision: revision})
 	if err != nil {
 		return dto.SiteEntryDeleteResponse{}, mapSiteManagementError(err)
 	}
@@ -123,10 +115,7 @@ func (s *SiteManagementService) Delete(ctx context.Context, rawSiteID, ifMatch, 
 	if err != nil || count < 1 {
 		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeSiteDeleteConfirm, "confirm_entry_count must be a positive integer")
 	}
-	if s.management == nil {
-		return httperr.NewWithCode(http.StatusServiceUnavailable, "site_library_unavailable", "site management is not configured")
-	}
-	if _, err := s.management.DeleteSite(ctx, repository.DeleteSiteParams{ID: siteID, Revision: revision, ConfirmEntryCount: count}); err != nil {
+	if _, err := s.writer.DeleteSite(ctx, repository.DeleteSiteParams{ID: siteID, Revision: revision, ConfirmEntryCount: count}); err != nil {
 		return mapSiteManagementError(err)
 	}
 	return nil

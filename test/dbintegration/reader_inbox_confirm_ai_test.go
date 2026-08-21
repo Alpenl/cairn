@@ -2,7 +2,6 @@ package dbintegration
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -20,13 +19,13 @@ func TestConfirmAIProposalsSelectsOnlyCurrentCompletedRowsInRequestedPartition(t
 	repo := repository.NewPGXReaderVNextRepository(pool)
 	base := time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)
 
-	activeFirst := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "active-first", "First active", "completed", 0, false, base)
-	activeSecond := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "active-second", "Second active", "completed", 0, false, base.Add(time.Minute))
-	stale := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "stale", "Stale completed", "completed", 1, false, base.Add(2*time.Minute))
-	running := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "running", "Running", "running", 0, false, base.Add(3*time.Minute))
-	failed := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "failed", "Failed", "failed", 0, false, base.Add(4*time.Minute))
-	blank := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "blank", "  ", "completed", 0, false, base.Add(5*time.Minute))
-	expired := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "expired", "Expired only", "completed", 0, true, base.Add(6*time.Minute))
+	activeFirst := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "active-first", "First active", "completed", false, base)
+	activeSecond := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "active-second", "Second active", "completed", false, base.Add(time.Minute))
+	stale := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "stale", "Edited after proposal", "idle", false, base.Add(2*time.Minute))
+	running := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "running", "Running", "running", false, base.Add(3*time.Minute))
+	failed := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "failed", "Failed", "failed", false, base.Add(4*time.Minute))
+	blank := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "blank", "  ", "completed", false, base.Add(5*time.Minute))
+	expired := seedConfirmAIProposalCandidate(t, pool, repo, ctx, "expired", "Expired only", "completed", true, base.Add(6*time.Minute))
 
 	activeResult, err := repo.ConfirmAIProposals(ctx, model.ReaderInboxPartitionActive)
 	if err != nil {
@@ -74,17 +73,17 @@ func TestConfirmAIProposalsRestoresAndAdoptsFeedManagedTrashLink(t *testing.T) {
 	rawURL := "https://confirm-ai.example/" + label
 	feedItem := seedReaderFeedSaveItem(t, pool, rawURL, "confirm-ai-feed-trash")
 	saved, err := repo.FeedbackFeed(ctx, "subscription:"+feedItem.String(), "save")
-	if err != nil || saved.Association == nil {
+	if err != nil || saved.LinkID == nil {
 		t.Fatalf("seed AI Feed save = %#v, %v", saved, err)
 	}
-	linkID := saved.Association.LinkID
+	linkID := *saved.LinkID
 	if _, err := repo.FeedbackFeed(ctx, "subscription:"+feedItem.String(), "unsave"); err != nil {
 		t.Fatalf("seed AI Feed trash: %v", err)
 	}
 	assertReaderFeedLinkLive(t, pool, linkID, false)
 
 	inboxID := seedConfirmAIProposalCandidate(
-		t, pool, repo, ctx, label, "Restore AI proposal", "completed", 0, false,
+		t, pool, repo, ctx, label, "Restore AI proposal", "completed", false,
 		time.Date(2026, 8, 14, 8, 0, 0, 0, time.UTC),
 	)
 	result, err := repo.ConfirmAIProposals(ctx, model.ReaderInboxPartitionActive)
@@ -122,7 +121,6 @@ func TestConfirmAIProposalsBatchesBacklogAtomicallyAfterFailedBatch(t *testing.T
 			label,
 			"Backlog "+label,
 			"completed",
-			0,
 			false,
 			base.Add(time.Duration(index)*time.Minute),
 		))
@@ -238,31 +236,25 @@ func dropConfirmAIProposalFailureTrigger(t *testing.T, pool *pgxpool.Pool) {
 	}
 }
 
-func seedConfirmAIProposalCandidate(t *testing.T, pool *pgxpool.Pool, repo *repository.PGXReaderVNextRepository, ctx context.Context, label, title, jobStatus string, expectedRevisionOffset int64, expired bool, createdAt time.Time) uuid.UUID {
+func seedConfirmAIProposalCandidate(t *testing.T, pool *pgxpool.Pool, repo *repository.PGXReaderVNextRepository, ctx context.Context, label, title, proposalStatus string, expired bool, createdAt time.Time) uuid.UUID {
 	t.Helper()
 	url := "https://confirm-ai.example/" + label
 	created, err := repo.CreateInbox(ctx, model.ReaderInbox{
-		URL:             url,
-		IdentityKey:     url,
-		SourceKind:      "url",
-		Title:           &title,
-		Body:            "body " + label,
-		ProposalSignals: json.RawMessage(`{}`),
-		ProposalStatus:  jobStatus,
+		URL:            url,
+		IdentityKey:    url,
+		SourceKind:     "url",
+		Title:          &title,
+		Body:           "body " + label,
+		ProposalStatus: proposalStatus,
 	})
 	if err != nil {
 		t.Fatalf("CreateInbox(%s): %v", label, err)
 	}
-	jobID := uuid.New()
-	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO reader_inbox_jobs (id,inbox_id,expected_metadata_revision,status)
-		VALUES ($1,$2,$3,$4)`, jobID, created.ID, created.MetadataRevision+expectedRevisionOffset, jobStatus); err != nil {
-		t.Fatalf("insert %s Inbox job: %v", label, err)
-	}
 	if _, err := pool.Exec(t.Context(), `
 		UPDATE reader_inbox
-		SET job_id=$2,proposal_status=$3,created_at=$4,expired_at=CASE WHEN $5 THEN NOW() ELSE NULL END
-		WHERE id=$1`, created.ID, jobID, jobStatus, createdAt, expired); err != nil {
+		SET proposal_status=$2,created_at=$3,
+			expires_at=CASE WHEN $4 THEN NOW() - INTERVAL '1 second' ELSE NOW() + INTERVAL '30 days' END
+		WHERE id=$1`, created.ID, proposalStatus, createdAt, expired); err != nil {
 		t.Fatalf("configure %s Inbox candidate: %v", label, err)
 	}
 	return created.ID

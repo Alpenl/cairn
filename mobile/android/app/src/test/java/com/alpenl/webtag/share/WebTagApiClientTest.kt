@@ -127,7 +127,7 @@ class WebTagApiClientTest {
             MockResponse()
                 .setResponseCode(202)
                 .setHeader("X-WebTag-Data-Namespace", namespace)
-                .setBody("{\"link_id\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"pending\",\"job_id\":\"22222222-2222-2222-2222-222222222222\"}"),
+                .setBody("{\"link_id\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"pending\"}"),
         )
         val url = "https://example.com/a?x=1"
 
@@ -148,7 +148,7 @@ class WebTagApiClientTest {
             MockResponse()
                 .setResponseCode(202)
                 .setHeader("X-WebTag-Data-Namespace", namespace)
-                .setBody("{\"link_id\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"pending\",\"job_id\":null}"),
+                .setBody("{\"link_id\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"pending\"}"),
         )
         val shared = "HTTPS://Example.COM:8443/Keep%2FCase?utm=Aa%2Bb&x=1#Sect%20ion"
         val candidate = UrlCandidateExtractor.extract(sharePayload(intentDataUrl = shared)).single()
@@ -224,7 +224,7 @@ class WebTagApiClientTest {
             MockResponse()
                 .setResponseCode(202)
                 .setHeader("X-WebTag-Data-Namespace", namespace)
-                .setBody("{\"link_id\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"processing\",\"job_id\":\"33333333-3333-3333-3333-333333333333\"}"),
+                .setBody("{\"link_id\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"processing\"}"),
         )
 
         val result = client().refresh(identity(), "key", "11111111-1111-1111-1111-111111111111")

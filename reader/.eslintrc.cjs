@@ -16,7 +16,7 @@ module.exports = {
     'plugin:@typescript-eslint/recommended',
     'plugin:react-hooks/recommended',
   ],
-  ignorePatterns: ['dist', 'node_modules', '*.cjs'],
+  ignorePatterns: ['dist', 'types', 'node_modules', '*.cjs'],
   rules: {
     // TS 已做符号解析，no-undef 在 TS 项目里只会误报（全局类型由 tsconfig types 提供）。
     'no-undef': 'off',

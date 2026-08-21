@@ -3,7 +3,6 @@ package analyzer
 import (
 	"bytes"
 	stdjson "encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -19,18 +18,6 @@ var (
 	jsonBlockRE  = regexp.MustCompile("```(?:json)?\\s*(\\{.*?\\})\\s*```")
 	jsonObjectRE = regexp.MustCompile(`\{.*\}`)
 )
-
-type analyzerSummaryTooLongError struct {
-	actual int
-	max    int
-}
-
-func (e *analyzerSummaryTooLongError) Error() string {
-	if e == nil {
-		return "analyzer summary too long"
-	}
-	return fmt.Sprintf("analyzer summary too long: %d > %d", e.actual, e.max)
-}
 
 // parseAnalysisResponse runs every JSON-shaped fragment found inside raw
 // through validateAnalysisResponse and returns the first one that passes.
@@ -54,7 +41,6 @@ func (a *OpenAIAnalyzer) parseAnalysisResponseForRequest(raw string, summaryLimi
 	}
 
 	var lastErr error
-	var truncatedFallback *AnalysisResult
 	for _, candidate := range candidates {
 		data, ok := decodeJSONObject(candidate)
 		if !ok {
@@ -65,12 +51,6 @@ func (a *OpenAIAnalyzer) parseAnalysisResponseForRequest(raw string, summaryLimi
 		if err == nil {
 			return result, nil
 		}
-		var summaryTooLong *analyzerSummaryTooLongError
-		if errors.As(err, &summaryTooLong) && truncatedFallback == nil {
-			if fallback, ok := a.truncatedSummaryFallback(data, summaryLimit); ok {
-				truncatedFallback = &fallback
-			}
-		}
 		// Keep the outermost candidate's diagnostic. Balanced-brace recovery
 		// also yields nested profile objects; their missing top-level fields are
 		// less useful than an explicit v2 kind conflict from the full response.
@@ -79,9 +59,6 @@ func (a *OpenAIAnalyzer) parseAnalysisResponseForRequest(raw string, summaryLimi
 		}
 	}
 
-	if truncatedFallback != nil {
-		return *truncatedFallback, nil
-	}
 	if lastErr != nil {
 		return AnalysisResult{}, lastErr
 	}
@@ -90,18 +67,16 @@ func (a *OpenAIAnalyzer) parseAnalysisResponseForRequest(raw string, summaryLimi
 }
 
 func (a *OpenAIAnalyzer) validateAnalysisResponseForRequest(data map[string]any, summaryLimit int, requested model.RequestedLibraryKind) (AnalysisResult, error) {
-	if _, hasVersion := data["schema_version"]; hasVersion || data["library_kind"] != nil {
-		return a.validateLibraryAnalysisResponse(data, summaryLimit, requested)
+	if accessible, present := data["accessible"].(bool); present && !accessible {
+		return AnalysisResult{Accessible: false}, nil
 	}
-	if requested == model.RequestedLibraryKindSite {
-		return AnalysisResult{}, fmt.Errorf("analyzer site response must use schema_version=2")
+	if _, versioned := data["schema_version"]; !versioned {
+		if requested == model.RequestedLibraryKindSite {
+			return AnalysisResult{}, fmt.Errorf("analyzer library_kind conflicts with explicit request")
+		}
+		return a.validateReadingAnalysisProfile(data, summaryLimit)
 	}
-	result, err := a.validateAnalysisResponse(data, summaryLimit)
-	if err != nil {
-		return AnalysisResult{}, err
-	}
-	result.LibraryKind = model.LibraryKindReading
-	return result, nil
+	return a.validateLibraryAnalysisResponse(data, summaryLimit, requested)
 }
 
 func (a *OpenAIAnalyzer) validateLibraryAnalysisResponse(data map[string]any, summaryLimit int, requested model.RequestedLibraryKind) (AnalysisResult, error) { //nolint:gocyclo // 逐字段校验模型响应，分支即 schema 约束
@@ -117,36 +92,13 @@ func (a *OpenAIAnalyzer) validateLibraryAnalysisResponse(data map[string]any, su
 	if requested == model.RequestedLibraryKindReading && kind != model.LibraryKindReading || requested == model.RequestedLibraryKindSite && kind != model.LibraryKindSite {
 		return AnalysisResult{}, fmt.Errorf("analyzer library_kind conflicts with explicit request")
 	}
-	confidence, ok := numericFloat32(data["classification_confidence"])
-	if !ok || confidence < 0 || confidence > 1 {
-		return AnalysisResult{}, fmt.Errorf("analyzer classification_confidence must be between 0 and 1")
-	}
-	reason, ok := boundedString(data["classification_reason"], 128)
-	if !ok {
-		return AnalysisResult{}, fmt.Errorf("analyzer classification_reason missing or invalid")
-	}
-	explanation, ok := boundedString(data["classification_explanation"], 500)
-	if !ok {
-		return AnalysisResult{}, fmt.Errorf("analyzer classification_explanation missing or invalid")
-	}
-	result := AnalysisResult{Accessible: true, LibraryKind: kind, ClassificationConfidence: confidence, ClassificationReason: reason, ClassificationExplanation: explanation}
+	result := AnalysisResult{Accessible: true, LibraryKind: kind}
 	if kind == model.LibraryKindReading {
 		profile, ok := data["reading_profile"].(map[string]any)
 		if !ok {
 			return AnalysisResult{}, fmt.Errorf("analyzer reading_profile missing")
 		}
-		title, _ := profile["title"].(string)
-		summary, err := a.validateSummary(profile["summary"], summaryLimit)
-		if err != nil {
-			return AnalysisResult{}, err
-		}
-		tags, err := a.validateTags(profile["tags"])
-		if err != nil {
-			return AnalysisResult{}, err
-		}
-		result.Title = textutil.NormalizeTitle(title)
-		result.Summary, result.Tags = summary, tags
-		return result, nil
+		return a.validateReadingAnalysisProfile(profile, summaryLimit)
 	}
 	profile, ok := data["site_profile"].(map[string]any)
 	if !ok {
@@ -165,6 +117,25 @@ func (a *OpenAIAnalyzer) validateLibraryAnalysisResponse(data map[string]any, su
 	}
 	result.SiteName, result.SiteIntro, result.EntryName, result.EntryPurpose, result.Tags = name, intro, entryName, purpose, tags
 	return result, nil
+}
+
+func (a *OpenAIAnalyzer) validateReadingAnalysisProfile(profile map[string]any, summaryLimit int) (AnalysisResult, error) {
+	title, _ := profile["title"].(string)
+	summary, err := a.validateSummary(profile["summary"], summaryLimit)
+	if err != nil {
+		return AnalysisResult{}, err
+	}
+	tags, err := a.validateTags(profile["tags"])
+	if err != nil {
+		return AnalysisResult{}, err
+	}
+	return AnalysisResult{
+		Accessible:  true,
+		LibraryKind: model.LibraryKindReading,
+		Title:       textutil.NormalizeTitle(title),
+		Summary:     summary,
+		Tags:        tags,
+	}, nil
 }
 
 func numericFloat32(value any) (float32, bool) {
@@ -193,43 +164,6 @@ func boundedString(value any, max int) (string, bool) {
 	return text, ok && text != "" && runeCount(text) <= max
 }
 
-// validateAnalysisResponse enforces the contract on the decoded JSON: a
-// non-empty Chinese summary plus up to the configured maximum of bounded,
-// case-insensitively deduplicated tags. The requested minimum is prompt
-// guidance, not a reason to discard an otherwise useful summary. Summary
-// overflow stays a distinct error so the parser can keep scanning for a later
-// fully-valid JSON candidate before falling back to truncation. Tags are
-// optional enrichment: a missing/non-array value becomes an empty set,
-// malformed or oversized elements are dropped individually, and excess valid
-// tags are truncated in model order. Only an unusable summary rejects the
-// candidate.
-func (a *OpenAIAnalyzer) validateAnalysisResponse(data map[string]any, summaryLimit int) (AnalysisResult, error) {
-	// accessible 仅 URLDirect 模式存在；缺省视为 true（已抓内容路径恒可用）。
-	// 模型显式报 false（登录墙/反爬/404）时不强校验 summary/tags，直接返回
-	// Accessible:false，由 pipeline 回退到本地抓取器。
-	if accessible, present := data["accessible"].(bool); present && !accessible {
-		return AnalysisResult{Accessible: false}, nil
-	}
-	// title 由所有内建提示词请求；自定义/旧提示词仍可省略，pipeline 会从
-	// 来源标题、摘要或 URL 生成有界兜底值。
-	title := ""
-	if t, ok := data["title"].(string); ok {
-		title = textutil.NormalizeTitle(t)
-	}
-
-	summary, err := a.validateSummary(data["summary"], summaryLimit)
-	if err != nil {
-		return AnalysisResult{}, err
-	}
-
-	tags, err := a.validateTags(data["tags"])
-	if err != nil {
-		return AnalysisResult{}, err
-	}
-
-	return AnalysisResult{Summary: summary, Tags: tags, Title: title, Accessible: true}, nil
-}
-
 func (a *OpenAIAnalyzer) validateSummary(value any, summaryLimit int) (string, error) {
 	summary, ok := value.(string)
 	if !ok {
@@ -239,8 +173,8 @@ func (a *OpenAIAnalyzer) validateSummary(value any, summaryLimit int) (string, e
 	if summary == "" {
 		return "", fmt.Errorf("analyzer summary missing or empty")
 	}
-	if actual := runeCount(summary); actual > summaryLimit {
-		return "", &analyzerSummaryTooLongError{actual: actual, max: summaryLimit}
+	if runeCount(summary) > summaryLimit {
+		summary = summarypolicy.Clamp(summary, summaryLimit)
 	}
 	return summary, nil
 }
@@ -275,36 +209,6 @@ func (a *OpenAIAnalyzer) validateTags(value any) ([]string, error) {
 		}
 	}
 	return tags, nil
-}
-
-func (a *OpenAIAnalyzer) truncatedSummaryFallback(data map[string]any, summaryLimit int) (AnalysisResult, bool) {
-	summary, ok := data["summary"].(string)
-	if !ok {
-		return AnalysisResult{}, false
-	}
-
-	clamped := summarypolicy.Clamp(summary, summaryLimit)
-	if clamped == "" {
-		return AnalysisResult{}, false
-	}
-
-	cloned := make(map[string]any, len(data))
-	for key, value := range data {
-		cloned[key] = value
-	}
-	cloned["summary"] = clamped
-
-	result, err := a.validateAnalysisResponse(cloned, summaryLimit)
-	if err != nil {
-		return AnalysisResult{}, false
-	}
-	// validateAnalysisResponse 是 v1 校验器，不设 LibraryKind——正常路径由
-	// validateAnalysisResponseForRequest 在它之后补上默认值，而本回退路径的结果
-	// 会被 parseAnalysisResponse 直接返回，绕过那一步。不补的话 AnalysisResult
-	// 就带着空归属流向 pipeline：service 层的 normalizeLibraryKind 会兜住它，但
-	// analyzer 不应对外产出非法值，兜底也就不该是唯一防线。
-	result.LibraryKind = model.LibraryKindReading
-	return result, true
 }
 
 func decodeJSONObject(raw string) (map[string]any, bool) {
@@ -464,7 +368,7 @@ func scanJSONObjectCandidates(text string) []string {
 }
 
 // normalizeTag is the format safety-net for model-emitted tags: even after
-// the v3 prompt asks for short single-concept tags, models still leak
+// the prompt asks for short single-topic tags, models still leak
 // hashtag markers, wrapping brackets/quotes, slash hierarchy separators
 // (e.g. "check/handle"), and ragged whitespace. It cleans those in-place
 // (one tag in, one tag out) BEFORE the length / dedup / count checks run,
@@ -473,7 +377,7 @@ func scanJSONObjectCandidates(text string) []string {
 //
 // Slash/backslash hierarchy separators are collapsed by keeping the single
 // longest segment ("check/handle" → "handle"), which de-hierarchizes the
-// tag into one reusable concept instead of polluting the tag tree. Internal
+// tag into one reusable value instead of polluting the tag tree. Internal
 // whitespace runs are collapsed to a single space (phrase-splitting is left
 // to the prompt — naive space-splitting would mint junk like "2" from
 // "Go 2").

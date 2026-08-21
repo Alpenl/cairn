@@ -8,10 +8,9 @@ import {
 export const ENABLED_READER_CAPABILITIES: CapabilitiesResponse = {
   library_kinds: true,
   site_library: true,
-  site_auto_classification: true,
   site_management: true,
   site_advanced_management: true,
-  archive_versions: [1, 2],
+  archive_versions: [2],
   reader_vnext: true,
   reader: {
     annotations: true,
@@ -22,7 +21,7 @@ export const ENABLED_READER_CAPABILITIES: CapabilitiesResponse = {
     home: true,
     feed: true,
     ai: true,
-    semantic: true,
+    related_tags: true,
     activity: true,
     history: true,
     trash: true,

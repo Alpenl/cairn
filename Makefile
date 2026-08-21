@@ -1,11 +1,11 @@
-.PHONY: help build build-full reader-build reader-clean run migrate migrate-fresh test test-integration test-dbintegration test-dbintegration-required test-no-skip arch-contract ci-contracts version-test core-legal-check core-release-test vet tools lint actionlint fmt tidy modules-verify vuln race fuzz-smoke bench frontend-verify reader-perf-postgres reader-perf-fixture-manifest reader-perf-browser docker-build db-migrate schema-dump schema-check container-smoke deploy-permissions gate verify clean
+.PHONY: help build build-full reader-build reader-clean run migrate migrate-fresh test test-integration test-dbintegration test-dbintegration-required test-no-skip ci-contracts version-test core-legal-check core-release-test vet tools lint actionlint fmt tidy modules-verify vuln race fuzz-smoke bench frontend-verify reader-perf-postgres reader-perf-fixture-manifest reader-perf-browser docker-build db-migrate schema-dump schema-check container-smoke deploy-permissions gate verify clean
 
 GO ?= go
 BIN_DIR ?= bin
 BIN ?= $(BIN_DIR)/webtag
 READER_EMBED_DIR ?= internal/app/assets/reader
 PNPM ?= corepack pnpm@10.13.1
-SCHEMA_PG_IMAGE ?= pgvector/pgvector:pg16
+SCHEMA_PG_IMAGE ?= postgres:16
 TOOLS_BIN_DIR ?= $(BIN_DIR)/tools
 FUZZ_TIME ?= 2s
 VERSION ?= $(shell sh scripts/version.sh)
@@ -100,10 +100,9 @@ core-release-test: core-legal-check ## 验证法律材料、签名 manifest、dr
 	bash scripts/core-release-manifest.test.sh
 	bash scripts/core-release-promote.test.sh
 
-# Live fetcher integration tests — hits real ArXiv / GitHub / DuckDuckGo /
-# Jina / YouTube. Network required. yt-dlp resolved via WEBTAG_TEST_YTDLP_BIN
-# (falls back to `yt-dlp` on PATH). Set WEBTAG_TEST_GITHUB_TOKEN to avoid
-# anonymous rate limiting. Slow on purpose; not part of `make verify`.
+# Live fetcher integration tests hit real ArXiv, GitHub and Jina endpoints.
+# Network required. Set WEBTAG_TEST_GITHUB_TOKEN to avoid anonymous rate
+# limiting. Slow on purpose; not part of `make verify`.
 test-integration: ## 对真实上游跑 fetcher 集成测试（需要网络）
 	$(GO) test -tags=integration -timeout=180s -v ./internal/fetcher/...
 
@@ -195,7 +194,7 @@ actionlint: $(ACTIONLINT_STAMP) $(SHELLCHECK_STAMP) ## 校验所有 GitHub Actio
 		END { exit bad }' .github/workflows/*.yml
 
 fmt: ## 用 gofmt 格式化所有 Go 源码（不动 vendor/）
-	@find . -path ./vendor -prune -o -name '*.go' -type f -print | xargs $(GO) fmt
+	@find . \( -path ./vendor -o -name node_modules \) -prune -o -name '*.go' -type f -print0 | xargs -0 gofmt -w
 
 tidy: ## 整理 go.mod 并重建 vendor/
 	$(GO) mod tidy
@@ -220,13 +219,12 @@ frontend-verify: ## 安装冻结 workspace 并运行共享契约、Reader、Exte
 	$(PNPM) install --frozen-lockfile
 	$(PNPM) verify
 
-# 热路径 benchmark：concept resolver / analyzer parser / link DTO 映射 /
-# light fetcher 解析。开发者本地按需跑，留 baseline 用 benchstat 对比，
+# 热路径 benchmark：analyzer parser / link DTO 映射 / fetcher 解析。
+# 开发者本地按需跑，留 baseline 用 benchstat 对比，
 # 不接入 CI（跑 PR 太重，benchstat 也需要稳定环境才有意义）。
 # 用法：保存 `-count` 输出作为 baseline，再用 benchstat 比较同环境结果。
-bench: ## 跑热路径 benchmark（concept / analyzer / service / fetcher 各热路径）
+bench: ## 跑 analyzer / service / fetcher 热路径 benchmark
 	$(GO) test -bench=. -benchmem -count=3 -run='^$$' \
-		./internal/concept/... \
 		./internal/service/analyzer/... \
 		./internal/service/ \
 		./internal/fetcher/...
@@ -257,7 +255,7 @@ reader-perf-browser: ## 跑 Reader 规模 fixture 的浏览器旅程与 API timi
 	READER_PERF_OUTPUT_DIR=$(abspath artifacts/reader-vnext-performance/browser) \
 	$(PNPM) --filter webtag-reader test:browser reader-vnext-performance.spec.ts
 
-docker-build: ## 构建运行时容器镜像（不含 yt-dlp）
+docker-build: ## 构建运行时容器镜像
 	docker build \
 		--target=slim \
 		--build-arg VERSION=$(VERSION) \
@@ -281,16 +279,21 @@ schema-dump: ## 重新生成 internal/migrate/schema.sql（需要 Docker）
 # bytes. This must never use the tracked snapshot as the dump destination:
 # a failed or interrupted dump must not make the working tree look clean.
 schema-check: ## 机械检查迁移后的真实 schema 与 tracked snapshot 一致（需要 Docker）
-	@tmp=$$(mktemp); \
-	cleanup() { rm -f "$$tmp"; }; \
+	@tmp=$$(mktemp); install_tmp=$$(mktemp); \
+	cleanup() { rm -f "$$tmp" "$$install_tmp"; }; \
 	trap cleanup EXIT; \
-	PG_IMAGE="$${PG_IMAGE:-$(SCHEMA_PG_IMAGE)}" OUT_FILE="$$tmp" ./scripts/db-dump-schema.sh; \
+	PG_IMAGE="$${PG_IMAGE:-$(SCHEMA_PG_IMAGE)}" OUT_FILE="$$tmp" INSTALL_OUT_FILE="$$install_tmp" ./scripts/db-dump-schema.sh; \
 	if ! cmp -s "$$tmp" internal/migrate/schema.sql; then \
 		echo "schema drift detected: internal/migrate/schema.sql is stale" >&2; \
 		diff -u internal/migrate/schema.sql "$$tmp" || true; \
 		exit 1; \
 	fi; \
-	echo "schema-check: internal/migrate/schema.sql matches generated schema"
+	if ! cmp -s "$$install_tmp" internal/migrate/install_schema.sql; then \
+		echo "schema drift detected: internal/migrate/install_schema.sql is stale" >&2; \
+		diff -u internal/migrate/install_schema.sql "$$install_tmp" || true; \
+		exit 1; \
+	fi; \
+	echo "schema-check: generated schema snapshots match"
 
 container-smoke: ## 启动完整镜像跑端到端容器冒烟
 	VERSION=$(VERSION) COMMIT=$(COMMIT) sh scripts/container_smoke.sh
@@ -341,13 +344,6 @@ test-no-skip: ## 断言没有测试在门禁上被 skip
 		exit 1; \
 	fi
 
-# Architecture contracts can consult subprocesses (go list and git ls-files),
-# whose inputs are outside Go's test-cache fingerprint. Force a fresh run in
-# the gate so a staged forbidden path or changed import graph cannot reuse a
-# previously green result.
-arch-contract: ## 不使用 Go test cache 运行架构与 tracked-tree 合同
-	$(GO) test -count=1 ./internal/arch
-
 ci-contracts: ## 离线验证 CI 诊断与 main ruleset 策略工具
 	node --test scripts/ci-run-diagnose.test.mjs scripts/validate-main-ruleset.test.mjs
 
@@ -359,7 +355,7 @@ ci-contracts: ## 离线验证 CI 诊断与 main ruleset 策略工具
 # 不含需要 Docker / 网络的项（docker-build、db-migrate、container-smoke、
 # required dbintegration、前端审计）——那些在 verify 里。真实外部网站的
 # test-integration 仍是人工诊断项，不属于确定性的 PR 门禁。
-gate: vet lint test test-no-skip arch-contract ci-contracts version-test ## 快速离线门禁：Go 检查 + 版本推导
+gate: vet lint test test-no-skip ci-contracts version-test ## 快速离线门禁：Go 检查 + 版本推导
 
 verify: schema-check gate modules-verify vuln race fuzz-smoke actionlint frontend-verify core-release-test test-dbintegration-required build docker-build db-migrate container-smoke deploy-permissions ## 本地 PR 前的全仓聚合门禁
 

@@ -25,10 +25,10 @@ const (
 	// rf9BaselineColumns freezes the pre-RF9 point-lookup payload. Keep it
 	// independent from production constants: the benchmark must remain a
 	// historical baseline even after the legacy full-row methods are retired.
-	rf9BaselineColumns = "id, url, source_kind, source_key, input_title, input_text, input_html, input_images, source_metadata, title, summary, tags, fetcher_type, is_low_confidence, low_confidence_reason, status, error_msg, description, domain, content_type, library_kind, library_kind_source, library_kind_locked, predicted_library_kind, classification_confidence, classification_reason, classification_explanation, classifier_version, content_revision, content_source, has_content, content_cjk_chars, content_words, first_collected_at, last_recollected_at, payload_purge_due_at, payload_purged_at, path_depth, parent_path, parent_id, created_at, updated_at"
-	rf9DetailColumns   = "id, url, title, summary, tags, fetcher_type, is_low_confidence, low_confidence_reason, status, error_msg, description, domain, content_type, library_kind, library_kind_source, library_kind_locked, predicted_library_kind, classification_confidence, classification_reason, classification_explanation, classifier_version, content_revision, content_source, has_content, content_cjk_chars, content_words, path_depth, parent_path, parent_id, created_at, updated_at"
-	rf9ParseColumns    = "id, url, source_kind, source_key, input_title, input_text, input_html, input_images, source_metadata, description, status, library_kind, library_kind_locked, content_revision, updated_at"
-	rf9LifecycleCols   = "id, url, status, library_kind, library_kind_source, library_kind_locked, classification_reason, content_revision, has_content"
+	rf9BaselineColumns = "id, url, source_kind, source_key, input_title, input_text, input_html, input_images, source_metadata, title, summary, tags, fetcher_type, is_low_confidence, low_confidence_reason, status, error_msg, description, domain, content_type, library_kind, library_kind_locked, content_revision, metadata_revision, parse_generation, content_source, has_content, content_cjk_chars, content_words, first_collected_at, last_recollected_at, payload_purge_due_at, payload_purged_at, path_depth, parent_path, parent_id, created_at, updated_at"
+	rf9DetailColumns   = "id, url, title, summary, tags, fetcher_type, is_low_confidence, low_confidence_reason, status, error_msg, description, domain, content_type, library_kind, content_revision, metadata_revision, content_source, has_content, content_cjk_chars, content_words, path_depth, parent_path, parent_id, created_at, updated_at"
+	rf9ParseColumns    = "id, url, source_kind, source_key, input_title, input_text, input_html, input_images, source_metadata, description, status, library_kind, library_kind_locked, content_revision, metadata_revision, parse_generation, updated_at"
+	rf9LifecycleCols   = "id, url, status, library_kind, library_kind_locked, content_revision, has_content, deleted_at"
 	rf9SubmitColumns   = "id, url, source_key, status, library_kind"
 
 	rf9WarmupReads     = 25
@@ -58,17 +58,15 @@ type rf9Fixture struct {
 }
 
 type rf9FixturePayload struct {
-	inputTitle     string
-	inputText      string
-	inputHTML      string
-	inputImages    []string
-	metadata       map[string]any
-	title          string
-	summary        string
-	tags           []string
-	description    string
-	explanation    string
-	classification string
+	inputTitle  string
+	inputText   string
+	inputHTML   string
+	inputImages []string
+	metadata    map[string]any
+	title       string
+	summary     string
+	tags        []string
+	description string
 }
 
 func TestLinkProjectionFixtureContract(t *testing.T) {
@@ -217,7 +215,6 @@ func seedRF9ProjectionFixtures(t testing.TB, pool *pgxpool.Pool) []rf9Fixture {
 		contentType := "article"
 		pathDepth := 1
 		parentPath := "/"
-		predicted := model.LibraryKindReading
 		link, err := repo.Create(ctx, repository.CreateLinkParams{
 			URL:                  rawURL,
 			SourceKind:           "browser_capture",
@@ -234,7 +231,6 @@ func seedRF9ProjectionFixtures(t testing.TB, pool *pgxpool.Pool) []rf9Fixture {
 			PathDepth:            &pathDepth,
 			ParentPath:           &parentPath,
 			RequestedLibraryKind: model.RequestedLibraryKindReading,
-			PredictedLibraryKind: &predicted,
 		})
 		if err != nil {
 			t.Fatalf("seed %s link: %v", fixture.name, err)
@@ -247,10 +243,6 @@ func seedRF9ProjectionFixtures(t testing.TB, pool *pgxpool.Pool) []rf9Fixture {
 			    fetcher_type = 'browser_capture',
 			    is_low_confidence = true,
 			    low_confidence_reason = 'controlled_fixture',
-			    classification_confidence = 0.91,
-			    classification_reason = $5,
-			    classification_explanation = $6,
-			    classifier_version = 'rf9-fixture-v1',
 			    content_revision = 7,
 			    content_source = 'user',
 			    content_cjk_chars = 321,
@@ -261,8 +253,7 @@ func seedRF9ProjectionFixtures(t testing.TB, pool *pgxpool.Pool) []rf9Fixture {
 			    created_at = TIMESTAMPTZ '2026-08-08 07:00:00+00',
 			    updated_at = TIMESTAMPTZ '2026-08-08 08:00:00+00'
 			WHERE id = $1`,
-			link.ID, payload.title, payload.summary, payload.tags, payload.classification,
-			payload.explanation,
+			link.ID, payload.title, payload.summary, payload.tags,
 		); err != nil {
 			t.Fatalf("enrich %s link: %v", fixture.name, err)
 		}
@@ -273,17 +264,15 @@ func seedRF9ProjectionFixtures(t testing.TB, pool *pgxpool.Pool) []rf9Fixture {
 
 func lightRF9Payload() rf9FixturePayload {
 	return rf9FixturePayload{
-		inputTitle:     "Light capture",
-		inputText:      "A short captured paragraph.",
-		inputHTML:      "<p>A short captured paragraph.</p>",
-		inputImages:    []string{"https://rf9.example/light.png"},
-		metadata:       map[string]any{"parse_depth": "light"},
-		title:          "Light article",
-		summary:        "Short summary.",
-		tags:           []string{"benchmark", "light"},
-		description:    "Short note.",
-		explanation:    "Controlled light fixture.",
-		classification: "content_article",
+		inputTitle:  "Light capture",
+		inputText:   "A short captured paragraph.",
+		inputHTML:   "<p>A short captured paragraph.</p>",
+		inputImages: []string{"https://rf9.example/light.png"},
+		metadata:    map[string]any{"capture_source_fingerprint": "fixture"},
+		title:       "Light article",
+		summary:     "Short summary.",
+		tags:        []string{"benchmark", "light"},
+		description: "Short note.",
 	}
 }
 
@@ -301,17 +290,15 @@ func heavyRF9Payload() rf9FixturePayload {
 		tags[i] = fmt.Sprintf("tag-%02d-%s", i, deterministicRF9Text(48, fmt.Sprintf("tag-%02d", i)))
 	}
 	return rf9FixturePayload{
-		inputTitle:     deterministicRF9Text(512, "input-title"),
-		inputText:      deterministicRF9Text(512*1024, "input-text"),
-		inputHTML:      deterministicRF9Text(512*1024, "input-html"),
-		inputImages:    images,
-		metadata:       metadata,
-		title:          deterministicRF9Text(512, "title"),
-		summary:        deterministicRF9Text(4096, "summary"),
-		tags:           tags,
-		description:    deterministicRF9Text(4096, "description"),
-		explanation:    deterministicRF9Text(4096, "explanation"),
-		classification: deterministicRF9Text(256, "classification"),
+		inputTitle:  deterministicRF9Text(512, "input-title"),
+		inputText:   deterministicRF9Text(512*1024, "input-text"),
+		inputHTML:   deterministicRF9Text(512*1024, "input-html"),
+		inputImages: images,
+		metadata:    metadata,
+		title:       deterministicRF9Text(512, "title"),
+		summary:     deterministicRF9Text(4096, "summary"),
+		tags:        tags,
+		description: deterministicRF9Text(4096, "description"),
 	}
 }
 

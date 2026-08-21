@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"webtag/internal/alloc"
 	"webtag/internal/database"
 	"webtag/internal/model"
 )
@@ -22,18 +21,6 @@ const (
 	readerTrashDefaultLimit = 50
 	readerTrashMaxLimit     = 200
 )
-
-// ReaderHostLifecycleStore is deliberately narrower than ReaderVNextStore.
-// Lifecycle routes can evolve without forcing unrelated Reader test doubles
-// to implement host deletion semantics.
-type ReaderHostLifecycleStore interface {
-	SoftDeleteHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error)
-	RestoreHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error)
-	PurgeHost(context.Context, model.ReaderHostKind, uuid.UUID, uuid.UUID) error
-	ListTrash(context.Context, *model.ReaderHostKind, string, int) ([]model.ReaderTrashItem, int, string, error)
-}
-
-var _ ReaderHostLifecycleStore = (*PGXReaderVNextRepository)(nil)
 
 type readerLockedHost struct {
 	deletedAt *time.Time
@@ -86,9 +73,6 @@ func (r *PGXReaderVNextRepository) RestoreHost(ctx context.Context, kind model.R
 	}
 	err := r.withTx(ctx, func(db database.Querier) error {
 		if kind == model.ReaderHostLink {
-			if err := prelockLibraryFeedRevisions(ctx, db); err != nil {
-				return err
-			}
 			restored, err := r.restoreLinkLifecycleOn(ctx, db, id)
 			if err != nil {
 				return err
@@ -367,13 +351,8 @@ func readerPurgeReceipt(ctx context.Context, db database.Querier, kind model.Rea
 
 func deleteReaderHostDerivedRows(ctx context.Context, db database.Querier, kind model.ReaderHostKind, id uuid.UUID) error {
 	hostID := id.String()
-	for _, statement := range []string{
-		`DELETE FROM reader_categorizables WHERE host_kind=$1 AND host_id=$2`,
-		`DELETE FROM reader_todos WHERE origin_host_kind=$1 AND origin_host_id=$2`,
-	} {
-		if _, err := db.Exec(ctx, statement, kind, hostID); err != nil {
-			return fmt.Errorf("delete reader %s purge projection: %w", kind, err)
-		}
+	if _, err := db.Exec(ctx, `DELETE FROM reader_todos WHERE origin_host_kind=$1 AND origin_host_id=$2`, kind, hostID); err != nil {
+		return fmt.Errorf("delete reader %s purge projection: %w", kind, err)
 	}
 	if kind == model.ReaderHostNote {
 		if _, err := db.Exec(ctx, `DELETE FROM reader_note_history WHERE note_id=$1`, id); err != nil {
@@ -485,7 +464,7 @@ func readerTrashPageQuery(base string, args []any, cursorAt time.Time, cursorKin
 
 func scanReaderTrashRows(rows pgx.Rows, limit int) ([]model.ReaderTrashItem, string, error) {
 	defer rows.Close()
-	items := make([]model.ReaderTrashItem, 0, alloc.Hint(normalizeReaderTrashLimit(limit)))
+	items := make([]model.ReaderTrashItem, 0)
 	for rows.Next() {
 		var (
 			item       model.ReaderTrashItem

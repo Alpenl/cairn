@@ -51,12 +51,9 @@ func TestReaderRelatedTagsCooccurrenceRunsAgainstPostgres(t *testing.T) {
 	setTags(t, pool, second, []string{"ai", "postgres"})
 	setTags(t, pool, unrelated, []string{"unrelated"})
 
-	tags, model, degraded, err := reader.RelatedTags(ctx, &seed, 12)
+	tags, err := reader.RelatedTags(ctx, &seed, 12)
 	if err != nil {
 		t.Fatalf("RelatedTags() error = %v", err)
-	}
-	if model != "cooccurrence-v1" || !degraded {
-		t.Fatalf("RelatedTags() = model %q degraded %v, want the degraded cooccurrence path (no embedding configured)", model, degraded)
 	}
 	// postgres co-occurs twice and redis once, so the more frequent tag must
 	// come first. This is the only assertion guarding ORDER BY uses DESC.
@@ -93,7 +90,7 @@ func TestReaderRelatedTagsWithoutSeedTagsRunsAgainstPostgres(t *testing.T) {
 		"https://reader-vnext.example/related-popular", "Popular", "Popular body", "Popular summary")
 	setTags(t, pool, other, []string{"popular"})
 
-	tags, _, _, err := reader.RelatedTags(ctx, nil, 12)
+	tags, err := reader.RelatedTags(ctx, nil, 12)
 	if err != nil {
 		t.Fatalf("RelatedTags() error = %v", err)
 	}

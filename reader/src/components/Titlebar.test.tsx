@@ -22,7 +22,6 @@ function renderTitlebar(thoughtSync: ThoughtSyncSnapshot): void {
       archiveDownloading={false}
       onDownloadArchive={vi.fn()}
       canUseAI={true}
-      semanticSearchEnabled={true}
       canDownloadArchive={true}
     />,
   )

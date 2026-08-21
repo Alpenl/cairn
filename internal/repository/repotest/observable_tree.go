@@ -8,7 +8,7 @@ import (
 	"webtag/internal/repository"
 )
 
-// TreeStoreCall mirrors LinkStoreCall / JobStoreCall for the TreeStore
+// TreeStoreCall mirrors LinkStoreCall for the TreeStore
 // surface. Tree tests inspect Calls() / CountCalls() the same way the
 // link and job tests do.
 type TreeStoreCall struct {
@@ -16,7 +16,7 @@ type TreeStoreCall struct {
 	Args   []any
 }
 
-// ObservableTreeStore mirrors ObservableLinkStore / ObservableJobStore
+// ObservableTreeStore mirrors ObservableLinkStore
 // for the TreeStore interface. Same shape: per-method typed call
 // slices, optional behavior hooks, a generic call log, mu-protected
 // for concurrent test scenarios. Read-side defaults pull from the

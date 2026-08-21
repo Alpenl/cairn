@@ -7,7 +7,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { MainView } from './MainView'
 import { err, ok } from '../lib/api/result'
 import type { ApiError, ApiResult } from '../lib/api/result'
-import type { IdentityBoundReaderClient, ListLinksParams, ReaderClient } from '../lib/api/client'
+import type {
+  IdentityBoundReaderClient,
+  ListLinksParams,
+  ReaderActivityRequestOptions,
+  ReaderClient,
+} from '../lib/api/client'
 import type {
   DomainTreeSummaryEnvelope,
   GroupedSearchResponse,
@@ -51,6 +56,14 @@ type TestMainViewProps = Omit<React.ComponentProps<typeof MainView>, 'client'> &
   readonly client: ReaderClient
 }
 
+const DEFAULT_MAIN_VIEW_CAPABILITIES: CapabilitiesResponse = {
+  ...ENABLED_READER_CAPABILITIES,
+  reader: {
+    ...ENABLED_READER_CAPABILITIES.reader,
+    activity: false,
+  },
+}
+
 function TestMainView(props: TestMainViewProps) {
   const lease = readerIdentity.activeLease
   if (!lease) throw new Error('test identity lease is not active')
@@ -68,16 +81,23 @@ function TestMainView(props: TestMainViewProps) {
     listInbox?: ReaderClient['listInbox']
   }
   inboxClient.listInbox ??= vi.fn(async () => ok({ items: [], active_count: 0, expired_count: 0 }))
+  const activityClient = props.client as unknown as {
+    getReaderActivity?: ReaderClient['getReaderActivity']
+  }
+  activityClient.getReaderActivity ??= vi.fn(async (_limit, options) => ok({
+    kind: options?.kind ?? 'all',
+    tags: [],
+    domains: [],
+  }))
   const capabilities = Object.prototype.hasOwnProperty.call(props, 'capabilities')
     ? props.capabilities
-    : ENABLED_READER_CAPABILITIES
+    : DEFAULT_MAIN_VIEW_CAPABILITIES
   return <MainView {...props} capabilities={capabilities} client={props.client as IdentityBoundReaderClient} />
 }
 
 const NOTE_CAPABILITIES: CapabilitiesResponse = {
   library_kinds: true,
   site_library: true,
-  site_auto_classification: true,
   site_management: true,
   site_advanced_management: true,
   archive_versions: [],
@@ -91,7 +111,7 @@ const NOTE_CAPABILITIES: CapabilitiesResponse = {
     home: true,
     feed: true,
     ai: false,
-    semantic: true,
+    related_tags: true,
     activity: true,
     history: true,
     trash: true,
@@ -166,15 +186,6 @@ async function seedAnnotation(
       operation = { kind: 'add', opId, linkId, target, draft }
       break
     case 'note':
-      operation = {
-        kind: 'add',
-        opId,
-        linkId,
-        target,
-        draft: { ...draft, blockKey: annotation.blockKey },
-      }
-      break
-    case 'legacy-stale':
       operation = {
         kind: 'add',
         opId,
@@ -273,6 +284,13 @@ function selectRenderedText(node: Node): void {
   fireEvent(document, new Event('selectionchange'))
 }
 
+async function clickSelectionAction(node: () => Node, name: string): Promise<void> {
+  selectRenderedText(node())
+  await screen.findByRole('button', { name })
+  selectRenderedText(node())
+  fireEvent.click(screen.getByRole('button', { name }))
+}
+
 function revisionFloorKey(): string {
   const key = ownedStorageKey('revisionFloor')
   if (!key) throw new Error('revision floor storage requires an active identity')
@@ -313,18 +331,14 @@ function makeReaderInbox(overrides: Partial<ReaderInboxResponse> = {}): ReaderIn
     source_kind: 'manual',
     title: '收件箱条目',
 	body: '收件箱正文',
-	note: '',
-	summary: '收件箱摘要',
+    note: '',
+    summary: '收件箱摘要',
     suggested_tags: [],
-    proposal_signals: {},
     proposal_status: 'completed',
     tags: [],
-    category_ids: [],
     status: 'pending',
     metadata_revision: 1,
-    job_id: null,
     expires_at: '2026-09-09T01:00:00Z',
-    expired_at: null,
     expired: false,
     created_at: '2026-08-10T01:00:00Z',
     updated_at: '2026-08-10T01:00:00Z',
@@ -478,14 +492,14 @@ function makeClient(
   // 读必然回源」），useLinks 拿到新数据就会 setPatches({}) 清掉乐观补丁。fake 若
   // 恒回 failed，就是在断言「服务端把状态改回去之后界面还显示 pending」。
   //
-  // 但**只能照做服务端真的会做的那部分**。`requeueLinkRefreshSQL`
-  // （link_repo_submit.go）写的是 `status = 'pending', error_msg = NULL`，
-  // 此外只清 embedding。顺手把 is_low_confidence 一起抹掉曾经让这条用例变成
-  // 恒真——它掩盖了「低置信徽标会在自愈重取之后回来」这个真实回退。
+	// 但**只能照做服务端真的会做的那部分**。`requeueLinkRefreshSQL`
+	// （link_repo_submit.go）写的是 `status = 'pending', error_msg = NULL`，
+	// 不会清 is_low_confidence。顺手把它抹掉曾经让这条用例变成恒真——它掩盖了
+	// 「低置信徽标会在自愈重取之后回来」这个真实回退。
   const refreshed = new Set<string>()
   const refreshLink = vi.fn(async (id: string) => {
     refreshed.add(id)
-    return ok({ link_id: id, job_id: 'refresh-job', status: 'pending' as const })
+    return ok({ link_id: id, status: 'pending' as const })
   })
   const asServerSees = (item: LinkResponse): LinkResponse =>
     refreshed.has(item.id)
@@ -538,7 +552,7 @@ function makeClient(
     }),
   )
   const getReaderFeed = vi.fn(async () =>
-    ok({ items: [], snapshot_id: 'snapshot-test', mode: 'recommended' as const }),
+    ok({ items: [], mode: 'recommended' as const }),
   )
   const listInbox = vi.fn(async () => ok({ items: [] }))
   const listCategories = vi.fn(async () => ok({ items: [] }))
@@ -556,12 +570,42 @@ function makeClient(
   }))
   const submitLink = vi.fn(async () => ok({
     link_id: 'L-created',
-    job_id: 'J-created',
     status: 'pending' as const,
   }))
   const downloadArchiveV2 = vi.fn(async () =>
     ok(new Blob(['{"schema_version":2}'], { type: 'application/json' })),
   )
+  const getReaderActivity = vi.fn(async (
+    _limit: number,
+    options: ReaderActivityRequestOptions = {},
+  ) => {
+    const tagLastAt = new Map<string, string>()
+    const domainLastAt = new Map<string, string>()
+    for (const item of links) {
+      if ((item.library_kind ?? 'reading') !== 'reading' || item.status !== 'done') continue
+      for (const rawTag of item.tags) {
+        const tag = rawTag.trim()
+        if (!tag) continue
+        const previous = tagLastAt.get(tag)
+        if (!previous || item.created_at > previous) tagLastAt.set(tag, item.created_at)
+      }
+      const domain = item.domain?.trim() ?? ''
+      if (domain) {
+        const previous = domainLastAt.get(domain)
+        if (!previous || item.created_at > previous) domainLastAt.set(domain, item.created_at)
+      }
+    }
+    const kind = options.kind ?? 'all'
+    return ok({
+      kind,
+      tags: kind === 'domain'
+        ? []
+        : [...tagLastAt].map(([tag, last_at]) => ({ tag, last_at })),
+      domains: kind === 'tag'
+        ? []
+        : [...domainLastAt].map(([domain, last_at]) => ({ domain, last_at })),
+    })
+  })
 
   const client = {
     isIdentityCurrent: vi.fn(() => true),
@@ -582,6 +626,7 @@ function makeClient(
     getContent,
     getTags: vi.fn(async () => ok([])),
     getDomainSummaries: vi.fn(async () => ok({ domains: [], total: 0 })),
+    getReaderActivity,
     refreshLink,
     saveContent,
     replaceContent,
@@ -671,7 +716,13 @@ describe('MainView Reading sidebar authority', () => {
         : ok({ domains: [{ domain: 'site-only.example', count: 9 }], total: 9 }),
     )
 
-    render(<TestMainView client={client} onOpenSettings={() => {}} />)
+    render(
+      <TestMainView
+        client={client}
+        capabilities={ENABLED_READER_CAPABILITIES}
+        onOpenSettings={() => {}}
+      />,
+    )
 
     await sidebarQueries().findByText('reading-tag')
     fireEvent.click(sidebarQueries().getByText('域名'))
@@ -1027,7 +1078,7 @@ describe('MainView Command-K canonical navigation', () => {
     try {
       const { client } = makeClient({}, {}, options.links, options.notes, response)
       render(<TestMainView client={client} onOpenSettings={() => {}} />)
-      fireEvent.click(screen.getByText('搜索链接 · 语义搜索'))
+      fireEvent.click(screen.getByText('搜索链接'))
       const input = screen.getByPlaceholderText('搜索标题、摘要、域名… 输入 # 搜标签')
       fireEvent.change(input, { target: { value: '命中' } })
       await act(async () => { await vi.advanceTimersByTimeAsync(300) })
@@ -1108,7 +1159,7 @@ describe('MainView Command-K canonical navigation', () => {
     try {
       const { client } = makeClient()
       render(<TestMainView client={client} onOpenSettings={() => {}} />)
-      fireEvent.click(screen.getByText('搜索链接 · 语义搜索'))
+      fireEvent.click(screen.getByText('搜索链接'))
       const input = screen.getByPlaceholderText('搜索标题、摘要、域名… 输入 # 搜标签')
       fireEvent.change(input, { target: { value: '收件箱' } })
       const pendingCommands = screen.getAllByText('收件箱').filter((node) => node.closest('.cmdk-item'))
@@ -1169,7 +1220,7 @@ describe('MainView Notes navigation protection', () => {
       const textarea = await screen.findByRole('textbox', { name: '笔记内容' })
       fireEvent.change(textarea, { target: { value: '命令导航前必须保留的逐字草稿' } })
       getLink.mockClear()
-      fireEvent.click(screen.getByText('搜索链接 · 语义搜索'))
+      fireEvent.click(screen.getByText('搜索链接'))
       const input = screen.getByPlaceholderText('搜索标题、摘要、域名… 输入 # 搜标签')
       fireEvent.change(input, { target: { value: '守卫目标链接' } })
       const result = (await screen.findAllByText('守卫目标链接'))
@@ -1210,7 +1261,7 @@ describe('MainView Notes navigation protection', () => {
       fireEvent.change(await screen.findByRole('textbox', { name: '笔记内容' }), {
         target: { value: '只保存一次再离开' },
       })
-      fireEvent.click(screen.getByText('搜索链接 · 语义搜索'))
+      fireEvent.click(screen.getByText('搜索链接'))
       const input = screen.getByPlaceholderText('搜索标题、摘要、域名… 输入 # 搜标签')
       fireEvent.change(input, { target: { value: '延迟成功目标' } })
       await screen.findAllByText('延迟成功目标')
@@ -1259,7 +1310,7 @@ describe('MainView Notes navigation protection', () => {
       await waitFor(() => expect(createNote).toHaveBeenCalledTimes(1))
       expect(saveNoteDraft.mock.invocationCallOrder[0]).toBeLessThan(createNote.mock.invocationCallOrder[0])
 
-      fireEvent.click(screen.getByText('搜索链接 · 语义搜索'))
+      fireEvent.click(screen.getByText('搜索链接'))
       const commandInput = screen.getByPlaceholderText('搜索标题、摘要、域名… 输入 # 搜标签')
       fireEvent.keyDown(commandInput, { key: 'Enter' })
       fireEvent.keyDown(commandInput, { key: 'Enter' })
@@ -1278,7 +1329,7 @@ describe('MainView Notes navigation protection', () => {
 
   it.each([
     ['unknown', undefined, '?view=reading', '搜索链接'],
-    ['false', NOTE_CAPABILITIES_DISABLED, '?surface=home', '搜索链接 · 语义搜索'],
+    ['false', NOTE_CAPABILITIES_DISABLED, '?surface=home', '搜索链接'],
   ] as const)('does not mount Notes or call its API when Notes capability is %s', async (_name, capabilities, expectedSearch, commandLabel) => {
     const previousURL = window.location.href
     window.history.replaceState({}, '', '/?view=notes')
@@ -1419,7 +1470,7 @@ describe('MainView Notes navigation protection', () => {
       const routeBeforeCreate = window.location.search
       expect(routeBeforeCreate).toBe('?view=reading&link_id=L1')
 
-      fireEvent.click(screen.getByText('搜索链接 · 语义搜索'))
+      fireEvent.click(screen.getByText('搜索链接'))
       fireEvent.keyDown(screen.getByPlaceholderText('搜索标题、摘要、域名… 输入 # 搜标签'), { key: 'Enter' })
 
       await waitFor(() => expect(confirmSpy).toHaveBeenCalledWith('当前正文有未保存修改，确定放弃？'))
@@ -2671,8 +2722,8 @@ describe('MainView 保存原文', () => {
     render(<TestMainView client={client} onOpenSettings={() => {}} />)
 
     await expandOriginal()
-    selectRenderedText(await screen.findByText('English body'))
-    fireEvent.click(await screen.findByRole('button', { name: '翻译' }))
+    await screen.findByText('English body')
+    await clickSelectionAction(() => screen.getByText('English body'), '翻译')
 
     await waitFor(() =>
       expect(createTranslation).toHaveBeenCalledWith('L1', {
@@ -2697,10 +2748,10 @@ describe('MainView 保存原文', () => {
 
     await screen.findByText('Translate this sentence')
     await waitFor(() => expect(getTranslations).toHaveBeenCalledWith('L1'))
-    selectRenderedText(
-      document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+    await clickSelectionAction(
+      () => document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+      '翻译',
     )
-    fireEvent.click(await screen.findByRole('button', { name: '翻译' }))
 
     await waitFor(() =>
       expect(createTranslation).toHaveBeenCalledWith('L1', {
@@ -3166,10 +3217,10 @@ describe('MainView 保存原文', () => {
         'Translate this sentence',
       ),
     )
-    selectRenderedText(
-      document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+    await clickSelectionAction(
+      () => document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+      '翻译',
     )
-    fireEvent.click(await screen.findByRole('button', { name: '翻译' }))
 
     await waitFor(() =>
       expect(document.querySelector('[data-hl-block="summary"]')).toHaveTextContent(
@@ -3212,19 +3263,19 @@ describe('MainView 保存原文', () => {
 
     await screen.findByText('Translate this sentence')
     await waitFor(() => expect(getTranslations).toHaveBeenCalledTimes(1))
-    selectRenderedText(
-      document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+    await clickSelectionAction(
+      () => document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+      '翻译',
     )
-    fireEvent.click(await screen.findByRole('button', { name: '翻译' }))
 
     await waitFor(() => expect(createTranslation).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(getLink).toHaveBeenCalledWith('L1'))
     await waitFor(() => expect(getTranslations).toHaveBeenCalledTimes(2))
 
-    selectRenderedText(
-      document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+    await clickSelectionAction(
+      () => document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+      '翻译',
     )
-    fireEvent.click(await screen.findByRole('button', { name: '翻译' }))
     await waitFor(() => expect(createTranslation).toHaveBeenCalledTimes(2))
     expect(createTranslation.mock.calls[1][1]).toMatchObject({
       block_key: 'summary',
@@ -3259,18 +3310,18 @@ describe('MainView 保存原文', () => {
 
     await screen.findByText('Translate this sentence')
     await waitFor(() => expect(getTranslations).toHaveBeenCalledTimes(1))
-    selectRenderedText(
-      document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+    await clickSelectionAction(
+      () => document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+      '翻译',
     )
-    fireEvent.click(await screen.findByRole('button', { name: '翻译' }))
 
     expect(await screen.findByText('翻译来源刷新失败，请稍后重试')).toBeInTheDocument()
     await waitFor(() => expect(getTranslations).toHaveBeenCalledTimes(2))
 
-    selectRenderedText(
-      document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+    await clickSelectionAction(
+      () => document.querySelector<HTMLElement>('[data-hl-block="summary"]') as HTMLElement,
+      '翻译',
     )
-    fireEvent.click(await screen.findByRole('button', { name: '翻译' }))
     await waitFor(() => expect(createTranslation).toHaveBeenCalledTimes(2))
     expect(createTranslation.mock.calls[1][1]).toMatchObject({
       block_key: 'summary',
@@ -3334,8 +3385,11 @@ describe('MainView 保存原文', () => {
     render(<TestMainView client={client} onOpenSettings={() => {}} />)
 
     await expandOriginal({ settleDocument: true })
-    selectRenderedText(await screen.findByText('Controller-owned annotation body'))
-    fireEvent.click(await screen.findByRole('button', { name: '划线' }))
+    await screen.findByText('Controller-owned annotation body')
+    await clickSelectionAction(
+      () => screen.getByText('Controller-owned annotation body'),
+      '划线',
+    )
 
     expect(await screen.findByText('内容来源已更新，请重新选择')).toBeInTheDocument()
     expect(annotate).toHaveBeenCalledTimes(1)
@@ -3954,10 +4008,17 @@ describe('MainView active 与 corpus ownership', () => {
     fireEvent.click(screen.getByText('今天新增'))
     expect(await screen.findByText('自然日条目 030')).toBeInTheDocument()
 
-    const scroller = container.querySelector<HTMLElement>('.list-scroll')
-    if (!scroller) throw new Error('list scroller not found')
-    for (const title of ['自然日条目 060', '自然日条目 090', '自然日条目 101']) {
+    const expectedPages = ['自然日条目 060', '自然日条目 090', '自然日条目 101']
+    for (const [index, title] of expectedPages.entries()) {
+      const scroller = container.querySelector<HTMLElement>('.list-scroll')
+      if (!scroller) throw new Error('list scroller not found')
       fireEvent.scroll(scroller)
+      await waitFor(() => {
+        const todayCallCount = getLinks.mock.calls
+          .filter(([params]) => Boolean(params?.created_from))
+          .length
+        expect(todayCallCount).toBe(index + 2)
+      })
       expect(await screen.findByText(title)).toBeInTheDocument()
     }
 
@@ -3994,7 +4055,7 @@ describe('MainView active 与 corpus ownership', () => {
     await screen.findByText('这个筛选下还没有链接')
     expect(screen.getByRole('heading', { name: '保存原文案例' })).toBeInTheDocument()
 
-    fireEvent.click(screen.getByText('搜索链接 · 语义搜索'))
+    fireEvent.click(screen.getByText('搜索链接'))
     fireEvent.change(screen.getByPlaceholderText('搜索标题、摘要、域名… 输入 # 搜标签'), {
       target: { value: '保存原文案例' },
     })

@@ -6,104 +6,58 @@ import (
 )
 
 const (
-	testReaderCursorKeyA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	testReaderCursorKeyB = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+	testCursorKeyA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	testCursorKeyB = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 )
 
-func TestResolveReaderCursorSigningKeyPrefersDedicatedKey(t *testing.T) {
-	got, err := resolveReaderCursorSigningKey(
-		"prod",
-		testReaderCursorKeyA,
-		testReaderCursorKeyB,
-		"postgres://replica-a",
-		"analyzer-a",
-	)
-	if err != nil || got != testReaderCursorKeyA {
-		t.Fatalf("resolve dedicated key = %q, %v; want dedicated key", got, err)
-	}
-}
-
-func TestResolveReaderCursorSigningKeyFallsBackToExplicitLinkKey(t *testing.T) {
-	got, err := resolveReaderCursorSigningKey(
-		"staging",
-		"",
-		testReaderCursorKeyA,
-		"postgres://replica-a",
-		"analyzer-a",
-	)
-	if err != nil || got != testReaderCursorKeyA {
-		t.Fatalf("resolve Link fallback = %q, %v; want explicit Link key", got, err)
-	}
-}
-
-func TestResolveReaderCursorSigningKeyIsStableAcrossReplicaCredentials(t *testing.T) {
-	replicaA, err := resolveReaderCursorSigningKey(
-		"prod", testReaderCursorKeyA, "", "postgres://replica-a", "analyzer-a",
-	)
+func TestResolveCursorSigningKeyUsesExplicitKeyAcrossReplicas(t *testing.T) {
+	replicaA, err := resolveCursorSigningKey("prod", testCursorKeyA, "postgres://replica-a", "analyzer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	replicaB, err := resolveReaderCursorSigningKey(
-		"prod", testReaderCursorKeyA, "", "postgres://replica-b", "analyzer-b",
-	)
+	replicaB, err := resolveCursorSigningKey("prod", testCursorKeyA, "postgres://replica-b", "analyzer-b")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replicaA != replicaB || replicaA != testReaderCursorKeyA {
+	if replicaA != replicaB || replicaA != testCursorKeyA {
 		t.Fatalf("replica keys = %q/%q, want one explicit stable key", replicaA, replicaB)
 	}
 }
 
-func TestResolveReaderCursorSigningKeyRotationInvalidatesPreviousKey(t *testing.T) {
-	oldKey, err := resolveReaderCursorSigningKey("prod", testReaderCursorKeyA, "", "database", "analyzer")
+func TestResolveCursorSigningKeyRotationChangesEffectiveKey(t *testing.T) {
+	oldKey, err := resolveCursorSigningKey("prod", testCursorKeyA, "database", "analyzer")
 	if err != nil {
 		t.Fatal(err)
 	}
-	newKey, err := resolveReaderCursorSigningKey("prod", testReaderCursorKeyB, "", "database", "analyzer")
+	newKey, err := resolveCursorSigningKey("prod", testCursorKeyB, "database", "analyzer")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if oldKey == newKey {
-		t.Fatal("explicit Reader cursor key rotation did not change the effective key")
+		t.Fatal("cursor key rotation did not change the effective key")
 	}
 }
 
-func TestResolveReaderCursorSigningKeyRejectsWeakExplicitKeys(t *testing.T) {
-	for _, tc := range []struct {
-		name           string
-		explicitReader string
-		explicitLink   string
-		wantEnv        string
-	}{
-		{name: "dedicated", explicitReader: "short-reader-key", wantEnv: "READER_CURSOR_SIGNING_KEY"},
-		{name: "Link fallback", explicitLink: "short-link-key", wantEnv: "CURSOR_SIGNING_KEY"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := resolveReaderCursorSigningKey(
-				"prod", tc.explicitReader, tc.explicitLink, "database", "analyzer",
-			)
-			if err == nil || !strings.Contains(err.Error(), tc.wantEnv) || !strings.Contains(err.Error(), "32 bytes") {
-				t.Fatalf("error = %v, want %s minimum-length rejection", err, tc.wantEnv)
-			}
-		})
+func TestResolveCursorSigningKeyRejectsWeakExplicitKey(t *testing.T) {
+	_, err := resolveCursorSigningKey("prod", "short-key", "database", "analyzer")
+	if err == nil || !strings.Contains(err.Error(), "CURSOR_SIGNING_KEY") || !strings.Contains(err.Error(), "32 bytes") {
+		t.Fatalf("error = %v, want minimum-length rejection", err)
 	}
 }
 
-func TestResolveReaderCursorSigningKeyRejectsCredentialFallbackOutsideDev(t *testing.T) {
-	_, err := resolveReaderCursorSigningKey(
-		"prod", "", "", "postgres://postgres:postgres@localhost/webtag", "test-key",
-	)
-	if err == nil || !strings.Contains(err.Error(), "READER_CURSOR_SIGNING_KEY or CURSOR_SIGNING_KEY") {
+func TestResolveCursorSigningKeyRejectsCredentialFallbackOutsideDev(t *testing.T) {
+	_, err := resolveCursorSigningKey("prod", "", "postgres://postgres:postgres@localhost/webtag", "test-key")
+	if err == nil || !strings.Contains(err.Error(), "CURSOR_SIGNING_KEY") {
 		t.Fatalf("error = %v, want production explicit-key requirement", err)
 	}
 }
 
-func TestResolveReaderCursorSigningKeyAllowsDevelopmentFallback(t *testing.T) {
+func TestResolveCursorSigningKeyAllowsDevelopmentFallback(t *testing.T) {
 	const (
 		databaseURL = "postgres://service:local@database:5432/webtag"
 		analyzerKey = "local-analyzer-key"
 	)
-	got, err := resolveReaderCursorSigningKey("dev", "", "", databaseURL, analyzerKey)
+	got, err := resolveCursorSigningKey("dev", "", databaseURL, analyzerKey)
 	if err != nil {
 		t.Fatal(err)
 	}

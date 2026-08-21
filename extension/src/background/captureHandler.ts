@@ -6,7 +6,7 @@
  *   1. 注入抓取脚本：deps.injectCapture 在活动标签执行 capturePageContent
  *   2. 归一化：toIngestSource 把原始 RawCapture 裁剪、组装为后端 IngestSource
  *   3. 提交：调 WebTagClient.ingest（POST /api/ingest）
- *   4. 轮询：调 WebTagClient.getJob（GET /api/jobs/{job_id}）直到 done / failed / 超时
+ *   4. 轮询：调 WebTagClient.getLink（GET /api/links/{link_id}）直到 done / failed / 超时
  *   5. 保存原文：解析完成后调 WebTagClient.saveLinkContent，持久化浏览器快照
  *   6. 回报：每次状态推进通过 deps.sendSnapshot 把 CaptureSnapshot 推送给 popup，
  *      并把最近一份快照 + 进行中任务持久化到 deps.store（chrome.storage.session）
@@ -40,7 +40,7 @@ import type { RawCapture } from '@/contentScripts/capture'
 import type {
   IngestRequest,
   IngestSource,
-  Job,
+  Link,
   SubmitResponse,
 } from '@/api/types'
 import {
@@ -78,7 +78,7 @@ import {
  *
  * = 轮询间隔 × 最大轮询次数（理论纯轮询耗时）+ 余量（覆盖 SW 被回收的空档、
  * 看门狗唤醒延迟）。超出此预算的持久化 in-flight 记录被视为 STALE：
- *   - 续跑路径忽略它（不再 getJob 续跑一个早已结束 / 卡死的任务）
+ *   - 续跑路径忽略它（不再 getLink 续跑一个早已结束 / 卡死的任务）
  *   - 并发去重路径忽略它（不再阻塞新采集）
  * 这让一个因 storage 故障被丢弃的 clearInFlight 留下的僵尸记录，会在
  * 预算到期后自动失效，而非锁死整个浏览器会话的后续采集。
@@ -520,8 +520,8 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
       )
     }
 
-    // Inbox is durable without a library link or parse job. Never invent
-    // either identity and never poll the library job endpoint for this branch.
+    // Inbox is durable without a library Link. Never invent that identity or
+    // poll the library endpoint for this branch.
     if (submit.inbox_id) {
       const snapshot = await finishCapture(
         makeSnapshot({
@@ -536,8 +536,8 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
       return snapshot
     }
 
-    // A duplicate library URL can return its existing failed state without a
-    // new job. It is not an implicit retry; explicit retry remains refreshLink.
+    // A duplicate library URL can return its existing failed state. It is not
+    // an implicit retry; explicit retry remains refreshLink.
     if (submit.status === 'failed') {
       return finishCapture(
         makeSnapshot({
@@ -551,9 +551,7 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
       )
     }
 
-    // Legacy/library duplicate responses may have no job_id. Preserve the
-    // established immediate-done behavior when no work is returned.
-    if (!submit.job_id || submit.status === 'done') {
+    if (submit.status === 'done') {
       return finishCapture(
         makeSnapshot({
           stage: 'done',
@@ -573,7 +571,7 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
     })
     const inFlight: InFlightCapture = {
       owner: activation.owner,
-      jobId: submit.job_id,
+      linkId: submit.link_id ?? '',
       url,
       title,
       note,
@@ -658,16 +656,16 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
   }
 
   /**
-   * 轮询 getJob 直到任务 done / failed 或超过 MAX_POLL_ATTEMPTS。
+   * 轮询 getLink 直到任务 done / failed 或超过 MAX_POLL_ATTEMPTS。
    *
    * 从 startAttempt 开始计数——首次采集传 0，看门狗续跑传持久化的 attempt。
-   * 每轮：延时 → getJob → decidePollOutcome 决策 → 终态则收尾返回，
+   * 每轮：延时 → getLink → decidePollOutcome 决策 → 终态则收尾返回，
    * 否则发布中间态、把递增后的 attempt 落盘后继续。
    *
    * pollLoopRunning 在进入时置 true、在 finally 置 false——保证一个 SW
    * 实例内只有一个轮询循环，看门狗据此判断是否需要续跑。
    *
-   * @param inFlight     进行中任务记录（jobId / url / title / note / attempt）
+   * @param inFlight     进行中任务记录（linkId / url / title / note / attempt）
    * @param startAttempt 起始轮询序号（首跑 0，续跑为持久化 attempt）
    */
   async function runCapturePolling(
@@ -677,7 +675,7 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
   ): Promise<void> {
     if (pollLoopRunning) return
     pollLoopRunning = true
-    const { jobId, url, title, note, requestedKind = 'auto' } = inFlight
+    const { linkId, url, title, note, requestedKind = 'auto' } = inFlight
     try {
       for (
         let attempt = startAttempt;
@@ -690,7 +688,7 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
           return
         }
         const client = activation.client
-        const result: ApiResult<Job> = await client.getJob(jobId)
+        const result: ApiResult<Link> = await client.getLink(linkId)
         if (!(await activationIsCurrent(activation))) {
           await abandonCapture(activation)
           return
@@ -698,15 +696,9 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
         const outcome = decidePollOutcome(result, attempt, MAX_POLL_ATTEMPTS)
 
         if (outcome.action === 'done') {
-          const libraryKind = result.ok
-            ? result.data.link?.library_kind
-            : undefined
+          const libraryKind = result.ok ? result.data.library_kind : undefined
           if (result.ok) {
-            await saveCapturedOriginal(
-              activation,
-              result.data.link_id,
-              libraryKind,
-            )
+            await saveCapturedOriginal(activation, result.data.id, libraryKind)
             if (!(await activationIsCurrent(activation))) {
               await abandonCapture(activation)
               return
@@ -759,21 +751,17 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
         // SW 此刻被回收，续跑应从下一轮开始，不重复本轮。
         // startedAt 沿用 inFlight 原始值（衡量「采集开始至今」墙钟时长，
         // 不随轮询推进刷新），陈旧判定才能正确反映总耗时。
-        const predictedKind = result.ok
-          ? result.data.link?.predicted_library_kind
-          : undefined
         const midSnapshot = makeSnapshot({
           stage: outcome.stage,
           url,
           title,
           requestedKind,
-          ...(predictedKind ? { predictedLibraryKind: predictedKind } : {}),
         })
         await publishSnapshot(midSnapshot, activation)
         await persistInFlight(
           {
             owner: inFlight.owner,
-            jobId,
+            linkId,
             url,
             title,
             note,
@@ -872,7 +860,7 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
           if (persistedInFlight && (await activationIsCurrent(activation))) {
             inMemoryInFlight = persistedInFlight
             if (
-              !persistedInFlight.jobId &&
+              !persistedInFlight.linkId &&
               persistedInFlight.source &&
               persistedInFlight.idempotencyKey
             ) {
@@ -992,7 +980,7 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
       await publishSnapshot(submittingSnapshot, activation)
       const pendingSubmission: InFlightCapture = {
         owner: activation.owner,
-        jobId: '',
+        linkId: '',
         url: raw.url,
         title: raw.title,
         note,
@@ -1192,7 +1180,7 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
    *   - 该任务 **未陈旧**——isInFlightStale 判定其墙钟耗时未超出采集预算。
    *     陈旧记录（如 clearInFlight 因 storage 故障被丢弃留下的僵尸记录、
    *     或采集异常卡死）不再续跑，直接清掉，避免对一个早已结束 / 死掉的
-   *     任务无限 getJob，也避免它永久占着持久化槽位阻塞新采集。
+   *     任务无限 getLink，也避免它永久占着持久化槽位阻塞新采集。
    *   - 本 SW 实例没有正在跑的轮询循环（pollLoopRunning=false）——
    *     说明轮询循环已随上一个被回收的 SW 一起消失
    * 满足则续跑，但分两种情况：
@@ -1261,7 +1249,7 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
       )
       return
     }
-    if (!inFlight.jobId) {
+    if (!inFlight.linkId) {
       inMemoryInFlight = inFlight
       await resumePendingSubmission(activation, inFlight)
       return

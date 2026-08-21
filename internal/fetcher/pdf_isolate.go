@@ -48,25 +48,10 @@ const (
 type pdfParseOutcome string
 
 const (
-	pdfParseOutcomeSuccess    pdfParseOutcome = "success"
-	pdfParseOutcomeLimit      pdfParseOutcome = "limit"
 	pdfParseOutcomeCrash      pdfParseOutcome = "crash"
 	pdfParseOutcomeTimeout    pdfParseOutcome = "timeout"
 	pdfParseOutcomeCanceled   pdfParseOutcome = "canceled"
 	pdfParseOutcomeParseError pdfParseOutcome = "parse_error"
-)
-
-type pdfParseLimit string
-
-const (
-	pdfParseLimitNone     pdfParseLimit = "none"
-	pdfParseLimitInput    pdfParseLimit = "input"
-	pdfParseLimitObjects  pdfParseLimit = "objects"
-	pdfParseLimitPages    pdfParseLimit = "pages"
-	pdfParseLimitOutput   pdfParseLimit = "output"
-	pdfParseLimitCPU      pdfParseLimit = "cpu"
-	pdfParseLimitMemory   pdfParseLimit = "memory"
-	pdfParseLimitWallTime pdfParseLimit = "wall_time"
 )
 
 var (
@@ -76,15 +61,12 @@ var (
 
 type pdfParseError struct {
 	outcome     pdfParseOutcome
-	limit       pdfParseLimit
 	cause       error
 	maxRSSBytes int64
 }
 
 func (e *pdfParseError) Error() string {
 	switch e.outcome {
-	case pdfParseOutcomeLimit:
-		return errPDFResourceBudget.Error()
 	case pdfParseOutcomeCrash:
 		return "isolated PDF parser crashed: " + errsafe.ErrParse.Error()
 	case pdfParseOutcomeTimeout:
@@ -97,30 +79,6 @@ func (e *pdfParseError) Error() string {
 }
 
 func (e *pdfParseError) Unwrap() error { return e.cause }
-
-func newPDFLimitError(limit pdfParseLimit) error {
-	return &pdfParseError{outcome: pdfParseOutcomeLimit, limit: limit, cause: errPDFResourceBudget}
-}
-
-func pdfParseMetricLabels(err error) (pdfParseOutcome, pdfParseLimit) {
-	if err == nil {
-		return pdfParseOutcomeSuccess, pdfParseLimitNone
-	}
-	var parseErr *pdfParseError
-	if errors.As(err, &parseErr) {
-		return parseErr.outcome, parseErr.limit
-	}
-	if errors.Is(err, context.Canceled) {
-		return pdfParseOutcomeCanceled, pdfParseLimitNone
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return pdfParseOutcomeTimeout, pdfParseLimitWallTime
-	}
-	if errors.Is(err, errPDFResourceBudget) {
-		return pdfParseOutcomeLimit, pdfParseLimitNone
-	}
-	return pdfParseOutcomeParseError, pdfParseLimitNone
-}
 
 type pdfParseBudget struct {
 	maxInputBytes    int64
@@ -148,14 +106,14 @@ func init() {
 func parsePDFIsolated(ctx context.Context, data []byte, budget pdfParseBudget) (body string, resultErr error) {
 	budget = normalizePDFBudget(budget)
 	if int64(len(data)) > budget.maxInputBytes {
-		return "", newPDFLimitError(pdfParseLimitInput)
+		return "", errPDFResourceBudget
 	}
 	if declaredPDFObjectsExceed(data, budget.maxObjects) {
-		return "", newPDFLimitError(pdfParseLimitObjects)
+		return "", errPDFResourceBudget
 	}
 	maxOutputBytes, ok := pdfOutputByteBudget(budget.maxChars)
 	if !ok {
-		return "", newPDFLimitError(pdfParseLimitOutput)
+		return "", errPDFResourceBudget
 	}
 	parseCtx, cancel := context.WithTimeout(ctx, budget.wallTime)
 	defer cancel()
@@ -166,12 +124,12 @@ func parsePDFIsolated(ctx context.Context, data []byte, budget pdfParseBudget) (
 	}
 	scratchDir, err := os.MkdirTemp(budget.testTempRoot, "cairn-pdf-*")
 	if err != nil {
-		return "", &pdfParseError{outcome: pdfParseOutcomeParseError, limit: pdfParseLimitNone, cause: errsafe.ErrParse}
+		return "", &pdfParseError{outcome: pdfParseOutcomeParseError, cause: errsafe.ErrParse}
 	}
 	defer func() {
 		if cleanupErr := os.RemoveAll(scratchDir); cleanupErr != nil {
 			body = ""
-			resultErr = &pdfParseError{outcome: pdfParseOutcomeParseError, limit: pdfParseLimitNone, cause: errsafe.ErrParse}
+			resultErr = &pdfParseError{outcome: pdfParseOutcomeParseError, cause: errsafe.ErrParse}
 		}
 	}()
 	cmd := exec.CommandContext(parseCtx, executable) //nolint:gosec // executable is the current Cairn binary, not caller-controlled input.
@@ -179,7 +137,7 @@ func parsePDFIsolated(ctx context.Context, data []byte, budget pdfParseBudget) (
 	defer func() {
 		if cleanupErr := killPDFHelperProcessGroup(cmd); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrProcessDone) {
 			body = ""
-			resultErr = &pdfParseError{outcome: pdfParseOutcomeParseError, limit: pdfParseLimitNone, cause: errsafe.ErrParse}
+			resultErr = &pdfParseError{outcome: pdfParseOutcomeParseError, cause: errsafe.ErrParse}
 		}
 	}()
 	// The parser needs no application configuration. Do not expose provider
@@ -187,9 +145,8 @@ func parsePDFIsolated(ctx context.Context, data []byte, budget pdfParseBudget) (
 	// attacker-controlled document.
 	goMemoryLimit := "384MiB"
 	if raceDetectorEnabled {
-		// The race runtime reserves a very large shadow address range. The
-		// production RLIMIT_AS is tested by the ordinary build; instrumented
-		// binaries keep the other parser budgets but cannot use that address cap.
+		// Instrumented binaries need substantially more runtime memory. Keep the
+		// other parser budgets, but leave heap control to the race runtime.
 		goMemoryLimit = "off"
 	}
 	cmd.Env = []string{
@@ -224,31 +181,30 @@ func parsePDFIsolated(ctx context.Context, data []byte, budget pdfParseBudget) (
 func classifyPDFHelperCompletion(parseCtx context.Context, cmd *exec.Cmd, output *boundedPDFOutput, budget pdfParseBudget, runErr error) error {
 	if ctxErr := parseCtx.Err(); ctxErr != nil {
 		if errors.Is(ctxErr, context.Canceled) {
-			return &pdfParseError{outcome: pdfParseOutcomeCanceled, limit: pdfParseLimitNone, cause: context.Canceled}
+			return &pdfParseError{outcome: pdfParseOutcomeCanceled, cause: context.Canceled}
 		}
-		return &pdfParseError{outcome: pdfParseOutcomeTimeout, limit: pdfParseLimitWallTime, cause: context.DeadlineExceeded}
+		return &pdfParseError{outcome: pdfParseOutcomeTimeout, cause: context.DeadlineExceeded}
 	}
 	if runErr == nil {
 		if output.exceeded {
-			return newPDFLimitError(pdfParseLimitOutput)
+			return errPDFResourceBudget
 		}
 		return nil
 	}
 	var exitErr *exec.ExitError
 	if !errors.As(runErr, &exitErr) {
-		return &pdfParseError{outcome: pdfParseOutcomeParseError, limit: pdfParseLimitNone, cause: errsafe.ErrParse}
+		return &pdfParseError{outcome: pdfParseOutcomeParseError, cause: errsafe.ErrParse}
 	}
 	if protocolErr, ok := pdfHelperProtocolError(exitErr.ExitCode()); ok {
 		return protocolErr
 	}
 	if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() && pdfProcessExhaustedCPU(cmd.ProcessState, budget.maxCPUSeconds) {
-		return newPDFLimitError(pdfParseLimitCPU)
+		return errPDFResourceBudget
 	}
-	// Runtime crashes, including RLIMIT_AS allocation failures, use exit codes
+	// Runtime crashes, including hard memory-limit failures, use exit codes
 	// outside the helper protocol and remain contained resource failures.
 	return &pdfParseError{
 		outcome:     pdfParseOutcomeCrash,
-		limit:       pdfParseLimitNone,
 		cause:       errPDFResourceBudget,
 		maxRSSBytes: pdfProcessMaxRSSBytes(cmd.ProcessState),
 	}
@@ -257,21 +213,12 @@ func classifyPDFHelperCompletion(parseCtx context.Context, cmd *exec.Cmd, output
 func pdfHelperProtocolError(exitCode int) (error, bool) {
 	switch exitCode {
 	case pdfHelperParseFailure, pdfHelperTextFailure, pdfHelperOutputFailure:
-		return &pdfParseError{outcome: pdfParseOutcomeParseError, limit: pdfParseLimitNone, cause: errsafe.ErrParse}, true
+		return &pdfParseError{outcome: pdfParseOutcomeParseError, cause: errsafe.ErrParse}, true
 	case pdfHelperBudgetFailure:
 		return errPDFResourceBudget, true
-	case pdfHelperPageLimit:
-		return newPDFLimitError(pdfParseLimitPages), true
-	case pdfHelperOutputLimit:
-		return newPDFLimitError(pdfParseLimitOutput), true
-	case pdfHelperInputLimit:
-		return newPDFLimitError(pdfParseLimitInput), true
-	case pdfHelperObjectLimit:
-		return newPDFLimitError(pdfParseLimitObjects), true
-	case pdfHelperMemoryLimit:
-		return newPDFLimitError(pdfParseLimitMemory), true
-	case pdfHelperCPULimit:
-		return newPDFLimitError(pdfParseLimitCPU), true
+	case pdfHelperPageLimit, pdfHelperOutputLimit, pdfHelperInputLimit,
+		pdfHelperObjectLimit, pdfHelperMemoryLimit, pdfHelperCPULimit:
+		return errPDFResourceBudget, true
 	default:
 		return nil, false
 	}
@@ -386,7 +333,7 @@ func applyPDFHelperResourceLimits() int {
 		return pdfHelperMemoryLimit
 	}
 	if !raceDetectorEnabled {
-		if err := syscall.Setrlimit(syscall.RLIMIT_AS, &syscall.Rlimit{Cur: memory, Max: memory}); err != nil {
+		if err := syscall.Setrlimit(syscall.RLIMIT_DATA, &syscall.Rlimit{Cur: memory, Max: memory}); err != nil {
 			return pdfHelperMemoryLimit
 		}
 	}

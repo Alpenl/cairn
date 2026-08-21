@@ -9,9 +9,6 @@ import { annotationTargetKey, canonicalAnnotationTarget } from './annotation-typ
 
 export const THOUGHT_CONTRACT_VERSION = 1 as const
 export const MAX_THOUGHT_LOGICAL_CLOCK = Number.MAX_SAFE_INTEGER
-/** A legacy row has no original v6 operation identity and cannot be safely replayed. */
-export const LEGACY_THOUGHT_OUTBOX_BLOCKED_REASON = 'legacy-operation-missing-v6-wire-baseline'
-export const MISSING_HISTORY_WINNER_KEY_BLOCKED_REASON = 'missing-server-winner-key' as const
 
 export interface ThoughtVersionKey {
   readonly logicalClock: number
@@ -77,13 +74,12 @@ export function isValidThoughtIdentifier(value: unknown, maxBytes = 128): value 
 
 export function isValidThoughtVersionKey(
   value: unknown,
-  allowLegacyZero: boolean,
 ): value is ThoughtVersionKey {
   if (!isRecord(value)) return false
   const key = value as Partial<ThoughtVersionKey>
   return isSafeNonNegativeInteger(key.logicalClock) &&
     key.logicalClock <= MAX_THOUGHT_LOGICAL_CLOCK &&
-    (allowLegacyZero || key.logicalClock > 0) &&
+    key.logicalClock > 0 &&
     isValidThoughtIdentifier(key.deviceId) &&
     isValidThoughtIdentifier(key.opId)
 }
@@ -149,14 +145,7 @@ function isValidFrozenSnapshot(value: unknown): value is ThoughtFrozenSnapshot {
   if (!isRecord(value) || typeof value.body !== 'string' ||
     !isNonEmptyString(value.source) || !value.source.trim() ||
     (value.quote !== null && !isValidQuote(value.quote)) || !isRecord(value.target) ||
-    !isValidThoughtVersionKey(value.winnerKey, true)) return false
-  return value.originalHostSnapshot === undefined || isJSONValue(value.originalHostSnapshot)
-}
-
-function isLegacyFrozenSnapshotWithoutWinnerKey(value: unknown): boolean {
-  if (!isRecord(value) || Object.prototype.hasOwnProperty.call(value, 'winnerKey') ||
-    typeof value.body !== 'string' || !isNonEmptyString(value.source) || !value.source.trim() ||
-    (value.quote !== null && !isValidQuote(value.quote)) || !isRecord(value.target)) return false
+    !isValidThoughtVersionKey(value.winnerKey)) return false
   return value.originalHostSnapshot === undefined || isJSONValue(value.originalHostSnapshot)
 }
 
@@ -166,15 +155,10 @@ export interface ThoughtOutboxRecord {
   readonly namespace: string
   /** Browser-local annotation operation sequence; never a server cursor. */
   readonly sequence: number
-  /**
-   * Persisted identity fields are untrusted until a complete v6 wire
-   * baseline has been verified. They stay opaque so legacy local payloads can
-   * remain visible without fabricating an operation key.
-   */
-  readonly opId: unknown
-  readonly deviceId: unknown
-  readonly contractVersion: unknown
-  readonly logicalClock: unknown
+  readonly opId: string
+  readonly deviceId: string
+  readonly contractVersion: typeof THOUGHT_CONTRACT_VERSION
+  readonly logicalClock: number
   readonly operationKind: 'add' | 'update' | 'delete'
   readonly annotationId: string
   readonly hostKind: string
@@ -188,9 +172,8 @@ export interface ThoughtOutboxRecord {
   readonly attemptCount: number
   readonly nextAttemptAt?: number
   readonly lastError?: string
-  /** SHA-256 of the canonical legacy/new thought payload when available. */
+  /** SHA-256 of the canonical thought payload when available. */
   readonly checksum?: string
-  /** Quarantined legacy rows remain durable but are excluded from pushing. */
   readonly status?: 'pending' | 'blocked'
   readonly blockedReason?: string
   /** A recovery CAS saw a newer winner; the candidate remains durable. */
@@ -199,53 +182,10 @@ export interface ThoughtOutboxRecord {
   readonly expectedCurrentWinnerKey?: ThoughtVersionKey
 }
 
-/** An outbox record whose original v6 operation identity is safe to replay. */
-export interface CompleteThoughtOutboxRecord extends ThoughtOutboxRecord {
-  readonly opId: string
-  readonly deviceId: string
-  readonly contractVersion: typeof THOUGHT_CONTRACT_VERSION
-  readonly logicalClock: number
-}
-
-/**
- * A v6 operation can be replayed only when its original wire identity is
- * already durable. Generating a new key for a legacy row could change LWW order.
- */
-export function hasCompleteThoughtWireBaseline(
-  record: ThoughtOutboxRecord,
-): record is CompleteThoughtOutboxRecord {
-  return record.contractVersion === THOUGHT_CONTRACT_VERSION &&
-    isValidThoughtVersionKey({
-      logicalClock: record.logicalClock,
-      deviceId: record.deviceId,
-      opId: record.opId,
-    }, false)
-}
-
-/** Keeps unverifiable legacy rows visible locally while permanently excluding them from replay. */
-export function quarantineLegacyThoughtOutboxRecord(
-  record: ThoughtOutboxRecord,
-): ThoughtOutboxRecord {
-  if (hasCompleteThoughtWireBaseline(record)) return record
-  const reason = isNonEmptyString(record.blockedReason)
-    ? record.blockedReason
-    : LEGACY_THOUGHT_OUTBOX_BLOCKED_REASON
-  if (record.status === 'blocked' && record.blockedReason === reason &&
-    record.nextAttemptAt === undefined) {
-    return record
-  }
-  return {
-    ...record,
-    status: 'blocked',
-    blockedReason: reason,
-    nextAttemptAt: undefined,
-  }
-}
-
 export function isThoughtOutboxDispatchable(
   record: ThoughtOutboxRecord,
-): record is CompleteThoughtOutboxRecord {
-  return hasCompleteThoughtWireBaseline(record) && record.status !== 'blocked'
+): boolean {
+  return record.status !== 'blocked'
 }
 
 /**
@@ -284,7 +224,6 @@ export interface ThoughtSyncStateRecord {
   readonly cursor: string
   readonly deviceId: string
   readonly tabToken: string
-  readonly clockContractVersion?: typeof THOUGHT_CONTRACT_VERSION
   /** Highest durable local, pulled, or acknowledged Lamport clock. */
   readonly logicalClockFloor?: number
   readonly updatedAt: number
@@ -404,8 +343,8 @@ function isValidThoughtSupersessionOperation(value: unknown, annotationId: strin
       : isRecord(quote)) &&
     isNonEmptyString(operation.createdAt) &&
     hasRecoveryOf === hasExpectedWinner &&
-    (!hasRecoveryOf || (isValidThoughtVersionKey(operation.recoveryOf, true) &&
-      isValidThoughtVersionKey(operation.expectedCurrentWinnerKey, true)))
+    (!hasRecoveryOf || (isValidThoughtVersionKey(operation.recoveryOf) &&
+      isValidThoughtVersionKey(operation.expectedCurrentWinnerKey)))
 }
 
 export function isValidThoughtSupersessionEventRecord(
@@ -476,6 +415,12 @@ export function isValidThoughtOutboxRecord(
     (expectedNamespace === undefined || record.namespace === expectedNamespace) &&
     isSafeNonNegativeInteger(record.sequence) && record.sequence > 0 &&
     record.key[0] === record.namespace && record.key[1] === record.sequence &&
+    record.contractVersion === THOUGHT_CONTRACT_VERSION &&
+    isValidThoughtVersionKey({
+      logicalClock: record.logicalClock,
+      deviceId: record.deviceId,
+      opId: record.opId,
+    }) &&
     (record.operationKind === 'add' || record.operationKind === 'update' || record.operationKind === 'delete') &&
     isNonEmptyString(record.annotationId) && isNonEmptyString(record.hostKind) &&
     isNonEmptyString(record.hostId) && isNonEmptyString(record.linkId) &&
@@ -490,19 +435,16 @@ export function isValidThoughtOutboxRecord(
     (record.patch === undefined || isValidPatch(record.patch)) &&
     (record.operationKind === 'delete' || record.annotation !== null || record.patch !== undefined) &&
     (status === 'pending' || status === 'blocked') &&
-    // A blocked legacy row may not yet have a reason. Quarantine normalizes
-    // it without altering its projection payload or opaque wire identity.
     (record.blockedReason === undefined || typeof record.blockedReason === 'string') &&
     (record.recoveryConflict === undefined || typeof record.recoveryConflict === 'boolean') &&
     hasRecoveryOf === hasExpectedWinner &&
-    (!hasRecoveryOf || (isValidThoughtVersionKey(record.recoveryOf, true) &&
-      isValidThoughtVersionKey(record.expectedCurrentWinnerKey, true)))
+    (!hasRecoveryOf || (isValidThoughtVersionKey(record.recoveryOf) &&
+      isValidThoughtVersionKey(record.expectedCurrentWinnerKey)))
 }
 
 function hasValidThoughtHistoryOutboxShape(
   value: unknown,
   expectedNamespace?: string,
-  isValidSnapshot: (snapshot: unknown) => boolean = isValidFrozenSnapshot,
 ): boolean {
   if (!isRecord(value)) return false
   const record = value as Partial<ThoughtHistoryOutboxRecord>
@@ -515,7 +457,7 @@ function hasValidThoughtHistoryOutboxShape(
     logicalClock: record.logicalClock,
     deviceId: record.deviceId,
     opId: record.opId,
-  }, false)
+  })
   const reattach = record.action === 'reattach'
   return Array.isArray(record.key) && record.key.length === 2 &&
     isNonEmptyString(record.namespace) &&
@@ -532,7 +474,7 @@ function hasValidThoughtHistoryOutboxShape(
       ? isSafeNonNegativeInteger(record.expectedHostRevision) && record.expectedHostRevision > 0 &&
         snapshotRecord !== null && snapshotRecord.quote !== null
       : record.expectedHostRevision === undefined) &&
-    isValidSnapshot(snapshot) &&
+    isValidFrozenSnapshot(snapshot) &&
     isSafeNonNegativeInteger(record.createdAt) &&
     isSafeNonNegativeInteger(record.attemptCount) &&
     (record.nextAttemptAt === undefined || isSafeNonNegativeInteger(record.nextAttemptAt)) &&
@@ -546,69 +488,7 @@ export function isValidThoughtHistoryOutboxRecord(
   value: unknown,
   expectedNamespace?: string,
 ): value is ThoughtHistoryOutboxRecord {
-  return hasValidThoughtHistoryOutboxShape(value, expectedNamespace, isValidFrozenSnapshot)
-}
-
-/**
- * Pre-winner-key records are recognized only to recover or quarantine them;
- * they are never accepted as active history outbox rows.
- */
-export function isLegacyThoughtHistoryOutboxRecordMissingWinnerKey(
-  value: unknown,
-  expectedNamespace?: string,
-): boolean {
-  return hasValidThoughtHistoryOutboxShape(
-    value,
-    expectedNamespace,
-    isLegacyFrozenSnapshotWithoutWinnerKey,
-  )
-}
-
-export function isQuarantinedThoughtHistoryOutboxRecord(
-  value: unknown,
-  expectedNamespace?: string,
-): boolean {
-  return isLegacyThoughtHistoryOutboxRecordMissingWinnerKey(value, expectedNamespace) &&
-    isRecord(value) && value.status === 'blocked' &&
-    value.blockedReason === MISSING_HISTORY_WINNER_KEY_BLOCKED_REASON
-}
-
-/** Restores legacy evidence only when a matching durable server winner exists. */
-export function hydrateThoughtHistoryOutboxWinnerKey(
-  value: unknown,
-  expectedNamespace: string | undefined,
-  winnerKey: unknown,
-): ThoughtHistoryOutboxRecord | null {
-  if (isValidThoughtHistoryOutboxRecord(value, expectedNamespace)) return value
-  if (!isLegacyThoughtHistoryOutboxRecordMissingWinnerKey(value, expectedNamespace) ||
-    !isValidThoughtVersionKey(winnerKey, true) || !isRecord(value) || !isRecord(value.snapshot)) {
-    return null
-  }
-  const candidate = {
-    ...value,
-    snapshot: {
-      ...value.snapshot,
-      winnerKey: { ...winnerKey },
-    },
-  }
-  return isValidThoughtHistoryOutboxRecord(candidate, expectedNamespace) ? candidate : null
-}
-
-/** Keeps otherwise-valid legacy evidence durable but removes it from retryable work. */
-export function quarantineThoughtHistoryOutboxMissingWinnerKey(
-  value: unknown,
-  expectedNamespace?: string,
-): Record<string, unknown> | null {
-  if (!isLegacyThoughtHistoryOutboxRecordMissingWinnerKey(value, expectedNamespace) ||
-    !isRecord(value)) return null
-  if (isQuarantinedThoughtHistoryOutboxRecord(value, expectedNamespace)) return value
-  const blocked = { ...value }
-  delete blocked.nextAttemptAt
-  return {
-    ...blocked,
-    status: 'blocked',
-    blockedReason: MISSING_HISTORY_WINNER_KEY_BLOCKED_REASON,
-  }
+  return hasValidThoughtHistoryOutboxShape(value, expectedNamespace)
 }
 
 export function isValidThoughtMaterializedRecord(
@@ -624,7 +504,7 @@ export function isValidThoughtMaterializedRecord(
     (expectedNamespace === undefined || record.namespace === expectedNamespace) &&
     record.key[0] === record.namespace && record.key[1] === record.annotationId &&
     record.contractVersion === THOUGHT_CONTRACT_VERSION &&
-    isValidThoughtVersionKey(record.winnerKey, true) &&
+    isValidThoughtVersionKey(record.winnerKey) &&
     isNonEmptyString(record.annotationId) && isNonEmptyString(record.hostKind) &&
     isNonEmptyString(record.hostId) && (record.linkId === null || isNonEmptyString(record.linkId)) &&
     target !== null && targetKey !== null && record.targetKey === targetKey &&

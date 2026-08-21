@@ -3,7 +3,6 @@ package durablework
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,15 +17,9 @@ import (
 // private to the durable adapter; application services never receive a
 // transaction handle or learn River cancellation semantics.
 type LinkQueue interface {
-	EnqueueTx(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error
-	CancelActiveTx(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error
+	EnqueueTx(context.Context, pgx.Tx, model.ParseAttempt) error
+	CancelActiveTx(context.Context, pgx.Tx, uuid.UUID) error
 	CancelAllActiveTx(context.Context, pgx.Tx, uuid.UUID) error
-}
-
-type LinkCommandsOptions struct {
-	Transactions database.TxBeginner
-	Links        *repository.PGXLinkRepository
-	Queue        LinkQueue
 }
 
 // LinkCommands is the concrete durable command adapter shared by submit,
@@ -37,64 +30,77 @@ type LinkCommands struct {
 	queue        LinkQueue
 }
 
-func NewLinkCommands(options LinkCommandsOptions) *LinkCommands {
+func NewLinkCommands(transactions database.TxBeginner, links *repository.PGXLinkRepository, queue LinkQueue) *LinkCommands {
+	if transactions == nil || links == nil || queue == nil {
+		panic("durablework.NewLinkCommands: transactions, links, and queue are required")
+	}
 	return &LinkCommands{
-		transactions: options.Transactions,
-		links:        options.Links,
-		queue:        options.Queue,
+		transactions: transactions,
+		links:        links,
+		queue:        queue,
 	}
 }
 
 func (c *LinkCommands) SubmitLink(ctx context.Context, command service.SubmitLinkCommand) (service.LinkSubmissionResult, error) {
-	results, err := c.submitLinks(ctx, []service.LinkCapture{command.Capture})
+	var result repository.LinkSubmitResult
+	err := database.WithTx(ctx, c.transactions, func(tx pgx.Tx) error {
+		var err error
+		result, err = c.links.SubmitTx(ctx, tx, repositoryLinkCapture(command.Capture))
+		if err != nil {
+			return err
+		}
+		if result.Link == nil {
+			return errors.New("submit link: repository returned nil link")
+		}
+		if result.Attempt == nil {
+			return nil
+		}
+		if result.Restored {
+			if err := c.queue.CancelActiveTx(ctx, tx, result.Link.ID); err != nil {
+				return err
+			}
+		}
+		return c.queue.EnqueueTx(ctx, tx, *result.Attempt)
+	})
 	if err != nil {
 		return service.LinkSubmissionResult{}, err
 	}
-	if len(results) != 1 || results[0].Link == nil {
-		return service.LinkSubmissionResult{}, fmt.Errorf("submit link: expected one result, got %d", len(results))
-	}
-	return results[0], nil
+	return service.LinkSubmissionResult{Link: result.Link, Enqueued: result.Attempt != nil}, nil
 }
 
 func (c *LinkCommands) RequeueLink(ctx context.Context, command service.RequeueLinkCommand) (service.LinkSubmissionResult, error) {
-	if !c.readyForLinks() {
-		return service.LinkSubmissionResult{}, errors.New("requeue link: durable commands are not configured")
-	}
 	var capture *repository.CreateLinkParams
 	if command.Capture != nil {
 		converted := repositoryLinkCapture(*command.Capture)
 		capture = &converted
 	}
-	var createdJob *model.ParseJob
+	var attempt model.ParseAttempt
 	err := database.WithTx(ctx, c.transactions, func(tx pgx.Tx) error {
 		var err error
-		createdJob, err = c.links.RequeueExistingTx(ctx, tx, command.LinkID, capture)
+		attempt, err = c.links.RequeueExistingTx(ctx, tx, command.LinkID, capture)
 		if err != nil {
 			return err
 		}
-		if err := c.queue.CancelActiveTx(ctx, tx, command.LinkID, createdJob.ID); err != nil {
+		if err := c.queue.CancelActiveTx(ctx, tx, command.LinkID); err != nil {
 			return err
 		}
-		return c.queue.EnqueueTx(ctx, tx, command.LinkID, createdJob.ID)
+		return c.queue.EnqueueTx(ctx, tx, attempt)
 	})
 	if err != nil {
 		return service.LinkSubmissionResult{}, err
 	}
-	return service.LinkSubmissionResult{Job: createdJob, Inserted: true}, nil
+	return service.LinkSubmissionResult{Enqueued: true}, nil
 }
 
-// UpdateLinkIntent persists a concrete capture intent while reusing an active
+// SetLinkLibraryKind persists a concrete capture selection while reusing an active
 // parse attempt. If terminal completion wins the row lock first, the same
 // transaction creates and enqueues a replacement attempt so the later-committed
 // explicit selection cannot be stranded on a done row.
-func (c *LinkCommands) UpdateLinkIntent(ctx context.Context, command service.UpdateLinkIntentCommand) (service.UpdateLinkIntentResult, error) {
-	if !c.readyForLinks() {
-		return service.UpdateLinkIntentResult{}, errors.New("update link intent: durable commands are not configured")
-	}
-	var result service.UpdateLinkIntentResult
+func (c *LinkCommands) SetLinkLibraryKind(ctx context.Context, command service.SetLinkLibraryKindCommand) (service.SetLinkLibraryKindResult, error) {
+	var result service.SetLinkLibraryKindResult
 	err := database.WithTx(ctx, c.transactions, func(tx pgx.Tx) error {
-		updated, err := c.links.UpdateRequestedLibraryIntentTx(ctx, tx, repository.UpdateRequestedLibraryIntentParams{
-			ID: command.LinkID, Kind: command.Kind, Source: command.Source,
+		updated, err := c.links.SetLibraryKindTx(ctx, tx, repository.SetLibraryKindParams{
+			ID: command.LinkID, Kind: command.Kind, Override: command.Override,
 		})
 		if err != nil {
 			return err
@@ -104,34 +110,26 @@ func (c *LinkCommands) UpdateLinkIntent(ctx context.Context, command service.Upd
 			return nil
 		}
 
-		job, err := c.links.RequeueExistingTx(ctx, tx, command.LinkID, nil)
+		attempt, err := c.links.RequeueExistingTx(ctx, tx, command.LinkID, nil)
 		if err != nil {
 			return err
 		}
-		if err := c.queue.CancelActiveTx(ctx, tx, command.LinkID, job.ID); err != nil {
+		if err := c.queue.CancelActiveTx(ctx, tx, command.LinkID); err != nil {
 			return err
 		}
-		if err := c.queue.EnqueueTx(ctx, tx, command.LinkID, job.ID); err != nil {
+		if err := c.queue.EnqueueTx(ctx, tx, attempt); err != nil {
 			return err
 		}
 		result.Status = model.LinkStatusPending
-		result.Job = job
 		return nil
 	})
 	if err != nil {
-		return service.UpdateLinkIntentResult{}, err
+		return service.SetLinkLibraryKindResult{}, err
 	}
 	return result, nil
 }
 
-func (c *LinkCommands) SubmitLinksBatch(ctx context.Context, command service.SubmitLinksBatchCommand) ([]service.LinkSubmissionResult, error) {
-	return c.submitLinks(ctx, command.Captures)
-}
-
 func (c *LinkCommands) ConvertLink(ctx context.Context, command service.ConvertLinkCommand) (service.ConvertLinkResult, error) {
-	if !c.readyForLinks() {
-		return service.ConvertLinkResult{}, errors.New("convert link: durable commands are not configured")
-	}
 	var result repository.ConvertLinkResult
 	err := database.WithTx(ctx, c.transactions, func(tx pgx.Tx) error {
 		var err error
@@ -143,10 +141,10 @@ func (c *LinkCommands) ConvertLink(ctx context.Context, command service.ConvertL
 			ExpectedSiteRevision:    command.ExpectedSiteRevision,
 			PreservedUserNote:       command.PreservedUserNote,
 		})
-		if err != nil || result.ParseJobID == nil {
+		if err != nil || result.ParseAttempt == nil {
 			return err
 		}
-		return c.queue.EnqueueTx(ctx, tx, result.LinkID, *result.ParseJobID)
+		return c.queue.EnqueueTx(ctx, tx, *result.ParseAttempt)
 	})
 	if err != nil {
 		return service.ConvertLinkResult{}, err
@@ -154,14 +152,11 @@ func (c *LinkCommands) ConvertLink(ctx context.Context, command service.ConvertL
 	return service.ConvertLinkResult{
 		LinkID: result.LinkID, Kind: result.Kind, ContentRevision: result.ContentRevision,
 		Status: result.Status, SiteID: result.SiteID, SiteRevision: result.SiteRevision,
-		EntryID: result.EntryID, ParseJobID: result.ParseJobID,
+		EntryID: result.EntryID,
 	}, nil
 }
 
 func (c *LinkCommands) DeleteLink(ctx context.Context, command service.DeleteLinkCommand) error {
-	if !c.readyForLinks() {
-		return errors.New("delete link: durable commands are not configured")
-	}
 	return database.WithTx(ctx, c.transactions, func(tx pgx.Tx) error {
 		lockedID, err := c.links.LockLinkForDeleteTx(ctx, tx, command.LinkID)
 		if err != nil {
@@ -174,64 +169,6 @@ func (c *LinkCommands) DeleteLink(ctx context.Context, command service.DeleteLin
 	})
 }
 
-func (c *LinkCommands) readyForLinks() bool {
-	return c != nil && c.transactions != nil && c.links != nil && c.queue != nil
-}
-
-func (c *LinkCommands) submitLinks(ctx context.Context, captures []service.LinkCapture) ([]service.LinkSubmissionResult, error) {
-	if len(captures) == 0 {
-		return nil, nil
-	}
-	if !c.readyForLinks() {
-		return nil, errors.New("submit links: durable commands are not configured")
-	}
-	items := make([]repository.CreateLinkParams, len(captures))
-	for i := range captures {
-		items[i] = repositoryLinkCapture(captures[i])
-	}
-
-	var results []repository.LinkSubmitResult
-	err := database.WithTx(ctx, c.transactions, func(tx pgx.Tx) error {
-		var err error
-		results, err = c.links.SubmitBatchTx(ctx, tx, items)
-		if err != nil {
-			return err
-		}
-		for _, result := range results {
-			if result.Job == nil {
-				continue
-			}
-			if result.Link == nil {
-				return errors.New("submit links: result with parse job is missing link")
-			}
-			if result.Restored {
-				if err := c.queue.CancelActiveTx(ctx, tx, result.Link.ID, result.Job.ID); err != nil {
-					return err
-				}
-			}
-			if err := c.queue.EnqueueTx(ctx, tx, result.Link.ID, result.Job.ID); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return serviceLinkSubmissionResults(results), err
-	}
-	return serviceLinkSubmissionResults(results), nil
-}
-
-func serviceLinkSubmissionResults(results []repository.LinkSubmitResult) []service.LinkSubmissionResult {
-	out := make([]service.LinkSubmissionResult, len(results))
-	for i := range results {
-		out[i] = service.LinkSubmissionResult{
-			Link: results[i].Link, Job: results[i].Job,
-			Inserted: results[i].Inserted, Restored: results[i].Restored, Error: results[i].Error,
-		}
-	}
-	return out
-}
-
 func repositoryLinkCapture(capture service.LinkCapture) repository.CreateLinkParams {
 	return repository.CreateLinkParams{
 		URL: capture.URL, SourceKind: capture.SourceKind, SourceKey: capture.SourceKey,
@@ -240,8 +177,7 @@ func repositoryLinkCapture(capture service.LinkCapture) repository.CreateLinkPar
 		Description: capture.Description, Status: capture.Status, Domain: capture.Domain,
 		ContentType: capture.ContentType, PathDepth: capture.PathDepth, ParentPath: capture.ParentPath,
 		ParentID: capture.ParentID, RequestedLibraryKind: capture.RequestedLibraryKind,
-		RequestedLibraryKindSource: capture.RequestedLibraryKindSource,
-		PredictedLibraryKind:       capture.PredictedLibraryKind,
+		UserSelectedLibraryKind: capture.UserSelectedLibraryKind,
 	}
 }
 

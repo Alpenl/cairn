@@ -81,7 +81,7 @@ function props(over: Partial<TestDetailPaneProps> = {}): TestDetailPaneProps {
     corpus: [],
     annotationsEnabled: true,
     aiEnabled: true,
-    semanticEnabled: true,
+    relatedTagsEnabled: true,
     engagementEnabled: true,
     anns: [],
     onAddAnn: vi.fn(async (annotation) => {
@@ -336,57 +336,6 @@ describe('DetailPane 文章导航', () => {
 
     expect(onPrevious).toHaveBeenCalledTimes(1)
     expect(onNext).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('DetailPane 正文历史入口', () => {
-  it('提供 callback 时显示带无障碍名称的按钮并传递当前链接 ID', () => {
-    const onOpenContentHistory = vi.fn()
-    render(
-      <TestDetailPane
-        {...props({
-          l: makeLink({ id: 'L1' }),
-          onOpenContentHistory,
-        })}
-      />,
-    )
-
-    const button = screen.getByRole('button', { name: '正文历史' })
-    expect(button).toHaveAttribute('title', '正文历史')
-
-    fireEvent.click(button)
-
-    expect(onOpenContentHistory).toHaveBeenCalledWith('L1')
-  })
-
-  it('没有 callback 时不显示入口', () => {
-    render(<TestDetailPane {...props()} />)
-
-    expect(screen.queryByRole('button', { name: '正文历史' })).not.toBeInTheDocument()
-  })
-
-  it('进入正文编辑态后隐藏入口，避免编辑期间误触', () => {
-    const onOpenContentHistory = vi.fn()
-    render(
-      <TestDetailPane
-        {...props({
-          l: makeLink({
-            id: 'L-HISTORY-EDIT',
-            content: '可编辑正文',
-            content_format: 'plain',
-            content_revision: 1,
-          }),
-          onOpenContentHistory,
-        })}
-      />,
-    )
-
-    expandOriginal()
-    fireEvent.click(screen.getByRole('button', { name: '编辑已保存原文' }))
-
-    expect(screen.queryByRole('button', { name: '正文历史' })).not.toBeInTheDocument()
-    expect(screen.getByRole('textbox', { name: '编辑已保存原文' })).toBeInTheDocument()
-    expect(onOpenContentHistory).not.toHaveBeenCalled()
   })
 })
 
@@ -1554,7 +1503,7 @@ describe('DetailPane 原文操作', () => {
     expect(screen.getByText('你好，世界')).toBeInTheDocument()
   })
 
-  it('把过期与旧版未验证译文放在独立历史区域且不当作当前译文', () => {
+  it('把过期译文放在独立历史区域且不当作当前译文', () => {
     const stale = translation({
       id: 'stale',
       scope: 'full',
@@ -1564,16 +1513,7 @@ describe('DetailPane 原文操作', () => {
       source_content_revision: 7,
       stale: true,
     })
-    const legacy = translation({
-      id: 'legacy',
-      scope: 'full',
-      block_key: 'content',
-      source_text: 'Unverified body',
-      translated_text: '未验证正文译文',
-      source_content_revision: null,
-    })
-
-    render(
+		render(
       <TestDetailPane
         {...props({
           l: makeLink({
@@ -1581,17 +1521,14 @@ describe('DetailPane 原文操作', () => {
             content: 'Current saved body',
             content_format: 'plain',
             content_revision: 8,
-          }),
-          staleTranslations: [stale],
-          legacyTranslations: [legacy],
-        })}
+				}),
+				staleTranslations: [stale],
+			})}
       />,
     )
 
-    expect(screen.getByText('已过期译文')).toBeInTheDocument()
-    expect(screen.getByText('旧版未验证译文')).toBeInTheDocument()
-    expect(screen.getByText('旧正文译文')).toBeInTheDocument()
-    expect(screen.getByText('未验证正文译文')).toBeInTheDocument()
+		expect(screen.getByText('已过期译文')).toBeInTheDocument()
+		expect(screen.getByText('旧正文译文')).toBeInTheDocument()
     expandOriginal()
     expect(screen.queryByRole('button', { name: '中文译文' })).not.toBeInTheDocument()
   })
@@ -1877,8 +1814,6 @@ describe('DetailPane 标签筛选', () => {
     resourceStore.activateIdentity(lease)
     const getRelatedTags = vi.fn(async () => ok({
       items: ['server-related'],
-      model: 'semantic',
-      degraded: false,
     }))
     const readerClient = {
       identityLease: lease,
@@ -1903,7 +1838,7 @@ describe('DetailPane 标签筛选', () => {
     resourceStore.deactivateIdentity(lease)
   })
 
-  it('does not request or render related tags when semantic capability is unavailable', () => {
+  it('does not request or render related tags when the capability is unavailable', () => {
     const lease = new IdentityLease({
       serverClientDataNamespace: 'detail-related-disabled-server',
       physicalNamespace: 'detail-related-disabled-physical',
@@ -1912,8 +1847,6 @@ describe('DetailPane 标签筛选', () => {
     resourceStore.activateIdentity(lease)
     const getRelatedTags = vi.fn(async () => ok({
       items: ['server-related'],
-      model: 'semantic',
-      degraded: false,
     }))
     const readerClient = {
       identityLease: lease,
@@ -1924,9 +1857,9 @@ describe('DetailPane 标签筛选', () => {
     render(
       <TestDetailPane
         {...props({
-          l: makeLink({ id: 'L-semantic-off', tags: ['LLM'] }),
+          l: makeLink({ id: 'L-related-tags-off', tags: ['LLM'] }),
           readerClient,
-          semanticEnabled: false,
+          relatedTagsEnabled: false,
           corpus: [makeLink({ id: 'other', tags: ['LLM', 'local-related'] })],
         })}
       />,

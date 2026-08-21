@@ -7,7 +7,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"webtag/internal/dto"
-	"webtag/internal/middleware"
 )
 
 // listTags 处理 GET /api/tags：返回所有标签及对应的使用次数。
@@ -29,6 +28,6 @@ func listTags(service TagService) gin.HandlerFunc {
 		if resp == nil {
 			resp = []dto.TagCountResponse{}
 		}
-		middleware.CacheableJSON(c, http.StatusOK, resp)
+		c.JSON(http.StatusOK, resp)
 	}
 }

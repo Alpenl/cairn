@@ -29,43 +29,29 @@ const cursorSeparator = "."
 // clients treat the token as opaque — we can change the underlying
 // scheme (compact binary, signed) without breaking API contracts.
 //
-// Wave 9 MED M5：当 s.cursorKey 非空时在 payload 后追加
-// ".<hex(HMAC-SHA256(payload, key)[:8])>" 防止伪造；为空时落回明文格式
-// 保持向后兼容。
+// payload 后追加 ".<hex(HMAC-SHA256(payload, key)[:8])>" 防止伪造。
 func (s *LinkReadService) encodeListCursor(createdAt time.Time, id uuid.UUID) string {
 	raw := strconv.FormatInt(createdAt.UTC().UnixNano(), 10) + ":" + id.String()
-	if len(s.cursorKey) == 0 {
-		return base64.RawURLEncoding.EncodeToString([]byte(raw))
-	}
 	raw += cursorSeparator + signCursor(s.cursorKey, raw)
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
 // decodeListCursor 是 encodeListCursor 的逆操作；任何解析失败都返回错误，
-// 由上层翻成 422，避免把内部格式细节透给客户端。当 s.cursorKey 非空时
-// 校验 HMAC：缺失或不匹配都返回 invalid_cursor 错误。
+// 由上层翻成 422，避免把内部格式细节透给客户端。缺失或不匹配的 HMAC
+// 都返回 invalid_cursor 错误。
 func (s *LinkReadService) decodeListCursor(token string) (*repository.ListLinksCursor, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
 		return nil, fmt.Errorf("decode cursor: %w", err)
 	}
 
-	payload := string(raw)
-	if len(s.cursorKey) > 0 {
-		// 找最后一个 '.'：payload 内部 uuid 字符串本身不含 '.'，所以
-		// 第一个 '.' 之后的部分一定是签名段。
-		dot := strings.LastIndex(payload, cursorSeparator)
-		if dot < 0 {
-			return nil, fmt.Errorf("cursor missing signature")
-		}
-		signed, sig := payload[:dot], payload[dot+1:]
-		expected := signCursor(s.cursorKey, signed)
-		// hmac.Equal 走常量时间比较防 timing 攻击；token 长度异常会被
-		// hmac.Equal 直接判 false（内部先比较长度）。
-		if !hmac.Equal([]byte(sig), []byte(expected)) {
-			return nil, fmt.Errorf("cursor signature mismatch")
-		}
-		payload = signed
+	payload, sig, ok := strings.Cut(string(raw), cursorSeparator)
+	if !ok || sig == "" {
+		return nil, fmt.Errorf("cursor missing signature")
+	}
+	expected := signCursor(s.cursorKey, payload)
+	if !hmac.Equal([]byte(sig), []byte(expected)) {
+		return nil, fmt.Errorf("cursor signature mismatch")
 	}
 
 	parts := strings.SplitN(payload, ":", 2)

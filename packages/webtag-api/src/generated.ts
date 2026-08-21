@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List, search or existence-check links
-         * @description Lists links filtered by collection kind and enrichment status. A plain legacy request defaults to completed reading links, preventing website cards from appearing in article readers. library_kind=reading|site explicitly selects a collection. The optional status= parameter takes pending|processing|failed|done; an explicit status query may return either collection and unresolved automatic captures. The status filter combines orthogonally with tags/domain/content_type, the paired created_at range, and both pagination modes. Two optional modes override the normal list path: q= runs hybrid search and url= performs an exact normalized-URL existence check.
+         * @description Lists links filtered by collection kind and enrichment status. A plain legacy request defaults to completed reading links, preventing website cards from appearing in article readers. library_kind=reading|site explicitly selects a collection. The optional status= parameter takes pending|processing|failed|done; an explicit status query may return either collection and unresolved automatic captures. The status filter combines with tags/domain/content_type, the paired created_at range, and both pagination modes. Two optional modes override the normal list path: q= runs keyword search and url= performs an exact normalized-URL existence check.
          */
         get: {
             parameters: {
@@ -32,7 +32,7 @@ export interface paths {
                     created_from?: string;
                     /** @description Exclusive created_at upper bound in RFC3339 format. Must be supplied together with created_from; together they define the half-open interval [created_from, created_before). One-sided, malformed, equal, or reversed bounds return 422; omitting both remains valid. */
                     created_before?: string;
-                    /** @description Hybrid search query. Non-blank switches to semantic+keyword search: when EMBEDDING_MODEL is configured the query is vectorized and matched against link content vectors (cosine nearest, top-50) merged with an ILIKE(title/summary/tags) keyword match, deduped, semantic hits first; when the model is unset or vectorization fails it degrades to pure ILIKE. Top-50, not paginated (page/after ignored). Blank/whitespace is treated as not supplied. Combines with status/tags/domain/content_type. Over 512 runes returns 422. */
+                    /** @description Keyword query over title, summary, and tags. Results are ordered newest first, limited to 50, and are not paginated (page/after ignored). Blank or whitespace is treated as not supplied. Combines with status, tags, domain, and content_type. Over 512 runes returns 422. */
                     q?: string;
                     /** @description Exact normalized-URL existence check. Returns 0 or 1 link (single-element or empty items array), no pagination. Takes precedence over q= when both are supplied. An invalid URL returns 422. */
                     url?: string;
@@ -66,13 +66,13 @@ export interface paths {
         put?: never;
         /**
          * Submit a single URL
-         * @description Idempotent by URL: any existing URL returns its current link/job state without creating work, including failed links. Only a new URL creates and enqueues a parse job. Retry or forced re-analysis is explicit through POST /api/links/{link_id}/refresh. Clients that may retry after an ambiguous timeout should also send a stable Idempotency-Key for the exact same request.
+         * @description Idempotent by URL: any existing URL returns its current link state without creating work, including failed links. Only a new URL creates and queues asynchronous parsing. Retry or forced re-analysis is explicit through POST /api/links/{link_id}/refresh. Clients that may retry after an ambiguous timeout should also send a stable Idempotency-Key for the exact same request.
          */
         post: {
             parameters: {
                 query?: never;
                 header?: {
-                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
+                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
                     "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path?: never;
@@ -99,56 +99,8 @@ export interface paths {
                 413: components["responses"]["AuthenticatedPayloadTooLarge"];
                 422: components["responses"]["AuthenticatedUnprocessableEntity"];
                 425: components["responses"]["AuthenticatedIdempotencyInProgress"];
-                429: components["responses"]["AuthenticatedTooManyRequests"];
                 500: components["responses"]["AuthenticatedInternalError"];
                 503: components["responses"]["AuthenticatedIdempotencyUnavailable"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/links/batch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Submit multiple URLs
-         * @description Body is an object whose `items` field contains 1–100 LinkCreateRequest entries. The response contains a parallel array of per-item outcome envelopes; each envelope has either result or error. Existing URLs are reported without creating work in every state, including failed; use POST /api/links/{link_id}/refresh for retry.
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["BatchCreateRequest"];
-                };
-            };
-            responses: {
-                /** @description Accepted */
-                202: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["BatchSubmitResponse"];
-                    };
-                };
-                413: components["responses"]["AuthenticatedPayloadTooLarge"];
-                422: components["responses"]["AuthenticatedUnprocessableEntity"];
-                429: components["responses"]["AuthenticatedTooManyRequests"];
             };
         };
         delete?: never;
@@ -168,7 +120,7 @@ export interface paths {
         put?: never;
         /**
          * Force-reparse an existing link
-         * @description Re-queues a link for analysis. Works for terminal links in both done and failed states — calling refresh on a failed link transitions it back to pending, clears its error, and enqueues a fresh parse job (this is how the extension's failed-link retry works). Subject to a per-link cooldown (default 60s); a follow-up within the window returns 429 with a Retry-After header. For a link already pending or processing, the in-flight parse job is returned as-is (202) instead of enqueuing a duplicate.
+         * @description Queues a fresh analysis for a link. Works for terminal links in both done and failed states — calling refresh on a failed link transitions it back to pending and clears its error (this is how the extension's failed-link retry works). Subject to a per-link cooldown (default 60s); a follow-up within the window returns 429 with a Retry-After header. For a link already pending or processing, its current asynchronous state is returned as-is (202) instead of creating duplicate work.
          */
         post: {
             parameters: {
@@ -429,7 +381,7 @@ export interface paths {
         put?: never;
         /**
          * Translate selected text or a saved full article to Simplified Chinese
-         * @description Creates or reuses a persistent translation. New and retried model calls are queued durably and return 202; an existing completed translation returns 200. scope=selection requires a Reader block anchor and selected source_text. scope=full reads the saved original from the server and never accepts client-supplied full content. Strict source identity is required: saved full/content/content-document requests identify their observed generation with expected_content_revision, while summary requests use expected_source_hash because that block does not share the saved-content generation lifecycle. Historical deep-research rows remain readable, but new deep-research schedules are rejected. A stale identity returns 409 content_revision_conflict or source_block_conflict with error.current_identity. A retryable schema collision returns translation_schema_transition. The API auto-detects any source language and only targets zh-CN.
+         * @description Creates or reuses a persistent translation. New and retried model calls are queued durably and return 202; an existing completed translation returns 200. scope=selection requires a Reader block anchor and selected source_text. scope=full reads the saved original from the server and never accepts client-supplied full content. Strict source identity is required: saved full/content/content-document requests identify their observed generation with expected_content_revision, while summary requests use expected_source_hash because that block does not share the saved-content generation lifecycle. A stale identity returns 409 content_revision_conflict or source_block_conflict with error.current_identity. The API auto-detects any source language and only targets zh-CN.
          */
         post: {
             parameters: {
@@ -471,7 +423,6 @@ export interface paths {
                 409: components["responses"]["AuthenticatedTranslationConflict"];
                 413: components["responses"]["AuthenticatedPayloadTooLarge"];
                 422: components["responses"]["AuthenticatedUnprocessableEntity"];
-                429: components["responses"]["AuthenticatedTooManyRequests"];
                 503: components["responses"]["AuthenticatedServiceUnavailable"];
             };
         };
@@ -643,152 +594,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/admin/concept-merges": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List pending concept-merge proposals
-         * @description Returns the queue of LLM-judged synonym pairs awaiting an admin decision. Each row carries the winner/loser surface names, use counts, pg_trgm similarity score, and the LLM's short reason. `limit` is clamped to [1, 200]; `offset` to [0, 10000].
-         */
-        get: {
-            parameters: {
-                query?: {
-                    limit?: number;
-                    offset?: number;
-                };
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            items?: {
-                                /** Format: uuid */
-                                id?: string;
-                                /** Format: uuid */
-                                winner_id?: string;
-                                winner_name?: string;
-                                winner_use_count?: number;
-                                /** Format: uuid */
-                                loser_id?: string;
-                                loser_name?: string;
-                                loser_use_count?: number;
-                                /** Format: float */
-                                score?: number;
-                                llm_reason?: string;
-                                created_at_unix?: number;
-                            }[];
-                        };
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/admin/concept-merges/{id}/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Approve a concept-merge proposal
-         * @description Runs the transactional merge — re-points link_concept and concept_alias rows from loser to winner, folds use_count, deletes loser. Returns 409 when the proposal was already decided (race against another admin session). `X-Admin-Actor` header is recorded as `decided_by`; falls back to `admin` when missing.
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: {
-                    /** @description Optional admin identifier to record in `decided_by`. */
-                    "X-Admin-Actor"?: string;
-                };
-                path: {
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Merged */
-                204: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-                400: components["responses"]["BadRequest"];
-                409: components["responses"]["Conflict"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/admin/concept-merges/{id}/reject": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reject a concept-merge proposal
-         * @description Marks the proposal as `rejected` without moving any data. The same pair will not be re-proposed by the judge (the candidate query excludes any pair that already has a row in `concept_merge_proposal`).
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: {
-                    "X-Admin-Actor"?: string;
-                };
-                path: {
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Rejected */
-                204: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-                400: components["responses"]["BadRequest"];
-                409: components["responses"]["Conflict"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/ingest": {
         parameters: {
             query?: never;
@@ -827,94 +632,8 @@ export interface paths {
                 };
                 413: components["responses"]["AuthenticatedPayloadTooLarge"];
                 422: components["responses"]["AuthenticatedUnprocessableEntity"];
-                429: components["responses"]["AuthenticatedTooManyRequests"];
             };
         };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get parse job status
-         * @description When status is `done`, the embedded `link` field contains the full LinkResponse.
-         */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    job_id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["JobResponse"];
-                    };
-                };
-                400: components["responses"]["AuthenticatedBadRequest"];
-                404: components["responses"]["AuthenticatedNotFound"];
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Batch get parse job statuses */
-        get: {
-            parameters: {
-                query?: {
-                    /** @description Comma-separated job ids. */
-                    ids?: string;
-                };
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["JobResponse"][];
-                    };
-                };
-                400: components["responses"]["AuthenticatedBadRequest"];
-            };
-        };
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1009,254 +728,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/library-classification-rules": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List personal classification rules */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Rules */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ClassificationRuleResponse"][];
-                    };
-                };
-            };
-        };
-        put?: never;
-        /** Create a personal classification rule */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["ClassificationRuleCreateRequest"];
-                };
-            };
-            responses: {
-                /** @description Created */
-                201: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ClassificationRuleResponse"];
-                    };
-                };
-                413: components["responses"]["AuthenticatedPayloadTooLarge"];
-                422: components["responses"]["AuthenticatedUnprocessableEntity"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/library-classification-rules/{rule_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Delete a personal classification rule */
-        delete: {
-            parameters: {
-                query?: never;
-                header: {
-                    "If-Match": string;
-                };
-                path: {
-                    rule_id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Deleted */
-                204: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-                400: components["responses"]["AuthenticatedBadRequest"];
-                409: components["responses"]["AuthenticatedConflict"];
-                /** @description The mandatory If-Match revision precondition is absent or unparsable (error_code=classification_rule_revision_required). */
-                428: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ErrorResponse"];
-                    };
-                };
-            };
-        };
-        options?: never;
-        head?: never;
-        /** Update a personal classification rule */
-        patch: {
-            parameters: {
-                query?: never;
-                header: {
-                    /** @description Current numeric rule revision, optionally quoted. */
-                    "If-Match": string;
-                };
-                path: {
-                    rule_id: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["ClassificationRuleUpdateRequest"];
-                };
-            };
-            responses: {
-                /** @description Updated */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ClassificationRuleResponse"];
-                    };
-                };
-                400: components["responses"]["AuthenticatedBadRequest"];
-                409: components["responses"]["AuthenticatedConflict"];
-                413: components["responses"]["AuthenticatedPayloadTooLarge"];
-                422: components["responses"]["AuthenticatedUnprocessableEntity"];
-                /** @description The mandatory If-Match revision precondition is absent or unparsable (error_code=classification_rule_revision_required). */
-                428: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ErrorResponse"];
-                    };
-                };
-            };
-        };
-        trace?: never;
-    };
-    "/api/library-reviews": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List durable library review items */
-        get: {
-            parameters: {
-                query?: {
-                    status?: "pending" | "applied" | "dismissed";
-                    type?: "classification_uncertain" | "migration_suggestion" | "note_conflict" | "merge_conflict";
-                    limit?: number;
-                    offset?: number;
-                };
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Review items */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["LibraryReviewResponse"][];
-                    };
-                };
-                422: components["responses"]["AuthenticatedUnprocessableEntity"];
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/library-reviews/{review_id}/resolve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Resolve a pending review item */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    review_id: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["LibraryReviewResolveRequest"];
-                };
-            };
-            responses: {
-                /** @description Resolved item */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["LibraryReviewResponse"];
-                    };
-                };
-                409: components["responses"]["AuthenticatedConflict"];
-                413: components["responses"]["AuthenticatedPayloadTooLarge"];
-                422: components["responses"]["AuthenticatedUnprocessableEntity"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/capabilities": {
         parameters: {
             query?: never;
@@ -1305,7 +776,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    view?: "all" | "pinned" | "recent" | "review";
+                    view?: "all" | "pinned" | "recent";
                     tags?: string;
                     /** @description Frozen lower-bound instant returned by page 1 of the recent view. Omit it on page 1; it is required and must be reused unchanged on every later page. Invalid with other views. */
                     recent_cutoff?: string;
@@ -1801,47 +1272,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Export the full knowledge base as a JSON array
-         * @description Streams every done link as a single JSON array, batched server-side by a cursor so the response never buffers the whole table (safe as the library grows). Each element is a LinkResponse with the same fields the read API returns; the raw input_* multimodal fields and the embedding vector are intentionally not included. Served behind the EXTENSION_API_TOKEN group — when that token is configured a missing/incorrect Bearer token returns 401. A Content-Disposition: attachment header carries a dated filename (webtag-export-YYYY-MM-DD.json). Because the response streams, a server error after the first byte leaves a truncated array rather than a clean 500; clients should treat a non-parseable body as a transient failure and retry.
-         */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK — streamed JSON array of all done links. */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["LinkResponse"][];
-                    };
-                };
-                401: components["responses"]["Unauthorized"];
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/export/v2": {
         parameters: {
             query?: never;
@@ -1851,7 +1281,7 @@ export interface paths {
         };
         /**
          * Download complete versioned archive
-         * @description Streams schema_version=2 metadata plus links, sites, site entries, site tags, site identities, classification rules, and an optional installation-scoped reader object. Omit sections only for full-archive compatibility; new clients send one explicit canonical selector. The server filters unselected private groups before querying or serializing them. The response may be truncated on a mid-stream error; clients must require valid JSON, validate the manifest counts and checksum against the received bytes, and fence it to the active identity before accepting it. Reader private content is available only to the authenticated export request and never enters ordinary logs, traces, or metric labels.
+         * @description Streams schema_version=2 metadata plus links, sites, site entries, site tags, site identities, and the installation-scoped Reader archive. Omit sections only for full-archive compatibility; new clients send one explicit canonical selector. The server filters unselected private groups before querying or serializing them. The response may be truncated on a mid-stream error; clients must require valid JSON, validate the manifest counts and checksum against the received bytes, and fence it to the active identity before accepting it. Reader private content is available only to the authenticated export request and never enters ordinary logs, traces, or metric labels.
          */
         get: {
             parameters: {
@@ -1877,48 +1307,6 @@ export interface paths {
                 };
                 401: components["responses"]["Unauthorized"];
                 422: components["responses"]["AuthenticatedArchiveV2InvalidSections"];
-                503: components["responses"]["AuthenticatedArchiveV2ReaderUnavailable"];
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/export/concepts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Export the installation concept vocabulary
-         * @description Streams the installation concept vocabulary as a single JSON array, batched server-side by a (created_at, id) cursor so the response never buffers the whole vocabulary. Independent of GET /api/export, this endpoint uses the same installation authentication and returns a dated webtag-concepts-YYYY-MM-DD.json attachment. Because the response streams, a server error after the first byte leaves a truncated array rather than a clean 500; clients should retry on a non-parseable body.
-         */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK — streamed JSON array of installation concepts. */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ConceptExportItem"][];
-                    };
-                };
-                401: components["responses"]["Unauthorized"];
             };
         };
         put?: never;
@@ -2579,7 +1967,6 @@ export interface paths {
                 400: components["responses"]["AuthenticatedBadRequest"];
                 404: components["responses"]["AuthenticatedNotFound"];
                 409: components["responses"]["AuthenticatedConflict"];
-                429: components["responses"]["AuthenticatedTooManyRequests"];
                 500: components["responses"]["AuthenticatedInternalError"];
             };
         };
@@ -2793,193 +2180,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/metrics": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Prometheus metrics */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "text/plain": string;
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Debug UI (HTML) */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "text/html": string;
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/docs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Scalar OpenAPI documentation viewer */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "text/html": string;
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/openapi.json": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Raw OpenAPI 3.1 specification */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": Record<string, never>;
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/static/{path}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Embedded static asset (debug UI HTML, OpenAPI spec, Scalar viewer)
-         * @description Serves files from the embedded `assets/` filesystem. Currently exposes index.html, openapi.json, scalar.html — the same payloads that /, /openapi.json, /docs render. Treat as an internal asset channel; production callers should prefer the dedicated routes.
-         */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    path: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "text/html": string;
-                        "application/json": Record<string, never>;
-                    };
-                };
-                404: components["responses"]["NotFound"];
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/session": {
         parameters: {
             query?: never;
@@ -2989,13 +2189,13 @@ export interface paths {
         };
         /**
          * Get the authenticated client identity snapshot
-         * @description Returns the authoritative opaque installation data namespace and representation contract for the current installation token, browser session, or explicitly enabled anonymous installation. The endpoint remains inside the public API guard even when session exchange is disabled. Responses are private and no-store.
+         * @description Returns the authoritative opaque installation data namespace and representation contract for the current installation token or browser session. The endpoint remains inside the public API guard even when session exchange is disabled. Responses are private and no-store.
          */
         get: operations["getSessionIdentity"];
         put?: never;
         /**
          * Exchange the installation token for a browser session cookie
-         * @description Trades the configured EXTENSION_API_TOKEN for a signed, time-limited session stored in an HttpOnly cookie. Explicitly open installations may create a session without a token. The signed value is never returned in the response body. Subsequent requests use the cookie together with X-WebTag-Session for CSRF protection. Sessions end on expiry, signing-key rotation, or process restart when an ephemeral signing key is used.
+         * @description Trades the configured EXTENSION_API_TOKEN for a signed, time-limited session stored in an HttpOnly cookie. The signed value is never returned in the response body. Subsequent requests use the cookie together with X-WebTag-Session for CSRF protection. Sessions end on expiry, signing-key rotation, or process restart when an ephemeral signing key is used.
          */
         post: operations["createSession"];
         /**
@@ -3263,61 +2463,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/annotations/{id}/reattach": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reattach a historical Reader thought to an explicit host
-         * @deprecated
-         * @description Only a still-historical thought tombstone can be manually reattached. The server validates request shape, source existence and lifecycle, and target availability before comparing either expected revision. A missing, deleted, unavailable, or unknown source/target is always reader_not_found; an existing source without a tombstone is always thought_reattach_invalid_state; revision_conflict is returned only after both lifecycle checks pass. /api/v1 is an identical compatibility alias.
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    /** @description Reader resource UUID. */
-                    id: components["parameters"]["ReaderID"];
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["ReaderThoughtReattachRequest"];
-                };
-            };
-            responses: {
-                /** @description Reattached thought */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ReaderThoughtResponse"];
-                    };
-                };
-                /** @description The source thought is missing, explicitly deleted, or not present in this installation, or the target host is missing, unavailable, or not present in this installation (error_code=reader_not_found). This precedence is independent of expected_last_sequence and expected_host_revision. */
-                404: components["responses"]["AuthenticatedNotFound"];
-                /** @description The source exists but is not a historical tombstone (error_code=thought_reattach_invalid_state), or a valid source and target fail source/target compare-and-swap (error_code=revision_conflict). */
-                409: components["responses"]["AuthenticatedConflict"];
-                413: components["responses"]["AuthenticatedPayloadTooLarge"];
-                /** @description The request structure, target host kind or ID, revision format, or quote reanchor result is invalid (error_code=invalid_request_body, invalid_thought_host, invalid_target_host_id, reader_last_sequence_invalid, reader_host_revision_required, or invalid_reanchor_ops). */
-                422: components["responses"]["AuthenticatedUnprocessableEntity"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/notes": {
         parameters: {
             query?: never;
@@ -3361,7 +2506,7 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: {
-                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
+                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
                     "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path?: never;
@@ -3786,7 +2931,7 @@ export interface paths {
         };
         /**
          * List a Reader inbox partition
-         * @description Pending Inbox captures are partitioned by their materialized expiration marker. active is the default and contains pending rows whose expired_at is null; expired contains pending rows whose expired_at is set. Pagination is stable within the requested partition. Items carry the narrow queue projection (ReaderInboxListItemResponse): the capture body, the user note, the raw AI proposal payload and the category memberships are served only by GET /api/inbox/{id}.
+         * @description Pending Inbox captures are partitioned by the server clock and expires_at. active is the default and contains rows without a deadline or whose deadline is still in the future; expired contains rows whose deadline has passed. Pagination is stable within the requested partition. Items carry the narrow queue projection (ReaderInboxListItemResponse): the capture body, the user note, AI proposal fields and category memberships are served only by GET /api/inbox/{id}.
          */
         get: {
             parameters: {
@@ -3865,7 +3010,7 @@ export interface paths {
         put?: never;
         /**
          * Confirm the next AI-ready Inbox proposal batch
-         * @description The server owns candidate selection. It selects at most 100 pending captures in the requested partition with a nonempty trimmed title and a current completed proposal job; stale, running, failed, and blank-title jobs are excluded. Each response is one atomic, idempotent transaction in stable server order. Clients repeat this action with the same partition until remaining_count is zero and must not derive candidates or batches locally.
+         * @description The server owns candidate selection. It selects at most 100 pending captures in the requested partition with a nonempty trimmed title and a completed proposal for the current metadata revision; stale, running, failed, and blank-title proposals are excluded. Each response is one atomic, idempotent transaction in stable server order. Clients repeat this action with the same partition until remaining_count is zero and must not derive candidates or batches locally.
          */
         post: {
             parameters: {
@@ -4098,7 +3243,7 @@ export interface paths {
                 header?: {
                     /** @description Optional metadata revision precondition for a backward-compatible confirmation request. */
                     "If-Match"?: components["parameters"]["ReaderOptionalIfMatch"];
-                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
+                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
                     "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path: {
@@ -4148,7 +3293,7 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: {
-                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
+                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
                     "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path: {
@@ -4190,13 +3335,13 @@ export interface paths {
         put?: never;
         /**
          * Restore a trashed or expired inbox capture
-         * @description Restores a trashed Inbox capture to pending and re-anchors uniquely matching Thoughts. Restoring an expired live capture clears expired_at and starts a fresh 30-day expires_at deadline without changing capture, category, thought, or proposal data. Repeating a live nonexpired restore is an idempotent success and does not move its deadline.
+         * @description Restores a trashed Inbox capture and re-anchors uniquely matching Thoughts. Restoring an expired live capture starts a fresh 30-day expires_at deadline without changing capture, category, thought, or proposal data. Repeating a live nonexpired restore is an idempotent success and does not move its deadline.
          */
         post: {
             parameters: {
                 query?: never;
                 header?: {
-                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
+                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
                     "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path: {
@@ -4290,7 +3435,7 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: {
-                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
+                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
                     "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path: {
@@ -4301,7 +3446,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Summary job accepted */
+                /** @description Summary proposal accepted; poll GET /api/inbox/{id} while proposal_status is pending or running */
                 202: {
                     headers: {
                         "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
@@ -4310,52 +3455,13 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["ReaderInboxJobResponse"];
+                        "application/json": components["schemas"]["ReaderInboxResponse"];
                     };
                 };
                 425: components["responses"]["AuthenticatedIdempotencyInProgress"];
                 503: components["responses"]["AuthenticatedIdempotencyUnavailable"];
             };
         };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/inbox/jobs/{job_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get an inbox summary job */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    job_id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Summary job */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ReaderInboxJobResponse"];
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4402,152 +3508,6 @@ export interface paths {
             };
         };
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/categories": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Reader categories */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Categories */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ReaderCategoriesResponse"];
-                    };
-                };
-            };
-        };
-        put?: never;
-        /** Create a Reader category */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["ReaderCategoryRequest"];
-                };
-            };
-            responses: {
-                /** @description Created */
-                201: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ReaderCategoryResponse"];
-                    };
-                };
-                413: components["responses"]["AuthenticatedPayloadTooLarge"];
-                422: components["responses"]["AuthenticatedUnprocessableEntity"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/categories/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Delete a Reader category */
-        delete: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    /** @description Reader resource UUID. */
-                    id: components["parameters"]["ReaderID"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Deleted */
-                204: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/categories/{id}/members": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Set a Reader category membership */
-        put: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    /** @description Reader resource UUID. */
-                    id: components["parameters"]["ReaderID"];
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["ReaderCategoryMembershipRequest"];
-                };
-            };
-            responses: {
-                /** @description Updated */
-                204: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-                413: components["responses"]["AuthenticatedPayloadTooLarge"];
-                422: components["responses"]["AuthenticatedUnprocessableEntity"];
-            };
-        };
         post?: never;
         delete?: never;
         options?: never;
@@ -4602,7 +3562,7 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: {
-                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
+                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
                     "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path?: never;
@@ -4656,7 +3616,7 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: {
-                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
+                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
                     "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path: {
@@ -4691,7 +3651,7 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: {
-                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
+                    /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
                     "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
                 };
                 path: {
@@ -4777,8 +3737,7 @@ export interface paths {
             parameters: {
                 query?: {
                     mode?: "recommended" | "chronological";
-                    snapshot_id?: string;
-                    /** @description Optional repeated source filter. The normalized set is part of snapshot identity. */
+                    /** @description Optional repeated source filter. A cursor is valid only for the same normalized source set. */
                     source?: ("reading" | "inbox" | "subscription")[];
                     /** @description Opaque cursor returned by the previous Reader page. */
                     after?: components["parameters"]["ReaderAfter"];
@@ -4836,7 +3795,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description Recorded feedback with its stable subscription-save association when applicable */
+                /** @description Applied the Feed action and returned the currently visible Link when applicable */
                 200: {
                     headers: {
                         "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
@@ -4941,13 +3900,13 @@ export interface paths {
         head?: never;
         /**
          * Replace link metadata with metadata-revision CAS
-         * @description Replaces the complete user-owned metadata tuple; it is not a partial merge. Every request must provide title, summary, and tags. title and summary may be null to clear them; tags must be a non-null array and [] clears all tags. Tags are trimmed and case-insensitively de-duplicated while preserving the first spelling and order. Send If-Match as the quoted positive decimal LinkResponse.metadata_revision, for example "7". Do not reuse the opaque representation ETag from GET /api/links/{link_id}: that validator is only for representation caching/If-None-Match, not this metadata CAS. A changed normalized tuple increments metadata_revision once; an identical normalized tuple is a successful no-op that retains its revision. The successful response body and ETag both carry the authoritative post-write metadata revision.
+         * @description Replaces the complete user-owned metadata tuple; it is not a partial merge. Every request must provide title, summary, and tags. title and summary may be null to clear them; tags must be a non-null array and [] clears all tags. Tags are trimmed and case-insensitively de-duplicated while preserving the first spelling and order. Send If-Match as the quoted positive decimal LinkResponse.metadata_revision, for example "7". A changed normalized tuple increments metadata_revision once; an identical normalized tuple is a successful no-op that retains its revision. The successful response body and ETag both carry the authoritative post-write metadata revision.
          */
         patch: {
             parameters: {
                 query?: never;
                 header: {
-                    /** @description Quoted canonical decimal metadata CAS token taken from LinkResponse.metadata_revision or the prior successful PATCH response ETag. It must represent a JavaScript-safe value from 1 through 9007199254740991, for example "7". This is not the opaque representation ETag returned by GET /api/links/{link_id}. */
+                    /** @description Quoted canonical decimal metadata CAS token taken from LinkResponse.metadata_revision or the prior successful PATCH response ETag. It must represent a JavaScript-safe value from 1 through 9007199254740991, for example "7". */
                     "If-Match": components["parameters"]["LinkMetadataIfMatch"];
                 };
                 path: {
@@ -5009,98 +3968,6 @@ export interface paths {
         };
         trace?: never;
     };
-    "/api/links/{link_id}/content-history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List saved content history */
-        get: {
-            parameters: {
-                query?: {
-                    /** @description Maximum number of Reader records to return. */
-                    limit?: components["parameters"]["ReaderLimit"];
-                };
-                header?: never;
-                path: {
-                    /** @description Saved reading link UUID. */
-                    link_id: components["parameters"]["ReaderLinkID"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description History */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            items: components["schemas"]["ReaderContentHistoryResponse"][];
-                        };
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/links/{link_id}/content-history/{history_id}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore saved content history */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    /** @description Saved reading link UUID. */
-                    link_id: components["parameters"]["ReaderLinkID"];
-                    history_id: number;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["ReaderContentHistoryRestoreRequest"];
-                };
-            };
-            responses: {
-                /** @description Restored */
-                200: {
-                    headers: {
-                        "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ReaderContentHistoryRestoreResponse"];
-                    };
-                };
-                413: components["responses"]["AuthenticatedPayloadTooLarge"];
-                422: components["responses"]["AuthenticatedUnprocessableEntity"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/reader/related-tags": {
         parameters: {
             query?: never;
@@ -5108,7 +3975,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get related semantic tags */
+        /**
+         * Get related tags
+         * @description Returns tags that co-occur with the current link tags, bounded by the requested limit.
+         */
         get: {
             parameters: {
                 query?: {
@@ -5262,15 +4132,13 @@ export interface components {
         /** @enum {string} */
         ArchiveV2SectionName: "base" | "thoughts" | "notes";
         /** @description A concrete frozen v2 archive row. Arrays below reference their section-specific schema; this union is retained only for generic archive tooling. */
-        ArchiveV2Record: components["schemas"]["ArchiveV2Site"] | components["schemas"]["ArchiveV2SiteEntry"] | components["schemas"]["ArchiveV2SiteTag"] | components["schemas"]["ArchiveV2SiteIdentity"] | components["schemas"]["ArchiveV2ClassificationRule"] | components["schemas"]["ArchiveV2ReaderInbox"] | components["schemas"]["ArchiveV2ReaderCategory"] | components["schemas"]["ArchiveV2ReaderCategorizable"] | components["schemas"]["ArchiveV2ReaderTodo"] | components["schemas"]["ArchiveV2ReaderEngagement"] | components["schemas"]["ArchiveV2ReaderFeedFeedback"] | components["schemas"]["ArchiveV2ReaderFeedSnapshot"] | components["schemas"]["ArchiveV2ReaderTagActivity"] | components["schemas"]["ArchiveV2ReaderDomainActivity"] | components["schemas"]["ArchiveV2ReaderContentHistory"] | components["schemas"]["ArchiveV2ReaderThought"] | components["schemas"]["ArchiveV2ReaderThoughtOperation"] | components["schemas"]["ArchiveV2ReaderThoughtTombstone"] | components["schemas"]["ArchiveV2ReaderNote"] | components["schemas"]["ArchiveV2ReaderNoteHistory"] | components["schemas"]["ArchiveV2FeedFolder"] | components["schemas"]["ArchiveV2FeedSubscription"] | components["schemas"]["ArchiveV2FeedItem"] | components["schemas"]["ArchiveV2FeedSave"];
+        ArchiveV2Record: components["schemas"]["ArchiveV2Site"] | components["schemas"]["ArchiveV2SiteEntry"] | components["schemas"]["ArchiveV2SiteTag"] | components["schemas"]["ArchiveV2SiteIdentity"] | components["schemas"]["ArchiveV2ReaderInbox"] | components["schemas"]["ArchiveV2ReaderTodo"] | components["schemas"]["ArchiveV2ReaderEngagement"] | components["schemas"]["ArchiveV2ReaderFeedHide"] | components["schemas"]["ArchiveV2ReaderThought"] | components["schemas"]["ArchiveV2ReaderThoughtOperation"] | components["schemas"]["ArchiveV2ReaderThoughtTombstone"] | components["schemas"]["ArchiveV2ReaderNote"] | components["schemas"]["ArchiveV2ReaderNoteHistory"] | components["schemas"]["ArchiveV2FeedFolder"] | components["schemas"]["ArchiveV2FeedSubscription"] | components["schemas"]["ArchiveV2FeedItem"] | components["schemas"]["ArchiveV2FeedSave"];
         /** Format: uuid */
         ArchiveV2UUID: string;
         /** Format: date-time */
         ArchiveV2DateTime: string;
         ArchiveV2SafeNonNegativeInteger: number;
         ArchiveV2SafePositiveInteger: number;
-        /** @enum {string} */
-        ArchiveV2FieldSource: "auto" | "user" | "migration";
         /** @enum {string} */
         ArchiveV2HostKind: "link" | "inbox" | "note";
         /** @enum {string} */
@@ -5292,19 +4160,12 @@ export interface components {
             id: components["schemas"]["ArchiveV2UUID"];
             site_key: string;
             name: string;
-            name_source: components["schemas"]["ArchiveV2FieldSource"];
             intro: string;
-            intro_source: components["schemas"]["ArchiveV2FieldSource"];
             homepage_url: string | null;
-            homepage_source: components["schemas"]["ArchiveV2FieldSource"] | null;
             icon_url: string | null;
-            icon_source: components["schemas"]["ArchiveV2FieldSource"] | null;
             user_note: string;
             pinned: boolean;
             primary_entry_id: components["schemas"]["ArchiveV2UUID"] | null;
-            primary_source: components["schemas"]["ArchiveV2FieldSource"];
-            grouping_locked: boolean;
-            needs_review: boolean;
             revision: components["schemas"]["ArchiveV2SafePositiveInteger"];
             first_collected_at: components["schemas"]["ArchiveV2DateTime"];
             last_collected_at: components["schemas"]["ArchiveV2DateTime"];
@@ -5316,9 +4177,7 @@ export interface components {
             site_id: components["schemas"]["ArchiveV2UUID"];
             link_id: components["schemas"]["ArchiveV2UUID"];
             entry_name: string;
-            entry_name_source: components["schemas"]["ArchiveV2FieldSource"];
             purpose: string;
-            purpose_source: components["schemas"]["ArchiveV2FieldSource"];
             normalized_url: string;
             first_collected_at: components["schemas"]["ArchiveV2DateTime"];
             last_recollected_at: components["schemas"]["ArchiveV2DateTime"] | null;
@@ -5329,29 +4188,12 @@ export interface components {
             site_id: components["schemas"]["ArchiveV2UUID"];
             tag: string;
             normalized_tag: string;
-            source: components["schemas"]["ArchiveV2FieldSource"];
-            concept_id: components["schemas"]["ArchiveV2UUID"] | null;
             created_at: components["schemas"]["ArchiveV2DateTime"];
             updated_at: components["schemas"]["ArchiveV2DateTime"];
         };
         ArchiveV2SiteIdentity: {
             identity_key: string;
             site_id: components["schemas"]["ArchiveV2UUID"];
-            /** @enum {string} */
-            source: "auto" | "manual_merge" | "manual_split" | "migration";
-            locked: boolean;
-            created_at: components["schemas"]["ArchiveV2DateTime"];
-            updated_at: components["schemas"]["ArchiveV2DateTime"];
-        };
-        ArchiveV2ClassificationRule: {
-            id: components["schemas"]["ArchiveV2UUID"];
-            host: string;
-            identity_adapter: string | null;
-            path_prefix: string | null;
-            /** @enum {string} */
-            target_kind: "reading" | "site";
-            enabled: boolean;
-            revision: components["schemas"]["ArchiveV2SafePositiveInteger"];
             created_at: components["schemas"]["ArchiveV2DateTime"];
             updated_at: components["schemas"]["ArchiveV2DateTime"];
         };
@@ -5395,11 +4237,10 @@ export interface components {
             created_at: components["schemas"]["ArchiveV2DateTime"];
             updated_at: components["schemas"]["ArchiveV2DateTime"];
         };
-        /** @description The durable feed-item to saved-link association retained independently of feed item link_id. */
+        /** @description The durable Reader save association. feed_items.link_id remains reserved for the separate Analyze workflow. */
         ArchiveV2FeedSave: {
             feed_item_id: components["schemas"]["ArchiveV2UUID"];
             link_id: components["schemas"]["ArchiveV2UUID"];
-            created_link: boolean;
             created_at: components["schemas"]["ArchiveV2DateTime"];
         };
         ArchiveV2ReaderInbox: {
@@ -5412,24 +4253,12 @@ export interface components {
             suggested_tags: string[];
             tags: string[];
             /** @enum {string} */
-            status: "pending" | "confirmed" | "discarded";
+            status: "pending" | "confirmed";
             metadata_revision: components["schemas"]["ArchiveV2SafePositiveInteger"];
-            job_id: components["schemas"]["ArchiveV2UUID"] | null;
             expires_at: components["schemas"]["ArchiveV2DateTime"] | null;
-            expired_at: components["schemas"]["ArchiveV2DateTime"] | null;
             deleted_at: components["schemas"]["ArchiveV2DateTime"] | null;
             created_at: components["schemas"]["ArchiveV2DateTime"];
             updated_at: components["schemas"]["ArchiveV2DateTime"];
-        };
-        ArchiveV2ReaderCategory: {
-            id: components["schemas"]["ArchiveV2UUID"];
-            name: string;
-            created_at: components["schemas"]["ArchiveV2DateTime"];
-        };
-        ArchiveV2ReaderCategorizable: {
-            category_id: components["schemas"]["ArchiveV2UUID"];
-            host_kind: components["schemas"]["ArchiveV2HostKind"];
-            host_id: components["schemas"]["ArchiveV2UUID"];
         };
         ArchiveV2ReaderTodo: {
             id: components["schemas"]["ArchiveV2UUID"];
@@ -5456,39 +4285,8 @@ export interface components {
             last_opened: components["schemas"]["ArchiveV2DateTime"] | null;
             updated_at: components["schemas"]["ArchiveV2DateTime"];
         };
-        ArchiveV2ReaderFeedFeedback: {
+        ArchiveV2ReaderFeedHide: {
             item_key: string;
-            /** @enum {string} */
-            action: "not_interested" | "hide" | "save" | "unsave";
-            created_at: components["schemas"]["ArchiveV2DateTime"];
-        };
-        ArchiveV2ReaderFeedSnapshot: {
-            id: components["schemas"]["ArchiveV2UUID"];
-            /** @enum {string} */
-            mode: "recommended" | "chronological";
-            items: unknown[];
-            created_at: components["schemas"]["ArchiveV2DateTime"];
-        };
-        ArchiveV2ReaderTagActivity: {
-            tag: string;
-            last_at: components["schemas"]["ArchiveV2DateTime"];
-            last_link_id: components["schemas"]["ArchiveV2UUID"] | null;
-        };
-        ArchiveV2ReaderDomainActivity: {
-            domain: string;
-            last_at: components["schemas"]["ArchiveV2DateTime"];
-            last_link_id: components["schemas"]["ArchiveV2UUID"] | null;
-        };
-        ArchiveV2ReaderContentHistory: {
-            id: components["schemas"]["ArchiveV2SafePositiveInteger"];
-            link_id: components["schemas"]["ArchiveV2UUID"];
-            revision: components["schemas"]["ArchiveV2SafePositiveInteger"];
-            content: string | null;
-            content_document: string | null;
-            /** @enum {string} */
-            content_format: "plain" | "markdown" | "html";
-            /** @enum {string} */
-            content_source: "fetched" | "user";
             created_at: components["schemas"]["ArchiveV2DateTime"];
         };
         ArchiveV2ReaderThought: {
@@ -5506,7 +4304,7 @@ export interface components {
             deleted: boolean;
             last_sequence: components["schemas"]["ArchiveV2SafePositiveInteger"];
             winner_key: {
-                logical_clock: components["schemas"]["ArchiveV2SafeNonNegativeInteger"];
+                logical_clock: components["schemas"]["ArchiveV2SafePositiveInteger"];
                 device_id: components["schemas"]["ArchiveV2ThoughtOperationIdentifier"];
                 op_id: components["schemas"]["ArchiveV2ThoughtOperationIdentifier"];
             };
@@ -5519,7 +4317,7 @@ export interface components {
             sequence: components["schemas"]["ArchiveV2SafePositiveInteger"];
             op_id: components["schemas"]["ArchiveV2ThoughtOperationIdentifier"];
             device_id: components["schemas"]["ArchiveV2ThoughtOperationIdentifier"];
-            logical_clock: components["schemas"]["ArchiveV2SafeNonNegativeInteger"];
+            logical_clock: components["schemas"]["ArchiveV2SafePositiveInteger"];
             /** @enum {string} */
             operation_kind: "add" | "update" | "delete";
             annotation_id: components["schemas"]["ArchiveV2ThoughtIdentifier"];
@@ -5578,15 +4376,9 @@ export interface components {
             feed_items: components["schemas"]["ArchiveV2FeedItem"][];
             feed_saves: components["schemas"]["ArchiveV2FeedSave"][];
             inbox: components["schemas"]["ArchiveV2ReaderInbox"][];
-            categories: components["schemas"]["ArchiveV2ReaderCategory"][];
-            categorizables: components["schemas"]["ArchiveV2ReaderCategorizable"][];
             todos: components["schemas"]["ArchiveV2ReaderTodo"][];
             engagement: components["schemas"]["ArchiveV2ReaderEngagement"][];
-            feed_feedback: components["schemas"]["ArchiveV2ReaderFeedFeedback"][];
-            feed_snapshots: components["schemas"]["ArchiveV2ReaderFeedSnapshot"][];
-            tag_activity: components["schemas"]["ArchiveV2ReaderTagActivity"][];
-            domain_activity: components["schemas"]["ArchiveV2ReaderDomainActivity"][];
-            content_history: components["schemas"]["ArchiveV2ReaderContentHistory"][];
+            feed_hides: components["schemas"]["ArchiveV2ReaderFeedHide"][];
             thoughts?: components["schemas"]["ArchiveV2ReaderThought"][];
             thought_ops?: components["schemas"]["ArchiveV2ReaderThoughtOperation"][];
             thought_supersession_events?: components["schemas"]["ArchiveV2ReaderThoughtSupersessionEvent"][];
@@ -5604,7 +4396,7 @@ export interface components {
             };
             checksum_sha256: string;
         };
-        /** @description The versioned archive. reader is absent only when the server has no Reader archive store; its selected private groups are otherwise defined by manifest.sections. */
+        /** @description The versioned archive. Reader base arrays are always present; selected private groups are defined by manifest.sections. */
         ArchiveV2Response: {
             /** @constant */
             schema_version: 2;
@@ -5617,8 +4409,7 @@ export interface components {
             site_entries: components["schemas"]["ArchiveV2SiteEntry"][];
             site_tags: components["schemas"]["ArchiveV2SiteTag"][];
             site_identities: components["schemas"]["ArchiveV2SiteIdentity"][];
-            classification_rules: components["schemas"]["ArchiveV2ClassificationRule"][];
-            reader?: components["schemas"]["ArchiveV2Reader"];
+            reader: components["schemas"]["ArchiveV2Reader"];
             manifest: components["schemas"]["ArchiveV2Manifest"];
         };
         /** @description Authoritative identity partition for this installation. */
@@ -5626,7 +4417,7 @@ export interface components {
             /** @description Opaque installation namespace used to fence client caches and asynchronous responses. */
             client_data_namespace: string;
             /**
-             * @description Representation and ETag contract understood by this server.
+             * @description Client data representation contract understood by this server.
              * @constant
              */
             representation_contract: "v3";
@@ -5642,7 +4433,6 @@ export interface components {
         CapabilitiesResponse: {
             library_kinds: boolean;
             site_library: boolean;
-            site_auto_classification: boolean;
             site_management: boolean;
             site_advanced_management: boolean;
             archive_versions: number[];
@@ -5658,7 +4448,7 @@ export interface components {
             home: boolean;
             feed: boolean;
             ai: boolean;
-            semantic: boolean;
+            related_tags: boolean;
             activity: boolean;
             history: boolean;
             trash: boolean;
@@ -5712,7 +4502,7 @@ export interface components {
             /** Format: int64 */
             target_revision: number;
             entries: components["schemas"]["SiteMergePreviewEntryResponse"][];
-            user_tags: string[];
+            tags: string[];
             identity_keys: string[];
             field_conflicts: components["schemas"]["SiteMergeFieldConflictResponse"][];
             requires_resolution: boolean;
@@ -5772,7 +4562,7 @@ export interface components {
             payload: components["schemas"]["SiteSplitRequest"];
             entries: components["schemas"]["SiteMergePreviewEntryResponse"][];
             identities: components["schemas"]["SiteSplitIdentityResponse"][];
-            user_tags: string[];
+            tags: string[];
         };
         SiteSplitExecuteResponse: {
             /** Format: uuid */
@@ -5784,66 +4574,6 @@ export interface components {
             /** Format: int64 */
             new_site_revision: number;
             moved_entries: number;
-        };
-        ClassificationRuleCreateRequest: {
-            host: string;
-            identity_adapter?: string;
-            path_prefix?: string;
-            /** @enum {string} */
-            target_kind: "reading" | "site";
-            enabled?: boolean;
-        };
-        ClassificationRuleUpdateRequest: {
-            host?: string;
-            identity_adapter?: string | null;
-            path_prefix?: string | null;
-            /** @enum {string} */
-            target_kind?: "reading" | "site";
-            enabled?: boolean;
-        };
-        ClassificationRuleResponse: {
-            /** Format: uuid */
-            id: string;
-            host: string;
-            identity_adapter?: string | null;
-            path_prefix?: string | null;
-            /** @enum {string} */
-            target_kind: "reading" | "site";
-            enabled: boolean;
-            /** Format: int64 */
-            revision: number;
-            /** Format: date-time */
-            created_at: string;
-            /** Format: date-time */
-            updated_at: string;
-        };
-        LibraryReviewResolveRequest: {
-            /** Format: int64 */
-            expected_revision: number;
-            /** @enum {string} */
-            resolution: "applied" | "dismissed";
-            /** @enum {string} */
-            action?: "keep_reading" | "move_to_site";
-            confirm_destructive?: boolean;
-        };
-        LibraryReviewResponse: {
-            /** Format: uuid */
-            id: string;
-            /** @enum {string} */
-            kind: "classification_uncertain" | "migration_suggestion" | "note_conflict" | "merge_conflict";
-            /** Format: uuid */
-            link_id?: string | null;
-            /** Format: uuid */
-            site_id?: string | null;
-            payload: Record<string, never>;
-            /** @enum {string} */
-            status: "pending" | "applied" | "dismissed";
-            /** Format: int64 */
-            revision: number;
-            /** Format: date-time */
-            created_at: string;
-            /** Format: date-time */
-            resolved_at?: string | null;
         };
         SiteTagPatchRequest: {
             add?: string[];
@@ -5897,7 +4627,7 @@ export interface components {
         };
         ReaderTarget: {
             /** @enum {string} */
-            view: "reading" | "sites" | "processing" | "failed" | "review";
+            view: "reading" | "sites" | "processing" | "failed";
             /** Format: uuid */
             link_id?: string;
             /** Format: uuid */
@@ -5921,8 +4651,6 @@ export interface components {
             /** Format: uuid */
             entry_id?: string;
             reparse_required: boolean;
-            /** Format: uuid */
-            parse_job_id?: string;
             reader_target: components["schemas"]["ReaderTarget"];
         };
         PaginatedSitesResponse: {
@@ -5942,22 +4670,13 @@ export interface components {
             /** Format: uri */
             url: string;
         };
-        SiteTagResponse: {
-            tag: string;
-            /** @enum {string} */
-            source: "auto" | "user" | "migration";
-        };
         SiteEntryResponse: {
             /** Format: uuid */
             id: string;
             /** Format: uuid */
             link_id: string;
             name: string;
-            /** @enum {string} */
-            name_source: "auto" | "user" | "migration";
             purpose: string;
-            /** @enum {string} */
-            purpose_source: "auto" | "user" | "migration";
             /** Format: uri */
             url: string;
             /** Format: date-time */
@@ -5987,7 +4706,6 @@ export interface components {
             tags: string[];
             entry_count: number;
             pinned: boolean;
-            needs_review: boolean;
             primary_entry?: components["schemas"]["SitePrimaryEntryResponse"] | null;
             /** Format: int64 */
             revision: number;
@@ -5998,21 +4716,8 @@ export interface components {
         };
         SiteDetailResponse: components["schemas"]["SiteListItemResponse"] & {
             user_note: string;
-            grouping_locked: boolean;
-            tags_with_source: components["schemas"]["SiteTagResponse"][];
             entries: components["schemas"]["SiteEntryResponse"][];
             related_readings: components["schemas"]["RelatedReadingResponse"][];
-        };
-        /** @description One concept vocabulary entry in the GET /api/export/concepts stream. Internal embedding data is not exposed. */
-        ConceptExportItem: {
-            /** Format: uuid */
-            id: string;
-            primary_name: string;
-            display_name: string;
-            aliases: string[];
-            use_count: number;
-            /** Format: date-time */
-            created_at: string;
         };
         FeedURLRequest: {
             /**
@@ -6209,33 +4914,16 @@ export interface components {
             /** Format: uri */
             url: string;
             /**
-             * @description Durable capture host. Omitted or library stores the URL in the link library; inbox stores a pending Reader Inbox item without creating a link or parse job.
+             * @description Durable capture host. Omitted or library stores the URL in the link library; inbox stores a pending Reader Inbox item without creating a link or asynchronous parsing work.
              * @enum {string}
              */
             destination?: "library" | "inbox";
             description?: string | null;
             /**
-             * @description Override the deployment's default fetch depth for this link. 'light' uses the truncated tag-only path (~7x cheaper LLM input, ~3x faster). 'deep' / 'full' uses the full body fetch chain. Omitted or empty uses the FETCH_PREFER_LIGHT env default. Case-insensitive.
-             * @enum {string|null}
-             */
-            parse_depth?: "light" | "deep" | "full" | null | "";
-            /**
              * @description Requested capture destination. Omitted is equivalent to auto; the server returns the final library kind after classification.
              * @enum {string}
              */
             requested_library_kind?: "auto" | "reading" | "site";
-        };
-        BatchCreateRequest: {
-            items: components["schemas"]["LinkCreateRequest"][];
-        };
-        /** @description Parallel array of per-item outcomes. Each item is a partial-success envelope: result is set on success, error is set on failure. Indices line up with the request order. */
-        BatchSubmitResponse: {
-            results: components["schemas"]["BatchItemResponse"][];
-        };
-        /** @description One item from /api/links/batch. Either result or error is present, never both. */
-        BatchItemResponse: {
-            result?: components["schemas"]["SubmitResponse"];
-            error?: string;
         };
         IngestRequest: {
             sources: components["schemas"]["IngestSource"][];
@@ -6245,7 +4933,7 @@ export interface components {
              */
             requested_library_kind?: "auto" | "reading" | "site";
             /**
-             * @description Durable capture host. Omitted or library stores the normalized source as a link under requested or automatic library-kind rules; inbox stores a pending Reader Inbox item without creating a link or parse job; site explicitly forces the site library.
+             * @description Durable capture host. Omitted or library stores the normalized source as a link under requested or automatic library-kind rules; inbox stores a pending Reader Inbox item without creating a link or asynchronous parsing work; site explicitly forces the site library.
              * @enum {string}
              */
             destination?: "library" | "inbox" | "site";
@@ -6265,10 +4953,8 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** @description A library or site response carries link_id and may carry job_id; an Inbox response carries inbox_id and does not create a link or parse job. destination is present on new Inbox and explicit site responses. Legacy library responses may omit destination. */
+        /** @description A library or site response carries link_id; an Inbox response carries inbox_id and does not create a link. destination is present on new Inbox and explicit site responses. Legacy library responses may omit destination. */
         SubmitResponse: {
-            /** Format: uuid */
-            job_id?: string;
             /**
              * Format: uuid
              * @description The durable link identity for a library or site capture. Absent for an Inbox capture.
@@ -6332,10 +5018,10 @@ export interface components {
             source_text?: string;
             /**
              * Format: int64
-             * @description Saved-content generation observed by the caller. Required for scope=full and for scope=selection with block_key=content or content-document. It must be omitted for summary. Historical deep-research rows remain readable, but new deep-research schedules are rejected.
+             * @description Saved-content generation observed by the caller. Required for scope=full and for scope=selection with block_key=content or content-document. It must be omitted for summary.
              */
             expected_content_revision?: number;
-            /** @description Source hash observed by the caller for a summary selection. Required for summary in strict mode; summary intentionally does not use expected_content_revision. Historical deep-research rows remain readable, but new deep-research schedules are rejected. */
+            /** @description Source hash observed by the caller for a summary selection. Required for summary; summary intentionally does not use expected_content_revision. */
             expected_source_hash?: string;
             /** @default false */
             force: boolean;
@@ -6358,7 +5044,7 @@ export interface components {
             target_language: "zh-CN";
             /**
              * Format: int64
-             * @description Saved-content generation this translation belongs to. Null means a summary identity or a historical deep-research row. Historical deep-research rows remain readable, but new deep-research schedules are rejected. Clients must not infer that a null row belongs to the current saved document.
+             * @description Saved-content generation this translation belongs to. Null is reserved for summary identities, which are versioned by source hash.
              */
             source_content_revision: number | null;
             /** @enum {string} */
@@ -6374,7 +5060,7 @@ export interface components {
         TranslationListResponse: {
             /**
              * Format: int64
-             * @description Authoritative current saved-content generation for the link. Zero means no saved-content generation has been created. This value is independent of items so empty and all-legacy lists remain unambiguous.
+             * @description Authoritative current saved-content generation for the link. Zero means no saved-content generation has been created. This value is independent of items so an empty list remains unambiguous.
              */
             current_content_revision: number;
             /** @description Authoritative SHA-256 of the current canonical rendered summary text, identical to the expected_source_hash/current_identity source_hash CAS identity and computed from the same source snapshot as items. Null means no canonical summary currently exists. */
@@ -6406,15 +5092,6 @@ export interface components {
             content_type: null | ("article" | "listing" | "homepage" | "unknown");
             /** @enum {string} */
             library_kind?: "reading" | "site";
-            /** @enum {string} */
-            library_kind_source?: "auto" | "user" | "migration";
-            library_kind_locked?: boolean;
-            /** @enum {string} */
-            predicted_library_kind?: "reading" | "site";
-            classification_confidence?: number;
-            classification_reason?: string;
-            classification_explanation?: string;
-            classifier_version?: string;
             content_revision?: number;
             /**
              * Format: int64
@@ -6422,7 +5099,7 @@ export interface components {
              */
             metadata_revision: number;
             /** @enum {string} */
-            status: "skeleton" | "pending" | "processing" | "done" | "failed";
+            status: "pending" | "processing" | "done" | "failed";
             domain: string | null;
             path_depth: number | null;
             /** Format: uuid */
@@ -6443,17 +5120,6 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
-        };
-        JobResponse: {
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            link_id: string;
-            /** @enum {string} */
-            status: "pending" | "processing" | "done" | "failed";
-            error_category: string | null;
-            error_msg: string | null;
-            link: components["schemas"]["LinkResponse"] | null;
         };
         /** @description Items + Limit are always present. In offset mode (page=) Total and Page reflect the windowed count and the requested page index. In cursor mode (after=) Total and Page are 0 because no count is computed; next_cursor carries the continuation token. next_cursor is omitted when the response is shorter than limit — a full page always emits it, and the client confirms termination by seeing an empty items array on the follow-up call. */
         PaginatedLinksResponse: {
@@ -6556,7 +5222,7 @@ export interface components {
             tags: string[];
             content_type: null | ("article" | "listing" | "homepage" | "unknown");
             /** @enum {string} */
-            status: "skeleton" | "pending" | "processing" | "done" | "failed";
+            status: "pending" | "processing" | "done" | "failed";
             domain: string | null;
             path_depth: number | null;
             /** Format: uuid */
@@ -6580,7 +5246,7 @@ export interface components {
             error: components["schemas"]["ErrorDetail"];
         };
         /** @description Closed union of every 409 response emitted by translation creation. The operational branch has no current_identity; each source-CAS branch requires a stable error_code and an authoritative current_identity. */
-        TranslationConflictErrorResponse: components["schemas"]["TranslationOperationalConflictResponse"] | components["schemas"]["TranslationContentRevisionConflictResponse"] | components["schemas"]["TranslationSourceBlockConflictResponse"] | components["schemas"]["TranslationSchemaTransitionConflictResponse"];
+        TranslationConflictErrorResponse: components["schemas"]["TranslationOperationalConflictResponse"] | components["schemas"]["TranslationContentRevisionConflictResponse"] | components["schemas"]["TranslationSourceBlockConflictResponse"];
         TranslationOperationalConflictResponse: {
             error: components["schemas"]["TranslationOperationalConflictDetail"];
         };
@@ -6613,17 +5279,6 @@ export interface components {
             message: string;
             current_identity: components["schemas"]["SavedTranslationSourceIdentity"] | components["schemas"]["SummaryTranslationSourceIdentity"];
         };
-        TranslationSchemaTransitionConflictResponse: {
-            error: components["schemas"]["TranslationSchemaTransitionConflictDetail"];
-        };
-        TranslationSchemaTransitionConflictDetail: {
-            /** @constant */
-            code: 409;
-            /** @constant */
-            error_code: "translation_schema_transition";
-            message: string;
-            current_identity: components["schemas"]["SavedTranslationSourceIdentity"];
-        };
         /** @description Authoritative saved-content identity. Generation zero is valid when no saved-content generation has been created. */
         SavedTranslationSourceIdentity: {
             /** Format: int64 */
@@ -6637,7 +5292,7 @@ export interface components {
             block_key: "summary";
             source_hash?: string;
         };
-        /** @description Authoritative translation source identity returned after a 409 source-CAS rejection. Saved content uses content_revision and summary uses source_hash. Historical deep-research rows remain readable, but new deep-research schedules are rejected; those rows therefore never produce a conflict identity. Fields outside the applicable identity domain are omitted. */
+        /** @description Authoritative translation source identity returned after a 409 source-CAS rejection. Saved content uses content_revision and summary uses source_hash. Fields outside the applicable identity domain are omitted. */
         TranslationSourceIdentity: {
             /** Format: int64 */
             content_revision?: number;
@@ -6647,7 +5302,7 @@ export interface components {
         ReaderThoughtVersionKey: {
             /**
              * Format: int64
-             * @description Lamport component. Zero is retained only for legacy operations.
+             * @description Positive Lamport component used for deterministic Thought ordering.
              */
             logical_clock: number;
             device_id: string;
@@ -6655,7 +5310,7 @@ export interface components {
         };
         ReaderThoughtOpRequest: {
             /**
-             * @description Thought Lamport wire contract. The server still accepts missing version and clock as an explicit legacy-zero operation.
+             * @description Current Thought Lamport wire contract.
              * @constant
              */
             contract_version: 1;
@@ -6764,19 +5419,6 @@ export interface components {
             contract_version: 1;
             items: components["schemas"]["ReaderThoughtConflictResponse"][];
             next_cursor?: string;
-        };
-        ReaderThoughtReattachRequest: {
-            /** @enum {string} */
-            target_host_kind: "link" | "note" | "inbox";
-            /** Format: uuid */
-            target_host_id: string;
-            /** Format: int64 */
-            expected_last_sequence: number;
-            /**
-             * Format: int64
-             * @description Expected current revision of the target host: links use content_revision, notes use published_revision, and inbox items use metadata_revision.
-             */
-            expected_host_revision: number;
         };
         ReaderNoteCreateRequest: {
             title?: string;
@@ -6900,24 +5542,16 @@ export interface components {
             summary?: string | null;
             /** @description AI proposal-owned tags; they never overwrite user tags. */
             suggested_tags: string[];
-            /** @description AI proposal-owned structured signals. */
-            proposal_signals: {
-                [key: string]: unknown;
-            };
             /**
-             * @description AI proposal lifecycle; it does not change metadata_revision.
+             * @description Product-facing AI proposal lifecycle. River owns job attempts and terminal queue state; editing metadata returns this field to idle.
              * @enum {string}
              */
-            proposal_status: "pending" | "running" | "completed" | "failed";
+            proposal_status: "idle" | "pending" | "running" | "completed" | "failed";
             tags: string[];
-            /** @description User-owned category memberships currently attached to this Inbox capture. */
-            category_ids: string[];
             /** @enum {string} */
-            status: "pending" | "confirmed" | "discarded";
+            status: "pending" | "confirmed";
             /** Format: int64 */
             metadata_revision: number;
-            /** Format: uuid */
-            job_id?: string | null;
             /** Format: date-time */
             deleted_at?: string | null;
             /**
@@ -6925,19 +5559,14 @@ export interface components {
              * @description The non-destructive Inbox expiration deadline, or null for grandfathered rows.
              */
             expires_at: string | null;
-            /**
-             * Format: date-time
-             * @description The materialized expiration time. A non-null value places a pending capture in the expired partition.
-             */
-            expired_at: string | null;
-            /** @description Derived from expired_at; clients must not infer it from wall-clock comparison with expires_at. */
+            /** @description Derived by PostgreSQL from expires_at and the server clock; clients must not compare against their own clock. */
             expired: boolean;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
         };
-        /** @description Queue projection of an Inbox capture. It deliberately omits body, note, proposal_signals, suggested_tags and category_ids: a capture accepts a 4 MiB body and a 1 MiB note, and this list is read every time the Inbox opens. Clients that need those fields read GET /api/inbox/{id}, whose contract is unchanged. */
+        /** @description Queue projection of an Inbox capture. It deliberately omits body, note and suggested_tags: a capture accepts a 4 MiB body and a 1 MiB note, and this list is read every time the Inbox opens. Clients that need those fields read GET /api/inbox/{id}. */
         ReaderInboxListItemResponse: {
             /** Format: uuid */
             id: string;
@@ -6949,13 +5578,13 @@ export interface components {
             preview: string;
             tags: string[];
             /** @enum {string} */
-            status: "pending" | "confirmed" | "discarded";
+            status: "pending" | "confirmed";
             /**
              * Format: int64
              * @description The revision the batch confirm/discard actions send back as expected_revisions.
              */
             metadata_revision: number;
-            /** @description Derived from the materialized expired_at; clients must not infer it from wall-clock comparison. */
+            /** @description Derived by PostgreSQL from expires_at and the server clock; clients must not compare against their own clock. */
             expired: boolean;
             /**
              * Format: date-time
@@ -7009,21 +5638,6 @@ export interface components {
             /** @description Eligible captures remaining in the requested partition after this batch commits. */
             remaining_count: number;
         };
-        ReaderInboxJobResponse: {
-            /** Format: uuid */
-            inbox_id: string;
-            status: string;
-            /** Format: uuid */
-            job_id: string;
-            attempts?: number;
-            error?: string;
-            /** Format: date-time */
-            created_at?: string;
-            /** Format: date-time */
-            updated_at?: string;
-            /** Format: date-time */
-            finished_at?: string;
-        };
         ReaderConfirmResponse: {
             /** @constant */
             target_kind: "link";
@@ -7031,25 +5645,6 @@ export interface components {
             link_id: string;
             /** @constant */
             status: "confirmed";
-        };
-        ReaderCategoryRequest: {
-            name: string;
-        };
-        ReaderCategoryResponse: {
-            /** Format: uuid */
-            id: string;
-            name: string;
-            count: number;
-            /** Format: date-time */
-            created_at: string;
-        };
-        ReaderCategoriesResponse: {
-            items: components["schemas"]["ReaderCategoryResponse"][];
-        };
-        ReaderCategoryMembershipRequest: {
-            host_kind: string;
-            host_id: string;
-            present: boolean;
         };
         ReaderTodoCreateRequest: {
             text: string;
@@ -7113,114 +5708,12 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
-        ReaderFeedSectionResponse: {
-            id: string;
-            /** @enum {string} */
-            source: "reading" | "inbox" | "subscription";
-            label: string;
-            count: number;
-            capabilities: components["schemas"]["ReaderFeedAction"][];
-        };
-        ReaderFeedSourceResponse: {
-            /** @enum {string} */
-            id: "reading" | "inbox" | "subscription";
-            label: string;
-            enabled: boolean;
-            count: number;
-            capabilities: components["schemas"]["ReaderFeedAction"][];
-        };
-        /** @enum {string} */
-        ReaderFeedAction: "confirm" | "discard" | "read" | "read_later" | "save" | "unsave" | "hide" | "not_interested" | "open" | "open_workspace";
-        /**
-         * @description A ranking signal. Every signal owns one column of ReaderFeedScoreContributions, which is why this set is narrower than ReaderFeedReasonCode.
-         * @enum {string}
-         */
-        ReaderFeedScoreSignal: "pending_confirmation" | "saved_library" | "subscription_recent" | "unread" | "read_later" | "chronological_fallback";
-        /**
-         * @description Why a card is on screen. The six ReaderFeedScoreSignal values are the reasons the ranking pass can win with; continue_reading is Home-only, carries no score contribution and never appears in enabled_score_signals.
-         * @enum {string}
-         */
-        ReaderFeedReasonCode: "pending_confirmation" | "saved_library" | "subscription_recent" | "unread" | "read_later" | "chronological_fallback" | "continue_reading";
-        ReaderFeedPendingConfirmationParams: {
-            /** @constant */
-            source: "inbox";
-        };
-        ReaderFeedSavedLibraryParams: {
-            /** @constant */
-            source: "reading";
-        };
-        ReaderFeedSubscriptionRecentParams: {
-            /** @constant */
-            source: "subscription";
-        };
-        ReaderFeedUnreadParams: {
-            /** @constant */
-            read: false;
-        };
-        ReaderFeedReadLaterParams: {
-            /** @constant */
-            read_later: true;
-        };
-        ReaderFeedChronologicalFallbackParams: {
-            /** Format: date-time */
-            created_at: string;
-        };
-        ReaderFeedScoreContributions: {
-            pending_confirmation: number;
-            saved_library: number;
-            subscription_recent: number;
-            unread: number;
-            read_later: number;
-            chronological_fallback: number;
-        };
-        ReaderFeedReasonTuple: {
-            /** @constant */
-            reason_code: "pending_confirmation";
-            reason_params: components["schemas"]["ReaderFeedPendingConfirmationParams"];
-            reason_contribution: number;
-        } | {
-            /** @constant */
-            reason_code: "saved_library";
-            reason_params: components["schemas"]["ReaderFeedSavedLibraryParams"];
-            reason_contribution: number;
-        } | {
-            /** @constant */
-            reason_code: "subscription_recent";
-            reason_params: components["schemas"]["ReaderFeedSubscriptionRecentParams"];
-            reason_contribution: number;
-        } | {
-            /** @constant */
-            reason_code: "unread";
-            reason_params: components["schemas"]["ReaderFeedUnreadParams"];
-            reason_contribution: number;
-        } | {
-            /** @constant */
-            reason_code: "read_later";
-            reason_params: components["schemas"]["ReaderFeedReadLaterParams"];
-            reason_contribution: number;
-        } | {
-            /** @constant */
-            reason_code: "chronological_fallback";
-            reason_params: components["schemas"]["ReaderFeedChronologicalFallbackParams"];
-            reason_contribution: number;
-        };
         ReaderFeedItemResponse: {
             key: string;
-            source: string;
-            /**
-             * @description Explicit union discriminator. It mirrors source for compatibility with older Reader clients.
-             * @enum {string}
-             */
-            item_type?: "reading" | "inbox" | "subscription";
-            /** @description Stable resource identity. For subscription items this may be the linked saved link while action_key remains the feed-item identity. */
-            resource_key?: string;
-            /** @description Canonical installation-scoped key accepted by Reader Feed action endpoints; key remains its legacy alias. */
-            action_key?: string;
-            /** @description Stable URL/resource key used to prevent duplicate cards in one snapshot. */
-            dedupe_key?: string;
-            section_id?: string;
-            /** @description Actions currently supported for this item. An empty collection means item actions are disabled. */
-            actions?: components["schemas"]["ReaderFeedAction"][];
+            /** @enum {string} */
+            source: "reading" | "inbox" | "subscription";
+            /** @description Stable resource identity used to merge the same reading across live pages. */
+            resource_key: string;
             title: string;
             summary: string;
             /** Format: uri */
@@ -7235,55 +5728,32 @@ export interface components {
             read_later: boolean;
             /** @description Whether this subscription item has a feed-save association; independent from read_later. */
             saved: boolean;
-            reason_code: components["schemas"]["ReaderFeedReasonCode"];
-            reason_text: string;
-            /** Format: date-time */
-            published_at?: string | null;
             /**
              * Format: date-time
-             * @description Authoritative visible Feed instant: published_at when present, otherwise created_at. Chronological ordering and cursors use this same value.
+             * @description Visible Feed instant: published_at when present, otherwise created_at.
              */
             event_at: string;
-            /** Format: date-time */
-            created_at: string;
         };
-        ReaderRankedFeedItemResponse: components["schemas"]["ReaderFeedItemResponse"] & {
-            score: number;
-            score_contributions: components["schemas"]["ReaderFeedScoreContributions"];
-            enabled_score_signals: components["schemas"]["ReaderFeedScoreSignal"][];
-        } & components["schemas"]["ReaderFeedReasonTuple"];
         ReaderFeedResponse: {
-            items: components["schemas"]["ReaderRankedFeedItemResponse"][];
-            /** @description Opaque snapshot-bound cursor. In chronological mode it encodes the complete event_at DESC, resource_key ASC tuple and must be returned unchanged. */
+            items: components["schemas"]["ReaderFeedItemResponse"][];
+            /** @description Opaque live keyset cursor bound to the current mode and normalized source filter. */
             next_cursor?: string;
-            /** Format: uuid */
-            snapshot_id: string;
             /** @enum {string} */
             mode: "recommended" | "chronological";
-            /** @description Additive Feed capabilities. Older clients may omit or ignore this collection; an empty collection is capability-off. */
-            capabilities?: ("snapshot" | "cursor" | "dedupe" | "reason" | "source_filter" | "actions" | "inbox_batch")[];
-            sections?: components["schemas"]["ReaderFeedSectionResponse"][];
-            sources?: components["schemas"]["ReaderFeedSourceResponse"][];
         };
         ReaderFeedFeedbackRequest: {
             /** @enum {string} */
-            action: "not_interested" | "hide" | "save" | "unsave";
-        };
-        ReaderFeedSaveAssociationResponse: {
-            /** Format: uuid */
-            feed_item_id: string;
-            /** Format: uuid */
-            link_id: string;
-            created_link: boolean;
+            action: "hide" | "save" | "unsave";
         };
         ReaderFeedFeedbackResponse: {
             item_key: string;
             /** @enum {string} */
-            action: "not_interested" | "hide" | "save" | "unsave";
-            /** @description Current subscription save state, independent from read_later. */
-            saved: boolean;
-            /** @description The association changed by a subscription save or unsave. */
-            association?: components["schemas"]["ReaderFeedSaveAssociationResponse"];
+            action: "hide" | "save" | "unsave";
+            /**
+             * Format: uuid
+             * @description The Library Link visible after a subscription save-state change. It is absent after unsave unless the item has a separate Analyze result.
+             */
+            link_id?: string;
         };
         ReaderHomeResponse: {
             today: string;
@@ -7321,32 +5791,8 @@ export interface components {
              */
             metadata_revision: number;
         };
-        ReaderContentHistoryResponse: {
-            /** Format: int64 */
-            id: number;
-            /** Format: int64 */
-            revision: number;
-            content?: string | null;
-            content_document?: string | null;
-            content_format: string;
-            content_source: string;
-            /** Format: date-time */
-            created_at: string;
-        };
-        ReaderContentHistoryRestoreRequest: {
-            /** Format: int64 */
-            expected_content_revision: number;
-        };
-        ReaderContentHistoryRestoreResponse: {
-            /** Format: uuid */
-            link_id: string;
-            /** Format: int64 */
-            content_revision: number;
-        };
         ReaderRelatedTagsResponse: {
             items: string[];
-            model: string;
-            degraded: boolean;
         };
         ReaderActivityResponse: {
             /** @enum {string} */
@@ -7394,8 +5840,6 @@ export interface components {
             version: string;
             commit: string;
             build_time: string;
-            /** @description Present only when AI_ALLOW_UNSAFE_TARGETS=true */
-            unsafe_targets_allowed?: boolean;
         };
         ReadyResponse: {
             /** @enum {string} */
@@ -7468,15 +5912,6 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Throttled: per-IP rate limit exceeded (error_code rate_limit_exceeded) or per-link refresh cooldown active (cooldown_active). Retry-After carries the wait hint when available. */
-        TooManyRequests: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["ErrorResponse"];
-            };
-        };
         /** @description Internal server error */
         InternalError: {
             headers: {
@@ -7534,7 +5969,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Translation request conflict. Operational conflicts use link_not_ready, site_original_content_forbidden, or translation_content_unavailable and omit current_identity. Source-CAS conflicts use content_revision_conflict, source_block_conflict, or the retryable translation_schema_transition and require error.current_identity with the authoritative current revision or block identity. */
+        /** @description Translation request conflict. Operational conflicts use link_not_ready, site_original_content_forbidden, or translation_content_unavailable and omit current_identity. Source-CAS conflicts use content_revision_conflict or source_block_conflict and require error.current_identity with the authoritative current revision or block identity. */
         AuthenticatedTranslationConflict: {
             headers: {
                 "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
@@ -7584,7 +6019,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Throttled: per-IP rate limit exceeded (error_code rate_limit_exceeded) or per-link refresh cooldown active (cooldown_active). Retry-After carries the wait hint when available. */
+        /** @description Per-link refresh cooldown active (error_code cooldown_active). Retry-After carries the remaining wait in whole seconds. */
         AuthenticatedTooManyRequests: {
             headers: {
                 "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
@@ -7596,16 +6031,6 @@ export interface components {
         };
         /** @description The sections query parameter is absent from the compatibility path but present with an empty, duplicate, non-canonical, whitespace, reordered, or case-variant value. The handler returns error_code=invalid_archive_sections before attachment headers or archive bytes are written. */
         AuthenticatedArchiveV2InvalidSections: {
-            headers: {
-                "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["ErrorResponse"];
-            };
-        };
-        /** @description A request selecting thoughts or notes reached a deployment whose Reader archive store is unavailable. The handler returns 503 error_code=archive_reader_unavailable before attachment headers or archive bytes are written; retry after the Reader schema and exporter are available. base remains available without a Reader archive store. */
-        AuthenticatedArchiveV2ReaderUnavailable: {
             headers: {
                 "X-WebTag-Data-Namespace": components["headers"]["WebTagDataNamespace"];
                 [name: string]: unknown;
@@ -7648,7 +6073,7 @@ export interface components {
         };
     };
     parameters: {
-        /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. When IDEMPOTENCY_ENABLED=true (the default), successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
+        /** @description Opaque key generated once for this exact method, path, installation, and request body, normally a UUID. Reuse the same key after an ambiguous timeout, but never reuse it for a different body: the server does not compare request bodies and may replay the first cached response. The Core always enables idempotency: successful and deterministic client-error responses are retained for IDEMPOTENCY_TTL_MS (24 hours by default); transient 409, 425, and 429 responses release the claim so the same key may be retried. A 5xx response or a panic is different: the server cannot prove whether the business side effect committed, so it fails closed and KEEPS the in-flight claim. Retrying that key returns 425 idempotency_in_progress inside the TTL and 503 idempotency_result_unknown permanently afterwards; it is never re-executed. Confirm the outcome out of band and issue a NEW key if the write must still happen. URL-level deduplication remains the resource-integrity backstop after the replay TTL expires. */
         IdempotencyKey: string;
         LinkID: string;
         /** @description Subscription UUID. */
@@ -7673,7 +6098,7 @@ export interface components {
         ReaderIfMatch: string;
         /** @description Optional metadata revision precondition for a backward-compatible confirmation request. */
         ReaderOptionalIfMatch: string;
-        /** @description Quoted canonical decimal metadata CAS token taken from LinkResponse.metadata_revision or the prior successful PATCH response ETag. It must represent a JavaScript-safe value from 1 through 9007199254740991, for example "7". This is not the opaque representation ETag returned by GET /api/links/{link_id}. */
+        /** @description Quoted canonical decimal metadata CAS token taken from LinkResponse.metadata_revision or the prior successful PATCH response ETag. It must represent a JavaScript-safe value from 1 through 9007199254740991, for example "7". */
         LinkMetadataIfMatch: string;
     };
     requestBodies: never;
@@ -7692,7 +6117,6 @@ export type ArchiveV2Uuid = components['schemas']['ArchiveV2UUID'];
 export type ArchiveV2DateTime = components['schemas']['ArchiveV2DateTime'];
 export type ArchiveV2SafeNonNegativeInteger = components['schemas']['ArchiveV2SafeNonNegativeInteger'];
 export type ArchiveV2SafePositiveInteger = components['schemas']['ArchiveV2SafePositiveInteger'];
-export type ArchiveV2FieldSource = components['schemas']['ArchiveV2FieldSource'];
 export type ArchiveV2HostKind = components['schemas']['ArchiveV2HostKind'];
 export type ArchiveV2TodoOriginHostKind = components['schemas']['ArchiveV2TodoOriginHostKind'];
 export type ArchiveV2ThoughtIdentifier = components['schemas']['ArchiveV2ThoughtIdentifier'];
@@ -7705,21 +6129,14 @@ export type ArchiveV2Site = components['schemas']['ArchiveV2Site'];
 export type ArchiveV2SiteEntry = components['schemas']['ArchiveV2SiteEntry'];
 export type ArchiveV2SiteTag = components['schemas']['ArchiveV2SiteTag'];
 export type ArchiveV2SiteIdentity = components['schemas']['ArchiveV2SiteIdentity'];
-export type ArchiveV2ClassificationRule = components['schemas']['ArchiveV2ClassificationRule'];
 export type ArchiveV2FeedFolder = components['schemas']['ArchiveV2FeedFolder'];
 export type ArchiveV2FeedSubscription = components['schemas']['ArchiveV2FeedSubscription'];
 export type ArchiveV2FeedItem = components['schemas']['ArchiveV2FeedItem'];
 export type ArchiveV2FeedSave = components['schemas']['ArchiveV2FeedSave'];
 export type ArchiveV2ReaderInbox = components['schemas']['ArchiveV2ReaderInbox'];
-export type ArchiveV2ReaderCategory = components['schemas']['ArchiveV2ReaderCategory'];
-export type ArchiveV2ReaderCategorizable = components['schemas']['ArchiveV2ReaderCategorizable'];
 export type ArchiveV2ReaderTodo = components['schemas']['ArchiveV2ReaderTodo'];
 export type ArchiveV2ReaderEngagement = components['schemas']['ArchiveV2ReaderEngagement'];
-export type ArchiveV2ReaderFeedFeedback = components['schemas']['ArchiveV2ReaderFeedFeedback'];
-export type ArchiveV2ReaderFeedSnapshot = components['schemas']['ArchiveV2ReaderFeedSnapshot'];
-export type ArchiveV2ReaderTagActivity = components['schemas']['ArchiveV2ReaderTagActivity'];
-export type ArchiveV2ReaderDomainActivity = components['schemas']['ArchiveV2ReaderDomainActivity'];
-export type ArchiveV2ReaderContentHistory = components['schemas']['ArchiveV2ReaderContentHistory'];
+export type ArchiveV2ReaderFeedHide = components['schemas']['ArchiveV2ReaderFeedHide'];
 export type ArchiveV2ReaderThought = components['schemas']['ArchiveV2ReaderThought'];
 export type ArchiveV2ReaderThoughtOperation = components['schemas']['ArchiveV2ReaderThoughtOperation'];
 export type ArchiveV2ReaderThoughtSupersessionEvent = components['schemas']['ArchiveV2ReaderThoughtSupersessionEvent'];
@@ -7746,11 +6163,6 @@ export type SiteSplitRequest = components['schemas']['SiteSplitRequest'];
 export type SiteSplitIdentityResponse = components['schemas']['SiteSplitIdentityResponse'];
 export type SiteSplitPreviewResponse = components['schemas']['SiteSplitPreviewResponse'];
 export type SiteSplitExecuteResponse = components['schemas']['SiteSplitExecuteResponse'];
-export type ClassificationRuleCreateRequest = components['schemas']['ClassificationRuleCreateRequest'];
-export type ClassificationRuleUpdateRequest = components['schemas']['ClassificationRuleUpdateRequest'];
-export type ClassificationRuleResponse = components['schemas']['ClassificationRuleResponse'];
-export type LibraryReviewResolveRequest = components['schemas']['LibraryReviewResolveRequest'];
-export type LibraryReviewResponse = components['schemas']['LibraryReviewResponse'];
 export type SiteTagPatchRequest = components['schemas']['SiteTagPatchRequest'];
 export type SiteEntryUpdateRequest = components['schemas']['SiteEntryUpdateRequest'];
 export type SiteEntryDeleteResponse = components['schemas']['SiteEntryDeleteResponse'];
@@ -7762,12 +6174,10 @@ export type ReaderTarget = components['schemas']['ReaderTarget'];
 export type ConversionExecuteResponse = components['schemas']['ConversionExecuteResponse'];
 export type PaginatedSitesResponse = components['schemas']['PaginatedSitesResponse'];
 export type SitePrimaryEntryResponse = components['schemas']['SitePrimaryEntryResponse'];
-export type SiteTagResponse = components['schemas']['SiteTagResponse'];
 export type SiteEntryResponse = components['schemas']['SiteEntryResponse'];
 export type RelatedReadingResponse = components['schemas']['RelatedReadingResponse'];
 export type SiteListItemResponse = components['schemas']['SiteListItemResponse'];
 export type SiteDetailResponse = components['schemas']['SiteDetailResponse'];
-export type ConceptExportItem = components['schemas']['ConceptExportItem'];
 export type FeedUrlRequest = components['schemas']['FeedURLRequest'];
 export type FeedSubscriptionCreateRequest = components['schemas']['FeedSubscriptionCreateRequest'];
 export type FeedSubscriptionUpdateRequest = components['schemas']['FeedSubscriptionUpdateRequest'];
@@ -7791,9 +6201,6 @@ export type FeedMarkReadResponse = components['schemas']['FeedMarkReadResponse']
 export type FeedItemAnalyzeResponse = components['schemas']['FeedItemAnalyzeResponse'];
 export type OpmlImportResponse = components['schemas']['OPMLImportResponse'];
 export type LinkCreateRequest = components['schemas']['LinkCreateRequest'];
-export type BatchCreateRequest = components['schemas']['BatchCreateRequest'];
-export type BatchSubmitResponse = components['schemas']['BatchSubmitResponse'];
-export type BatchItemResponse = components['schemas']['BatchItemResponse'];
 export type IngestRequest = components['schemas']['IngestRequest'];
 export type IngestSource = components['schemas']['IngestSource'];
 export type SubmitResponse = components['schemas']['SubmitResponse'];
@@ -7803,7 +6210,6 @@ export type TranslationCreateRequest = components['schemas']['TranslationCreateR
 export type TranslationResponse = components['schemas']['TranslationResponse'];
 export type TranslationListResponse = components['schemas']['TranslationListResponse'];
 export type LinkResponse = components['schemas']['LinkResponse'];
-export type JobResponse = components['schemas']['JobResponse'];
 export type PaginatedLinksResponse = components['schemas']['PaginatedLinksResponse'];
 export type TagCountResponse = components['schemas']['TagCountResponse'];
 export type LibrarySearchGroup = components['schemas']['LibrarySearchGroup'];
@@ -7827,8 +6233,6 @@ export type TranslationContentRevisionConflictResponse = components['schemas']['
 export type TranslationContentRevisionConflictDetail = components['schemas']['TranslationContentRevisionConflictDetail'];
 export type TranslationSourceBlockConflictResponse = components['schemas']['TranslationSourceBlockConflictResponse'];
 export type TranslationSourceBlockConflictDetail = components['schemas']['TranslationSourceBlockConflictDetail'];
-export type TranslationSchemaTransitionConflictResponse = components['schemas']['TranslationSchemaTransitionConflictResponse'];
-export type TranslationSchemaTransitionConflictDetail = components['schemas']['TranslationSchemaTransitionConflictDetail'];
 export type SavedTranslationSourceIdentity = components['schemas']['SavedTranslationSourceIdentity'];
 export type SummaryTranslationSourceIdentity = components['schemas']['SummaryTranslationSourceIdentity'];
 export type TranslationSourceIdentity = components['schemas']['TranslationSourceIdentity'];
@@ -7841,7 +6245,6 @@ export type ReaderThoughtsResponse = components['schemas']['ReaderThoughtsRespon
 export type ReaderThoughtConflictOperationResponse = components['schemas']['ReaderThoughtConflictOperationResponse'];
 export type ReaderThoughtConflictResponse = components['schemas']['ReaderThoughtConflictResponse'];
 export type ReaderThoughtConflictsResponse = components['schemas']['ReaderThoughtConflictsResponse'];
-export type ReaderThoughtReattachRequest = components['schemas']['ReaderThoughtReattachRequest'];
 export type ReaderNoteCreateRequest = components['schemas']['ReaderNoteCreateRequest'];
 export type ReaderNoteDraftRequest = components['schemas']['ReaderNoteDraftRequest'];
 export type ReaderNotePublishRequest = components['schemas']['ReaderNotePublishRequest'];
@@ -7863,43 +6266,20 @@ export type ReaderInboxBulkRequest = components['schemas']['ReaderInboxBulkReque
 export type ReaderInboxBulkItemResponse = components['schemas']['ReaderInboxBulkItemResponse'];
 export type ReaderInboxBulkResponse = components['schemas']['ReaderInboxBulkResponse'];
 export type ReaderInboxConfirmAiProposalsResponse = components['schemas']['ReaderInboxConfirmAIProposalsResponse'];
-export type ReaderInboxJobResponse = components['schemas']['ReaderInboxJobResponse'];
 export type ReaderConfirmResponse = components['schemas']['ReaderConfirmResponse'];
-export type ReaderCategoryRequest = components['schemas']['ReaderCategoryRequest'];
-export type ReaderCategoryResponse = components['schemas']['ReaderCategoryResponse'];
-export type ReaderCategoriesResponse = components['schemas']['ReaderCategoriesResponse'];
-export type ReaderCategoryMembershipRequest = components['schemas']['ReaderCategoryMembershipRequest'];
 export type ReaderTodoCreateRequest = components['schemas']['ReaderTodoCreateRequest'];
 export type ReaderTodoPatchRequest = components['schemas']['ReaderTodoPatchRequest'];
 export type ReaderTodoResponse = components['schemas']['ReaderTodoResponse'];
 export type ReaderTodosResponse = components['schemas']['ReaderTodosResponse'];
 export type ReaderEngagementRequest = components['schemas']['ReaderEngagementRequest'];
 export type ReaderEngagementResponse = components['schemas']['ReaderEngagementResponse'];
-export type ReaderFeedSectionResponse = components['schemas']['ReaderFeedSectionResponse'];
-export type ReaderFeedSourceResponse = components['schemas']['ReaderFeedSourceResponse'];
-export type ReaderFeedAction = components['schemas']['ReaderFeedAction'];
-export type ReaderFeedScoreSignal = components['schemas']['ReaderFeedScoreSignal'];
-export type ReaderFeedReasonCode = components['schemas']['ReaderFeedReasonCode'];
-export type ReaderFeedPendingConfirmationParams = components['schemas']['ReaderFeedPendingConfirmationParams'];
-export type ReaderFeedSavedLibraryParams = components['schemas']['ReaderFeedSavedLibraryParams'];
-export type ReaderFeedSubscriptionRecentParams = components['schemas']['ReaderFeedSubscriptionRecentParams'];
-export type ReaderFeedUnreadParams = components['schemas']['ReaderFeedUnreadParams'];
-export type ReaderFeedReadLaterParams = components['schemas']['ReaderFeedReadLaterParams'];
-export type ReaderFeedChronologicalFallbackParams = components['schemas']['ReaderFeedChronologicalFallbackParams'];
-export type ReaderFeedScoreContributions = components['schemas']['ReaderFeedScoreContributions'];
-export type ReaderFeedReasonTuple = components['schemas']['ReaderFeedReasonTuple'];
 export type ReaderFeedItemResponse = components['schemas']['ReaderFeedItemResponse'];
-export type ReaderRankedFeedItemResponse = components['schemas']['ReaderRankedFeedItemResponse'];
 export type ReaderFeedResponse = components['schemas']['ReaderFeedResponse'];
 export type ReaderFeedFeedbackRequest = components['schemas']['ReaderFeedFeedbackRequest'];
-export type ReaderFeedSaveAssociationResponse = components['schemas']['ReaderFeedSaveAssociationResponse'];
 export type ReaderFeedFeedbackResponse = components['schemas']['ReaderFeedFeedbackResponse'];
 export type ReaderHomeResponse = components['schemas']['ReaderHomeResponse'];
 export type ReaderLinkMetadataRequest = components['schemas']['ReaderLinkMetadataRequest'];
 export type ReaderLinkMetadataResponse = components['schemas']['ReaderLinkMetadataResponse'];
-export type ReaderContentHistoryResponse = components['schemas']['ReaderContentHistoryResponse'];
-export type ReaderContentHistoryRestoreRequest = components['schemas']['ReaderContentHistoryRestoreRequest'];
-export type ReaderContentHistoryRestoreResponse = components['schemas']['ReaderContentHistoryRestoreResponse'];
 export type ReaderRelatedTagsResponse = components['schemas']['ReaderRelatedTagsResponse'];
 export type ReaderActivityResponse = components['schemas']['ReaderActivityResponse'];
 export type ReaderTagActivityResponse = components['schemas']['ReaderTagActivityResponse'];
@@ -7916,7 +6296,6 @@ export type ResponseConflict = components['responses']['Conflict'];
 export type ResponseAuthenticatedReaderInboxBulkError = components['responses']['AuthenticatedReaderInboxBulkError'];
 export type ResponsePayloadTooLarge = components['responses']['PayloadTooLarge'];
 export type ResponseUnprocessableEntity = components['responses']['UnprocessableEntity'];
-export type ResponseTooManyRequests = components['responses']['TooManyRequests'];
 export type ResponseInternalError = components['responses']['InternalError'];
 export type ResponseBadGateway = components['responses']['BadGateway'];
 export type ResponseServiceUnavailable = components['responses']['ServiceUnavailable'];
@@ -7930,7 +6309,6 @@ export type ResponseAuthenticatedPayloadTooLarge = components['responses']['Auth
 export type ResponseAuthenticatedServiceUnavailable = components['responses']['AuthenticatedServiceUnavailable'];
 export type ResponseAuthenticatedTooManyRequests = components['responses']['AuthenticatedTooManyRequests'];
 export type ResponseAuthenticatedArchiveV2InvalidSections = components['responses']['AuthenticatedArchiveV2InvalidSections'];
-export type ResponseAuthenticatedArchiveV2ReaderUnavailable = components['responses']['AuthenticatedArchiveV2ReaderUnavailable'];
 export type ResponseAuthenticatedUnprocessableEntity = components['responses']['AuthenticatedUnprocessableEntity'];
 export type ResponseAuthenticatedIdempotencyInProgress = components['responses']['AuthenticatedIdempotencyInProgress'];
 export type ResponseAuthenticatedIdempotencyUnavailable = components['responses']['AuthenticatedIdempotencyUnavailable'];
@@ -8047,7 +6425,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Static installation token configured by EXTENSION_API_TOKEN. May be empty only when PUBLIC_API_OPEN explicitly enables anonymous access. */
+                    /** @description Required static installation token configured by EXTENSION_API_TOKEN. */
                     token: string;
                 };
             };

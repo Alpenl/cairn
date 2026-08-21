@@ -36,26 +36,11 @@ func TestEnvExampleIncludesCurrentGoRuntimeVariables(t *testing.T) {
 		"AI_RETRY_ATTEMPTS=",
 		"AI_RETRY_DELAY_MS=",
 		"AI_REQUEST_TIMEOUT_MS=",
-		"AI_ALLOW_UNSAFE_TARGETS=",
-		"AI_DISABLE_STRUCTURED_OUTPUT=",
-		"TAG_CACHE_TTL_MS=",
-		"TREE_CACHE_TTL_MS=",
-		"GZIP_ENABLED=",
-		"GZIP_MIN_LENGTH=",
 		"DB_MAX_CONNS=",
 		"DB_MIN_CONNS=",
 		// Wave 12.5 安全加固新增的 env：
 		"APP_ENV=",
 		"LOG_LEVEL=",
-		"ADMIN_AUTH_TOKEN=",
-		"METRICS_AUTH_TOKEN=",
-		"PPROF_ENABLED=",
-		"RATE_LIMIT_RPS=",
-		"RATE_LIMIT_BURST=",
-		"OTEL_EXPORTER_OTLP_ENDPOINT=",
-		// Wave 2 H4 OTel 真实接入新增：
-		"OTEL_SAMPLING_RATIO=",
-		"OTEL_EXPORTER_OTLP_INSECURE=",
 		// Wave 2 DB 加固 + 可观测性新增的 env：
 		"DB_MAX_CONN_LIFETIME_MS=",
 		"DB_MAX_CONN_IDLE_TIME_MS=",
@@ -65,41 +50,28 @@ func TestEnvExampleIncludesCurrentGoRuntimeVariables(t *testing.T) {
 		"SHUTDOWN_TIMEOUT_MS=",
 		// Wave 9 MED M5 新增：游标 HMAC 签名密钥。
 		"CURSOR_SIGNING_KEY=",
-		"READER_CURSOR_SIGNING_KEY=",
 		// 浏览器扩展 Task 1B 新增：公开 API 的 opt-in Bearer token。
 		"EXTENSION_API_TOKEN=",
 		// RF6A：translation River job v1→v2 三阶段滚动协议。
-		"TRANSLATION_JOBS_ROLLOUT=",
-		// RF5A：translation source identity 兼容/严格发布阶段。
-		"TRANSLATION_SOURCE_ROLLOUT=",
-		// RF6B：translation terminal reconciler cadence and scan bounds.
-		"TRANSLATION_RECONCILE_INTERVAL_MS=",
-		"TRANSLATION_RECONCILE_BATCH=",
-		"TRANSLATION_RECONCILE_ROUND_TIMEOUT_MS=",
-		"TRANSLATION_RECONCILE_MISSING_AFTER_MS=",
-		// RF6C：parse missing recovery and bounded River terminal retention.
-		"PARSE_RECONCILE_INTERVAL_MS=",
-		"PARSE_RECONCILE_BATCH=",
-		"PARSE_RECONCILE_ROUND_TIMEOUT_MS=",
-		"PARSE_RECONCILE_MISSING_AFTER_MS=",
+		// River cleans terminal execution history after this retention period.
 		"RIVER_TERMINAL_RETENTION_MS=",
-		"RIVER_MAX_RECOVERY_DOWNTIME_MS=",
-		// Phase 5 v3.0 embedding client. Retired concept-normalization settings
-		// are intentionally absent so a fresh deployment cannot enable no-op
-		// behavior by following the example.
-		"EMBEDDING_MODEL=",
-		"EMBEDDING_BASE_URL=",
-		"EMBEDDING_API_KEY=",
-		"EMBEDDING_DIMENSIONS=",
-		"SITE_MIGRATION_ENABLED=",
-		"SITE_MIGRATION_DRY_RUN=",
-		"SITE_MIGRATION_BATCH=",
-		"SITE_MIGRATION_INTERVAL_MS=",
 	}
 
 	for _, needle := range required {
 		if !strings.Contains(content, needle) {
 			t.Fatalf(".env.example missing %q", needle)
+		}
+	}
+	for _, retired := range []string{
+		"AI_ALLOW_UNSAFE_TARGETS=",
+		"AI_DISABLE_STRUCTURED_OUTPUT=",
+		"PUBLIC_API_OPEN=",
+		"TAG_CACHE_TTL_MS=",
+		"TREE_CACHE_TTL_MS=",
+		"METRICS_AUTH_TOKEN=",
+	} {
+		if strings.Contains(content, retired) {
+			t.Fatalf(".env.example still documents retired variable %q", retired)
 		}
 	}
 
@@ -108,17 +80,7 @@ func TestEnvExampleIncludesCurrentGoRuntimeVariables(t *testing.T) {
 		"AI_API_KEY=\n",
 		"AI_MODEL=grok-4.3-fast",
 		"\nPARSE_MODE=grok_direct\n",
-		"\nTRANSLATION_SOURCE_ROLLOUT=strict\n",
-		"\nTRANSLATION_RECONCILE_INTERVAL_MS=60000\n",
-		"\nTRANSLATION_RECONCILE_BATCH=100\n",
-		"\nTRANSLATION_RECONCILE_ROUND_TIMEOUT_MS=30000\n",
-		"\nTRANSLATION_RECONCILE_MISSING_AFTER_MS=21600000\n",
-		"\nPARSE_RECONCILE_INTERVAL_MS=60000\n",
-		"\nPARSE_RECONCILE_BATCH=100\n",
-		"\nPARSE_RECONCILE_ROUND_TIMEOUT_MS=30000\n",
-		"\nPARSE_RECONCILE_MISSING_AFTER_MS=21600000\n",
 		"\nRIVER_TERMINAL_RETENTION_MS=604800000\n",
-		"\nRIVER_MAX_RECOVERY_DOWNTIME_MS=86400000\n",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf(".env.example must document the Grok production defaults; missing %q", want)
@@ -134,17 +96,6 @@ func TestEnvExampleIncludesCurrentGoRuntimeVariables(t *testing.T) {
 		t.Fatalf(".env.example 里出现了疑似真实网关地址 %q；示例文件只能放占位符，真实值放部署环境的 secret", matched)
 	}
 	assertNoBareGatewayIP(t)
-
-	deprecated := []string{
-		"WIKIDATA_ENABLED=",
-		"CONCEPT_JUDGE_ENABLED=",
-		"CONCEPT_RETRIEVE_TOP_K=",
-	}
-	for _, needle := range deprecated {
-		if strings.Contains(content, needle) {
-			t.Fatalf(".env.example must not advertise ignored setting %q", needle)
-		}
-	}
 }
 
 // placeholderAIBaseURL 是 .env.example 里应当出现的占位地址。

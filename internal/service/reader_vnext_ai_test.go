@@ -60,15 +60,10 @@ type readerAIStub struct {
 	answer       string
 	model        string
 	err          error
-	available    *bool
 	lastContext  context.Context
 	lastPrompt   string
 	lastScope    string
 	beforeReturn func(context.Context)
-}
-
-func (s *readerAIStub) Available() bool {
-	return s.available == nil || *s.available
 }
 
 func (s *readerAIStub) Complete(ctx context.Context, prompt, scope string) (string, string, error) {
@@ -206,24 +201,6 @@ func TestCompleteAIWhitespaceResponseIsNotSuccess(t *testing.T) {
 		t.Fatalf("response = %#v, want disabled zero response on provider empty answer", response)
 	}
 	assertReaderAIHTTPError(t, err, http.StatusBadGateway, "ai_empty_response")
-}
-
-func TestCompleteAIUnavailableProviderDoesNotReadTenantContext(t *testing.T) {
-	available := false
-	ai := &readerAIStub{available: &available}
-	store := &aiContextCountingStore{contextValue: &model.ReaderAIContext{Content: "private"}}
-	svc := NewReaderVNextService(store, ai)
-
-	response, err := svc.CompleteAI(context.Background(), dto.ReaderAIRequest{Prompt: "question", LinkID: uuid.NewString()})
-	if err != nil {
-		t.Fatalf("CompleteAI() error = %v", err)
-	}
-	if response.Enabled {
-		t.Fatalf("response = %#v, want capability-off response", response)
-	}
-	if store.contextReads != 0 || ai.calls != 0 {
-		t.Fatalf("disabled provider touched context/provider: reads=%d calls=%d", store.contextReads, ai.calls)
-	}
 }
 
 func TestCompleteAIPropagatesContextToStoreAndProvider(t *testing.T) {

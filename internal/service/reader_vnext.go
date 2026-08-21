@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -35,46 +34,32 @@ type ReaderAIBackend interface {
 type ReaderVNextService struct {
 	store             repository.ReaderVNextStore
 	ai                ReaderAIBackend
-	inboxAI           ReaderInboxAIBackend
-	inboxScheduler    ReaderInboxJobScheduler
 	inboxCommands     InboxProposalCommands
-	metadataCache     CacheInvalidator
 	now               func() time.Time
-	activityMu        sync.Mutex
-	activityLast      time.Time
 	activityCursorKey []byte
 }
 
-// readerFeedSourceStore is an additive capability. Keeping the original
-// ReaderVNextStore.ListFeed method intact lets older service test doubles keep
-// compiling while the mixed Feed gains a source-filtered snapshot path.
-type readerFeedSourceStore interface {
-	ListFeedWithSources(context.Context, string, string, string, []string, int) (*model.ReaderFeedPage, error)
-}
-
 type ReaderVNextServiceOptions struct {
-	CursorSigningKey string
+	CursorSigningKey      string
+	InboxProposalCommands InboxProposalCommands
 }
 
 func NewReaderVNextService(store repository.ReaderVNextStore, ai ReaderAIBackend, options ...ReaderVNextServiceOptions) *ReaderVNextService {
 	cursorKey := processReaderCursorKey
-	if len(options) > 0 && options[0].CursorSigningKey != "" {
-		cursorKey = []byte(options[0].CursorSigningKey)
+	var configured ReaderVNextServiceOptions
+	if len(options) > 0 {
+		configured = options[0]
+	}
+	if configured.CursorSigningKey != "" {
+		cursorKey = []byte(configured.CursorSigningKey)
 	}
 	return &ReaderVNextService{
 		store:             store,
 		ai:                ai,
+		inboxCommands:     configured.InboxProposalCommands,
 		now:               time.Now,
 		activityCursorKey: append([]byte(nil), cursorKey...),
 	}
-}
-
-// ConfigureMetadataCacheInvalidator installs the installation-level aggregate
-// invalidator shared by the Link metadata command and normal Link writers.
-// It is optional for lightweight tests and deployments without in-memory
-// aggregate caches.
-func (s *ReaderVNextService) ConfigureMetadataCacheInvalidator(invalidator CacheInvalidator) {
-	s.metadataCache = invalidator
 }
 
 func readerUUID(raw, field string) (uuid.UUID, error) {
@@ -118,7 +103,6 @@ var readerErrorMappings = []readerErrorMapping{
 	{targets: []error{repository.ErrRevisionConflict}, status: http.StatusConflict, code: httperr.CodeRevisionConflict, message: "resource revision is stale"},
 	{targets: []error{repository.ErrInvalidReaderHostKind}, status: http.StatusUnprocessableEntity, code: "invalid_host_kind", message: "host_kind must be link, inbox, or note"},
 	{targets: []error{repository.ErrInvalidReaderCursor}, status: http.StatusUnprocessableEntity, code: httperr.CodeInvalidCursor, message: "invalid cursor"},
-	{targets: []error{repository.ErrInvalidReaderFeedReason}, status: http.StatusUnprocessableEntity, code: httperr.CodeInvalidFeedReason, message: "feed reason evidence is incomplete"},
 	{targets: []error{repository.ErrInvalidReaderReanchor}, status: http.StatusUnprocessableEntity, code: "invalid_reanchor_ops", message: "invalid reanchor operations"},
 	{targets: []error{repository.ErrReaderNoteContentEmpty}, status: http.StatusUnprocessableEntity, code: "note_content_empty", message: "note content must not be empty"},
 	{targets: []error{repository.ErrReaderNoteDraftDirty}, status: http.StatusConflict, code: "note_draft_dirty", message: "note draft has unpublished changes"},
@@ -135,7 +119,6 @@ var readerErrorMappings = []readerErrorMapping{
 	{targets: []error{repository.ErrReaderThoughtLinkMismatch, repository.ErrInvalidReaderThought}, status: http.StatusUnprocessableEntity, code: "invalid_thought", message: "thought host and payload are inconsistent"},
 	{targets: []error{repository.ErrReaderInboxTitleRequired}, status: http.StatusUnprocessableEntity, code: "inbox_title_required", message: "inbox title must not be blank when confirming"},
 	{targets: []error{repository.ErrReaderInboxStateConflict}, status: http.StatusConflict, code: "inbox_state_conflict", message: "the inbox item is in a state that cannot accept this transition"},
-	{targets: []error{repository.ErrInvalidReaderCategoryMembership}, status: http.StatusUnprocessableEntity, code: "invalid_category_membership", message: "category membership identity is invalid"},
 }
 
 // mapReaderError translates repository sentinels into HTTP errors. Anything the
@@ -218,7 +201,7 @@ func validateThoughtEnvelope(input dto.ReaderThoughtOpRequest) error {
 	}); err != nil {
 		return err
 	}
-	if err := validateThoughtLogicalClock(input.ContractVersion, input.LogicalClock); err != nil {
+	if err := validateThoughtLogicalClock(input.LogicalClock); err != nil {
 		return err
 	}
 	if err := validateThoughtOperationKind(input.OperationKind); err != nil {
@@ -253,19 +236,13 @@ func validateThoughtEnvelopeFields(fields []thoughtEnvelopeField) error {
 }
 
 func validateThoughtContractVersion(contractVersion int) error {
-	if contractVersion != 0 && contractVersion != model.ReaderThoughtContractVersion {
+	if contractVersion != model.ReaderThoughtContractVersion {
 		return httperr.NewWithCode(http.StatusUnprocessableEntity, "unsupported_thought_contract", "unsupported thought contract_version")
 	}
 	return nil
 }
 
-func validateThoughtLogicalClock(contractVersion int, logicalClock int64) error {
-	if contractVersion == 0 {
-		if logicalClock != 0 {
-			return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_clock", "legacy thought operations must use logical_clock 0")
-		}
-		return nil
-	}
+func validateThoughtLogicalClock(logicalClock int64) error {
 	if logicalClock < 1 || logicalClock > model.ReaderThoughtMaxLogicalClock {
 		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_clock", "logical_clock must be a safe positive integer")
 	}
@@ -289,7 +266,6 @@ type readerThoughtTargetWire struct {
 		SourceHash       string `json:"source_hash"`
 		NoteRevision     int64  `json:"note_revision"`
 		MetadataRevision int64  `json:"metadata_revision"`
-		SourceKey        string `json:"source_key"`
 	} `json:"version"`
 }
 
@@ -317,10 +293,6 @@ func readerThoughtTarget(input dto.ReaderThoughtOpRequest) (readerThoughtTargetW
 	case "inbox":
 		if target.Version.MetadataRevision <= 0 {
 			return readerThoughtTargetWire{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "inbox target requires metadata_revision")
-		}
-	case "legacy-stale":
-		if strings.TrimSpace(target.Version.SourceKey) == "" {
-			return readerThoughtTargetWire{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "legacy-stale target requires source_key")
 		}
 	default:
 		return readerThoughtTargetWire{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_target", "unsupported thought target kind")
@@ -509,16 +481,8 @@ func (s *ReaderVNextService) SyncThoughts(ctx context.Context, after string, lim
 	return out, nil
 }
 
-type readerThoughtConflictStore interface {
-	ListThoughtConflicts(context.Context, string, int) ([]model.ReaderThoughtConflict, string, error)
-}
-
 func (s *ReaderVNextService) ListThoughtConflicts(ctx context.Context, after string, limit int) (dto.ReaderThoughtConflictsResponse, error) {
-	store, ok := s.store.(readerThoughtConflictStore)
-	if !ok {
-		return dto.ReaderThoughtConflictsResponse{ContractVersion: model.ReaderThoughtContractVersion, Items: []dto.ReaderThoughtConflictResponse{}}, nil
-	}
-	items, next, err := store.ListThoughtConflicts(ctx, after, limit)
+	items, next, err := s.store.ListThoughtConflicts(ctx, after, limit)
 	if err != nil {
 		return dto.ReaderThoughtConflictsResponse{}, mapReaderError(err)
 	}
@@ -560,27 +524,6 @@ func thoughtConflictOperationResponse(item model.ReaderThoughtConflictOperation)
 
 func (s *ReaderVNextService) GetThought(ctx context.Context, rawID string) (dto.ReaderThoughtResponse, error) {
 	item, err := s.store.GetThought(ctx, rawID)
-	if err != nil {
-		return dto.ReaderThoughtResponse{}, mapReaderError(err)
-	}
-	return thoughtResponse(*item), nil
-}
-
-func (s *ReaderVNextService) ReattachThought(ctx context.Context, rawID string, request dto.ReaderThoughtReattachRequest) (dto.ReaderThoughtResponse, error) {
-	if request.TargetHostKind != "link" && request.TargetHostKind != "note" && request.TargetHostKind != "inbox" {
-		return dto.ReaderThoughtResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_thought_host", "target_host_kind must be link, note, or inbox")
-	}
-	targetHostID, err := readerUUID(request.TargetHostID, "target_host_id")
-	if err != nil {
-		return dto.ReaderThoughtResponse{}, err
-	}
-	if request.ExpectedLastSequence < 0 {
-		return dto.ReaderThoughtResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "reader_last_sequence_invalid", "expected_last_sequence must be non-negative")
-	}
-	if request.ExpectedHostRevision <= 0 {
-		return dto.ReaderThoughtResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "reader_host_revision_required", "expected_host_revision must be positive")
-	}
-	item, err := s.store.ReattachThought(ctx, model.ReaderThoughtReattachCommand{ThoughtID: strings.TrimSpace(rawID), TargetHostKind: request.TargetHostKind, TargetHostID: targetHostID.String(), ExpectedLastSequence: request.ExpectedLastSequence, ExpectedHostRevision: request.ExpectedHostRevision})
 	if err != nil {
 		return dto.ReaderThoughtResponse{}, mapReaderError(err)
 	}
@@ -719,17 +662,11 @@ func (s *ReaderVNextService) DeleteNote(ctx context.Context, rawID string) (dto.
 	if err != nil {
 		return dto.ReaderHostLifecycleResponse{}, err
 	}
-	if lifecycle, ok := s.store.(repository.ReaderHostLifecycleStore); ok {
-		result, lifecycleErr := lifecycle.SoftDeleteHost(ctx, model.ReaderHostNote, id)
-		if lifecycleErr != nil {
-			return dto.ReaderHostLifecycleResponse{}, mapReaderError(lifecycleErr)
-		}
-		return readerHostLifecycleResponse(result), nil
+	result, err := s.store.SoftDeleteHost(ctx, model.ReaderHostNote, id)
+	if err != nil {
+		return dto.ReaderHostLifecycleResponse{}, mapReaderError(err)
 	}
-	if err := mapReaderError(s.store.DeleteNote(ctx, id)); err != nil {
-		return dto.ReaderHostLifecycleResponse{}, err
-	}
-	return dto.ReaderHostLifecycleResponse{HostKind: string(model.ReaderHostNote), HostID: id.String(), State: string(model.ReaderHostTrashed), Changed: true}, nil
+	return readerHostLifecycleResponse(result), nil
 }
 
 func (s *ReaderVNextService) RestoreNote(ctx context.Context, rawID string) (dto.ReaderHostLifecycleResponse, error) {
@@ -737,17 +674,11 @@ func (s *ReaderVNextService) RestoreNote(ctx context.Context, rawID string) (dto
 	if err != nil {
 		return dto.ReaderHostLifecycleResponse{}, err
 	}
-	if lifecycle, ok := s.store.(repository.ReaderHostLifecycleStore); ok {
-		result, lifecycleErr := lifecycle.RestoreHost(ctx, model.ReaderHostNote, id)
-		if lifecycleErr != nil {
-			return dto.ReaderHostLifecycleResponse{}, mapReaderError(lifecycleErr)
-		}
-		return readerHostLifecycleResponse(result), nil
+	result, err := s.store.RestoreHost(ctx, model.ReaderHostNote, id)
+	if err != nil {
+		return dto.ReaderHostLifecycleResponse{}, mapReaderError(err)
 	}
-	if err := mapReaderError(s.store.RestoreNote(ctx, id)); err != nil {
-		return dto.ReaderHostLifecycleResponse{}, err
-	}
-	return dto.ReaderHostLifecycleResponse{HostKind: string(model.ReaderHostNote), HostID: id.String(), State: string(model.ReaderHostLive), Changed: true}, nil
+	return readerHostLifecycleResponse(result), nil
 }
 
 func (s *ReaderVNextService) ListNoteHistory(ctx context.Context, rawID string, limit int) ([]dto.ReaderNoteHistoryResponse, error) {
@@ -798,38 +729,17 @@ func (s *ReaderVNextService) CreateInbox(ctx context.Context, request dto.Reader
 	if err != nil {
 		return dto.ReaderInboxResponse{}, err
 	}
-	input := model.ReaderInbox{URL: strings.TrimSpace(request.URL), IdentityKey: normalizedURL, SourceKind: request.SourceKind, Title: request.Title, Body: request.Body, Note: request.Note, Summary: request.Summary, Tags: append([]string(nil), request.Tags...), ProposalSignals: []byte(`{}`), ProposalStatus: "pending"}
-	var item *model.ReaderInbox
-	if s.inboxCommands != nil {
-		result, commandErr := s.inboxCommands.CreateInboxProposal(ctx, CreateInboxProposalCommand{Inbox: input})
-		if commandErr != nil {
-			return dto.ReaderInboxResponse{}, mapReaderError(commandErr)
-		}
-		item = result.Inbox
-	} else {
-		item, err = s.store.CreateInbox(ctx, input)
-		if err != nil {
-			return dto.ReaderInboxResponse{}, mapReaderError(err)
-		}
+	input := model.ReaderInbox{URL: strings.TrimSpace(request.URL), IdentityKey: normalizedURL, SourceKind: request.SourceKind, Title: request.Title, Body: request.Body, Note: request.Note, Summary: request.Summary, Tags: append([]string(nil), request.Tags...), ProposalStatus: "idle"}
+	if s.inboxCommands == nil {
+		return dto.ReaderInboxResponse{}, errors.New("create Reader inbox: durable commands are not configured")
 	}
+	result, commandErr := s.inboxCommands.CreateInboxProposal(ctx, CreateInboxProposalCommand{Inbox: input})
+	if commandErr != nil {
+		return dto.ReaderInboxResponse{}, mapReaderError(commandErr)
+	}
+	item := result.Inbox
 	if item == nil {
 		return dto.ReaderInboxResponse{}, errors.New("create Reader inbox: durable command returned nil item")
-	}
-	// Production installs a scheduler during dependency construction. Creating
-	// the durable row and queue message together keeps ordinary capture writes
-	// on the proposal path without making offline/test callers depend on River.
-	if s.inboxCommands == nil && s.inboxScheduler != nil {
-		job, created, beginErr := s.store.BeginInboxResummarizeJob(ctx, item.ID, item.MetadataRevision)
-		if beginErr != nil {
-			return dto.ReaderInboxResponse{}, mapReaderError(beginErr)
-		}
-		if created {
-			args := ReaderInboxSummaryJobArgs{JobID: job.ID, InboxID: item.ID, ExpectedMetadataRevision: job.ExpectedMetadataRevision}
-			if enqueueErr := s.inboxScheduler.EnqueueReaderInboxSummary(ctx, args); enqueueErr != nil {
-				_ = s.store.FailInboxJob(ctx, job.ID, "reader_inbox_job_enqueue_failed")
-				return dto.ReaderInboxResponse{}, fmt.Errorf("enqueue Reader inbox job: %w", enqueueErr)
-			}
-		}
 	}
 	return inboxResponse(*item), nil
 }
@@ -890,16 +800,7 @@ func (s *ReaderVNextService) GetInbox(ctx context.Context, rawID string) (dto.Re
 }
 
 func inboxResponse(item model.ReaderInbox) dto.ReaderInboxResponse {
-	categoryIDs := make([]string, 0, len(item.CategoryIDs))
-	for _, categoryID := range item.CategoryIDs {
-		categoryIDs = append(categoryIDs, categoryID.String())
-	}
-	out := dto.ReaderInboxResponse{ID: item.ID.String(), URL: item.URL, SourceKind: item.SourceKind, Title: item.Title, Body: item.Body, Note: item.Note, Summary: item.Summary, SuggestedTags: item.SuggestedTags, ProposalSignals: item.ProposalSignals, ProposalStatus: item.ProposalStatus, Tags: item.Tags, CategoryIDs: categoryIDs, Status: item.Status, MetadataRevision: item.MetadataRevision, ExpiresAt: item.ExpiresAt, ExpiredAt: item.ExpiredAt, Expired: item.Expired, DeletedAt: item.DeletedAt, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
-	if item.JobID != nil {
-		id := item.JobID.String()
-		out.JobID = &id
-	}
-	return out
+	return dto.ReaderInboxResponse{ID: item.ID.String(), URL: item.URL, SourceKind: item.SourceKind, Title: item.Title, Body: item.Body, Note: item.Note, Summary: item.Summary, SuggestedTags: item.SuggestedTags, ProposalStatus: item.ProposalStatus, Tags: item.Tags, Status: item.Status, MetadataRevision: item.MetadataRevision, ExpiresAt: item.ExpiresAt, Expired: item.Expired, DeletedAt: item.DeletedAt, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
 }
 
 func (s *ReaderVNextService) PatchInbox(ctx context.Context, rawID string, request dto.ReaderInboxPatchRequest, expected int64) (dto.ReaderInboxResponse, error) {
@@ -912,10 +813,6 @@ func (s *ReaderVNextService) PatchInbox(ctx context.Context, rawID string, reque
 		return dto.ReaderInboxResponse{}, mapReaderError(err)
 	}
 	return inboxResponse(*item), nil
-}
-
-type readerInboxConfirmationCASStore interface {
-	ConfirmInboxCAS(context.Context, uuid.UUID, int64) (uuid.UUID, error)
 }
 
 func (s *ReaderVNextService) ConfirmInbox(ctx context.Context, rawID string, expectedRevision int64) (map[string]string, error) {
@@ -933,12 +830,11 @@ func (s *ReaderVNextService) ConfirmInbox(ctx context.Context, rawID string, exp
 	if expectedRevision >= 0 && item.MetadataRevision != expectedRevision {
 		return nil, mapReaderError(repository.ErrRevisionConflict)
 	}
-	var linkID uuid.UUID
-	if store, ok := s.store.(readerInboxConfirmationCASStore); ok && expectedRevision >= 0 {
-		linkID, err = store.ConfirmInboxCAS(ctx, id, expectedRevision)
-	} else {
-		linkID, err = s.store.ConfirmInbox(ctx, id)
+	var expected *int64
+	if expectedRevision >= 0 {
+		expected = &expectedRevision
 	}
+	linkID, err := s.store.ConfirmInbox(ctx, id, expected)
 	if err != nil {
 		return nil, mapReaderError(err)
 	}
@@ -950,12 +846,7 @@ func (s *ReaderVNextService) DiscardInbox(ctx context.Context, rawID string) err
 	if err != nil {
 		return err
 	}
-	if lifecycle, ok := s.store.(repository.ReaderHostLifecycleStore); ok {
-		_, err = lifecycle.SoftDeleteHost(ctx, model.ReaderHostInbox, id)
-		return mapReaderError(err)
-	}
-	_, err = s.store.UpdateInboxStatus(ctx, id, "discarded")
-	return mapReaderError(err)
+	return mapReaderError(s.store.DiscardInbox(ctx, id))
 }
 
 // RestoreInbox is an Inbox-specific lifecycle command because an expired live
@@ -1009,11 +900,7 @@ func (s *ReaderVNextService) RestoreHost(ctx context.Context, rawKind, rawID str
 	if err != nil {
 		return dto.ReaderHostLifecycleResponse{}, err
 	}
-	lifecycle, ok := s.store.(repository.ReaderHostLifecycleStore)
-	if !ok {
-		return dto.ReaderHostLifecycleResponse{}, errors.New("reader host lifecycle is not configured")
-	}
-	result, err := lifecycle.RestoreHost(ctx, kind, id)
+	result, err := s.store.RestoreHost(ctx, kind, id)
 	if err != nil {
 		return dto.ReaderHostLifecycleResponse{}, mapReaderError(err)
 	}
@@ -1033,11 +920,7 @@ func (s *ReaderVNextService) PurgeHost(ctx context.Context, rawKind, rawID strin
 	if err != nil {
 		return err
 	}
-	lifecycle, ok := s.store.(repository.ReaderHostLifecycleStore)
-	if !ok {
-		return errors.New("reader host lifecycle is not configured")
-	}
-	return mapReaderError(lifecycle.PurgeHost(ctx, kind, id, operationID))
+	return mapReaderError(s.store.PurgeHost(ctx, kind, id, operationID))
 }
 
 func (s *ReaderVNextService) ListTrash(ctx context.Context, rawKind, after string, limit int) (dto.ReaderTrashResponse, error) {
@@ -1049,11 +932,7 @@ func (s *ReaderVNextService) ListTrash(ctx context.Context, rawKind, after strin
 		}
 		kind = &parsed
 	}
-	lifecycle, ok := s.store.(repository.ReaderHostLifecycleStore)
-	if !ok {
-		return dto.ReaderTrashResponse{}, errors.New("reader host lifecycle is not configured")
-	}
-	items, count, next, err := lifecycle.ListTrash(ctx, kind, after, limit)
+	items, count, next, err := s.store.ListTrash(ctx, kind, after, limit)
 	if err != nil {
 		return dto.ReaderTrashResponse{}, mapReaderError(err)
 	}
@@ -1142,36 +1021,19 @@ func (s *ReaderVNextService) ConfirmInboxBulk(ctx context.Context, rawIDs []stri
 	return items, nil
 }
 
-// DiscardInboxBulk is the matching internal seam for batch discard. A
-// discarded item is safe to retry; a confirmed item is rejected so a bulk
+// DiscardInboxBulk is the matching internal seam for batch discard. A trashed
+// item is safe to retry; a confirmed item is rejected so a bulk
 // action cannot remove a saved link's source capture accidentally.
 func (s *ReaderVNextService) DiscardInboxBulk(ctx context.Context, rawIDs []string) ([]model.ReaderInboxBulkResult, error) {
 	ids, err := parseReaderInboxBulkIDs(rawIDs)
 	if err != nil {
 		return nil, err
 	}
-	items, err := s.store.BulkUpdateInboxStatus(ctx, ids, "discarded")
+	items, err := s.store.BulkDiscardInbox(ctx, ids)
 	if err != nil {
 		return nil, mapReaderError(err)
 	}
 	return items, nil
-}
-
-// RepairProjectedTodos rebuilds every host's TODO projection from the current
-// Thoughts and published Notes and reports how many blocks the sources emit.
-//
-// Thought and Note commands maintain the projection inside their own
-// transaction, so this is a drift repair, not part of any read. It stays an
-// explicit operator command and a test entry point on purpose: putting a
-// whole-installation rebuild back behind GET is exactly the cost this change
-// removed. Dismissed projections stay dismissed here too — the repair shares
-// the same tombstone rule as every other path.
-func (s *ReaderVNextService) RepairProjectedTodos(ctx context.Context) (int, error) {
-	projected, err := s.store.RepairTodoProjections(ctx)
-	if err != nil {
-		return 0, mapReaderError(err)
-	}
-	return projected, nil
 }
 
 func (s *ReaderVNextService) CreateTodo(ctx context.Context, request dto.ReaderTodoCreateRequest) (dto.ReaderTodoResponse, error) {
@@ -1334,227 +1196,18 @@ func readerFeedActionIdentityForKey(itemKey string) (readerFeedActionIdentity, e
 	return readerFeedActionIdentity{key: itemKey, kind: kind, source: source, id: id}, nil
 }
 
-func readerFeedSourceName(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "saved":
-		return "reading"
-	case "pending":
-		return "inbox"
-	case "feed":
-		return "subscription"
-	default:
-		return strings.ToLower(strings.TrimSpace(raw))
-	}
-}
-
-// normalizeReaderFeedItem repairs the representation of legacy snapshots and
-// lightweight service doubles before it reaches the DTO. The action key is
-// still the source-prefixed identity used by FeedbackFeed; subscription items
-// may additionally carry the linked saved-resource identity.
-// readerFeedSourceFromUnion infers the source of an item that carries no
-// source and no key, from whichever union member is populated.
-func readerFeedSourceFromUnion(item model.ReaderFeedItem) (string, error) {
-	switch {
-	case item.FeedItemID != nil:
-		return "subscription", nil
-	case item.InboxID != nil && item.LinkID == nil:
-		return "inbox", nil
-	case item.LinkID != nil && item.InboxID == nil:
-		return "reading", nil
-	default:
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "feed item must have one canonical union identity")
-	}
-}
-
-// resolveReaderFeedItemSource settles the source, preferring the declared one,
-// then the one implied by the action key, then the populated union member.
-func resolveReaderFeedItemSource(item model.ReaderFeedItem) (string, error) {
-	source := readerFeedSourceName(item.Source)
-	if source == "" {
-		if strings.TrimSpace(item.Key) != "" {
-			identity, identityErr := readerFeedActionIdentityForKey(item.Key)
-			if identityErr != nil {
-				return "", identityErr
-			}
-			source = identity.source
-		} else {
-			unionSource, unionErr := readerFeedSourceFromUnion(item)
-			if unionErr != nil {
-				return "", unionErr
-			}
-			source = unionSource
-		}
-	}
-	if source != "reading" && source != "inbox" && source != "subscription" {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "feed item has an unsupported source")
-	}
-	return source, nil
-}
-
-// seedReaderFeedItemKey derives the action key from the union member matching
-// the resolved source, for items that arrived without one.
-func seedReaderFeedItemKey(item model.ReaderFeedItem, source string) (model.ReaderFeedItem, error) {
-	if strings.TrimSpace(item.Key) != "" {
-		return item, nil
-	}
-	var id *uuid.UUID
-	switch source {
-	case "reading":
-		id = item.LinkID
-	case "inbox":
-		id = item.InboxID
-	case "subscription":
-		id = item.FeedItemID
-	}
-	if id == nil {
-		return model.ReaderFeedItem{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "feed item must have an action identity")
-	}
-	item.Key = map[string]string{
-		"reading":      "link:",
-		"inbox":        "inbox:",
-		"subscription": "subscription:",
-	}[source] + id.String()
-	return item, nil
-}
-
-// bindReaderFeedItemResource pins a union member to the action identity,
-// rejecting an item that already points somewhere else.
-func bindReaderFeedItemResource(current **uuid.UUID, id uuid.UUID) error {
-	if *current != nil && **current != id {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "feed item resource and action identity disagree")
-	}
-	if *current == nil {
-		bound := id
-		*current = &bound
-	}
-	return nil
-}
-
-// bindReaderFeedItemUnion enforces that exactly the union member belonging to
-// the source is populated, and that it agrees with the action identity.
-func bindReaderFeedItemUnion(item model.ReaderFeedItem, source string, id uuid.UUID) (model.ReaderFeedItem, error) {
-	switch source {
-	case "reading":
-		if item.InboxID != nil || item.FeedItemID != nil {
-			return model.ReaderFeedItem{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "reading item has an incompatible union identity")
-		}
-		if err := bindReaderFeedItemResource(&item.LinkID, id); err != nil {
-			return model.ReaderFeedItem{}, err
-		}
-	case "inbox":
-		if item.LinkID != nil || item.FeedItemID != nil {
-			return model.ReaderFeedItem{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "inbox item has an incompatible union identity")
-		}
-		if err := bindReaderFeedItemResource(&item.InboxID, id); err != nil {
-			return model.ReaderFeedItem{}, err
-		}
-	case "subscription":
-		if item.InboxID != nil {
-			return model.ReaderFeedItem{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "subscription item has an incompatible union identity")
-		}
-		if err := bindReaderFeedItemResource(&item.FeedItemID, id); err != nil {
-			return model.ReaderFeedItem{}, err
-		}
-	}
-	return item, nil
-}
-
-// fillReaderFeedItemDefaults derives the representation fields legacy
-// snapshots and service doubles never stored.
-func fillReaderFeedItemDefaults(item model.ReaderFeedItem, source string) model.ReaderFeedItem {
-	item.ActionKey = item.Key
-	if strings.TrimSpace(item.ResourceKey) == "" {
-		item.ResourceKey = item.ResourceIdentity()
-	}
-	if strings.TrimSpace(item.DedupeKey) == "" {
-		item.DedupeKey = item.DedupeIdentity()
-	}
-	if strings.TrimSpace(item.SectionID) == "" {
-		item.SectionID = source
-	}
-	if item.Actions == nil {
-		item.Actions = item.ActionCapabilities()
-	}
-	return item
-}
-
-func normalizeReaderFeedItem(item model.ReaderFeedItem) (model.ReaderFeedItem, error) {
-	if strings.TrimSpace(item.Key) == "" && strings.TrimSpace(item.ActionKey) != "" {
-		item.Key = strings.TrimSpace(item.ActionKey)
-	}
-	source, err := resolveReaderFeedItemSource(item)
-	if err != nil {
-		return model.ReaderFeedItem{}, err
-	}
-	item, err = seedReaderFeedItemKey(item, source)
-	if err != nil {
-		return model.ReaderFeedItem{}, err
-	}
-	identity, err := readerFeedActionIdentityForKey(item.Key)
-	if err != nil {
-		return model.ReaderFeedItem{}, err
-	}
-	if identity.source != source {
-		return model.ReaderFeedItem{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "feed item source and action identity disagree")
-	}
-	item.Key = identity.key
-	item.Source = source
-	if strings.TrimSpace(item.ActionKey) != "" && strings.TrimSpace(item.ActionKey) != item.Key {
-		return model.ReaderFeedItem{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "feed item action identity disagrees with key")
-	}
-	item, err = bindReaderFeedItemUnion(item, source, identity.id)
-	if err != nil {
-		return model.ReaderFeedItem{}, err
-	}
-	return fillReaderFeedItemDefaults(item, source), nil
-}
-
 func feedItemResponse(item model.ReaderFeedItem) dto.ReaderFeedItemResponse {
-	actions := item.ActionCapabilities()
-	if actions == nil {
-		actions = []string{}
-	}
-	enabledScoreSignals := make([]string, 0, len(item.EnabledScoreSignals))
-	for _, signal := range item.EnabledScoreSignals {
-		enabledScoreSignals = append(enabledScoreSignals, string(signal))
-	}
 	out := dto.ReaderFeedItemResponse{
 		Key:         item.Key,
 		Source:      item.Source,
-		ItemType:    item.Source,
 		ResourceKey: item.ResourceIdentity(),
-		ActionKey:   item.ActionIdentity(),
-		DedupeKey:   item.DedupeIdentity(),
-		SectionID:   item.SectionIdentity(),
-		Actions:     actions,
 		Title:       item.Title,
 		Summary:     item.Summary,
 		URL:         item.URL,
 		Read:        item.Read,
 		ReadLater:   item.ReadLater,
 		Saved:       item.Saved,
-		Score:       item.Score,
-		ScoreContributions: dto.ReaderFeedScoreContributions{
-			PendingConfirmation:   item.ScoreContributions.PendingConfirmation,
-			SavedLibrary:          item.ScoreContributions.SavedLibrary,
-			SubscriptionRecent:    item.ScoreContributions.SubscriptionRecent,
-			Unread:                item.ScoreContributions.Unread,
-			ReadLater:             item.ScoreContributions.ReadLater,
-			ChronologicalFallback: item.ScoreContributions.ChronologicalFallback,
-		},
-		EnabledScoreSignals: enabledScoreSignals,
-		ReasonCode:          string(item.ReasonCode),
-		ReasonParams: dto.ReaderFeedReasonParams{
-			Source:    item.ReasonParams.Source,
-			Read:      item.ReasonParams.Read,
-			ReadLater: item.ReasonParams.ReadLater,
-			CreatedAt: item.ReasonParams.CreatedAt,
-		},
-		ReasonContribution: item.ReasonContribution,
-		ReasonText:         item.ReasonText,
-		PublishedAt:        item.PublishedAt,
-		EventAt:            item.VisibleEventAt(),
-		CreatedAt:          item.CreatedAt,
+		EventAt:     item.VisibleEventAt(),
 	}
 	if item.LinkID != nil {
 		value := item.LinkID.String()
@@ -1571,97 +1224,9 @@ func feedItemResponse(item model.ReaderFeedItem) dto.ReaderFeedItemResponse {
 	return out
 }
 
-var readerFeedSourceOrder = []string{"inbox", "reading", "subscription"}
-
-func readerFeedSourceLabel(source string) string {
-	switch source {
-	case "inbox":
-		return "收件箱"
-	case "reading":
-		return "收藏"
-	case "subscription":
-		return "订阅"
-	default:
-		return source
-	}
-}
-
-func readerFeedSourceEnabled(sources []string, source string) bool {
-	if len(sources) == 0 {
-		return true
-	}
-	for _, candidate := range sources {
-		if candidate == source {
-			return true
-		}
-	}
-	return false
-}
-
-func readerFeedAppendCapability(values []string, value string) []string {
-	for _, current := range values {
-		if current == value {
-			return values
-		}
-	}
-	return append(values, value)
-}
-
-func cloneReaderFeedStrings(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	return append(make([]string, 0, len(values)), values...)
-}
-
-func readerFeedDerivedMetadata(items []model.ReaderFeedItem, sources []string) ([]string, []dto.ReaderFeedSectionResponse, []dto.ReaderFeedSourceResponse) {
-	counts := make(map[string]int, len(readerFeedSourceOrder))
-	actions := make(map[string][]string, len(readerFeedSourceOrder))
-	for _, source := range readerFeedSourceOrder {
-		counts[source] = 0
-		actions[source] = []string{}
-	}
-	for _, item := range items {
-		if _, ok := counts[item.Source]; !ok {
-			continue
-		}
-		counts[item.Source]++
-		for _, action := range item.ActionCapabilities() {
-			actions[item.Source] = readerFeedAppendCapability(actions[item.Source], action)
-		}
-	}
-	capabilities := []string{"snapshot", "cursor", "dedupe", "reason", "source_filter"}
-	sections := make([]dto.ReaderFeedSectionResponse, 0, len(readerFeedSourceOrder))
-	sourceMeta := make([]dto.ReaderFeedSourceResponse, 0, len(readerFeedSourceOrder))
-	for _, source := range readerFeedSourceOrder {
-		if !readerFeedSourceEnabled(sources, source) {
-			continue
-		}
-		if source == "inbox" {
-			capabilities = readerFeedAppendCapability(capabilities, "inbox_batch")
-		}
-		if counts[source] == 0 {
-			actions[source] = model.ReaderFeedItem{Source: source}.ActionCapabilities()
-		}
-		if len(actions[source]) > 0 {
-			capabilities = readerFeedAppendCapability(capabilities, "actions")
-		}
-		sectionActions := cloneReaderFeedStrings(actions[source])
-		sections = append(sections, dto.ReaderFeedSectionResponse{ID: source, Source: source, Label: readerFeedSourceLabel(source), Count: counts[source], Capabilities: sectionActions})
-		sourceMeta = append(sourceMeta, dto.ReaderFeedSourceResponse{ID: source, Label: readerFeedSourceLabel(source), Enabled: true, Count: counts[source], Capabilities: cloneReaderFeedStrings(sectionActions)})
-	}
-	return capabilities, sections, sourceMeta
-}
-
-func (s *ReaderVNextService) Feed(ctx context.Context, mode, snapshotID, after string, limit int) (dto.ReaderFeedResponse, error) {
-	return s.FeedWithSources(ctx, mode, snapshotID, after, nil, limit)
-}
-
-// FeedWithSources lists one immutable mixed-feed snapshot. The source filter
-// is part of snapshot identity: callers must send the same filter while
-// refreshing or advancing a cursor, otherwise the repository rejects the
-// request instead of silently mixing two orderings.
-func (s *ReaderVNextService) FeedWithSources(ctx context.Context, mode, snapshotID, after string, sources []string, limit int) (dto.ReaderFeedResponse, error) {
+// FeedWithSources returns one live mixed-feed page. The cursor carries its mode
+// and source filter, so changing either parameter while paging is rejected.
+func (s *ReaderVNextService) FeedWithSources(ctx context.Context, mode, after string, sources []string, limit int) (dto.ReaderFeedResponse, error) {
 	mode = strings.TrimSpace(mode)
 	if err := validateReaderFeedRequestMode(mode); err != nil {
 		return dto.ReaderFeedResponse{}, err
@@ -1670,116 +1235,39 @@ func (s *ReaderVNextService) FeedWithSources(ctx context.Context, mode, snapshot
 	if err != nil {
 		return dto.ReaderFeedResponse{}, err
 	}
-	page, err := s.listReaderFeedPage(ctx, mode, snapshotID, after, normalizedSources, limit)
+	page, err := s.store.ListFeedWithSources(ctx, mode, after, normalizedSources, limit)
 	if err != nil {
-		return dto.ReaderFeedResponse{}, err
-	}
-	responseMode, err := resolveReaderFeedResponseMode(page.Mode, mode)
-	if err != nil {
-		return dto.ReaderFeedResponse{}, err
-	}
-	out := dto.ReaderFeedResponse{Items: make([]dto.ReaderFeedItemResponse, 0, len(page.Items)), NextCursor: page.NextCursor, SnapshotID: page.SnapshotID, Mode: responseMode}
-	normalizedItems := make([]model.ReaderFeedItem, 0, len(page.Items))
-	for _, item := range page.Items {
-		normalized, normalizeErr := normalizeReaderFeedItem(item)
-		if normalizeErr != nil {
-			return dto.ReaderFeedResponse{}, normalizeErr
-		}
-		normalizedItems = append(normalizedItems, normalized)
-		out.Items = append(out.Items, feedItemResponse(normalized))
-	}
-	derivedCapabilities, derivedSections, derivedSources := readerFeedDerivedMetadata(normalizedItems, normalizedSources)
-	out.Capabilities = readerFeedCapabilitiesResponse(page.Capabilities, derivedCapabilities)
-	out.Sections = readerFeedSectionsResponse(page.Sections, derivedSections)
-	out.Sources = readerFeedSourcesResponse(page.Sources, derivedSources)
-	return out, nil
-}
-
-// validateReaderFeedRequestMode guards the caller-supplied mode. An empty mode
-// stays legal here because the store, not the caller, picks the default.
-func validateReaderFeedRequestMode(mode string) error {
-	if mode != "" && mode != "recommended" && mode != "chronological" {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_mode", "unsupported feed mode")
-	}
-	return nil
-}
-
-// listReaderFeedPage picks the store call matching the source filter and
-// guarantees a non-nil page to the caller: a store that answers with neither a
-// page nor an error is a server fault, not an empty feed.
-func (s *ReaderVNextService) listReaderFeedPage(ctx context.Context, mode, snapshotID, after string, normalizedSources []string, limit int) (*model.ReaderFeedPage, error) {
-	var page *model.ReaderFeedPage
-	var err error
-	if len(normalizedSources) == 0 {
-		page, err = s.store.ListFeed(ctx, mode, snapshotID, after, limit)
-	} else {
-		filteredStore, ok := s.store.(readerFeedSourceStore)
-		if !ok {
-			return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "feed_source_filter_unavailable", "feed source filtering is unavailable")
-		}
-		page, err = filteredStore.ListFeedWithSources(ctx, mode, snapshotID, after, normalizedSources, limit)
-	}
-	if err != nil {
-		return nil, mapReaderError(err)
+		return dto.ReaderFeedResponse{}, mapReaderError(err)
 	}
 	if page == nil {
-		return nil, httperr.NewWithCode(http.StatusInternalServerError, "reader_feed_unavailable", "reader feed returned no page")
+		return dto.ReaderFeedResponse{}, httperr.NewWithCode(http.StatusInternalServerError, "reader_feed_unavailable", "reader feed returned no page")
 	}
-	return page, nil
-}
-
-// resolveReaderFeedResponseMode reports the mode the snapshot was actually built
-// with, falling back to the request mode and then to "recommended". The result
-// is always a concrete mode, so clients can echo it back on the next page.
-func resolveReaderFeedResponseMode(pageMode, requestMode string) (string, error) {
-	responseMode := strings.TrimSpace(pageMode)
+	responseMode := strings.TrimSpace(page.Mode)
 	if responseMode == "" {
-		responseMode = requestMode
+		responseMode = mode
 		if responseMode == "" {
 			responseMode = "recommended"
 		}
 	}
 	if responseMode != "recommended" && responseMode != "chronological" {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_mode", "unsupported feed mode")
+		return dto.ReaderFeedResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_mode", "unsupported feed mode")
 	}
-	return responseMode, nil
+	out := dto.ReaderFeedResponse{
+		Items:      make([]dto.ReaderFeedItemResponse, 0, len(page.Items)),
+		NextCursor: page.NextCursor,
+		Mode:       responseMode,
+	}
+	for _, item := range page.Items {
+		out.Items = append(out.Items, feedItemResponse(item))
+	}
+	return out, nil
 }
 
-// readerFeedCapabilitiesResponse prefers what the store declared and falls back
-// to the derived set only when the store stayed silent. An explicitly empty
-// (non-nil) store value is an answer, not a gap.
-func readerFeedCapabilitiesResponse(pageCapabilities, derived []string) []string {
-	if pageCapabilities == nil {
-		return derived
+func validateReaderFeedRequestMode(mode string) error {
+	if mode != "" && mode != "recommended" && mode != "chronological" {
+		return httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_mode", "unsupported feed mode")
 	}
-	return cloneReaderFeedStrings(pageCapabilities)
-}
-
-// readerFeedSectionsResponse mirrors readerFeedCapabilitiesResponse for sections
-// and copies every capability slice so the response never aliases store memory.
-func readerFeedSectionsResponse(pageSections []model.ReaderFeedSection, derived []dto.ReaderFeedSectionResponse) []dto.ReaderFeedSectionResponse {
-	if pageSections == nil {
-		return derived
-	}
-	out := make([]dto.ReaderFeedSectionResponse, 0, len(pageSections))
-	for _, section := range pageSections {
-		out = append(out, dto.ReaderFeedSectionResponse{ID: section.ID, Source: section.Source, Label: section.Label, Count: section.Count, Capabilities: cloneReaderFeedStrings(section.Capabilities)})
-	}
-	return out
-}
-
-// readerFeedSourcesResponse mirrors readerFeedCapabilitiesResponse for the
-// source list and copies every capability slice so the response never aliases
-// store memory.
-func readerFeedSourcesResponse(pageSources []model.ReaderFeedSource, derived []dto.ReaderFeedSourceResponse) []dto.ReaderFeedSourceResponse {
-	if pageSources == nil {
-		return derived
-	}
-	out := make([]dto.ReaderFeedSourceResponse, 0, len(pageSources))
-	for _, source := range pageSources {
-		out = append(out, dto.ReaderFeedSourceResponse{ID: source.ID, Label: source.Label, Enabled: source.Enabled, Count: source.Count, Capabilities: cloneReaderFeedStrings(source.Capabilities)})
-	}
-	return out
+	return nil
 }
 
 func normalizeReaderFeedSources(raw []string) ([]string, error) {
@@ -1821,19 +1309,20 @@ func (s *ReaderVNextService) FeedbackFeed(ctx context.Context, itemKey, action s
 	if err != nil {
 		return dto.ReaderFeedFeedbackResponse{}, err
 	}
-	if action != "not_interested" && action != "hide" && action != "save" && action != "unsave" {
+	if action != "hide" && action != "save" && action != "unsave" {
 		return dto.ReaderFeedFeedbackResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_action", "unsupported feed action")
 	}
-	if identity.source == "inbox" && (action == "save" || action == "unsave") {
-		return dto.ReaderFeedFeedbackResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "the requested action is unavailable for inbox items")
+	if identity.source != "subscription" && (action == "save" || action == "unsave") {
+		return dto.ReaderFeedFeedbackResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_item", "only subscription items can be saved")
 	}
 	feedback, err := s.store.FeedbackFeed(ctx, identity.key, action)
 	if err = mapReaderError(err); err != nil {
 		return dto.ReaderFeedFeedbackResponse{}, err
 	}
-	response := dto.ReaderFeedFeedbackResponse{ItemKey: feedback.ItemKey, Action: feedback.Action, Saved: feedback.Saved}
-	if feedback.Association != nil {
-		response.Association = &dto.ReaderFeedSaveAssociationResponse{FeedItemID: feedback.Association.FeedItemID.String(), LinkID: feedback.Association.LinkID.String(), CreatedLink: feedback.Association.CreatedLink}
+	response := dto.ReaderFeedFeedbackResponse{ItemKey: feedback.ItemKey, Action: feedback.Action}
+	if feedback.LinkID != nil {
+		linkID := feedback.LinkID.String()
+		response.LinkID = &linkID
 	}
 	return response, nil
 }
@@ -1851,11 +1340,11 @@ func (s *ReaderVNextService) RelatedTags(ctx context.Context, rawLinkID string, 
 		}
 		linkID = &id
 	}
-	items, modelName, degraded, err := s.store.RelatedTags(ctx, linkID, limit)
+	items, err := s.store.RelatedTags(ctx, linkID, limit)
 	if err != nil {
 		return dto.ReaderRelatedTagsResponse{}, mapReaderError(err)
 	}
-	return dto.ReaderRelatedTagsResponse{Items: items, Model: modelName, Degraded: degraded}, nil
+	return dto.ReaderRelatedTagsResponse{Items: items}, nil
 }
 
 func (s *ReaderVNextService) Activity(ctx context.Context, rawKind, rawAfter string, limit int) (dto.ReaderActivityResponse, error) {
@@ -1865,9 +1354,6 @@ func (s *ReaderVNextService) Activity(ctx context.Context, rawKind, rawAfter str
 	}
 	after, err := s.decodeReaderActivityCursor(ctx, kind, rawAfter)
 	if err != nil {
-		return dto.ReaderActivityResponse{}, mapReaderError(err)
-	}
-	if err := s.refreshActivityIfDue(ctx); err != nil {
 		return dto.ReaderActivityResponse{}, mapReaderError(err)
 	}
 	if limit <= 0 || limit > 100 {
@@ -1900,30 +1386,6 @@ func (s *ReaderVNextService) Activity(ctx context.Context, rawKind, rawAfter str
 	}
 	return out, nil
 }
-
-const readerActivityRefreshInterval = 30 * time.Second
-
-func (s *ReaderVNextService) refreshActivityIfDue(ctx context.Context) error {
-	now := s.now()
-	s.activityMu.Lock()
-	if !s.activityLast.IsZero() && now.Sub(s.activityLast) < readerActivityRefreshInterval {
-		s.activityMu.Unlock()
-		return nil
-	}
-	s.activityLast = now
-	s.activityMu.Unlock()
-
-	if err := s.store.RefreshActivity(ctx); err != nil {
-		s.activityMu.Lock()
-		if s.activityLast.Equal(now) {
-			s.activityLast = time.Time{}
-		}
-		s.activityMu.Unlock()
-		return err
-	}
-	return nil
-}
-
 func (s *ReaderVNextService) PatchLinkMetadata(ctx context.Context, rawID string, request dto.ReaderLinkMetadataRequest, expected int64) (dto.ReaderLinkMetadataResponse, error) {
 	id, err := readerUUID(rawID, "link_id")
 	if err != nil {
@@ -1944,9 +1406,6 @@ func (s *ReaderVNextService) PatchLinkMetadata(ctx context.Context, rawID string
 	}
 	if update.MetadataRevision < 1 || update.MetadataRevision > model.LinkMetadataMaxRevision {
 		return dto.ReaderLinkMetadataResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeMetadataRevisionConflict, "link metadata revision is outside the JavaScript-safe range")
-	}
-	if update.TagsChanged && s.metadataCache != nil {
-		s.metadataCache.Invalidate(ctx)
 	}
 	return dto.ReaderLinkMetadataResponse{LinkID: id.String(), MetadataRevision: update.MetadataRevision}, nil
 }
@@ -1992,34 +1451,6 @@ func validateLinkMetadataRequest(request *dto.ReaderLinkMetadataRequest) error {
 	}
 	request.Tags = tags
 	return nil
-}
-
-func (s *ReaderVNextService) ListContentHistory(ctx context.Context, rawID string, limit int) ([]dto.ReaderContentHistoryResponse, error) {
-	id, err := readerUUID(rawID, "link_id")
-	if err != nil {
-		return nil, err
-	}
-	items, err := s.store.ListContentHistory(ctx, id, limit)
-	if err != nil {
-		return nil, mapReaderError(err)
-	}
-	out := make([]dto.ReaderContentHistoryResponse, 0, len(items))
-	for _, item := range items {
-		out = append(out, dto.ReaderContentHistoryResponse{ID: item.ID, Revision: item.Revision, Content: item.Content, ContentDocument: item.ContentDocument, ContentFormat: item.ContentFormat, ContentSource: item.ContentSource, CreatedAt: item.CreatedAt})
-	}
-	return out, nil
-}
-
-func (s *ReaderVNextService) RestoreContentHistory(ctx context.Context, rawID string, historyID, expectedRevision int64) (dto.ReaderContentHistoryRestoreResponse, error) {
-	id, err := readerUUID(rawID, "link_id")
-	if err != nil {
-		return dto.ReaderContentHistoryRestoreResponse{}, err
-	}
-	revision, err := s.store.RestoreContentHistory(ctx, id, historyID, expectedRevision)
-	if err != nil {
-		return dto.ReaderContentHistoryRestoreResponse{}, mapReaderError(err)
-	}
-	return dto.ReaderContentHistoryRestoreResponse{LinkID: id.String(), ContentRevision: revision}, nil
 }
 
 // validateReaderAIRequest normalises and bounds the request before any saved
@@ -2099,9 +1530,6 @@ func (s *ReaderVNextService) CompleteAI(ctx context.Context, request dto.ReaderA
 	if s.ai == nil {
 		return dto.ReaderAIResponse{Enabled: false}, nil
 	}
-	if capability, ok := s.ai.(readerAICapability); ok && !capability.Available() {
-		return dto.ReaderAIResponse{Enabled: false}, nil
-	}
 	prompt, err = s.composeReaderAIPrompt(ctx, request, prompt, selected)
 	if err != nil {
 		return dto.ReaderAIResponse{}, err
@@ -2157,48 +1585,4 @@ func minReaderRunes(value string, maximum int) int {
 		return maximum
 	}
 	return count
-}
-
-func categoryResponse(item model.ReaderCategory) dto.ReaderCategoryResponse {
-	return dto.ReaderCategoryResponse{ID: item.ID.String(), Name: item.Name, Count: item.Count, CreatedAt: item.CreatedAt}
-}
-
-func (s *ReaderVNextService) ListCategories(ctx context.Context) (dto.ReaderCategoriesResponse, error) {
-	items, err := s.store.ListCategories(ctx)
-	if err != nil {
-		return dto.ReaderCategoriesResponse{}, mapReaderError(err)
-	}
-	out := dto.ReaderCategoriesResponse{Items: make([]dto.ReaderCategoryResponse, 0, len(items))}
-	for _, item := range items {
-		out.Items = append(out.Items, categoryResponse(item))
-	}
-	return out, nil
-}
-
-func (s *ReaderVNextService) CreateCategory(ctx context.Context, request dto.ReaderCategoryRequest) (dto.ReaderCategoryResponse, error) {
-	name := strings.TrimSpace(request.Name)
-	if name == "" {
-		return dto.ReaderCategoryResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "category_name_required", "category name is required")
-	}
-	item, err := s.store.CreateCategory(ctx, name)
-	if err != nil {
-		return dto.ReaderCategoryResponse{}, mapReaderError(err)
-	}
-	return categoryResponse(*item), nil
-}
-
-func (s *ReaderVNextService) DeleteCategory(ctx context.Context, rawID string) error {
-	id, err := readerUUID(rawID, "category_id")
-	if err != nil {
-		return err
-	}
-	return mapReaderError(s.store.DeleteCategory(ctx, id))
-}
-
-func (s *ReaderVNextService) SetCategoryMembership(ctx context.Context, rawID string, request dto.ReaderCategoryMembershipRequest) error {
-	id, err := readerUUID(rawID, "category_id")
-	if err != nil {
-		return err
-	}
-	return mapReaderError(s.store.SetCategoryMembership(ctx, id, strings.TrimSpace(request.HostKind), strings.TrimSpace(request.HostID), request.Present))
 }

@@ -11,8 +11,8 @@ import (
 	"webtag/internal/repository"
 )
 
-// LinkStoreCall is a single observed method invocation. Method names match
-// the LinkStore interface; Args are the call's input arguments in order
+// LinkStoreCall is a single observed link repository invocation. Args are the
+// call's input arguments in order
 // (excluding the context). Tests can ask "how many times was Method X
 // called" through CountCalls, or pull the raw log via Calls() when they
 // need ordering across methods.
@@ -22,31 +22,21 @@ type LinkStoreCall struct {
 }
 
 type ParseStateCall struct {
-	LinkID       uuid.UUID
-	JobID        uuid.UUID
+	Attempt      model.ParseAttempt
 	ErrorMessage string
 }
 
-type CompleteParseCall struct {
-	Analysis repository.UpdateLinkAnalysisParams
-	JobID    uuid.UUID
-}
-
-// CompleteReadingParseCall records one terminal reading write. Unlike
-// CompleteParseCall it carries the classification params, because that is
-// exactly what separates the reading transaction from the legacy one.
+// CompleteReadingParseCall records one terminal reading write.
 type CompleteReadingParseCall struct {
 	Params repository.CompleteReadingParseParams
-	JobID  uuid.UUID
 }
 
 // CompleteSiteParseCall records one terminal site write.
 type CompleteSiteParseCall struct {
 	Params repository.CompleteSiteParseParams
-	JobID  uuid.UUID
 }
 
-// ObservableLinkStore is a fakeable LinkStore that records every call
+// ObservableLinkStore is a fakeable link repository that records every call
 // into a structured log and routes behavior through optional per-method
 // hooks. It replaces ad-hoc spy fakes with a single shared primitive:
 //
@@ -96,7 +86,6 @@ type ObservableLinkStore struct {
 	UpdateAnalysisCalls []repository.UpdateLinkAnalysisParams
 	MarkProcessingCalls []ParseStateCall
 	MarkFailedCalls     []ParseStateCall
-	CompleteParseCalls  []CompleteParseCall
 	DeleteCalls         []uuid.UUID
 
 	// Terminal completion records. Production wires one repository object as
@@ -122,17 +111,16 @@ type ObservableLinkStore struct {
 	ListDoneFunc            func(context.Context, repository.ListLinksFilter) ([]model.Link, int, error)
 	UpdateStateFunc         func(context.Context, repository.UpdateLinkStateParams) error
 	UpdateAnalysisFunc      func(context.Context, repository.UpdateLinkAnalysisParams) error
-	MarkParseProcessingFunc func(context.Context, uuid.UUID, uuid.UUID) error
-	MarkParseFailedFunc     func(context.Context, uuid.UUID, uuid.UUID, string) error
-	CompleteParseFunc       func(context.Context, repository.UpdateLinkAnalysisParams, uuid.UUID) error
+	MarkParseProcessingFunc func(context.Context, model.ParseAttempt) error
+	MarkParseFailedFunc     func(context.Context, model.ParseAttempt, string) error
 	DeleteFunc              func(context.Context, uuid.UUID) error
 
 	// CompleteReadingParseFunc / CompleteSiteParseFunc default to "record and
 	// succeed" rather than panicking: every parse run ends in one of them, so
 	// requiring each test to restate the hook would be pure noise. Tests that
 	// care assert on the *Calls slices or override the hook.
-	CompleteReadingParseFunc func(context.Context, repository.CompleteReadingParseParams, uuid.UUID) (repository.CompleteReadingParseResult, error)
-	CompleteSiteParseFunc    func(context.Context, repository.CompleteSiteParseParams, uuid.UUID) (repository.SiteAggregateResult, error)
+	CompleteReadingParseFunc func(context.Context, repository.CompleteReadingParseParams) (repository.CompleteReadingParseResult, error)
+	CompleteSiteParseFunc    func(context.Context, repository.CompleteSiteParseParams) (repository.SiteAggregateResult, error)
 }
 
 // Calls returns a snapshot of every method invocation observed so far.
@@ -326,12 +314,7 @@ func detailProjection(link *model.Link) repository.LinkDetailProjection {
 		FetcherType: link.FetcherType, IsLowConfidence: link.IsLowConfidence,
 		LowConfidenceReason: link.LowConfidenceReason, Status: link.Status, ErrorMsg: link.ErrorMsg,
 		Description: link.Description, Domain: link.Domain, ContentType: link.ContentType,
-		LibraryKind: link.LibraryKind, LibraryKindSource: link.LibraryKindSource,
-		LibraryKindLocked: link.LibraryKindLocked, PredictedLibraryKind: link.PredictedLibraryKind,
-		ClassificationConfidence:  link.ClassificationConfidence,
-		ClassificationReason:      link.ClassificationReason,
-		ClassificationExplanation: link.ClassificationExplanation,
-		ClassifierVersion:         link.ClassifierVersion, ContentRevision: link.ContentRevision,
+		LibraryKind: link.LibraryKind, ContentRevision: link.ContentRevision,
 		ContentSource: link.ContentSource, HasContent: link.HasContent,
 		ContentCJKChars: link.ContentCJKChars, ContentWords: link.ContentWords,
 		PathDepth: link.PathDepth, ParentPath: link.ParentPath, ParentID: link.ParentID,
@@ -345,27 +328,31 @@ func parseInputProjection(link *model.Link) repository.LinkParseInput {
 		InputTitle: link.InputTitle, InputText: link.InputText, InputHTML: link.InputHTML,
 		InputImages: link.InputImages, SourceMetadata: link.SourceMetadata,
 		Description: link.Description, Status: link.Status,
-		RequestedLibraryKind:       link.RequestedLibraryKind,
-		RequestedLibraryKindSource: link.RequestedLibraryKindSource,
-		LibraryKind:                link.LibraryKind,
-		LibraryKindLocked:          link.LibraryKindLocked, ContentRevision: link.ContentRevision,
-		UpdatedAt: link.UpdatedAt,
+		LibraryKind:       link.LibraryKind,
+		LibraryKindLocked: link.LibraryKindLocked,
+		ContentRevision:   link.ContentRevision,
+		MetadataRevision:  link.MetadataRevision,
+		ParseGeneration:   link.ParseGeneration,
+		UpdatedAt:         link.UpdatedAt,
 	}
 }
 
 func lifecycleProjection(link *model.Link) repository.LinkLifecycleProjection {
 	return repository.LinkLifecycleProjection{
 		ID: link.ID, URL: link.URL, Status: link.Status, LibraryKind: link.LibraryKind,
-		LibraryKindSource: link.LibraryKindSource, LibraryKindLocked: link.LibraryKindLocked,
-		ClassificationReason: link.ClassificationReason, ContentRevision: link.ContentRevision,
+		LibraryKindLocked: link.LibraryKindLocked, ContentRevision: link.ContentRevision,
 		HasContent: link.HasContent,
 	}
 }
 
 func submitLookupProjection(link *model.Link) repository.LinkSubmitLookup {
+	requestedAt := link.FirstCollectedAt
+	if link.LastRecollectedAt != nil {
+		requestedAt = *link.LastRecollectedAt
+	}
 	return repository.LinkSubmitLookup{
 		ID: link.ID, URL: link.URL, SourceKey: link.SourceKey, Status: link.Status,
-		LibraryKind: link.LibraryKind,
+		LibraryKind: link.LibraryKind, LibraryKindLocked: link.LibraryKindLocked, ParseRequestedAt: requestedAt,
 	}
 }
 
@@ -418,41 +405,28 @@ func (o *ObservableLinkStore) UpdateAnalysis(ctx context.Context, params reposit
 	return o.BaseLinkStore.UpdateAnalysis(ctx, params)
 }
 
-func (o *ObservableLinkStore) MarkParseProcessing(ctx context.Context, linkID, jobID uuid.UUID) error {
+func (o *ObservableLinkStore) MarkParseProcessing(ctx context.Context, attempt model.ParseAttempt) error {
 	o.mu.Lock()
-	o.record("MarkParseProcessing", linkID, jobID)
-	o.MarkProcessingCalls = append(o.MarkProcessingCalls, ParseStateCall{LinkID: linkID, JobID: jobID})
+	o.record("MarkParseProcessing", attempt)
+	o.MarkProcessingCalls = append(o.MarkProcessingCalls, ParseStateCall{Attempt: attempt})
 	hook := o.MarkParseProcessingFunc
 	o.mu.Unlock()
 	if hook != nil {
-		return hook(ctx, linkID, jobID)
+		return hook(ctx, attempt)
 	}
-	return o.BaseLinkStore.MarkParseProcessing(ctx, linkID, jobID)
+	return o.BaseLinkStore.MarkParseProcessing(ctx, attempt)
 }
 
-func (o *ObservableLinkStore) MarkParseFailed(ctx context.Context, linkID, jobID uuid.UUID, message string) error {
+func (o *ObservableLinkStore) MarkParseFailed(ctx context.Context, attempt model.ParseAttempt, message string) error {
 	o.mu.Lock()
-	o.record("MarkParseFailed", linkID, jobID, message)
-	o.MarkFailedCalls = append(o.MarkFailedCalls, ParseStateCall{LinkID: linkID, JobID: jobID, ErrorMessage: message})
+	o.record("MarkParseFailed", attempt, message)
+	o.MarkFailedCalls = append(o.MarkFailedCalls, ParseStateCall{Attempt: attempt, ErrorMessage: message})
 	hook := o.MarkParseFailedFunc
 	o.mu.Unlock()
 	if hook != nil {
-		return hook(ctx, linkID, jobID, message)
+		return hook(ctx, attempt, message)
 	}
-	return o.BaseLinkStore.MarkParseFailed(ctx, linkID, jobID, message)
-}
-
-func (o *ObservableLinkStore) CompleteParse(ctx context.Context, params repository.UpdateLinkAnalysisParams, jobID uuid.UUID) error {
-	o.mu.Lock()
-	o.record("CompleteParse", params, jobID)
-	o.UpdateAnalysisCalls = append(o.UpdateAnalysisCalls, params)
-	o.CompleteParseCalls = append(o.CompleteParseCalls, CompleteParseCall{Analysis: params, JobID: jobID})
-	hook := o.CompleteParseFunc
-	o.mu.Unlock()
-	if hook != nil {
-		return hook(ctx, params, jobID)
-	}
-	return o.BaseLinkStore.CompleteParse(ctx, params, jobID)
+	return o.BaseLinkStore.MarkParseFailed(ctx, attempt, message)
 }
 
 // CompleteReadingParse 记录终态 reading 写入。未设置 hook 时默认成功——
@@ -462,7 +436,7 @@ func (o *ObservableLinkStore) CompleteParse(ctx context.Context, params reposito
 // 的前置校验（Kind 必须是 reading、分类与分析必须指向同一 link）。fake 一旦比生产
 // 宽松，生产会拒绝的参数在测试里就悄悄通过——曾有一次归属为空字符串的回归正是
 // 这样对整套测试隐形的。
-func (o *ObservableLinkStore) CompleteReadingParse(ctx context.Context, params repository.CompleteReadingParseParams, jobID uuid.UUID) (repository.CompleteReadingParseResult, error) {
+func (o *ObservableLinkStore) CompleteReadingParse(ctx context.Context, params repository.CompleteReadingParseParams) (repository.CompleteReadingParseResult, error) {
 	// 校验先于记录：生产在守卫失败时整个事务回滚，不写任何行。若先记录再校验，
 	// 断言 len(CompleteReadingParseCalls)==1 的测试对「参数非法、生产会拒绝」
 	// 的场景仍会通过——守卫挡住了返回值，却没挡住观测记录。
@@ -471,9 +445,9 @@ func (o *ObservableLinkStore) CompleteReadingParse(ctx context.Context, params r
 	}
 
 	o.mu.Lock()
-	o.record("CompleteReadingParse", params, jobID)
+	o.record("CompleteReadingParse", params)
 	o.UpdateAnalysisCalls = append(o.UpdateAnalysisCalls, params.Analysis)
-	o.CompleteReadingParseCalls = append(o.CompleteReadingParseCalls, CompleteReadingParseCall{Params: params, JobID: jobID})
+	o.CompleteReadingParseCalls = append(o.CompleteReadingParseCalls, CompleteReadingParseCall{Params: params})
 	hook := o.CompleteReadingParseFunc
 	storedMetadataRevision := int64(0)
 	if link := o.ByID[params.Analysis.ID]; link != nil {
@@ -481,75 +455,50 @@ func (o *ObservableLinkStore) CompleteReadingParse(ctx context.Context, params r
 	}
 	o.mu.Unlock()
 	if hook != nil {
-		return hook(ctx, params, jobID)
+		return hook(ctx, params)
 	}
 	revision := params.Analysis.ExpectedMetadataRevision
 	if revision <= 0 {
 		// A pre-rollout job is still permitted to complete its lifecycle, but
 		// it owns no user-facing metadata. Mirror the parser fence rather than
-		// letting a zero fixture accidentally exercise embeddings or concepts.
+		// letting a zero fixture accidentally overwrite current metadata.
 		return repository.CompleteReadingParseResult{MetadataRevision: storedMetadataRevision, MetadataApplied: false}, nil
 	}
 	return repository.CompleteReadingParseResult{MetadataRevision: revision, MetadataApplied: true}, nil
 }
 
-// ValidateReadingParse 拒绝生产 CompleteReadingParse 事务内会拒绝的全部参数，
-// 而不只是入口那一条：
-//
-//	parse_state_repository.go   Kind 必须是 reading、分析与分类同一 link
-//	link_repo_library.go        updateLibraryClassificationOn 的 Source 白名单
-//
-// 第二条容易漏——它在被调用的下游函数里，不在 CompleteReadingParse 的函数体内。
-// 漏掉的后果与 H-2 当初要防的完全一致，只是换到了姊妹字段上：若
-// finalClassificationSource 将来多一个返回空 Source 的分支，service 层整套测试
-// 会保持全绿，而生产解析会以 invalid source 失败。
 func ValidateReadingParse(params repository.CompleteReadingParseParams) error {
 	if params.Classification.Kind != model.LibraryKindReading || params.Analysis.ID != params.Classification.ID {
 		return fmt.Errorf("repotest: complete reading parse: final reading classification and matching link id are required (kind=%q analysis=%s classification=%s)",
 			params.Classification.Kind, params.Analysis.ID, params.Classification.ID)
 	}
-	// 直接调用生产实现，不复刻。
-	return repository.ValidateLibraryKindSource(params.Classification.Source)
+	return nil
 }
 
 // CompleteSiteParse 记录终态 site 写入。未设置 hook 时返回零值聚合结果并成功，
 // 但先复刻 PGXLinkRepository.CompleteSiteParse 的两条前置校验——理由同
 // CompleteReadingParse：fake 可以比生产省事，不可以比生产宽松。
-func (o *ObservableLinkStore) CompleteSiteParse(ctx context.Context, params repository.CompleteSiteParseParams, jobID uuid.UUID) (repository.SiteAggregateResult, error) {
+func (o *ObservableLinkStore) CompleteSiteParse(ctx context.Context, params repository.CompleteSiteParseParams) (repository.SiteAggregateResult, error) {
 	// 校验先于记录，理由同 CompleteReadingParse。
 	if err := ValidateSiteParse(params); err != nil {
 		return repository.SiteAggregateResult{}, err
 	}
 
 	o.mu.Lock()
-	o.record("CompleteSiteParse", params, jobID)
+	o.record("CompleteSiteParse", params)
 	o.UpdateAnalysisCalls = append(o.UpdateAnalysisCalls, params.Analysis)
-	o.CompleteSiteParseCalls = append(o.CompleteSiteParseCalls, CompleteSiteParseCall{Params: params, JobID: jobID})
+	o.CompleteSiteParseCalls = append(o.CompleteSiteParseCalls, CompleteSiteParseCall{Params: params})
 	hook := o.CompleteSiteParseFunc
 	o.mu.Unlock()
 	if hook != nil {
-		return hook(ctx, params, jobID)
+		return hook(ctx, params)
 	}
 	return repository.SiteAggregateResult{}, nil
 }
 
-// ValidateSiteParse 拒绝生产 CompleteSiteParse 会拒绝的全部参数：
-//
-//	site_repository.go                     Kind 必须是 site、Source 非空、link id 一致
-//	repository.ValidateAggregateSiteParams aggregateSiteOn 的五项聚合参数校验
-//	repository.ValidateLibraryKindSource   library_kind_source 白名单
-//
-// 后两条**直接调用生产实现**而非复刻。复刻必然漂移：本函数曾只抄了
-// name/entry_name 两条，漏掉 LinkID / IdentityKey / NormalizedURL——而 fake 一旦
-// 比生产宽松，生产会拒绝的参数在测试里就静默通过。
-//
-// Source 白名单的出处值得一提：site 路径**不**经 updateLibraryClassificationOn
-// （那是 reading 路径专有），它用 completeSiteLinkSQL 内联写入，Go 层没有对应
-// 守卫，只由 DB 的 chk_links_library_kind_source 约束——fake 在此代 DB 拒绝。
 func ValidateSiteParse(params repository.CompleteSiteParseParams) error {
-	if params.Classification.Kind != model.LibraryKindSite || params.Classification.Source == "" {
-		return fmt.Errorf("repotest: complete site parse: final site classification is required (kind=%q source=%q)",
-			params.Classification.Kind, params.Classification.Source)
+	if params.Classification.Kind != model.LibraryKindSite {
+		return fmt.Errorf("repotest: complete site parse: final site classification is required (kind=%q)", params.Classification.Kind)
 	}
 	if params.Analysis.ID != params.Site.LinkID || params.Analysis.ID != params.Classification.ID {
 		return fmt.Errorf("repotest: complete site parse: link ids must match (analysis=%s site=%s classification=%s)",
@@ -558,7 +507,7 @@ func ValidateSiteParse(params repository.CompleteSiteParseParams) error {
 	if err := repository.ValidateAggregateSiteParams(params.Site); err != nil {
 		return fmt.Errorf("repotest: %w", err)
 	}
-	return repository.ValidateLibraryKindSource(params.Classification.Source)
+	return nil
 }
 
 // Delete 记录调用并回退到 DeleteFunc，未设置时通过 BaseLinkStore panic。
@@ -574,11 +523,9 @@ func (o *ObservableLinkStore) Delete(ctx context.Context, id uuid.UUID) error {
 	return o.BaseLinkStore.Delete(ctx, id)
 }
 
-// Compile-time assertions: ObservableLinkStore satisfies LinkStore plus both
-// terminal completer surfaces, mirroring production where a single repository
-// object is wired as Links + ReadingCompleter + SiteCompleter.
+// Compile-time assertions cover the terminal completer surfaces used directly
+// by parse-pipeline tests.
 var (
-	_ repository.LinkStore             = (*ObservableLinkStore)(nil)
 	_ repository.ReadingParseCompleter = (*ObservableLinkStore)(nil)
 	_ repository.SiteParseCompleter    = (*ObservableLinkStore)(nil)
 )

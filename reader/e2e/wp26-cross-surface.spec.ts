@@ -84,15 +84,6 @@ type CompletedTodoResponse = JsonRecord & {
   completed_at: string
 }
 
-type HistoryResponse = JsonRecord & { items: Array<JsonRecord & { id: string }> }
-
-type RestoredResponse = JsonRecord & {
-  link_id: string
-  content_revision: number
-}
-
-type RestoredContentResponse = JsonRecord & { content: string }
-
 type WorkflowResult = {
   capture: CaptureResponse
   pending: PendingResponse
@@ -107,12 +98,9 @@ type WorkflowResult = {
   publish: PublishResponse
   todos: TodosResponse
   completedTodo: CompletedTodoResponse
-  history: HistoryResponse
-  restored: RestoredResponse
-  restoredContent: RestoredContentResponse
 }
 
-test('WP-26 browser workflow keeps capture, Reader surfaces, and restore identities connected', async ({ page }) => {
+test('WP-26 browser workflow keeps capture and Reader surface identities connected', async ({ page }) => {
   const backend = new Wp26BackendFixture()
   await backend.install(page)
   await page.goto('/__test__/blank', { waitUntil: 'domcontentloaded' })
@@ -151,8 +139,10 @@ test('WP-26 browser workflow keeps capture, Reader surfaces, and restore identit
     const content = asRecord<ContentResponse>(await request(`/api/links/${confirmation.link_id}/content`), 'content')
 
     const thought = {
+      contract_version: 1,
       op_id: 'wp26-thought-op-1',
       device_id: 'wp26-device-1',
+      logical_clock: 1,
       operation_kind: 'add',
       annotation_id: 'wp26-thought-1',
       host_kind: 'link',
@@ -213,16 +203,6 @@ test('WP-26 browser workflow keeps capture, Reader surfaces, and restore identit
       body: JSON.stringify({ done: true }),
     }), 'completedTodo')
 
-    const history = asRecord<HistoryResponse>(await request(`/api/links/${confirmation.link_id}/content-history`), 'history')
-    const historyItem = history.items[0]
-    if (!historyItem) throw new Error('content history did not return a restore candidate')
-    const restored = asRecord<RestoredResponse>(await request(`/api/links/${confirmation.link_id}/content-history/${historyItem.id}/restore`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expected_content_revision: link.content_revision }),
-    }), 'restored')
-    const restoredContent = asRecord<RestoredContentResponse>(await request(`/api/links/${confirmation.link_id}/content`), 'restoredContent')
-
     return {
       capture,
       pending,
@@ -237,9 +217,6 @@ test('WP-26 browser workflow keeps capture, Reader surfaces, and restore identit
       publish,
       todos,
       completedTodo,
-      history,
-      restored,
-      restoredContent,
     }
   })
 
@@ -254,12 +231,12 @@ test('WP-26 browser workflow keeps capture, Reader surfaces, and restore identit
     sequence: 2,
     disposition: 'applied',
     submitted_key: {
-      logical_clock: 0,
+      logical_clock: 1,
       device_id: 'wp26-device-1',
       op_id: 'wp26-thought-op-1',
     },
     current_winner_key: {
-      logical_clock: 0,
+      logical_clock: 1,
       device_id: 'wp26-device-1',
       op_id: 'wp26-thought-op-1',
     },
@@ -269,8 +246,6 @@ test('WP-26 browser workflow keeps capture, Reader surfaces, and restore identit
   expect(workflow.publish).toMatchObject({ id: workflow.note.id, published_revision: 1, draft_content: null, dirty: false })
   expect(workflow.todos.items).toEqual(expect.arrayContaining([expect.objectContaining({ origin_kind: 'note', origin_host_id: workflow.note.id, done: false })]))
   expect(workflow.completedTodo).toMatchObject({ done: true, completed_at: expect.any(String) })
-  expect(workflow.restored).toEqual({ link_id: 'link-capture-1', content_revision: 4 })
-  expect(workflow.restoredContent.content).toBe('The original body before the edit.')
 
   const paths = backend.calls.map((call) => `${call.method} ${call.path}`)
   expect(paths).toEqual(expect.arrayContaining([
@@ -284,13 +259,12 @@ test('WP-26 browser workflow keeps capture, Reader surfaces, and restore identit
     'PATCH /api/notes/note-capture-2/draft',
     'POST /api/notes/note-capture-2/publish',
     'GET /api/todos',
-    'POST /api/links/link-capture-1/content-history/1/restore',
   ]))
   const publishCall = backend.calls.find((call) => call.path === '/api/notes/note-capture-2/publish')
   expect(publishCall?.body).toMatchObject({ reanchor_ops: [expect.objectContaining({ status: 'reanchored', reason: 'unique-quote' })] })
 })
 
-test('WP-26 Home and Feed preserve the same identity after a Feed action', async ({ page }) => {
+test('WP-26 Home and Feed preserve the same identity after a Feed engagement action', async ({ page }) => {
   const backend = new Wp26BackendFixture()
   await backend.install(page)
   await configureReaderConnection(page)
@@ -305,18 +279,17 @@ test('WP-26 Home and Feed preserve the same identity after a Feed action', async
   await expect(card).toBeVisible()
   await card.getByRole('button', { name: '未读' }).click()
   await expect(card.getByRole('button', { name: '已读' })).toBeVisible()
-  await card.getByRole('button', { name: '保存' }).click()
-  await expect(card.getByRole('button', { name: '取消保存' })).toBeVisible()
-  await card.getByRole('button', { name: '查看推荐原因：尚未阅读' }).click()
-  await expect(page.getByRole('note')).toContainText('规则 unread')
+  await expect(card.getByRole('button', { name: '保存', exact: true })).toHaveCount(0)
+  await card.getByRole('button', { name: '查看推荐原因：已保存到资料库' }).click()
+  await expect(page.getByRole('note')).toContainText('推荐原因：已保存到资料库')
 
   await page.getByRole('button', { name: '返回' }).click()
   await expect(page.getByRole('heading', { level: 1, name: '今天' })).toBeVisible()
   expect(backend.calls.map((call) => `${call.method} ${call.path}`)).toEqual(expect.arrayContaining([
     'PATCH /api/engagement/link-capture-1',
-    'POST /api/reader-feed/feedback?item_key=link%3Alink-capture-1',
     'GET /api/home',
   ]))
+  expect(backend.calls.some((call) => call.path.startsWith('/api/reader-feed/feedback'))).toBe(false)
   const engagementCall = backend.calls.find((call) => call.path === '/api/engagement/link-capture-1')
   expect(engagementCall?.body).toMatchObject({ read: true })
 })

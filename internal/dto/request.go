@@ -1,22 +1,11 @@
 package dto
 
-import (
-	"bytes"
-	"encoding/json"
-	"net/http"
-	"strings"
-
-	"webtag/internal/httperr"
-)
-
 // LinkCreateRequest 是 POST /api/links 单条入库请求的 JSON 主体。
 //
 // validator binding tag 由 Wave 10 API MED M5 引入，作为请求体的早期门禁：
 //   - URL：required + url 格式（RFC 3986）+ max=2048（实践上限，多数浏览器
 //     与 CDN 的 URL 长度上限在 2K–8K，按保守默认取 2048，业务可调）
-//   - Description / ParseDepth：可选字段，仅做长度上限保护，避免恶意客户端
-//     用超长字符串撑爆 DB 列。具体语义（如 ParseDepth 的 oneof 校验）仍由
-//     service.NormalizeParseDepth 等深度防御逻辑兜底。
+//   - Description：可选字段，仅做长度上限保护，避免恶意客户端用超长字符串撑爆 DB 列。
 type LinkCreateRequest struct {
 	URL string `json:"url" binding:"required,url,max=2048"`
 	// Destination selects the durable capture host. Empty means inbox: a
@@ -30,54 +19,6 @@ type LinkCreateRequest struct {
 	// RequestedLibraryKind is optional for backwards compatibility. Empty is
 	// equivalent to auto; final library_kind is always assigned by the server.
 	RequestedLibraryKind string `json:"requested_library_kind,omitempty" binding:"omitempty,max=16"`
-	// ParseDepth, when set, overrides the pipeline's default fetch
-	// strategy for this link. "light" forces the truncated tag-only
-	// fetch path (~7x cheaper); "deep" (or "full") forces the full
-	// body fetch chain. Empty / omitted = use whatever the deployment
-	// default is (see FETCH_PREFER_LIGHT). Case-insensitive on input.
-	//
-	// 仅做长度上限：实际 oneof 由 NormalizeParseDepth 做（大小写归一 + 422 slug）。
-	ParseDepth *string `json:"parse_depth,omitempty" binding:"omitempty,max=16"`
-}
-
-// BatchCreateRequest 是 POST /api/links/batch 批量入库请求的 JSON 主体，
-// Items 长度上限为 100；超过将被请求校验拒绝。
-//
-// validator binding tag：
-//   - Items 必须存在且 1–100 条；超过 100 是与 service.defaultBatchSubmitLimit
-//     对齐的保守默认，按 wave 10 默认值设置，业务可调。
-//   - 子项不在 binding 层递归校验：Batch 的公开契约是逐项 partial success，
-//     坏 URL / parse_depth / 超长备注应落在对应 results[index].error，而不是让
-//     第一个坏项把整批提前变成顶层 422。字段语义和长度由 service 逐项校验。
-type BatchCreateRequest struct {
-	Items []LinkCreateRequest `json:"items" binding:"required,min=1,max=100"`
-}
-
-// ValidParseDepths is the canonical allow-list of accepted parse_depth
-// values, lower-cased. Empty string is also accepted (meaning "use
-// deployment default") but is not enumerated here so the handler can
-// short-circuit it without traversing the slice.
-var ValidParseDepths = []string{"light", "deep", "full"}
-
-// NormalizeParseDepth returns the canonical lower-cased trimmed value
-// for parse_depth, or an httperr 422 if the value is non-empty but not
-// one of the allow-list members. The empty string passes through as ""
-// (deployment default).
-func NormalizeParseDepth(raw *string) (string, error) {
-	if raw == nil {
-		return "", nil
-	}
-	v := strings.ToLower(strings.TrimSpace(*raw))
-	if v == "" {
-		return "", nil
-	}
-	for _, ok := range ValidParseDepths {
-		if v == ok {
-			return v, nil
-		}
-	}
-	return "", httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeUnsupportedParseDepth,
-		"parse_depth must be one of: light, deep, full")
 }
 
 // IngestRequest 是多模态采集接口的请求体，允许一次提交多个不同来源（URL / 文本 / 图片等）。
@@ -156,9 +97,9 @@ type SiteUpdateRequest struct {
 	Tags        *SiteTagPatchRequest `json:"tags,omitempty"`
 }
 
-// SiteTagPatchRequest maintains user-owned site tags as a delta. An omitted
-// tags field leaves tags untouched; add/remove are de-duplicated and validated
-// by the service before they reach the transaction.
+// SiteTagPatchRequest maintains site tags as a delta. An omitted tags field
+// leaves tags untouched; add/remove are de-duplicated and validated by the
+// service before they reach the transaction.
 type SiteTagPatchRequest struct {
 	Add    []string `json:"add,omitempty" binding:"omitempty,max=50,dive,min=1,max=128"`
 	Remove []string `json:"remove,omitempty" binding:"omitempty,max=50,dive,min=1,max=128"`
@@ -187,61 +128,6 @@ type ConversionExecuteRequest struct {
 	TargetSiteID            *string `json:"target_site_id,omitempty" binding:"omitempty,uuid"`
 	ConfirmDestructive      bool    `json:"confirm_destructive,omitempty"`
 	PreservedUserNote       *string `json:"preserved_user_note,omitempty" binding:"omitempty,max=10000"`
-}
-
-// ClassificationRuleCreateRequest is intentionally scope-oriented: shared
-// platform validation happens server-side and never relies on UI affordances.
-type ClassificationRuleCreateRequest struct {
-	Host            string  `json:"host" binding:"required,max=253"`
-	IdentityAdapter *string `json:"identity_adapter,omitempty" binding:"omitempty,max=64"`
-	PathPrefix      *string `json:"path_prefix,omitempty" binding:"omitempty,max=2048"`
-	TargetKind      string  `json:"target_kind" binding:"required,oneof=reading site"`
-	Enabled         *bool   `json:"enabled,omitempty"`
-}
-
-// OptionalString preserves all three PATCH states for nullable scope fields:
-// omitted, explicitly cleared with null, and supplied with a string. It is an
-// input-only type; response DTOs continue to use ordinary *string fields.
-type OptionalString struct {
-	Set   bool
-	Value *string
-}
-
-func (o *OptionalString) UnmarshalJSON(data []byte) error {
-	o.Set = true
-	if bytes.Equal(data, []byte("null")) {
-		o.Value = nil
-		return nil
-	}
-	var value string
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	o.Value = &value
-	return nil
-}
-
-// ClassificationRuleUpdateRequest is intentionally narrower than a generic
-// JSON merge patch. Updating a scope requires host, adapter, and prefix
-// together, so a shared-platform rule can never be widened by an omitted
-// field. OptionalString keeps explicit null available for changing a scoped
-// rule into a host-wide rule on a non-shared host.
-type ClassificationRuleUpdateRequest struct {
-	Host            *string        `json:"host,omitempty" binding:"omitempty,max=253"`
-	IdentityAdapter OptionalString `json:"identity_adapter,omitempty"`
-	PathPrefix      OptionalString `json:"path_prefix,omitempty"`
-	TargetKind      *string        `json:"target_kind,omitempty" binding:"omitempty,oneof=reading site"`
-	Enabled         *bool          `json:"enabled,omitempty"`
-}
-
-// LibraryReviewResolveRequest resolves one pending review with the revision
-// returned by the list API. Action-specific object writes are deliberately
-// delegated to their owning workflows; this endpoint owns queue lifecycle.
-type LibraryReviewResolveRequest struct {
-	ExpectedRevision   int64  `json:"expected_revision" binding:"required,min=1"`
-	Resolution         string `json:"resolution" binding:"required,oneof=applied dismissed"`
-	Action             string `json:"action,omitempty" binding:"omitempty,oneof=keep_reading move_to_site"`
-	ConfirmDestructive bool   `json:"confirm_destructive,omitempty"`
 }
 
 type SiteRevisionRef struct {

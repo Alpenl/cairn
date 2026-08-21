@@ -26,10 +26,9 @@ const TEST_NAMESPACE = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 const ENABLED_READER_CAPABILITIES = {
   library_kinds: true,
   site_library: true,
-  site_auto_classification: true,
   site_management: true,
   site_advanced_management: true,
-  archive_versions: [1, 2],
+  archive_versions: [2],
   reader_vnext: true,
   reader: {
     annotations: true,
@@ -40,7 +39,7 @@ const ENABLED_READER_CAPABILITIES = {
     home: true,
     feed: true,
     ai: false,
-    semantic: true,
+    related_tags: true,
     activity: true,
     history: true,
     trash: true,

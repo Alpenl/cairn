@@ -20,7 +20,7 @@ describe('SourceBlockId', () => {
     expectTypeOf<SourceBlockId>().not.toHaveProperty('contentRevision')
   })
 
-  it('rejects retired deep-research as a schedulable source block kind', () => {
+  it('rejects an unsupported source block kind', () => {
     const invalid = {
       namespace: 'physical-A',
       linkId: 'L1',

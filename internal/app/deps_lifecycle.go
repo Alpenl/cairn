@@ -8,7 +8,6 @@ import (
 
 	"webtag/internal/database"
 	"webtag/internal/lifecycle"
-	"webtag/internal/observability"
 )
 
 type runtimeManagedBackground interface {
@@ -32,14 +31,12 @@ type runtimeLifecycleOptions struct {
 	backgrounds    []namedRuntimeBackground
 	cleanupTimeout time.Duration
 	persistence    runtimePersistence
-	tracerShutdown observability.TracerShutdown
 }
 
 type runtimeLifecycle struct {
 	backgrounds    []namedRuntimeBackground
 	cleanupTimeout time.Duration
 	persistence    runtimePersistence
-	tracerShutdown observability.TracerShutdown
 	started        cleanupStack
 	constructed    cleanupStack
 	ownerRevoke    func()
@@ -55,7 +52,6 @@ func newRuntimeLifecycle(options runtimeLifecycleOptions) *runtimeLifecycle {
 		backgrounds:    options.backgrounds,
 		cleanupTimeout: options.cleanupTimeout,
 		persistence:    options.persistence,
-		tracerShutdown: options.tracerShutdown,
 	}
 	for _, entry := range options.backgrounds {
 		if entry.background != nil {
@@ -158,16 +154,6 @@ func (l *runtimeLifecycle) Close(ctx context.Context) error {
 		}
 	}
 
-	if l.tracerShutdown != nil {
-		tracerCtx := ctx
-		cancel := func() {}
-		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-			tracerCtx, cancel = context.WithTimeout(ctx, 2*time.Second)
-		}
-		tracerErr := l.tracerShutdown(tracerCtx)
-		cancel()
-		return tracerErr
-	}
 	return nil
 }
 

@@ -1,7 +1,6 @@
 import {
   isCapabilitiesResponse,
   isErrorResponse,
-  isJobResponse,
   isLinkContentResponse,
   isLinkResponse,
   isPaginatedLinksResponse,
@@ -77,17 +76,6 @@ export function defineSharedApiContractTests(
         }),
         true,
       )
-      equal(
-        isJobResponse({
-          id: 'job-1',
-          link_id: 'link-1',
-          status: 'done',
-          error_category: null,
-          error_msg: null,
-          link,
-        }),
-        true,
-      )
       equal(isTagCountResponse({ tag: 'shared', count: 1 }), true)
       equal(
         isLinkContentResponse({
@@ -104,10 +92,9 @@ export function defineSharedApiContractTests(
         isCapabilitiesResponse({
           library_kinds: true,
           site_library: true,
-          site_auto_classification: true,
           site_management: true,
           site_advanced_management: true,
-          archive_versions: [1, 2],
+          archive_versions: [2],
           reader_vnext: true,
           reader: {
             annotations: true,
@@ -118,7 +105,7 @@ export function defineSharedApiContractTests(
             home: true,
             feed: true,
             ai: true,
-            semantic: true,
+            related_tags: true,
             activity: true,
             history: true,
             trash: true,
@@ -129,164 +116,42 @@ export function defineSharedApiContractTests(
       const feedItem = {
         key: 'subscription:feed-1',
         source: 'subscription',
-        item_type: 'subscription',
         resource_key: 'link:link-1',
-        action_key: 'subscription:feed-1',
-        dedupe_key: 'url:https://example.com/article',
-        section_id: 'subscription',
-        actions: ['read', 'read_later', 'save', 'unsave', 'open'],
         title: 'Feed item',
         summary: 'Summary',
         url: 'https://example.com/article',
         link_id: 'link-1',
-        inbox_id: null,
         feed_item_id: 'feed-1',
         read: false,
-		read_later: false,
-		saved: false,
-		score: 60,
-        score_contributions: {
-          pending_confirmation: 0,
-          saved_library: 0,
-          subscription_recent: 40,
-          unread: 20,
-          read_later: 0,
-          chronological_fallback: 0,
-		},
-		enabled_score_signals: ['subscription_recent', 'unread', 'read_later', 'chronological_fallback'],
-        reason_code: 'subscription_recent',
-        reason_params: { source: 'subscription' },
-        reason_contribution: 40,
-        reason_text: '订阅更新',
-        published_at: null,
+        read_later: false,
+        saved: false,
         event_at: '2026-08-08T00:00:00Z',
-        created_at: '2026-08-08T00:00:00Z',
       }
       equal(
         isReaderFeedResponse({
           items: [feedItem],
-          snapshot_id: 'snapshot-1',
+          next_cursor: 'live-cursor-1',
           mode: 'recommended',
-          capabilities: ['snapshot', 'cursor', 'dedupe', 'reason', 'source_filter', 'actions'],
-          sections: [{
-            id: 'subscription',
-            source: 'subscription',
-            label: '订阅',
-            count: 1,
-            capabilities: ['read', 'read_later', 'save', 'unsave', 'open'],
-          }],
-          sources: [{
-            id: 'subscription',
-            label: '订阅',
-            enabled: true,
-            count: 1,
-            capabilities: ['read', 'read_later', 'save', 'unsave', 'open'],
-          }],
         }),
         true,
       )
       equal(
         isReaderFeedResponse({
           items: [feedItem],
-          snapshot_id: 'snapshot-off',
           mode: 'chronological',
-          capabilities: [],
-          sections: [],
-          sources: [],
         }),
         true,
       )
       equal(
         isReaderFeedResponse({
-          items: [{ ...feedItem, actions: ['unsupported'] }],
-          snapshot_id: 'snapshot-invalid',
-          mode: 'recommended',
-        }),
-        false,
-      )
-      const { score: _score, ...missingScore } = feedItem
-      equal(
-        isReaderFeedResponse({ items: [missingScore], snapshot_id: 'snapshot-missing-score', mode: 'recommended' }),
-        false,
-      )
-      equal(
-        isReaderFeedResponse({
-          items: [{ ...feedItem, reason_code: 'saved_library', reason_params: { source: 'subscription' } }],
-          snapshot_id: 'snapshot-mismatched-reason',
+          items: [{ ...feedItem, resource_key: undefined }],
           mode: 'recommended',
         }),
         false,
       )
       equal(
         isReaderFeedResponse({
-          items: [{ ...feedItem, reason_code: 'source_guess' }],
-          snapshot_id: 'snapshot-unknown-reason',
-          mode: 'recommended',
-        }),
-        false,
-      )
-      equal(
-        isReaderFeedResponse({
-          items: [{ ...feedItem, score_contributions: { subscription_recent: 40 } }],
-          snapshot_id: 'snapshot-incomplete-contributions',
-          mode: 'recommended',
-        }),
-        false,
-      )
-      equal(
-        isReaderFeedResponse({
-          items: [{ ...feedItem, score: 61 }],
-          snapshot_id: 'snapshot-wrong-total',
-          mode: 'recommended',
-        }),
-        false,
-      )
-      equal(
-        isReaderFeedResponse({
-          items: [{ ...feedItem, reason_contribution: 20 }],
-          snapshot_id: 'snapshot-wrong-winner-contribution',
-          mode: 'recommended',
-        }),
-        false,
-      )
-      equal(
-        isReaderFeedResponse({
-          items: [{ ...feedItem, reason_params: { source: 'subscription', guessed: true } }],
-          snapshot_id: 'snapshot-ambiguous-params',
-          mode: 'recommended',
-        }),
-        false,
-      )
-      equal(
-        isReaderFeedResponse({
-          items: [{ ...feedItem, actions: ['read', 'read'] }],
-          snapshot_id: 'snapshot-duplicate-actions',
-          mode: 'recommended',
-        }),
-        false,
-      )
-      equal(
-        isReaderFeedResponse({
-          items: [feedItem],
-          snapshot_id: 'snapshot-invalid-capability',
-          mode: 'recommended',
-          capabilities: ['unsupported'],
-        }),
-        false,
-      )
-      equal(
-        isReaderFeedResponse({
-          items: [feedItem],
-          snapshot_id: 'snapshot-duplicate-capabilities',
-          mode: 'recommended',
-          capabilities: ['snapshot', 'snapshot'],
-        }),
-        false,
-      )
-      equal(
-        isReaderFeedResponse({
-          items: [{ ...feedItem, item_type: 'inbox' }],
-          snapshot_id: 'snapshot-invalid-union',
+          items: [{ ...feedItem, source: 'reading' }],
           mode: 'recommended',
         }),
         false,
@@ -294,33 +159,7 @@ export function defineSharedApiContractTests(
       equal(
         isReaderFeedResponse({
           items: [{ ...feedItem, event_at: undefined }],
-          snapshot_id: 'snapshot-missing-event-at',
           mode: 'chronological',
-        }),
-        false,
-      )
-      equal(
-        isReaderFeedResponse({
-          items: [{
-            key: 'link-legacy',
-            source: 'reading',
-            title: 'Legacy',
-            summary: '',
-            url: 'https://example.com/legacy',
-            link_id: null,
-            inbox_id: null,
-            feed_item_id: null,
-            read: false,
-            read_later: false,
-            saved: false,
-            reason_code: 'legacy',
-            reason_text: 'legacy',
-            published_at: null,
-            event_at: '2026-08-08T00:00:00Z',
-            created_at: '2026-08-08T00:00:00Z',
-          }],
-          snapshot_id: 'snapshot-legacy',
-          mode: 'recommended',
         }),
         false,
       )

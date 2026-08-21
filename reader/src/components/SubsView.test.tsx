@@ -477,7 +477,7 @@ describe('SubsView', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '技术 1' }))
     await waitFor(() =>
-      // 第二个实参是条件请求上下文（If-None-Match / onETag 通道，PF5 起）。
+      // 第二个实参携带缓存层的请求取消信号。
       expect(first.client.getFeedItems).toHaveBeenLastCalledWith(
         expect.objectContaining({ folder_id: 'folder-1' }),
         expect.anything(),

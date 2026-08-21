@@ -215,24 +215,4 @@ func TestTranslationRepositoryFailsAndClearsOnlyWholeCurrentAttempt(t *testing.T
 	}
 }
 
-func TestResolvedLegacyTranslationAttemptCarriesLockedProductSourceIdentity(t *testing.T) {
-	t.Parallel()
-
-	revision := int64(41)
-	item := &model.LinkTranslation{
-		ID:                    uuid.New(),
-		AttemptGeneration:     7,
-		SourceHash:            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		SourceContentRevision: &revision,
-	}
-	resolution := resolvedTranslationAttempt(item, 731)
-	got := resolution.Attempt
-	if resolution.Rejected() || got.TranslationID != item.ID ||
-		got.AttemptGeneration != item.AttemptGeneration || got.RiverJobID != 731 ||
-		got.SourceHash != item.SourceHash || got.SourceContentRevision == nil ||
-		*got.SourceContentRevision != revision {
-		t.Fatalf("resolved attempt = %+v", resolution)
-	}
-}
-
 func ptrTo[T any](value T) *T { return &value }

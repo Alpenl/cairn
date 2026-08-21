@@ -125,10 +125,9 @@ func TestReaderDismissedTodoProjectionStaysDismissed(t *testing.T) {
 	}
 }
 
-// TestReaderDismissedTodoProjectionSurvivesSourceRewrite covers the second way
-// the two reconcile paths could disagree: the source drops the checkbox, the
-// reconcile dismisses the projection, and the same checkbox text comes back.
-// The stored tombstone is the authority for both Home and Todos.
+// TestReaderDismissedTodoProjectionSurvivesSourceRewrite verifies that normal
+// note publishes retire a removed checkbox without resurrecting its tombstone
+// when the same checkbox returns later.
 func TestReaderDismissedTodoProjectionSurvivesSourceRewrite(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
@@ -145,30 +144,39 @@ func TestReaderDismissedTodoProjectionSurvivesSourceRewrite(t *testing.T) {
 		t.Fatal("creating the note did not project its checkbox")
 	}
 
-	// An out-of-band source rewrite is exactly the drift the explicit repair
-	// exists for, so it stands in for whatever produced the tombstone.
-	if _, err := pool.Exec(ctx, `UPDATE reader_notes SET published_content=$1,published_revision=2,updated_at=NOW() WHERE id=$2`, "no checklist left", note.ID); err != nil {
-		t.Fatalf("drop source checkbox: %v", err)
+	draft, err := reader.SaveNoteDraft(ctx, model.ReaderNoteDraftCommand{
+		NoteID: note.ID, Content: "no checklist left", ExpectedDraftRevision: note.DraftRevision,
+	})
+	if err != nil {
+		t.Fatalf("save draft without checkbox: %v", err)
 	}
-	if _, err := service.RepairProjectedTodos(ctx); err != nil {
-		t.Fatalf("repair after dropping the checkbox: %v", err)
+	published, err := reader.PublishNote(ctx, model.ReaderNotePublishCommand{
+		NoteID: note.ID, ExpectedDraftRevision: draft.DraftRevision, ExpectedPublishedRevision: note.PublishedRevision,
+	})
+	if err != nil {
+		t.Fatalf("publish without checkbox: %v", err)
 	}
 	dismissed := readReaderTodoProjections(t, pool, "note", note.ID.String())
 	if len(dismissed) != 1 || dismissed[0].DeletedAt == nil {
 		t.Fatalf("projections after dropping the checkbox = %#v, want one tombstone", dismissed)
 	}
 
-	if _, err := pool.Exec(ctx, `UPDATE reader_notes SET published_content=$1,published_revision=3,updated_at=NOW() WHERE id=$2`, "- [ ] rewritten by the source", note.ID); err != nil {
-		t.Fatalf("restore source checkbox: %v", err)
+	restoredDraft, err := reader.SaveNoteDraft(ctx, model.ReaderNoteDraftCommand{
+		NoteID: note.ID, Content: "- [ ] rewritten by the source", ExpectedDraftRevision: published.DraftRevision,
+	})
+	if err != nil {
+		t.Fatalf("save restored checkbox: %v", err)
+	}
+	if _, err := reader.PublishNote(ctx, model.ReaderNotePublishCommand{
+		NoteID: note.ID, ExpectedDraftRevision: restoredDraft.DraftRevision, ExpectedPublishedRevision: published.PublishedRevision,
+	}); err != nil {
+		t.Fatalf("publish restored checkbox: %v", err)
 	}
 	if _, err := reader.LoadHomeAggregate(ctx); err != nil {
 		t.Fatalf("LoadHomeAggregate: %v", err)
 	}
 	if _, err := service.ListTodos(ctx, "", 200); err != nil {
 		t.Fatalf("ListTodos after restoring the checkbox: %v", err)
-	}
-	if _, err := service.RepairProjectedTodos(ctx); err != nil {
-		t.Fatalf("repair after restoring the checkbox: %v", err)
 	}
 	after := readReaderTodoProjections(t, pool, "note", note.ID.String())
 	if len(after) != 1 || after[0].DeletedAt == nil {

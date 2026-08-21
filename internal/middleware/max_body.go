@@ -41,7 +41,7 @@ const DefaultMaxRequestBodyBytes int64 = 4 << 20
 //
 // WHY 现在加：之前只有 /api/links 显式
 // 限制过 body。其他 POST/PUT/PATCH 路由（包括 admin 的 approve/reject）
-// 默认是无限大——攻击者打一个 10 GB body 到 /api/admin/concept-merges/:id/reject
+// 默认是无限大，攻击者可以向任意 JSON 写接口发送超大 body
 // 就能在 io.ReadAll 内吃光 server 内存。集中在中间件挂一次，所有路由
 // 自动有默认上限。
 func MaxRequestBody(maxBytes int64) gin.HandlerFunc {

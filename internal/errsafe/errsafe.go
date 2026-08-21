@@ -57,7 +57,6 @@ var ErrAlreadyPersisted = errors.New("processor: failure already persisted")
 //	ErrNetwork          → "network"
 //	ErrUpstreamHTTP     → "upstream_http"
 //	ErrParse            → "parse"
-//	ErrParseJobMissing  → "parse_job_missing"
 //	ErrBlockedByOrigin  → "blocked_by_origin"
 //
 // New sentinels are safe to add; renaming an existing one is a breaking
@@ -70,7 +69,6 @@ var (
 	ErrNetwork          = errors.New("network failure")
 	ErrUpstreamHTTP     = errors.New("upstream http error")
 	ErrParse            = errors.New("parse failure")
-	ErrParseJobMissing  = errors.New("parse job missing")
 	// ErrBlockedByOrigin marks a fetch that reached the origin and got a
 	// well-formed HTTP 200 that is an anti-bot / verification interstitial
 	// instead of the requested document. It is deliberately distinct from
@@ -125,8 +123,6 @@ func ClassifyError(err error) string {
 		return "upstream_http"
 	case errors.Is(err, ErrBlockedByOrigin):
 		return "blocked_by_origin"
-	case errors.Is(err, ErrParseJobMissing):
-		return "parse_job_missing"
 	case errors.Is(err, ErrParse):
 		return "parse"
 	}

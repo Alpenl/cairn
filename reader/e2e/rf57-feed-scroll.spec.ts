@@ -58,9 +58,11 @@ async function loadSecondPage(page: Page, mode: Rf57Mode, filter: Rf57Source[]):
 }
 
 test('RF57 Feed returns to the same card after a detail roundtrip, Back/Forward and a reload', async ({ page }) => {
-  await openFeed(page)
+  const backend = await openFeed(page)
   await expectCardVisible(page, 'recommended', ALL_SOURCES, 0)
   await loadSecondPage(page, 'recommended', ALL_SOURCES)
+  const requestsAfterPaging = backend.feedRequests.length
+  expect(backend.feedRequests.filter((request) => request.includes('after='))).toHaveLength(1)
 
   // A card from the second page, deliberately scrolled part-way into view.
   await scrollFeedToCard(page, rf57CardKey('recommended', ALL_SOURCES, 15), 40)
@@ -86,50 +88,9 @@ test('RF57 Feed returns to the same card after a detail roundtrip, Back/Forward 
   await page.reload()
   await expect(page.getByRole('heading', { level: 1, name: '混合 Feed' })).toBeVisible()
   await expectAnchoredAt(page, 'recommended', ALL_SOURCES, 15, 40)
-})
 
-test('RF57 Feed re-anchors on the card when the content above it grows', async ({ page }) => {
-  const backend = await openFeed(page)
-  await expectCardVisible(page, 'recommended', ALL_SOURCES, 0)
-  await scrollFeedToCard(page, rf57CardKey('recommended', ALL_SOURCES, 8), -20)
-  await expectAnchoredAt(page, 'recommended', ALL_SOURCES, 8, -20)
-  const left = await readFeedViewport(page, rf57CardKey('recommended', ALL_SOURCES, 8))
-  if (left.anchorOffset === null) throw new Error('anchored card is not rendered before reload')
-
-  // The first card's summary grew while the reader was away. A raw scrollTop
-  // would now land on a different card; the item anchor must not.
-  backend.grownIndexes.add(0)
-  await page.reload()
-  await expect(page.getByRole('heading', { level: 1, name: '混合 Feed' })).toBeVisible()
-  await expectCardVisible(page, 'recommended', ALL_SOURCES, 8)
-  await expectAnchoredAt(page, 'recommended', ALL_SOURCES, 8, left.anchorOffset)
-
-  const restored = await readFeedViewport(page, rf57CardKey('recommended', ALL_SOURCES, 8))
-  expect(restored.scrollTop).toBeGreaterThan(left.scrollTop + 2)
-})
-
-test('RF57 Feed falls back to its own scrollTop when the anchored card is gone', async ({ page }) => {
-  const backend = await openFeed(page)
-  await expectCardVisible(page, 'recommended', ALL_SOURCES, 0)
-  await scrollFeedToCard(page, rf57CardKey('recommended', ALL_SOURCES, 5), -20)
-  await expectAnchoredAt(page, 'recommended', ALL_SOURCES, 5, -20)
-  const left = await readFeedViewport(page, rf57CardKey('recommended', ALL_SOURCES, 5))
-  // The card the reader is looking at is the one that has to disappear.
-  expect(left.firstVisibleKey).toBe(rf57CardKey('recommended', ALL_SOURCES, 5))
-
-  // Retention drops the snapshot and the anchored card with it, so the only
-  // position information left for this key is its own scrollTop.
-  backend.expireSnapshotOnce = true
-  backend.droppedIndexes.add(5)
-  await page.reload()
-  await expect(page.getByRole('heading', { level: 1, name: '混合 Feed' })).toBeVisible()
-  await expectCardVisible(page, 'recommended', ALL_SOURCES, 6)
-  await expect(page.getByText(rf57ItemTitle('recommended', ALL_SOURCES, 5), { exact: true })).toHaveCount(0)
-
-  await expect.poll(async () => {
-    const drift = (await readFeedViewport(page, null)).scrollTop - left.scrollTop
-    return Math.abs(drift) <= 2 ? 'restored' : `off by ${Math.round(drift)}px`
-  }).toBe('restored')
+  expect(backend.feedRequests).toHaveLength(requestsAfterPaging)
+  expect(backend.feedRequests.every((request) => !request.includes('snapshot_id'))).toBe(true)
 })
 
 test('RF57 Feed keeps a separate position per mode and per source filter', async ({ page }) => {

@@ -15,12 +15,9 @@ const AT = '2026-08-11T00:00:00Z'
 const LINK_ID = '11111111-1111-4111-8111-111111111111'
 const SITE_ID = '22222222-2222-4222-8222-222222222222'
 const ENTRY_ID = '33333333-3333-4333-8333-333333333333'
-const CATEGORY_ID = '44444444-4444-4444-8444-444444444444'
 const NOTE_ID = '55555555-5555-4555-8555-555555555555'
 const INBOX_ID = '66666666-6666-4666-8666-666666666666'
 const TODO_ID = '77777777-7777-4777-8777-777777777777'
-const SNAPSHOT_ID = '88888888-8888-4888-8888-888888888888'
-const RULE_ID = '99999999-9999-4999-8999-999999999999'
 const FEED_FOLDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const FEED_SUBSCRIPTION_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const FEED_ITEM_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -31,7 +28,6 @@ const TOP_LEVEL_SECTIONS = [
   'site_entries',
   'site_tags',
   'site_identities',
-  'classification_rules',
 ] as const
 
 const READER_BASE_SECTIONS = [
@@ -40,15 +36,9 @@ const READER_BASE_SECTIONS = [
   'feed_items',
   'feed_saves',
   'inbox',
-  'categories',
-  'categorizables',
   'todos',
   'engagement',
-  'feed_feedback',
-  'feed_snapshots',
-  'tag_activity',
-  'domain_activity',
-  'content_history',
+  'feed_hides',
 ] as const
 
 const READER_THOUGHT_SECTIONS = [
@@ -96,19 +86,12 @@ function topLevelRow(section: (typeof TOP_LEVEL_SECTIONS)[number]): Record<strin
         id: SITE_ID,
         site_key: 'example.com',
         name: 'Example',
-        name_source: 'auto',
         intro: 'A site',
-        intro_source: 'auto',
         homepage_url: 'https://example.com',
-        homepage_source: 'auto',
         icon_url: null,
-        icon_source: null,
         user_note: '',
         pinned: false,
         primary_entry_id: ENTRY_ID,
-        primary_source: 'auto',
-        grouping_locked: false,
-        needs_review: false,
         revision: 1,
         first_collected_at: AT,
         last_collected_at: AT,
@@ -121,9 +104,7 @@ function topLevelRow(section: (typeof TOP_LEVEL_SECTIONS)[number]): Record<strin
         site_id: SITE_ID,
         link_id: LINK_ID,
         entry_name: 'Home',
-        entry_name_source: 'auto',
         purpose: '',
-        purpose_source: 'auto',
         normalized_url: 'https://example.com/',
         first_collected_at: AT,
         last_recollected_at: null,
@@ -135,8 +116,6 @@ function topLevelRow(section: (typeof TOP_LEVEL_SECTIONS)[number]): Record<strin
         site_id: SITE_ID,
         tag: 'web',
         normalized_tag: 'web',
-        source: 'auto',
-        concept_id: null,
         created_at: AT,
         updated_at: AT,
       }
@@ -144,20 +123,6 @@ function topLevelRow(section: (typeof TOP_LEVEL_SECTIONS)[number]): Record<strin
       return {
         identity_key: 'host:example.com',
         site_id: SITE_ID,
-        source: 'auto',
-        locked: false,
-        created_at: AT,
-        updated_at: AT,
-      }
-    case 'classification_rules':
-      return {
-        id: RULE_ID,
-        host: 'example.com',
-        identity_adapter: null,
-        path_prefix: null,
-        target_kind: 'site',
-        enabled: true,
-        revision: 1,
         created_at: AT,
         updated_at: AT,
       }
@@ -201,7 +166,7 @@ function readerRow(section: ReaderSection): Record<string, unknown> {
         updated_at: AT,
       }
     case 'feed_saves':
-      return { feed_item_id: FEED_ITEM_ID, link_id: LINK_ID, created_link: true, created_at: AT }
+      return { feed_item_id: FEED_ITEM_ID, link_id: LINK_ID, created_at: AT }
     case 'thoughts':
       return {
         contract_version: 1,
@@ -288,17 +253,11 @@ function readerRow(section: ReaderSection): Record<string, unknown> {
         tags: [],
         status: 'pending',
         metadata_revision: 1,
-        job_id: null,
         expires_at: null,
-        expired_at: null,
         deleted_at: null,
         created_at: AT,
         updated_at: AT,
       }
-    case 'categories':
-      return { id: CATEGORY_ID, name: 'Ideas', created_at: AT }
-    case 'categorizables':
-      return { category_id: CATEGORY_ID, host_kind: 'link', host_id: LINK_ID }
     case 'todos':
       return {
         id: TODO_ID,
@@ -324,25 +283,8 @@ function readerRow(section: ReaderSection): Record<string, unknown> {
         last_opened: null,
         updated_at: AT,
       }
-    case 'feed_feedback':
-      return { item_key: 'feed:item', action: 'save', created_at: AT }
-    case 'feed_snapshots':
-      return { id: SNAPSHOT_ID, mode: 'recommended', items: [], created_at: AT }
-    case 'tag_activity':
-      return { tag: 'web', last_at: AT, last_link_id: LINK_ID }
-    case 'domain_activity':
-      return { domain: 'example.com', last_at: AT, last_link_id: LINK_ID }
-    case 'content_history':
-      return {
-        id: 1,
-        link_id: LINK_ID,
-        revision: 1,
-        content: null,
-        content_document: null,
-        content_format: 'plain',
-        content_source: 'fetched',
-        created_at: AT,
-      }
+    case 'feed_hides':
+      return { item_key: 'feed:item', created_at: AT }
   }
 }
 
@@ -369,7 +311,6 @@ async function makeArchiveBytes(
     site_entries: [topLevelRow('site_entries')],
     site_tags: [topLevelRow('site_tags')],
     site_identities: [topLevelRow('site_identities')],
-    classification_rules: [topLevelRow('classification_rules')],
     reader,
   }
   if (options.omitReader) delete (archive as Record<string, unknown>).reader

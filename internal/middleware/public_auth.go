@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/subtle"
 	"net/http"
 	"strings"
@@ -11,6 +12,11 @@ import (
 	"webtag/internal/representation"
 	"webtag/internal/session"
 )
+
+// IdentityReader resolves the stable installation identity namespace.
+type IdentityReader interface {
+	Current(context.Context) (representation.ClientIdentity, error)
+}
 
 // InstallationAuthenticator validates the one static credential configured
 // for this installation. Bearer authentication and session exchange share it.
@@ -32,35 +38,30 @@ func (a *InstallationAuthenticator) Configured() bool {
 }
 
 type PublicAuthOptions struct {
-	Authenticator   *InstallationAuthenticator
-	AllowOpenAccess bool
-	SessionKey      []byte
-	Representations VersionReader
+	Authenticator  *InstallationAuthenticator
+	SessionKey     []byte
+	IdentityReader IdentityReader
 	// SessionTTL is the window each renewal grants. Zero falls back to
 	// session.DefaultTTL so a caller that does not care still renews.
 	SessionTTL time.Duration
 }
 
-// PublicAuth accepts the static Bearer token, an explicitly enabled anonymous
-// request, or a valid HttpOnly session accompanied by the CSRF header. Every
-// successful path enters the same installation namespace.
+// PublicAuth accepts the static Bearer token or a valid HttpOnly session
+// accompanied by the CSRF header. Every successful path enters the same
+// installation namespace.
 func PublicAuth(opts PublicAuthOptions) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authorization := strings.TrimSpace(c.GetHeader("Authorization"))
 		if authorization != "" {
 			token, ok := bearerToken(authorization)
 			if ok && opts.Authenticator.Authenticate(token) {
-				allowInstallation(c, opts.Representations)
+				allowInstallation(c, opts.IdentityReader)
 				return
 			}
 			rejectPublicAuth(c)
 			return
 		}
 		if handled := tryInstallationSession(c, opts); handled {
-			return
-		}
-		if opts.AllowOpenAccess {
-			allowInstallation(c, opts.Representations)
 			return
 		}
 		rejectPublicAuth(c)
@@ -91,7 +92,7 @@ func tryInstallationSession(c *gin.Context, opts PublicAuthOptions) bool {
 		return true
 	}
 	renewSessionCookie(c, opts, claims, now)
-	allowInstallation(c, opts.Representations)
+	allowInstallation(c, opts.IdentityReader)
 	return true
 }
 
@@ -120,23 +121,17 @@ func renewSessionCookie(c *gin.Context, opts PublicAuthOptions, claims session.C
 	SetSessionCookie(c, token, renewed.ExpiresAt)
 }
 
-func allowInstallation(c *gin.Context, versions VersionReader) {
-	if versions == nil {
+func allowInstallation(c *gin.Context, identities IdentityReader) {
+	if identities == nil {
 		JSONErrorWithSlug(c, http.StatusInternalServerError, ErrCodeInternalError, "installation namespace is unavailable")
 		return
 	}
-	components, err := representation.NewComponentSet()
+	identity, err := identities.Current(c.Request.Context())
 	if err != nil {
 		JSONErrorWithSlug(c, http.StatusInternalServerError, ErrCodeInternalError, "installation namespace is unavailable")
 		return
 	}
-	base, err := versions.Current(c.Request.Context(), components)
-	if err != nil {
-		JSONErrorWithSlug(c, http.StatusInternalServerError, ErrCodeInternalError, "installation namespace is unavailable")
-		return
-	}
-	identity, err := representation.NewClientIdentity(base)
-	if err != nil {
+	if !identity.Valid() {
 		JSONErrorWithSlug(c, http.StatusInternalServerError, ErrCodeInternalError, "installation namespace is unavailable")
 		return
 	}

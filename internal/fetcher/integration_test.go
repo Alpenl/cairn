@@ -11,12 +11,8 @@
 //
 // Optional environment variables:
 //
-//	WEBTAG_TEST_YTDLP_BIN  — path to a yt-dlp binary (skips ytdlp tests if
-//	                         unset and `yt-dlp` is not on PATH)
 //	WEBTAG_TEST_GITHUB_TOKEN — GitHub PAT to avoid 60/h anonymous rate limit
-//	WEBTAG_TEST_SKIP_YTDLP   — set to "1" to skip ytdlp even if binary present
 //	WEBTAG_TEST_SKIP_JINA    — set to "1" to skip Jina (r.jina.ai) probes
-//	WEBTAG_TEST_SKIP_DDG     — set to "1" to skip DuckDuckGo searcher probes
 //
 // Each test asserts the *shape* of a successful fetch (FetcherType, Title /
 // Body presence, key metadata) without pinning brittle exact strings —
@@ -29,38 +25,18 @@ import (
 	"context"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
 
-// integrationDeadline is the per-fetch wall-clock budget. It is generous on
-// purpose: yt-dlp metadata extraction and jina.ai cold starts have both been
-// observed to take 20+s in practice.
+// integrationDeadline is the per-fetch wall-clock budget. Jina cold starts can
+// take more than 20 seconds in practice.
 const integrationDeadline = 45 * time.Second
 
 func integrationContext(t *testing.T) (context.Context, context.CancelFunc) {
 	t.Helper()
 	return context.WithTimeout(context.Background(), integrationDeadline)
-}
-
-func resolveYtdlpBinary(t *testing.T) string {
-	t.Helper()
-	if os.Getenv("WEBTAG_TEST_SKIP_YTDLP") == "1" {
-		t.Skip("WEBTAG_TEST_SKIP_YTDLP=1; skipping ytdlp integration test")
-	}
-	if explicit := strings.TrimSpace(os.Getenv("WEBTAG_TEST_YTDLP_BIN")); explicit != "" {
-		if _, err := os.Stat(explicit); err == nil {
-			return explicit
-		}
-		t.Skipf("WEBTAG_TEST_YTDLP_BIN=%q not found on disk", explicit)
-	}
-	if path, err := exec.LookPath("yt-dlp"); err == nil {
-		return path
-	}
-	t.Skip("yt-dlp not on PATH and WEBTAG_TEST_YTDLP_BIN unset; skipping")
-	return ""
 }
 
 func skipIfEnv(t *testing.T, key, reason string) {
@@ -281,61 +257,6 @@ func TestIntegrationJinaFetcher(t *testing.T) {
 	t.Logf("jina → title=%q body_len=%d", content.Title, len(content.Body))
 }
 
-func TestIntegrationDuckDuckGoSearcher(t *testing.T) {
-	t.Parallel()
-	skipIfEnv(t, "WEBTAG_TEST_SKIP_DDG", "skipping DDG integration probe")
-
-	ctx, cancel := integrationContext(t)
-	defer cancel()
-
-	searcher := NewDuckDuckGoSearcher(newIntegrationClient())
-
-	summary, err := searcher.Search(ctx, "golang programming language")
-	if err != nil {
-		t.Fatalf("DuckDuckGoSearcher.Search error: %v", err)
-	}
-	if strings.TrimSpace(summary) == "" {
-		t.Fatal("Search returned empty summary")
-	}
-	if !strings.Contains(strings.ToLower(summary), "go") {
-		t.Errorf("summary does not mention 'go': %q", head(summary, 300))
-	}
-	t.Logf("ddg → summary_len=%d first200=%q", len(summary), head(summary, 200))
-}
-
-func TestIntegrationYtdlpFetcher(t *testing.T) {
-	t.Parallel()
-
-	bin := resolveYtdlpBinary(t)
-
-	ctx, cancel := integrationContext(t)
-	defer cancel()
-
-	fetcher := NewYtdlpFetcher(bin, integrationDeadline)
-	// Rickroll: 1B+ views, never going to be removed.
-	const url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-
-	if !fetcher.CanHandle(url) {
-		t.Fatalf("YtdlpFetcher.CanHandle(%q) = false, want true", url)
-	}
-
-	content, err := fetcher.Fetch(ctx, url)
-	if err != nil {
-		t.Fatalf("YtdlpFetcher.Fetch error: %v", err)
-	}
-
-	if content.FetcherType != "ytdlp" {
-		t.Errorf("FetcherType = %q, want %q", content.FetcherType, "ytdlp")
-	}
-	if content.Title == "" {
-		t.Error("Title is empty")
-	}
-	if extractor, _ := content.Metadata["extractor"].(string); extractor == "" {
-		t.Errorf("metadata.extractor missing; metadata=%+v", content.Metadata)
-	}
-	t.Logf("ytdlp → title=%q body_len=%d extractor=%v", content.Title, len(content.Body), content.Metadata["extractor"])
-}
-
 // ---------------------------------------------------------------------------
 // Manager end-to-end
 // ---------------------------------------------------------------------------
@@ -347,11 +268,9 @@ func TestIntegrationManagerRouting(t *testing.T) {
 		name        string
 		url         string
 		wantFetcher string
-		needsYtdlp  bool
 	}{
 		{name: "arxiv_abs", url: "https://arxiv.org/abs/1706.03762", wantFetcher: "arxiv"},
 		{name: "github_repo", url: "https://github.com/golang/go", wantFetcher: "github"},
-		{name: "youtube_watch", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", wantFetcher: "ytdlp", needsYtdlp: true},
 		{name: "plain_html", url: "https://example.com/", wantFetcher: "basic"},
 	}
 
@@ -360,28 +279,22 @@ func TestIntegrationManagerRouting(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			opts := ManagerOptions{
-				GitHubToken: strings.TrimSpace(os.Getenv("WEBTAG_TEST_GITHUB_TOKEN")),
-			}
-			if tc.needsYtdlp {
-				opts.YtdlpBinaryPath = resolveYtdlpBinary(t)
-				opts.YtdlpTimeout = integrationDeadline
-			}
+			githubToken := strings.TrimSpace(os.Getenv("WEBTAG_TEST_GITHUB_TOKEN"))
 
-			manager := NewDefaultManager(newIntegrationClient(), opts)
+			manager := NewDefaultManager(newIntegrationClient(), githubToken)
 
 			ctx, cancel := integrationContext(t)
 			defer cancel()
 
 			content, err := manager.Fetch(ctx, tc.url)
 			if err != nil {
-				if tc.wantFetcher == "github" && strings.Contains(err.Error(), "rate limited") && opts.GitHubToken == "" {
+				if tc.wantFetcher == "github" && strings.Contains(err.Error(), "rate limited") && githubToken == "" {
 					t.Skipf("GitHub rate-limited; supply WEBTAG_TEST_GITHUB_TOKEN to test reliably: %v", err)
 				}
 				t.Fatalf("Manager.Fetch(%s) error: %v", tc.url, err)
 			}
 
-			// Manager may suffix "+thin" / "+search" — accept exact match or prefix-with-plus.
+			// Manager may suffix "+thin"; accept exact match or prefix-with-plus.
 			if !fetcherTypeMatches(content.FetcherType, tc.wantFetcher) {
 				t.Errorf("FetcherType = %q, want %q (or %q+...)", content.FetcherType, tc.wantFetcher, tc.wantFetcher)
 			}
@@ -397,7 +310,7 @@ func TestIntegrationManagerRouting(t *testing.T) {
 }
 
 // fetcherTypeMatches accepts either the exact fetcher name or a "name+suffix"
-// composition like "basic+thin" / "github+search" used when Manager records a
+// composition like "basic+thin" used when Manager records a
 // degraded path. We deliberately do *not* accept arbitrary substrings to keep
 // the assertion meaningful.
 func fetcherTypeMatches(actual, want string) bool {

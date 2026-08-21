@@ -17,15 +17,9 @@ const readerBaseSections = [
   'feed_items',
   'feed_saves',
   'inbox',
-  'categories',
-  'categorizables',
   'todos',
   'engagement',
-  'feed_feedback',
-  'feed_snapshots',
-  'tag_activity',
-  'domain_activity',
-  'content_history',
+  'feed_hides',
 ]
 
 function headers(extra: Record<string, string> = {}): Record<string, string> {
@@ -67,7 +61,6 @@ function archivePayload(selection: ArchiveSelection, rows: ReaderArchiveRows = {
     site_entries: [],
     site_tags: [],
     site_identities: [],
-    classification_rules: [],
     reader,
   }
   const prefix = JSON.stringify(archive).slice(0, -1)
@@ -77,7 +70,6 @@ function archivePayload(selection: ArchiveSelection, rows: ReaderArchiveRows = {
     site_entries: 0,
     site_tags: 0,
     site_identities: 0,
-    classification_rules: 0,
   }
   for (const section of selectedReaderSections(selection)) {
     const sectionRows = reader[section]
@@ -144,9 +136,8 @@ async function installArchiveApp(page: Page, getMode: () => ArchiveMode, request
         body: JSON.stringify({
           library_kinds: true,
           site_library: true,
-          site_auto_classification: true,
           site_management: true,
-          archive_versions: [1, 2],
+          archive_versions: [2],
           reader_vnext: false,
           reader: {
             annotations: false,
@@ -157,7 +148,7 @@ async function installArchiveApp(page: Page, getMode: () => ArchiveMode, request
             home: false,
             feed: false,
             ai: false,
-            semantic: false,
+            related_tags: false,
             activity: false,
             history: false,
             trash: false,
@@ -273,9 +264,9 @@ test('v2 archive downloads server-valid Thought IDs, source text, and delete hos
           host_id: '66666666-6666-4666-8666-666666666666',
           link_id: null,
           target: {
-            kind: 'legacy-stale',
+            kind: 'inbox',
             host_id: '66666666-6666-4666-8666-666666666666',
-            version: { source_key: 'reader-v0' },
+            version: { metadata_revision: 1 },
           },
           quote: { exact: 'selected text' },
           body: 'Imported thought',
@@ -293,9 +284,9 @@ test('v2 archive downloads server-valid Thought IDs, source text, and delete hos
           host_id: deletedHostID,
           link_id: null,
           target: {
-            kind: 'legacy-stale',
+            kind: 'inbox',
             host_id: deletedHostID,
-            version: { source_key: 'reader-v0' },
+            version: { metadata_revision: 1 },
           },
           quote: null,
           body: '',
@@ -319,9 +310,9 @@ test('v2 archive downloads server-valid Thought IDs, source text, and delete hos
           host_kind: 'inbox',
           host_id: '66666666-6666-4666-8666-666666666666',
           target: {
-            kind: 'legacy-stale',
+            kind: 'inbox',
             host_id: '66666666-6666-4666-8666-666666666666',
-            version: { source_key: 'reader-v0' },
+            version: { metadata_revision: 1 },
           },
           payload: { body: 'Imported thought', quote: { exact: 'selected text' }, source: 'reader-v0-import' },
           recovery_of: null,
@@ -339,9 +330,9 @@ test('v2 archive downloads server-valid Thought IDs, source text, and delete hos
           host_kind: 'inbox',
           host_id: deletedHostID,
           target: {
-            kind: 'legacy-stale',
+            kind: 'inbox',
             host_id: deletedHostID,
-            version: { source_key: 'reader-v0' },
+            version: { metadata_revision: 1 },
           },
           payload: {},
           recovery_of: null,

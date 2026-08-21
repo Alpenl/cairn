@@ -5,71 +5,39 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"webtag/internal/database"
 	"webtag/internal/representation"
 )
 
-// PGXReadRevisionRepository reads the installation-wide representation base.
-//
-// The fresh migration creates singleton library, global, and feed revision
-// rows. Statement triggers advance those components. Go only reads this
-// projection because manually wiring every
-// write path would inevitably miss one and produce stale 304 responses.
-type PGXReadRevisionRepository struct {
+// PGXInstallationIdentityRepository reads the installation namespace. The
+// namespace is the only representation value consumed by the current server.
+type PGXInstallationIdentityRepository struct {
 	db database.Querier
 }
 
-func NewPGXReadRevisionRepository(db database.Querier) *PGXReadRevisionRepository {
-	return &PGXReadRevisionRepository{db: db}
+func NewPGXInstallationIdentityRepository(db database.Querier) *PGXInstallationIdentityRepository {
+	return &PGXInstallationIdentityRepository{db: db}
 }
 
-const currentRepresentationBaseSQL = `
-	SELECT state.representation_namespace,
-		COALESCE(library.revision, 0),
-		COALESCE((SELECT revision FROM global_read_revision WHERE singleton), 0),
-		COALESCE(feed.revision, 0)
-	FROM installation_state state
-	LEFT JOIN library_read_revision library ON library.singleton
-	LEFT JOIN feed_read_revision feed ON feed.singleton
-	WHERE state.singleton`
+const currentInstallationIdentitySQL = `
+	SELECT representation_namespace
+	FROM installation_state
+	WHERE singleton`
 
-// Current executes one authoritative query for the selected component set.
-// Missing component rows coalesce to zero, while a missing installation_state
-// row fails closed because it owns the representation namespace.
-func (r *PGXReadRevisionRepository) Current(ctx context.Context, components representation.ComponentSet) (representation.VersionBase, error) {
-	var (
-		base            representation.VersionBase
-		libraryRevision int64
-		globalRevision  int64
-		feedRevision    int64
-	)
-	err := r.db.QueryRow(ctx, currentRepresentationBaseSQL).Scan(
-		&base.RepresentationNamespace,
-		&libraryRevision,
-		&globalRevision,
-		&feedRevision,
-	)
-	if err != nil {
+func (r *PGXInstallationIdentityRepository) Current(ctx context.Context) (representation.ClientIdentity, error) {
+	var namespace uuid.UUID
+	if err := r.db.QueryRow(ctx, currentInstallationIdentitySQL).Scan(&namespace); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return representation.VersionBase{}, errors.New("read representation version base: installation state is missing")
+			return representation.ClientIdentity{}, errors.New("read installation identity: installation state is missing")
 		}
-		return representation.VersionBase{}, fmt.Errorf("read representation version base: %w", err)
+		return representation.ClientIdentity{}, fmt.Errorf("read installation identity: %w", err)
 	}
-	revisions := map[representation.ComponentName]int64{
-		representation.LibraryComponent: libraryRevision,
-		representation.GlobalComponent:  globalRevision,
-		representation.FeedComponent:    feedRevision,
+	identity, err := representation.NewClientIdentity(namespace)
+	if err != nil {
+		return representation.ClientIdentity{}, fmt.Errorf("read installation identity: %w", err)
 	}
-	for _, name := range components.Names() {
-		base.Components = append(base.Components, representation.Component{
-			Name:     name,
-			Revision: revisions[name],
-		})
-	}
-	if !base.ValidFor(components) {
-		return representation.VersionBase{}, errors.New("read representation version base: invalid namespace or component vector")
-	}
-	return base, nil
+	return identity, nil
 }

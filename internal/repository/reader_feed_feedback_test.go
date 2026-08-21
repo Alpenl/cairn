@@ -14,7 +14,7 @@ import (
 	"webtag/internal/model"
 )
 
-func TestFeedbackFeedValidatesAndCommitsLinkStateWithFeedback(t *testing.T) {
+func TestFeedbackFeedValidatesAndCommitsHide(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatalf("pgxmock.NewPool() error = %v", err)
@@ -26,13 +26,13 @@ func TestFeedbackFeedValidatesAndCommitsLinkStateWithFeedback(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS (SELECT 1 FROM links WHERE id=$1)")).
 		WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectExec("(?s)INSERT INTO reader_feed_feedback").
-		WithArgs("link:"+linkID.String(), "save").
+	mock.ExpectExec("(?s)INSERT INTO reader_feed_hides").
+		WithArgs("link:" + linkID.String()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	repo := NewPGXReaderVNextRepository(mock)
-	if _, err := repo.FeedbackFeed(context.Background(), "link:"+linkID.String(), "save"); err != nil {
+	if _, err := repo.FeedbackFeed(context.Background(), "link:"+linkID.String(), "hide"); err != nil {
 		t.Fatalf("FeedbackFeed() error = %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -55,7 +55,7 @@ func TestFeedbackFeedDoesNotCreateEngagementForMissingLink(t *testing.T) {
 	mock.ExpectRollback()
 
 	repo := NewPGXReaderVNextRepository(mock)
-	if _, err := repo.FeedbackFeed(context.Background(), "link:"+linkID.String(), "save"); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.FeedbackFeed(context.Background(), "link:"+linkID.String(), "hide"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("FeedbackFeed() error = %v, want ErrNotFound", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -71,7 +71,7 @@ func TestFeedbackFeedRejectsMalformedItemBeforeTransaction(t *testing.T) {
 	defer mock.Close()
 
 	repo := NewPGXReaderVNextRepository(mock)
-	if _, err := repo.FeedbackFeed(context.Background(), "link:not-a-uuid", "save"); !errors.Is(err, ErrInvalidReaderFeedItem) {
+	if _, err := repo.FeedbackFeed(context.Background(), "link:not-a-uuid", "hide"); !errors.Is(err, ErrInvalidReaderFeedItem) {
 		t.Fatalf("FeedbackFeed() error = %v, want ErrInvalidReaderFeedItem", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -79,7 +79,7 @@ func TestFeedbackFeedRejectsMalformedItemBeforeTransaction(t *testing.T) {
 	}
 }
 
-func TestUnsaveSubscriptionTrashesLastFeedManagedClaimRegardlessOfCreator(t *testing.T) {
+func TestUnsaveSubscriptionTrashesLastFeedManagedLink(t *testing.T) {
 	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -87,27 +87,23 @@ func TestUnsaveSubscriptionTrashesLastFeedManagedClaimRegardlessOfCreator(t *tes
 	}
 	defer mock.Close()
 	itemID, linkID := uuid.New(), uuid.New()
-	mock.ExpectQuery("SELECT link_id,created_link FROM reader_feed_saves").WithArgs(itemID).
-		WillReturnRows(mock.NewRows([]string{"link_id", "created_link"}).AddRow(linkID, false))
+	mock.ExpectQuery("SELECT save.link_id,item.link_id").WithArgs(itemID).
+		WillReturnRows(mock.NewRows([]string{"saved_link_id", "analyzed_link_id"}).AddRow(linkID.String(), nil))
 	mock.ExpectQuery("SELECT feed_managed,status FROM links.*FOR UPDATE").WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"feed_managed", "status"}).AddRow(true, model.LinkStatusDone))
 	mock.ExpectExec("DELETE FROM reader_feed_saves").WithArgs(itemID, linkID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
-	mock.ExpectExec("UPDATE feed_items SET link_id=NULL").WithArgs(itemID, linkID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("SELECT EXISTS.*reader_feed_saves").WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectExec(regexp.QuoteMeta(terminalizeDeletedParseAttemptsSQL)).WithArgs(linkID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectExec(regexp.QuoteMeta(terminalizeDeletedTranslationAttemptsSQL)).WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectExec(regexp.QuoteMeta(deleteLinkSQL)).WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	expectLinkThoughtTodoProjectionRefresh(mock, linkID)
 
-	association, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID)
-	if err != nil || association == nil || association.LinkID != linkID || association.CreatedLink {
-		t.Fatalf("unsaveSubscriptionFeedItem() = %+v, %v", association, err)
+	visibleLink, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID)
+	if err != nil || visibleLink != nil {
+		t.Fatalf("unsaveSubscriptionFeedItem() = %+v, %v", visibleLink, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -122,19 +118,43 @@ func TestUnsaveSubscriptionPreservesIndependentLibraryLink(t *testing.T) {
 	}
 	defer mock.Close()
 	itemID, linkID := uuid.New(), uuid.New()
-	mock.ExpectQuery("SELECT link_id,created_link FROM reader_feed_saves").WithArgs(itemID).
-		WillReturnRows(mock.NewRows([]string{"link_id", "created_link"}).AddRow(linkID, true))
+	mock.ExpectQuery("SELECT save.link_id,item.link_id").WithArgs(itemID).
+		WillReturnRows(mock.NewRows([]string{"saved_link_id", "analyzed_link_id"}).AddRow(linkID.String(), nil))
 	mock.ExpectQuery("SELECT feed_managed,status FROM links.*FOR UPDATE").WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"feed_managed", "status"}).AddRow(false, model.LinkStatusDone))
 	mock.ExpectExec("DELETE FROM reader_feed_saves").WithArgs(itemID, linkID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
-	mock.ExpectExec("UPDATE feed_items SET link_id=NULL").WithArgs(itemID, linkID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("SELECT EXISTS.*reader_feed_saves").WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"exists"}).AddRow(false))
 
 	if _, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID); err != nil {
 		t.Fatalf("unsaveSubscriptionFeedItem() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnsaveSubscriptionReturnsSeparateAnalyzeLink(t *testing.T) {
+	t.Parallel()
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	itemID, savedLinkID, analyzedLinkID := uuid.New(), uuid.New(), uuid.New()
+	mock.ExpectQuery("SELECT save.link_id,item.link_id").WithArgs(itemID).
+		WillReturnRows(mock.NewRows([]string{"saved_link_id", "analyzed_link_id"}).AddRow(savedLinkID.String(), analyzedLinkID.String()))
+	mock.ExpectQuery("SELECT feed_managed,status FROM links.*FOR UPDATE").WithArgs(savedLinkID).
+		WillReturnRows(mock.NewRows([]string{"feed_managed", "status"}).AddRow(false, model.LinkStatusDone))
+	mock.ExpectExec("DELETE FROM reader_feed_saves").WithArgs(itemID, savedLinkID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectQuery("SELECT EXISTS.*reader_feed_saves").WithArgs(savedLinkID).
+		WillReturnRows(mock.NewRows([]string{"exists"}).AddRow(false))
+
+	visibleLink, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID)
+	if err != nil || visibleLink == nil || *visibleLink != analyzedLinkID {
+		t.Fatalf("unsaveSubscriptionFeedItem() = %v, %v; want Analyze Link %s", visibleLink, err, analyzedLinkID)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -152,24 +172,23 @@ func TestFeedbackFeedResaveRollsBackRestoreWhenAssociationWriteFails(t *testing.
 	rawURL := "https://example.com/feed-restore"
 	wantErr := errors.New("association write failed")
 	mock.ExpectBegin()
-	expectLibraryFeedRevisionPrelock(mock)
 	mock.ExpectQuery("SELECT EXISTS.*feed_items").WithArgs(itemID).
 		WillReturnRows(mock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery("SELECT url,COALESCE.*FROM feed_items.*FOR UPDATE").WithArgs(itemID).
 		WillReturnRows(mock.NewRows([]string{"url", "title", "summary"}).AddRow(rawURL, "Feed item", "Summary"))
 	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("canonical-link:" + rawURL).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
-	mock.ExpectQuery("SELECT feed_item_id,link_id,created_link FROM reader_feed_saves").WithArgs(itemID).
+	mock.ExpectQuery("SELECT link_id FROM reader_feed_saves").WithArgs(itemID).
 		WillReturnError(pgx.ErrNoRows)
-	mock.ExpectQuery(regexp.QuoteMeta(findInboxSavedLinkSQL)).WithArgs(rawURL).
-		WillReturnRows(mock.NewRows([]string{"id", "trashed", "feed_managed"}).AddRow(linkID, true, true))
+	mock.ExpectQuery(regexp.QuoteMeta(findCanonicalLinkSQL)).WithArgs(rawURL).
+		WillReturnRows(mock.NewRows([]string{"id"}).AddRow(linkID))
 	mock.ExpectQuery(regexp.QuoteMeta(lockLinkForRestoreSQL)).WithArgs(linkID).
-		WillReturnRows(mock.NewRows([]string{"status", "deleted_at", "body", "content_revision", "feed_managed"}).
-			AddRow(model.LinkStatusDone, time.Now(), "saved body", int64(4), true))
+		WillReturnRows(mock.NewRows([]string{"status", "deleted_at", "body", "content_revision"}).
+			AddRow(model.LinkStatusDone, time.Now(), "saved body", int64(4)))
 	mock.ExpectExec("UPDATE links SET deleted_at=NULL").WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	expectEmptyLinkThoughtRestore(mock, linkID)
-	mock.ExpectQuery("INSERT INTO reader_feed_saves").WithArgs(itemID, linkID, false).
+	mock.ExpectExec("INSERT INTO reader_feed_saves").WithArgs(itemID, linkID).
 		WillReturnError(wantErr)
 	mock.ExpectRollback()
 

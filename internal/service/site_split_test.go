@@ -35,7 +35,7 @@ func TestSiteSplitPreviewReturnsNormalizedFinalPayloadAndIdentityOwnership(t *te
 			{ID: movedID, SiteID: siteID, LinkID: uuid.New(), EntryName: "Docs", NormalizedURL: "https://github.com/Acme/Docs/tree/main"},
 		},
 		Identities: []model.SiteIdentity{{IdentityKey: "v1:host:acme.test"}, {IdentityKey: githubIdentity}},
-		Tags:       []model.SiteTag{{Tag: "Tools", Source: model.FieldSourceUser}},
+		Tags:       []model.SiteTag{{Tag: "Tools"}},
 	}
 	svc := NewSiteSplitService(&siteSplitFake{siteMergeReaderFake: siteMergeReaderFake{details: map[uuid.UUID]*repository.SiteDetail{siteID: site}}})
 	intro, homepage, icon, note := "  API docs  ", " https://docs.acme.test/ ", " https://docs.acme.test/icon.png ", "  team note  "
@@ -48,7 +48,7 @@ func TestSiteSplitPreviewReturnsNormalizedFinalPayloadAndIdentityOwnership(t *te
 	if got.Payload.Name != "Acme Docs" || got.Payload.Intro == nil || *got.Payload.Intro != "API docs" || got.Payload.HomepageURL == nil || *got.Payload.HomepageURL != "https://docs.acme.test/" || got.Payload.IconURL == nil || *got.Payload.IconURL != "https://docs.acme.test/icon.png" || got.Payload.UserNote == nil || *got.Payload.UserNote != "team note" {
 		t.Fatalf("normalized payload=%#v", got.Payload)
 	}
-	if got.Payload.ExpectedRevision != got.SourceRevision || len(got.Entries) != 1 || got.Entries[0].ID != movedID.String() || len(got.UserTags) != 1 {
+	if got.Payload.ExpectedRevision != got.SourceRevision || len(got.Entries) != 1 || got.Entries[0].ID != movedID.String() || len(got.Tags) != 1 {
 		t.Fatalf("preview=%#v", got)
 	}
 	if len(got.Identities) != 2 || got.Identities[0].IdentityKey != githubIdentity || !got.Identities[0].EligibleForNewSite || got.Identities[0].Owner != "new_site" || got.Identities[1].EligibleForNewSite || got.Identities[1].Owner != "source" {
@@ -143,5 +143,3 @@ func TestSiteSplitStaleRevisionReturnsConflict(t *testing.T) {
 		t.Fatalf("stale preview error=%v", err)
 	}
 }
-
-var _ repository.SiteSplitWriter = (*siteSplitFake)(nil)

@@ -6,9 +6,7 @@ import (
 )
 
 func TestSubmitResponseJSONShape(t *testing.T) {
-	jobID := "job-1"
 	payload, err := json.Marshal(SubmitResponse{
-		JobID:  &jobID,
 		LinkID: "link-1",
 		Status: "pending",
 	})
@@ -17,34 +15,13 @@ func TestSubmitResponseJSONShape(t *testing.T) {
 	}
 
 	got := string(payload)
-	for _, want := range []string{`"job_id"`, `"link_id"`, `"status"`} {
-		if !contains(got, want) {
-			t.Fatalf("SubmitResponse JSON = %s, missing %s", got, want)
-		}
-	}
-}
-
-// TestSubmitResponseOmitsJobIDWhenNil locks in the L3 contract: a done-state
-// submission no longer fabricates a parse_jobs row, so the response carries
-// no job_id at all rather than a fake one. Encoders must omit the field
-// (omitempty on the *string pointer).
-func TestSubmitResponseOmitsJobIDWhenNil(t *testing.T) {
-	payload, err := json.Marshal(SubmitResponse{
-		LinkID: "link-1",
-		Status: "done",
-	})
-	if err != nil {
-		t.Fatalf("Marshal() returned error: %v", err)
-	}
-
-	got := string(payload)
-	if contains(got, `"job_id"`) {
-		t.Fatalf("SubmitResponse JSON = %s, expected job_id field to be omitted", got)
-	}
 	for _, want := range []string{`"link_id"`, `"status"`} {
 		if !contains(got, want) {
 			t.Fatalf("SubmitResponse JSON = %s, missing %s", got, want)
 		}
+	}
+	if contains(got, `"job_id"`) {
+		t.Fatalf("SubmitResponse JSON = %s, legacy job_id must not be exposed", got)
 	}
 }
 
@@ -89,7 +66,7 @@ func TestErrorDetailOmitsErrorCodeWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestLinkAndJobResponseJSONShapeIncludesDiagnosticFields(t *testing.T) {
+func TestLinkResponseJSONShapeIncludesDiagnosticFields(t *testing.T) {
 	lowConfidenceReason := "search_fallback"
 	errorCategory := "upstream_http"
 
@@ -110,23 +87,6 @@ func TestLinkAndJobResponseJSONShapeIncludesDiagnosticFields(t *testing.T) {
 	for _, want := range []string{`"low_confidence_reason"`, `"error_category"`, `"is_low_confidence"`} {
 		if !contains(linkJSON, want) {
 			t.Fatalf("LinkResponse JSON = %s, missing %s", linkJSON, want)
-		}
-	}
-
-	jobPayload, err := json.Marshal(JobResponse{
-		ID:            "job-1",
-		LinkID:        "link-1",
-		Status:        "failed",
-		ErrorCategory: &errorCategory,
-	})
-	if err != nil {
-		t.Fatalf("Marshal(JobResponse) returned error: %v", err)
-	}
-
-	jobJSON := string(jobPayload)
-	for _, want := range []string{`"link_id"`, `"status"`, `"error_category"`} {
-		if !contains(jobJSON, want) {
-			t.Fatalf("JobResponse JSON = %s, missing %s", jobJSON, want)
 		}
 	}
 }

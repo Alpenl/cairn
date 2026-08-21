@@ -1,20 +1,7 @@
 import type { IdentityLease, IdentityOperationContext } from '../identity'
 import { ownedDatabaseName } from '../storage-ownership'
-import {
-  isThoughtRepairSourceSeal,
-  isThoughtRepairAck,
-  planThoughtRepair,
-  repairInputsForKnownSources,
-  thoughtRepairSourceSeal,
-  type ThoughtRepairAckRecord,
-  type ThoughtRepairPlan,
-  type ThoughtRepairReadyRecord,
-  type ThoughtRepairSourceRecord,
-  canonicalRepairJSON,
-  repairReadyChecksum,
-} from './thought-repair'
 
-export const USER_DATA_DATABASE_VERSION = 9
+export const USER_DATA_DATABASE_VERSION = 10
 export const LEGACY_PENDING_STORE = 'legacy-unattributed'
 export const LEGACY_ARCHIVE_STORE = 'legacy-import-archive'
 export const LEGACY_ARCHIVE_NAMESPACE_INDEX = 'by-imported-namespace'
@@ -45,16 +32,6 @@ export const THOUGHT_SYNC_STATE_STORE = 'thought_sync_state'
 export const THOUGHT_MATERIALIZED_STORE = 'thought_materialized'
 export const THOUGHT_MATERIALIZED_NAMESPACE_INDEX = 'by-namespace'
 export const THOUGHT_MATERIALIZED_HOST_INDEX = 'by-host'
-// v6 is deliberately a derived, append-only migration surface.  The v4/v5
-// stores above remain the forensic source of truth and are never rewritten by
-// repair; a failed or corrupt derived copy can therefore be rebuilt safely.
-export const THOUGHT_REPAIR_READY_STORE = 'thought_repair_ready'
-export const THOUGHT_REPAIR_QUARANTINE_STORE = 'thought_repair_quarantine'
-export const THOUGHT_REPAIR_MANIFEST_STORE = 'thought_repair_manifest'
-/** Maps immutable v4/v5 source rows so sync can never dispatch them directly. */
-export const THOUGHT_REPAIR_SOURCE_STORE = 'thought_repair_source'
-/** Durable acknowledgement receipts prevent a later rebuild from reviving a row. */
-export const THOUGHT_REPAIR_ACK_STORE = 'thought_repair_ack'
 
 // Supersession events are a distinct immutable stream. Their cursor must not
 // share the ordinary thought replay cursor or annotation operation sequence.
@@ -78,11 +55,6 @@ export type UserDataStoreName =
   | typeof THOUGHT_HISTORY_OUTBOX_STORE
   | typeof THOUGHT_SYNC_STATE_STORE
   | typeof THOUGHT_MATERIALIZED_STORE
-  | typeof THOUGHT_REPAIR_READY_STORE
-  | typeof THOUGHT_REPAIR_QUARANTINE_STORE
-  | typeof THOUGHT_REPAIR_MANIFEST_STORE
-  | typeof THOUGHT_REPAIR_SOURCE_STORE
-  | typeof THOUGHT_REPAIR_ACK_STORE
   | typeof THOUGHT_SUPERSESSION_EVENTS_STORE
   | typeof THOUGHT_SUPERSESSION_STATE_STORE
 
@@ -130,59 +102,6 @@ function migrateResolvedV1Batch(transaction: IDBTransaction): void {
       }
       pending.clear()
     }
-  }
-}
-
-function getAll(store: IDBObjectStore): IDBRequest<unknown[]> {
-  return store.getAll() as IDBRequest<unknown[]>
-}
-
-function writeRepairPlan(transaction: IDBTransaction, plan: ThoughtRepairPlan, clear = false): void {
-  const sources = transaction.objectStore(THOUGHT_REPAIR_SOURCE_STORE)
-  const ready = transaction.objectStore(THOUGHT_REPAIR_READY_STORE)
-  const quarantine = transaction.objectStore(THOUGHT_REPAIR_QUARANTINE_STORE)
-  const manifests = transaction.objectStore(THOUGHT_REPAIR_MANIFEST_STORE)
-  if (clear) {
-    sources.clear()
-    ready.clear()
-    quarantine.clear()
-    manifests.clear()
-  }
-  for (const source of plan.sources) sources.put(source)
-  sources.put(thoughtRepairSourceSeal(plan.sources))
-  for (const record of plan.ready) ready.put(record)
-  for (const record of plan.quarantine) quarantine.put(record)
-  // A manifest is the commit marker. It is deliberately the final durable
-  // write for each namespace after all ready/quarantine/floor planning exists.
-  for (const manifest of plan.manifests) manifests.put(manifest)
-}
-
-function deriveRepairInVersionchange(transaction: IDBTransaction): void {
-  const requests = {
-    v4Operations: getAll(transaction.objectStore(ANNOTATION_OPS_STORE)),
-    v5Outbox: getAll(transaction.objectStore(THOUGHT_OUTBOX_STORE)),
-    v4Materialized: getAll(transaction.objectStore(ANNOTATION_MATERIALIZED_STORE)),
-    v5Materialized: getAll(transaction.objectStore(THOUGHT_MATERIALIZED_STORE)),
-    syncStates: getAll(transaction.objectStore(THOUGHT_SYNC_STATE_STORE)),
-  }
-  let completed = 0
-  const finish = () => {
-    if (completed !== Object.keys(requests).length) return
-    try {
-      writeRepairPlan(transaction, planThoughtRepair({
-        v4Operations: requests.v4Operations.result,
-        v5Outbox: requests.v5Outbox.result,
-        v4Materialized: requests.v4Materialized.result,
-        v5Materialized: requests.v5Materialized.result,
-        syncStates: requests.syncStates.result,
-      }))
-    } catch {
-      transaction.abort()
-    }
-  }
-  for (const request of Object.values(requests)) {
-    request.onerror = () => transaction.abort()
-    request.onsuccess = () => { completed += 1; finish() }
   }
 }
 
@@ -280,22 +199,6 @@ function ensureUserDataSchema(
     database.createObjectStore(THOUGHT_SYNC_STATE_STORE, { keyPath: 'namespace' })
   }
 
-  if (!database.objectStoreNames.contains(THOUGHT_REPAIR_READY_STORE)) {
-    database.createObjectStore(THOUGHT_REPAIR_READY_STORE, { keyPath: 'key' })
-  }
-  if (!database.objectStoreNames.contains(THOUGHT_REPAIR_QUARANTINE_STORE)) {
-    database.createObjectStore(THOUGHT_REPAIR_QUARANTINE_STORE, { keyPath: 'key' })
-  }
-  if (!database.objectStoreNames.contains(THOUGHT_REPAIR_MANIFEST_STORE)) {
-    database.createObjectStore(THOUGHT_REPAIR_MANIFEST_STORE, { keyPath: 'namespace' })
-  }
-  if (!database.objectStoreNames.contains(THOUGHT_REPAIR_SOURCE_STORE)) {
-    database.createObjectStore(THOUGHT_REPAIR_SOURCE_STORE, { keyPath: 'key' })
-  }
-  if (!database.objectStoreNames.contains(THOUGHT_REPAIR_ACK_STORE)) {
-    database.createObjectStore(THOUGHT_REPAIR_ACK_STORE, { keyPath: 'key' })
-  }
-
   const materialized = database.objectStoreNames.contains(THOUGHT_MATERIALIZED_STORE)
     ? transaction.objectStore(THOUGHT_MATERIALIZED_STORE)
     : database.createObjectStore(THOUGHT_MATERIALIZED_STORE, { keyPath: 'key' })
@@ -316,198 +219,17 @@ function ensureUserDataSchema(
     database.createObjectStore(THOUGHT_SUPERSESSION_STATE_STORE, { keyPath: 'namespace' })
   }
 
+  for (const retiredStore of [
+    'thought_repair_ready',
+    'thought_repair_quarantine',
+    'thought_repair_manifest',
+    'thought_repair_source',
+    'thought_repair_ack',
+  ]) {
+    if (database.objectStoreNames.contains(retiredStore)) database.deleteObjectStore(retiredStore)
+  }
+
   if (oldVersion === 1) migrateResolvedV1Batch(transaction)
-  // v4/v5 rows are forensic inputs. Never add bookkeeping fields, normalize
-  // clocks, clear queues, or otherwise write their stores in this migration.
-  // All normalised data lives in the independent v6 repair stores instead.
-  if (oldVersion < 6) deriveRepairInVersionchange(transaction)
-}
-
-interface RepairRows {
-  readonly v4Operations: readonly unknown[]
-  readonly v5Outbox: readonly unknown[]
-  readonly v4Materialized: readonly unknown[]
-  readonly v5Materialized: readonly unknown[]
-  readonly syncStates: readonly unknown[]
-  readonly sources: readonly unknown[]
-  readonly ready: readonly unknown[]
-  readonly quarantine: readonly unknown[]
-  readonly manifests: readonly unknown[]
-  readonly acknowledgements: readonly unknown[]
-}
-
-function sortedCanonical(rows: readonly unknown[]): string[] {
-  return rows.map(canonicalRepairJSON).sort()
-}
-
-function exactRows(actual: readonly unknown[], expected: readonly unknown[]): boolean {
-  const a = sortedCanonical(actual)
-  const b = sortedCanonical(expected)
-  return a.length === b.length && a.every((row, index) => row === b[index])
-}
-
-/** Only operation bytes, never retry/backoff bookkeeping, participate in repair integrity. */
-function exactReadyRows(
-  actual: readonly unknown[],
-  expected: readonly ThoughtRepairReadyRecord[],
-): boolean {
-  if (actual.length !== expected.length) return false
-  const expectedByKey = new Map(expected.map((record) => [
-    `${record.namespace}\0${record.opId}`, record,
-  ]))
-  const seen = new Set<string>()
-  for (const raw of actual) {
-    if (!raw || typeof raw !== 'object') return false
-    const candidate = raw as Partial<ThoughtRepairReadyRecord>
-    if (typeof candidate.namespace !== 'string' || typeof candidate.opId !== 'string') return false
-    const key = `${candidate.namespace}\0${candidate.opId}`
-    const planned = expectedByKey.get(key)
-    if (!planned || seen.has(key)) return false
-    if (repairReadyChecksum(raw as ThoughtRepairReadyRecord) !== repairReadyChecksum(planned)) return false
-    seen.add(key)
-  }
-  return true
-}
-
-function repairSourceRecords(rows: readonly unknown[]): readonly ThoughtRepairSourceRecord[] | null {
-  const sealRows = rows.filter((row) => {
-    if (!row || typeof row !== 'object') return false
-    const key = (row as { key?: unknown }).key
-    return Array.isArray(key) && key.length === 2 &&
-      key[0] === '__webtag-repair-source-seal__' && key[1] === 'v6'
-  })
-  if (sealRows.length !== 1) return null
-  const sources = rows.filter((row) => row !== sealRows[0]) as readonly ThoughtRepairSourceRecord[]
-  return isThoughtRepairSourceSeal(sealRows[0], sources) ? sources : null
-}
-
-function repairRowsMatch(
-  plan: ThoughtRepairPlan,
-  rows: RepairRows,
-  sources: readonly ThoughtRepairSourceRecord[],
-): boolean {
-  const expectedByKey = new Map(plan.ready.map((record) => [
-    `${record.namespace}\0${record.opId}`, record,
-  ]))
-  const acknowledgements: ThoughtRepairAckRecord[] = []
-  for (const raw of rows.acknowledgements) {
-    if (!raw || typeof raw !== 'object') return false
-    const candidate = raw as Partial<ThoughtRepairAckRecord>
-    const expected = typeof candidate.namespace === 'string' && typeof candidate.opId === 'string'
-      ? expectedByKey.get(`${candidate.namespace}\0${candidate.opId}`)
-      : undefined
-    if (!expected || !isThoughtRepairAck(raw, expected)) return false
-    acknowledgements.push(raw as ThoughtRepairAckRecord)
-  }
-  const acknowledged = new Set(acknowledgements.map((record) =>
-    `${record.namespace}\0${record.opId}`))
-  const expectedReady = plan.ready.filter((record) => !acknowledged.has(`${record.namespace}\0${record.opId}`))
-  return exactRows(sources, plan.sources) &&
-    exactReadyRows(rows.ready, expectedReady) &&
-    exactRows(rows.quarantine, plan.quarantine) &&
-    exactRows(rows.manifests, plan.manifests)
-}
-
-function readRepairRows(
-  transaction: IDBTransaction,
-  done: (rows: RepairRows) => void,
-): void {
-  const requests = {
-    v4Operations: getAll(transaction.objectStore(ANNOTATION_OPS_STORE)),
-    v5Outbox: getAll(transaction.objectStore(THOUGHT_OUTBOX_STORE)),
-    v4Materialized: getAll(transaction.objectStore(ANNOTATION_MATERIALIZED_STORE)),
-    v5Materialized: getAll(transaction.objectStore(THOUGHT_MATERIALIZED_STORE)),
-    syncStates: getAll(transaction.objectStore(THOUGHT_SYNC_STATE_STORE)),
-    sources: getAll(transaction.objectStore(THOUGHT_REPAIR_SOURCE_STORE)),
-    ready: getAll(transaction.objectStore(THOUGHT_REPAIR_READY_STORE)),
-    quarantine: getAll(transaction.objectStore(THOUGHT_REPAIR_QUARANTINE_STORE)),
-    manifests: getAll(transaction.objectStore(THOUGHT_REPAIR_MANIFEST_STORE)),
-    acknowledgements: getAll(transaction.objectStore(THOUGHT_REPAIR_ACK_STORE)),
-  }
-  let completed = 0
-  const finish = () => {
-    if (completed !== Object.keys(requests).length) return
-    done({
-      v4Operations: requests.v4Operations.result,
-      v5Outbox: requests.v5Outbox.result,
-      v4Materialized: requests.v4Materialized.result,
-      v5Materialized: requests.v5Materialized.result,
-      syncStates: requests.syncStates.result,
-      sources: requests.sources.result,
-      ready: requests.ready.result,
-      quarantine: requests.quarantine.result,
-      manifests: requests.manifests.result,
-      acknowledgements: requests.acknowledgements.result,
-    })
-  }
-  for (const request of Object.values(requests)) {
-    request.onerror = () => transaction.abort()
-    request.onsuccess = () => { completed += 1; finish() }
-  }
-}
-
-/**
- * Versionchange cannot run again for an already-v6 database. Before exposing
- * the handle, therefore, rederive and validate its v6 view. Missing or
- * tampered derived data is atomically rebuilt from read-only legacy sources.
- */
-function ensureRepairIntegrity(database: IDBDatabase): Promise<boolean> {
-  const names: UserDataStoreName[] = [
-    ANNOTATION_OPS_STORE,
-    THOUGHT_OUTBOX_STORE,
-    THOUGHT_HISTORY_OUTBOX_STORE,
-    ANNOTATION_MATERIALIZED_STORE,
-    THOUGHT_MATERIALIZED_STORE,
-    THOUGHT_SYNC_STATE_STORE,
-    THOUGHT_REPAIR_SOURCE_STORE,
-    THOUGHT_REPAIR_READY_STORE,
-    THOUGHT_REPAIR_QUARANTINE_STORE,
-    THOUGHT_REPAIR_MANIFEST_STORE,
-    THOUGHT_REPAIR_ACK_STORE,
-  ]
-  if (!names.every((name) => database.objectStoreNames.contains(name))) return Promise.resolve(false)
-  return new Promise((resolve) => {
-    let transaction: IDBTransaction
-    try {
-      transaction = database.transaction(names, 'readwrite')
-      readRepairRows(transaction, (rows) => {
-        try {
-          const sources = repairSourceRecords(rows.sources)
-          if (!sources) {
-            transaction.abort()
-            return
-          }
-          const plan = planThoughtRepair(repairInputsForKnownSources(rows, sources))
-          if (repairRowsMatch(plan, rows, sources)) return
-          const validAcks = rows.acknowledgements.filter((raw) => {
-            if (!raw || typeof raw !== 'object') return false
-            const value = raw as Partial<ThoughtRepairAckRecord>
-            const expected = typeof value.namespace === 'string' && typeof value.opId === 'string'
-              ? plan.ready.find((record) => record.namespace === value.namespace && record.opId === value.opId)
-              : undefined
-            return expected !== undefined && isThoughtRepairAck(raw, expected)
-          }) as ThoughtRepairAckRecord[]
-          transaction.objectStore(THOUGHT_REPAIR_ACK_STORE).clear()
-          for (const ack of validAcks) transaction.objectStore(THOUGHT_REPAIR_ACK_STORE).put(ack)
-          writeRepairPlan(transaction, plan, true)
-          const acknowledged = new Set(validAcks.map((ack) => `${ack.namespace}\0${ack.opId}`))
-          const ready = transaction.objectStore(THOUGHT_REPAIR_READY_STORE)
-          // writeRepairPlan stores the complete immutable planned set. Remove
-          // only receipt-backed records before commit, never any legacy source.
-          for (const record of plan.ready) {
-            if (acknowledged.has(`${record.namespace}\0${record.opId}`)) ready.delete([...record.key])
-          }
-        } catch {
-          transaction.abort()
-        }
-      })
-      transaction.oncomplete = () => resolve(true)
-      transaction.onerror = () => resolve(false)
-      transaction.onabort = () => resolve(false)
-    } catch {
-      resolve(false)
-    }
-  })
 }
 
 function beginOpen(generation: number): Promise<IDBDatabase | null> {
@@ -569,9 +291,7 @@ function beginOpen(generation: number): Promise<IDBDatabase | null> {
           databaseGeneration += 1
         }
       }
-      // Sync never receives this handle until the manifest has been checked or
-      // rebuilt. A malformed v6 view therefore has no window to send a tail.
-      void ensureRepairIntegrity(database).then((ready) => finish(ready ? database : null), () => finish(null))
+      finish(database)
     }
     request.onerror = () => finish(null)
     request.onblocked = () => finish(null)

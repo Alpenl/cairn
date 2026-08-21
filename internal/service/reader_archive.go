@@ -5,15 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-
-	"webtag/internal/repository"
 )
 
-// ReaderArchiveExporter writes the Reader-owned part of the versioned archive.
-// It is kept separate from the legacy bare links export so adding Reader data
-// cannot silently change GET /api/export's array shape.
-type ReaderArchiveExporter interface {
-	ExportReaderArchive(context.Context, io.Writer, ArchiveV2Selection) (map[string]int, error)
+type readerArchiveReader interface {
+	StreamReaderArchiveSection(context.Context, string, func([]byte) error) error
 }
 
 var readerArchiveBaseSections = []string{
@@ -22,15 +17,9 @@ var readerArchiveBaseSections = []string{
 	"feed_items",
 	"feed_saves",
 	"inbox",
-	"categories",
-	"categorizables",
 	"todos",
 	"engagement",
-	"feed_feedback",
-	"feed_snapshots",
-	"tag_activity",
-	"domain_activity",
-	"content_history",
+	"feed_hides",
 }
 
 // Thought rows, their operation clock, and host tombstones are one privacy
@@ -65,20 +54,10 @@ func readerArchiveSectionsFor(selection ArchiveV2Selection) []string {
 var readerArchiveSections = readerArchiveSectionsFor(FullArchiveV2Selection())
 
 type readerArchiveExporter struct {
-	reader repository.ReaderArchiveReader
-}
-
-func NewReaderArchiveExporter(reader repository.ReaderArchiveReader) ReaderArchiveExporter {
-	if reader == nil {
-		return nil
-	}
-	return readerArchiveExporter{reader: reader}
+	reader readerArchiveReader
 }
 
 func (s readerArchiveExporter) ExportReaderArchive(ctx context.Context, w io.Writer, selection ArchiveV2Selection) (map[string]int, error) {
-	if s.reader == nil {
-		return nil, fmt.Errorf("reader archive reader is not configured")
-	}
 	if _, err := io.WriteString(w, `{"schema_version":2,"thought_contract_version":1`); err != nil {
 		return nil, err
 	}
@@ -129,5 +108,3 @@ func validateReaderArchiveRow(raw []byte) error {
 	}
 	return nil
 }
-
-var _ ReaderArchiveExporter = readerArchiveExporter{}

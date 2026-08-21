@@ -45,12 +45,6 @@ type sourceLine struct {
 	end   int
 }
 
-type parsedBlock struct {
-	Block
-	legacyBlockRef   string
-	legacyOccurrence int
-}
-
 func linesOf(source string) []sourceLine {
 	lines := make([]sourceLine, 0, strings.Count(source, "\n")+1)
 	start := 0
@@ -72,7 +66,7 @@ func linesOf(source string) []sourceLine {
 	return lines
 }
 
-func surroundingContext(lines []sourceLine, index int) (heading, next string) {
+func nearestHeading(lines []sourceLine, index int) string {
 	for cursor := index - 1; cursor >= 0; cursor-- {
 		value := strings.TrimSpace(lines[cursor].value)
 		if strings.HasPrefix(value, "#") {
@@ -81,32 +75,19 @@ func surroundingContext(lines []sourceLine, index int) (heading, next string) {
 				level++
 			}
 			if level > 0 && level <= 6 && len(value) > level && value[level] == ' ' {
-				heading = value
-				break
+				return value
 			}
 		}
 	}
-	for cursor := index + 1; cursor < len(lines); cursor++ {
-		value := strings.TrimSpace(lines[cursor].value)
-		if value != "" {
-			next = value
-			break
-		}
-	}
-	return heading, next
+	return ""
 }
 
 // BlockReference deliberately hashes UTF-16 JSON code units. This mirrors
 // JavaScript's JSON.stringify and keeps server projections addressable by the
 // Reader client without exposing source text in a persistent marker.
-func BlockReference(lines []sourceLine, index int, text string) string {
-	heading, _ := surroundingContext(lines, index)
+func blockReference(lines []sourceLine, index int, text string) string {
+	heading := nearestHeading(lines, index)
 	return blockReferenceForParts(strings.TrimSpace(text), heading)
-}
-
-func legacyBlockReference(lines []sourceLine, index int, text string) string {
-	heading, next := surroundingContext(lines, index)
-	return blockReferenceForParts(strings.TrimSpace(text), heading, next)
 }
 
 func blockReferenceForParts(parts ...string) string {
@@ -124,19 +105,13 @@ func blockReferenceForParts(parts ...string) string {
 }
 
 func List(source string) []Block {
-	parsed := parseBlocks(source)
-	blocks := make([]Block, 0, len(parsed))
-	for _, item := range parsed {
-		blocks = append(blocks, item.Block)
-	}
-	return blocks
+	return parseBlocks(source)
 }
 
-func parseBlocks(source string) []parsedBlock {
+func parseBlocks(source string) []Block {
 	lines := linesOf(source)
-	blocks := make([]parsedBlock, 0)
+	blocks := make([]Block, 0)
 	occurrences := make(map[string]int)
-	legacyOccurrences := make(map[string]int)
 	var fence *struct {
 		marker byte
 		length int
@@ -163,23 +138,17 @@ func parseBlocks(source string) []parsedBlock {
 			continue
 		}
 		text := match[4]
-		ref := BlockReference(lines, index, text)
-		legacyRef := legacyBlockReference(lines, index, text)
+		ref := blockReference(lines, index, text)
 		occurrences[ref]++
-		legacyOccurrences[legacyRef]++
 		markerStart := len(match[1]) + len(match[2]) + 2
-		blocks = append(blocks, parsedBlock{
-			Block: Block{
-				BlockRef:    ref,
-				Text:        text,
-				Done:        strings.EqualFold(match[3], "x"),
-				Occurrence:  occurrences[ref],
-				LineStart:   line.start,
-				LineEnd:     line.end,
-				MarkerStart: line.start + markerStart,
-			},
-			legacyBlockRef:   legacyRef,
-			legacyOccurrence: legacyOccurrences[legacyRef],
+		blocks = append(blocks, Block{
+			BlockRef:    ref,
+			Text:        text,
+			Done:        strings.EqualFold(match[3], "x"),
+			Occurrence:  occurrences[ref],
+			LineStart:   line.start,
+			LineEnd:     line.end,
+			MarkerStart: line.start + markerStart,
 		})
 	}
 	return blocks
@@ -189,18 +158,15 @@ func Update(source, blockRef string, occurrence int, done bool) UpdateResult {
 	if occurrence <= 0 {
 		occurrence = 1
 	}
-	matches, useLegacy := matchingBlocks(parseBlocks(source), blockRef)
+	matches := matchingBlocks(parseBlocks(source), blockRef)
 	if len(matches) == 0 {
 		return UpdateResult{Status: NotFound}
 	}
-	selected, status := selectByOccurrence(matches, occurrence, useLegacy)
+	selected, status := selectByOccurrence(matches, occurrence)
 	if selected == nil {
 		return UpdateResult{Status: status}
 	}
-	block := selected.Block
-	if useLegacy {
-		block.Occurrence = selected.legacyOccurrence
-	}
+	block := *selected
 	next, ok := writeMarker(source, block.MarkerStart, done)
 	if !ok {
 		return UpdateResult{Status: NotFound}
@@ -209,41 +175,24 @@ func Update(source, blockRef string, occurrence int, done bool) UpdateResult {
 	return UpdateResult{Status: Updated, Source: next, Block: block}
 }
 
-// matchingBlocks resolves blockRef against the stable reference first and only
-// falls back to the legacy one when nothing matched, so a stable reference can
-// never be shadowed by a legacy collision. useLegacy tells the caller which
-// occurrence counter the returned matches are numbered by.
-func matchingBlocks(blocks []parsedBlock, blockRef string) (matches []parsedBlock, useLegacy bool) {
-	stableMatches := make([]parsedBlock, 0, 1)
+func matchingBlocks(blocks []Block, blockRef string) []Block {
+	matches := make([]Block, 0, 1)
 	for _, block := range blocks {
 		if block.BlockRef == blockRef {
-			stableMatches = append(stableMatches, block)
+			matches = append(matches, block)
 		}
 	}
-	useLegacy = len(stableMatches) == 0
-	matches = stableMatches
-	if useLegacy {
-		for _, block := range blocks {
-			if block.legacyBlockRef == blockRef {
-				matches = append(matches, block)
-			}
-		}
-	}
-	return matches, useLegacy
+	return matches
 }
 
 // selectByOccurrence picks the single match carrying the requested occurrence.
 // A second hit is Ambiguous rather than a silent first-wins update, because two
 // items sharing a reference and an occurrence are not distinguishable. The
 // status is the caller's verdict only when no block is returned.
-func selectByOccurrence(matches []parsedBlock, occurrence int, useLegacy bool) (selected *parsedBlock, status UpdateStatus) {
+func selectByOccurrence(matches []Block, occurrence int) (selected *Block, status UpdateStatus) {
 	for index := range matches {
 		candidate := matches[index]
-		candidateOccurrence := candidate.Occurrence
-		if useLegacy {
-			candidateOccurrence = candidate.legacyOccurrence
-		}
-		if candidateOccurrence != occurrence {
+		if candidate.Occurrence != occurrence {
 			continue
 		}
 		if selected != nil {

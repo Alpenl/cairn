@@ -2,22 +2,11 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"webtag/internal/dto"
 	"webtag/internal/repository"
 )
-
-// ErrReaderHomeAggregateUnavailable means the service was constructed with a
-// Reader store that has not installed the authoritative Home query seam.
-// Keeping this explicit prevents silently falling back to the old collection
-// of independent reads and presenting an unverified partial snapshot.
-var ErrReaderHomeAggregateUnavailable = errors.New("reader home aggregate unavailable")
-
-type readerHomeAggregateReader interface {
-	LoadHomeAggregate(context.Context) (repository.ReaderHomeAggregate, error)
-}
 
 // HomeAggregate is the single service call boundary for the Home surface. The
 // repository returns one transactionally coherent result; this method only
@@ -25,11 +14,7 @@ type readerHomeAggregateReader interface {
 // summary. It deliberately does not reconcile through ListTodos, because that
 // would reopen the multi-read and multi-snapshot behavior this seam replaces.
 func (s *ReaderVNextService) HomeAggregate(ctx context.Context) (dto.ReaderHomeResponse, error) {
-	reader, ok := s.store.(readerHomeAggregateReader)
-	if !ok {
-		return dto.ReaderHomeResponse{}, ErrReaderHomeAggregateUnavailable
-	}
-	aggregate, err := reader.LoadHomeAggregate(ctx)
+	aggregate, err := s.store.LoadHomeAggregate(ctx)
 	if err != nil {
 		return dto.ReaderHomeResponse{}, mapReaderError(err)
 	}

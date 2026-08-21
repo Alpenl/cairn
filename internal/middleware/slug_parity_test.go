@@ -27,7 +27,6 @@ func TestMiddlewareSlugsMatchHTTPErr(t *testing.T) {
 		httperr    string
 	}{
 		{"LinkNotFound", middleware.ErrCodeLinkNotFound, httperr.CodeLinkNotFound},
-		{"JobNotFound", middleware.ErrCodeJobNotFound, httperr.CodeJobNotFound},
 		{"CooldownActive", middleware.ErrCodeCooldownActive, httperr.CodeCooldownActive},
 		{"InvalidCursor", middleware.ErrCodeInvalidCursor, httperr.CodeInvalidCursor},
 	} {

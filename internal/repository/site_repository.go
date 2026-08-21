@@ -8,14 +8,16 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"webtag/internal/model"
 )
 
 const (
 	findSiteIdentityForUpdateSQL = "SELECT site_id FROM site_identities WHERE identity_key = $1 FOR UPDATE"
-	insertSiteSQL                = "INSERT INTO sites (site_key, name, name_source, intro, intro_source, homepage_url, homepage_source, icon_url, icon_source, first_collected_at, last_collected_at, created_at, updated_at) VALUES ($1, $2, 'auto', $3, 'auto', $4, CASE WHEN $4::text IS NULL THEN NULL ELSE 'auto' END, $5, CASE WHEN $5::text IS NULL THEN NULL ELSE 'auto' END, NOW(), NOW(), NOW(), NOW()) ON CONFLICT (site_key) DO UPDATE SET last_collected_at = NOW(), updated_at = NOW() RETURNING id, (xmax = 0)"
-	insertSiteIdentitySQL        = "INSERT INTO site_identities (identity_key, site_id, source, locked, created_at, updated_at) VALUES ($1, $2, 'auto', false, NOW(), NOW()) ON CONFLICT (identity_key) DO UPDATE SET updated_at = NOW() RETURNING site_id"
+	insertSiteSQL                = "INSERT INTO sites (site_key, name, intro, homepage_url, icon_url, first_collected_at, last_collected_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NOW(), NOW()) ON CONFLICT (site_key) DO UPDATE SET last_collected_at = NOW(), updated_at = NOW() RETURNING id, (xmax = 0)"
+	insertSiteIdentitySQL        = "INSERT INTO site_identities (identity_key, site_id, created_at, updated_at) VALUES ($1, $2, NOW(), NOW()) ON CONFLICT (identity_key) DO UPDATE SET updated_at = NOW() RETURNING site_id"
 	deleteUnboundSiteSQL         = "DELETE FROM sites WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM site_identities WHERE site_id = $1) AND NOT EXISTS (SELECT 1 FROM site_entries WHERE site_id = $1)"
-	insertSiteEntrySQL           = "INSERT INTO site_entries (site_id, link_id, entry_name, entry_name_source, purpose, purpose_source, normalized_url, first_collected_at, created_at, updated_at) VALUES ($1, $2, $3, 'auto', $4, 'auto', $5, NOW(), NOW(), NOW()) ON CONFLICT (link_id) DO UPDATE SET last_recollected_at = NOW(), updated_at = NOW() RETURNING id, site_id, (xmax = 0)"
+	insertSiteEntrySQL           = "INSERT INTO site_entries (site_id, link_id, entry_name, purpose, normalized_url, first_collected_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NOW()) ON CONFLICT (link_id) DO UPDATE SET last_recollected_at = NOW(), updated_at = NOW() RETURNING id, site_id, (xmax = 0)"
 	// site_entries 有两个唯一索引：(link_id) 与 (site_id, normalized_url)。
 	// ON CONFLICT 只能推断其中一个，而两个 Link 完全可能在 urlidentity 下互不
 	// 相同、在 siteidentity 下归一到同一个 URL（?q=hello+world 与
@@ -25,9 +27,29 @@ const (
 	findSiteEntryByNormalizedURLSQL = "SELECT id, site_id FROM site_entries WHERE site_id = $1 AND normalized_url = $2 AND link_id <> $3"
 	touchSiteEntrySQL               = "UPDATE site_entries SET last_recollected_at = NOW(), updated_at = NOW() WHERE id = $1"
 	setPrimarySiteEntrySQL          = "UPDATE sites SET primary_entry_id = COALESCE(primary_entry_id, $1), last_collected_at = NOW(), updated_at = NOW() WHERE id = $2"
-	invalidateSiteEmbeddingSQL      = "UPDATE sites SET embedding = NULL, embedding_model = NULL, revision = revision + 1, updated_at = NOW() WHERE id = $1"
-	completeSiteLinkSQL             = "UPDATE links SET title = $2, summary = NULL, tags = COALESCE($3, '{}'::text[]), fetcher_type = $4, is_low_confidence = $5, low_confidence_reason = $6, status = 'done', error_msg = NULL, domain = $7, content_type = $8, path_depth = $9, parent_path = $10, parent_id = $11, library_kind = 'site', library_kind_source = $12, library_kind_locked = $13, requested_library_kind = CASE WHEN $12 = 'user' THEN 'site' ELSE requested_library_kind END, requested_library_kind_source = CASE WHEN $12 = 'user' THEN 'user' ELSE requested_library_kind_source END, predicted_library_kind = $14, classification_confidence = $15, classification_reason = $16, classification_explanation = $17, classifier_version = $18, content = NULL, content_cjk_chars = 0, content_words = 0, content_document = NULL, content_format = 'plain', content_source = 'fetched', content_revision = content_revision + 1, input_text = NULL, input_html = NULL, input_images = NULL, source_metadata = NULL, payload_purge_due_at = NULL, payload_purged_at = NOW(), updated_at = NOW() WHERE id = $1 AND requested_library_kind = $19 AND requested_library_kind_source = $20"
-	deleteSiteTranslationsSQL       = "DELETE FROM link_translations WHERE link_id = $1"
+	bumpSiteRevisionSQL             = "UPDATE sites SET revision = revision + 1, updated_at = NOW() WHERE id = $1"
+	completeSiteLinkSQL             = `WITH prior AS (
+		SELECT id,metadata_revision,parse_generation
+		FROM links
+		WHERE id=$1 AND deleted_at IS NULL
+		FOR UPDATE
+	)
+	UPDATE links AS link SET
+		title=CASE WHEN $16 > 0 AND prior.metadata_revision=$16 THEN $2 ELSE link.title END,
+		summary=NULL,
+		tags=CASE WHEN $16 > 0 AND prior.metadata_revision=$16 THEN COALESCE($3,'{}'::text[]) ELSE link.tags END,
+		fetcher_type=$4,is_low_confidence=$5,low_confidence_reason=$6,status='done',error_msg=NULL,
+		domain=$7,content_type=$8,path_depth=$9,parent_path=$10,parent_id=$11,
+		library_kind='site',library_kind_locked=$12,
+		content=NULL,content_cjk_chars=0,content_words=0,content_document=NULL,content_format='plain',content_source='fetched',
+		content_revision=link.content_revision+1,input_text=NULL,input_html=NULL,input_images=NULL,source_metadata=NULL,
+		payload_purge_due_at=NULL,payload_purged_at=NOW(),updated_at=NOW()
+	FROM prior
+	WHERE link.id=prior.id
+	  AND link.library_kind IS NOT DISTINCT FROM $13 AND link.library_kind_locked=$14
+	  AND $15 > 0 AND prior.parse_generation=$15
+	  AND link.status IN ('pending','processing')`
+	deleteSiteTranslationsSQL = "DELETE FROM link_translations WHERE link_id = $1"
 )
 
 // Aggregate creates/refreshes a site aggregate for one final site link. The
@@ -39,10 +61,6 @@ func (r *PGXLinkRepository) Aggregate(ctx context.Context, params AggregateSiteP
 		return SiteAggregateResult{}, fmt.Errorf("begin site aggregate tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockRepresentationWriteGateShared(ctx, tx); err != nil {
-		return SiteAggregateResult{}, err
-	}
-
 	result, err := aggregateSiteOn(ctx, tx, params)
 	if err != nil {
 		return SiteAggregateResult{}, err
@@ -103,8 +121,8 @@ func aggregateSiteOn(ctx context.Context, tx pgx.Tx, params AggregateSiteParams)
 		return SiteAggregateResult{}, fmt.Errorf("set site primary entry: %w", err)
 	}
 	if createdEntry && !created {
-		if _, err := tx.Exec(ctx, invalidateSiteEmbeddingSQL, entrySiteID); err != nil {
-			return SiteAggregateResult{}, fmt.Errorf("invalidate site embedding after entry insert: %w", err)
+		if _, err := tx.Exec(ctx, bumpSiteRevisionSQL, entrySiteID); err != nil {
+			return SiteAggregateResult{}, fmt.Errorf("bump site revision after entry insert: %w", err)
 		}
 	}
 	return SiteAggregateResult{SiteID: entrySiteID, EntryID: entryID, CreatedSite: created, CreatedEntry: createdEntry}, nil
@@ -112,8 +130,8 @@ func aggregateSiteOn(ctx context.Context, tx pgx.Tx, params AggregateSiteParams)
 
 // CompleteSiteParse makes a link visible as a site only after all
 // reading-only artifacts are removed and its SiteEntry is durable.
-func (r *PGXLinkRepository) CompleteSiteParse(ctx context.Context, params CompleteSiteParseParams, jobID uuid.UUID) (SiteAggregateResult, error) {
-	if params.Classification.Kind != "site" || params.Classification.Source == "" {
+func (r *PGXLinkRepository) CompleteSiteParse(ctx context.Context, params CompleteSiteParseParams) (SiteAggregateResult, error) {
+	if params.Classification.Kind != "site" {
 		return SiteAggregateResult{}, fmt.Errorf("complete site parse: final site classification is required")
 	}
 	if params.Analysis.ID != params.Site.LinkID || params.Analysis.ID != params.Classification.ID {
@@ -124,26 +142,22 @@ func (r *PGXLinkRepository) CompleteSiteParse(ctx context.Context, params Comple
 		return SiteAggregateResult{}, fmt.Errorf("begin complete site parse tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockRepresentationWriteGateShared(ctx, tx); err != nil {
-		return SiteAggregateResult{}, err
-	}
 	analysis, classification := params.Analysis, params.Classification
-	expectedKind, expectedSource := normalizeRequestedLibraryIntent(params.ExpectedRequestedLibraryKind, params.ExpectedRequestedLibraryKindSource)
-	tag, err := tx.Exec(ctx, completeSiteLinkSQL, analysis.ID, analysis.Title, analysis.Tags, analysis.FetcherType, analysis.IsLowConfidence, analysis.LowConfidenceReason, analysis.Domain, analysis.ContentType, analysis.PathDepth, analysis.ParentPath, nullableUUIDValue(analysis.ParentID), classification.Source, classification.Locked, classification.PredictedKind, classification.Confidence, classification.Reason, classification.Explanation, classification.ClassifierVersion, expectedKind, expectedSource)
+	tag, err := tx.Exec(ctx, completeSiteLinkSQL, analysis.ID, analysis.Title, analysis.Tags, analysis.FetcherType, analysis.IsLowConfidence, analysis.LowConfidenceReason, analysis.Domain, analysis.ContentType, analysis.PathDepth, analysis.ParentPath, nullableUUIDValue(analysis.ParentID), classification.Locked, params.ExpectedLibraryKind, params.ExpectedLibraryKindLocked, analysis.ExpectedParseGeneration, analysis.ExpectedMetadataRevision)
 	if err != nil {
 		return SiteAggregateResult{}, fmt.Errorf("complete site link: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return SiteAggregateResult{}, classifyLibraryCompletionMiss(ctx, tx, classification, expectedKind, expectedSource)
+		if err := requireCurrentParseAttempt(ctx, tx, model.ParseAttempt{LinkID: analysis.ID, Generation: analysis.ExpectedParseGeneration}); err != nil {
+			return SiteAggregateResult{}, err
+		}
+		return SiteAggregateResult{}, classifyLibrarySelectionMiss(ctx, tx, analysis.ID, params.ExpectedLibraryKind, params.ExpectedLibraryKindLocked)
 	}
 	if _, err := tx.Exec(ctx, deleteSiteTranslationsSQL, analysis.ID); err != nil {
 		return SiteAggregateResult{}, fmt.Errorf("delete site translations: %w", err)
 	}
 	result, err := aggregateSiteOn(ctx, tx, params.Site)
 	if err != nil {
-		return SiteAggregateResult{}, err
-	}
-	if err := completeExactParseJob(ctx, tx, analysis.ID, jobID, analysis.ExpectedMetadataRevision); err != nil {
 		return SiteAggregateResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -180,5 +194,4 @@ func aggregateSiteIdentity(ctx context.Context, tx pgx.Tx, params AggregateSiteP
 	return siteID, createdCandidate && siteID == candidateID, nil
 }
 
-var _ SiteAggregator = (*PGXLinkRepository)(nil)
 var _ SiteParseCompleter = (*PGXLinkRepository)(nil)

@@ -35,10 +35,7 @@ func TestExportReaderArchiveWritesAllInstallationSections(t *testing.T) {
 		"thought_tombstones":          {[]byte(`{"thought_id":"thought-2"}`)},
 		"thought_supersession_events": {[]byte(`{"sequence":7,"annotation_id":"thought-1","loser":{"body":"durable loser"},"winner_at_detection":{"body":"winner"}}`)},
 	}}
-	exporter := NewReaderArchiveExporter(fake)
-	if exporter == nil {
-		t.Fatal("NewReaderArchiveExporter returned nil")
-	}
+	exporter := readerArchiveExporter{reader: fake}
 
 	var body bytes.Buffer
 	counts, err := exporter.ExportReaderArchive(context.Background(), &body, FullArchiveV2Selection())
@@ -83,7 +80,7 @@ func TestExportReaderArchivePreservesServerAcceptedThoughtBoundaryRows(t *testin
 		"thought_ops":        {[]byte(`{"annotation_id":"` + annotationID + `","operation_kind":"delete","host_kind":"inbox","host_id":"` + deletedHostID + `"}`)},
 		"thought_tombstones": {[]byte(`{"thought_id":"deleted-thought","host_kind":"inbox","host_id":"` + deletedHostID + `"}`)},
 	}}
-	exporter := NewReaderArchiveExporter(fake)
+	exporter := readerArchiveExporter{reader: fake}
 	var body bytes.Buffer
 	counts, err := exporter.ExportReaderArchive(context.Background(), &body, ArchiveV2Selection{IncludeThoughts: true})
 	if err != nil {
@@ -125,18 +122,22 @@ func TestExportReaderArchivePreservesServerAcceptedThoughtBoundaryRows(t *testin
 	}
 }
 
-func TestArchiveV2IncludesReaderArchiveWithoutChangingLegacyWhenAbsent(t *testing.T) {
+func TestArchiveV2IncludesReaderArchive(t *testing.T) {
 	reader := &readerArchiveStreamFake{rows: map[string][][]byte{
 		"notes": {[]byte(`{"id":"note-1"}`)},
 	}}
 	svc := NewArchiveV2Service(
 		archiveV2LinksFake{payload: "[]"},
 		archiveV2SectionsFake{},
-		archiveV2RulesFake{},
-	).WithReaderArchive(NewReaderArchiveExporter(reader))
+		reader,
+	)
 
 	var body bytes.Buffer
-	if err := svc.Export(context.Background(), &body); err != nil {
+	options := ArchiveV2ExportOptions{
+		Selection:           FullArchiveV2Selection(),
+		ClientDataNamespace: "reader-archive-test",
+	}
+	if err := svc.Export(context.Background(), &body, options); err != nil {
 		t.Fatalf("Export() error = %v", err)
 	}
 	var decoded map[string]json.RawMessage
@@ -151,28 +152,11 @@ func TestArchiveV2IncludesReaderArchiveWithoutChangingLegacyWhenAbsent(t *testin
 	if err := json.Unmarshal(readerArchive["notes"], &notes); err != nil || len(notes) != 1 {
 		t.Fatalf("reader notes = %s, err=%v", readerArchive["notes"], err)
 	}
-
-	legacy := NewArchiveV2Service(
-		archiveV2LinksFake{payload: "[]"},
-		archiveV2SectionsFake{},
-		archiveV2RulesFake{},
-	)
-	var legacyBody bytes.Buffer
-	if err := legacy.Export(context.Background(), &legacyBody); err != nil {
-		t.Fatalf("legacy Export() error = %v", err)
-	}
-	var legacyDecoded map[string]json.RawMessage
-	if err := json.Unmarshal(legacyBody.Bytes(), &legacyDecoded); err != nil {
-		t.Fatalf("legacy archive is not valid JSON: %v", err)
-	}
-	if _, ok := legacyDecoded["reader"]; ok {
-		t.Fatal("legacy archive unexpectedly contains reader section")
-	}
 }
 
 func TestExportReaderArchivePropagatesSectionError(t *testing.T) {
 	fake := &readerArchiveStreamFake{errAt: "notes"}
-	exporter := NewReaderArchiveExporter(fake)
+	exporter := readerArchiveExporter{reader: fake}
 	var body bytes.Buffer
 	_, err := exporter.ExportReaderArchive(context.Background(), &body, FullArchiveV2Selection())
 	if err == nil {
@@ -183,7 +167,7 @@ func TestExportReaderArchiveRejectsTopLevelTenantIdentity(t *testing.T) {
 	fake := &readerArchiveStreamFake{rows: map[string][][]byte{
 		"notes": {[]byte(`{"id":"note-1","tenant_id":"tenant-secret"}`)},
 	}}
-	exporter := NewReaderArchiveExporter(fake)
+	exporter := readerArchiveExporter{reader: fake}
 	var body bytes.Buffer
 	if _, err := exporter.ExportReaderArchive(context.Background(), &body, FullArchiveV2Selection()); err == nil {
 		t.Fatal("archive export must reject a top-level tenant_id")
@@ -198,7 +182,7 @@ func TestExportReaderArchiveSkipsPrivateGroupsAtTheRepositoryBoundary(t *testing
 		"note_history":       {[]byte(`{"id":"history-private"}`)},
 		"inbox":              {[]byte(`{"id":"base-row"}`)},
 	}}
-	exporter := NewReaderArchiveExporter(fake)
+	exporter := readerArchiveExporter{reader: fake}
 	var body bytes.Buffer
 	counts, err := exporter.ExportReaderArchive(context.Background(), &body, ArchiveV2Selection{})
 	if err != nil {

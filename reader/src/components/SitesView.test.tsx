@@ -24,7 +24,6 @@ const site: SiteListItemResponse = {
   tags: ['docs', 'platform'],
   entry_count: 1,
   pinned: false,
-  needs_review: false,
   primary_entry: {
     id: '22222222-2222-2222-2222-222222222222',
     url: 'https://docs.acme.test/start',
@@ -37,16 +36,12 @@ const site: SiteListItemResponse = {
 const detail: SiteDetailResponse = {
   ...site,
   user_note: '',
-  grouping_locked: false,
-  tags_with_source: site.tags.map((tag) => ({ tag, source: 'auto' as const })),
   entries: [
     {
       id: '22222222-2222-2222-2222-222222222222',
       link_id: '33333333-3333-3333-3333-333333333333',
       name: 'Getting started',
-      name_source: 'auto',
       purpose: 'Platform documentation',
-      purpose_source: 'auto',
       url: 'https://docs.acme.test/start',
       first_collected_at: '2026-07-20T00:00:00Z',
       last_recollected_at: null,
@@ -73,7 +68,6 @@ function numberedDetail(item: SiteListItemResponse): SiteDetailResponse {
   return {
     ...detail,
     ...item,
-    tags_with_source: [],
     entries: [],
     related_readings: [],
   }
@@ -98,10 +92,6 @@ function capabilityClient(siteDetail: SiteDetailResponse = detail) {
   const getLink = vi.fn()
   const convertLink = vi.fn()
   const deleteSite = vi.fn()
-  const getClassificationRules = vi.fn(async () => ok([]))
-  const createClassificationRule = vi.fn()
-  const updateClassificationRule = vi.fn()
-  const deleteClassificationRule = vi.fn()
   const previewSiteMerge = vi.fn()
   const executeSiteMerge = vi.fn()
   const previewSiteSplit = vi.fn()
@@ -117,10 +107,6 @@ function capabilityClient(siteDetail: SiteDetailResponse = detail) {
     getLink,
     convertLink,
     deleteSite,
-    getClassificationRules,
-    createClassificationRule,
-    updateClassificationRule,
-    deleteClassificationRule,
     previewSiteMerge,
     executeSiteMerge,
     previewSiteSplit,
@@ -138,10 +124,6 @@ function capabilityClient(siteDetail: SiteDetailResponse = detail) {
       getLink,
       convertLink,
       deleteSite,
-      getClassificationRules,
-      createClassificationRule,
-      updateClassificationRule,
-      deleteClassificationRule,
       previewSiteMerge,
       executeSiteMerge,
       previewSiteSplit,
@@ -179,9 +161,7 @@ const splitDetail: SiteDetailResponse = {
       id: '44444444-4444-4444-4444-444444444444',
       link_id: '55555555-5555-5555-5555-555555555555',
       name: 'API reference',
-      name_source: 'auto',
       purpose: 'API documentation',
-      purpose_source: 'auto',
       url: 'https://github.com/acme/docs',
       first_collected_at: '2026-07-21T00:00:00Z',
       last_recollected_at: null,
@@ -190,9 +170,7 @@ const splitDetail: SiteDetailResponse = {
       id: '66666666-6666-6666-6666-666666666666',
       link_id: '77777777-7777-7777-7777-777777777777',
       name: 'Status',
-      name_source: 'auto',
       purpose: 'Service status',
-      purpose_source: 'auto',
       url: 'https://status.acme.test',
       first_collected_at: '2026-07-22T00:00:00Z',
       last_recollected_at: null,
@@ -236,7 +214,6 @@ describe('SitesView card grid', () => {
       '删除入口',
       '合并网站',
       '拆分网站',
-      '分类规则',
     ]) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
     }
@@ -253,13 +230,13 @@ describe('SitesView card grid', () => {
     for (const name of ['编辑网站资料', '置顶', '删除网站', '移到阅读', '编辑入口', '删除入口']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
-    for (const name of ['合并网站', '拆分网站', '分类规则']) {
+    for (const name of ['合并网站', '拆分网站']) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
     }
     expect(fixture.writeCalls.slice(7).every((request) => request.mock.calls.length === 0)).toBe(true)
   })
 
-  it('exposes classification, merge, and split management with siteAdvanced', async () => {
+  it('exposes merge and split management with siteAdvanced', async () => {
     const fixture = capabilityClient()
 
     render(sitesElement(fixture.client, enabledReaderCapabilityLease()))
@@ -267,9 +244,6 @@ describe('SitesView card grid', () => {
 
     expect(screen.getByRole('button', { name: '合并网站' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '拆分网站' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '分类规则' }))
-    expect(await screen.findByRole('dialog', { name: '分类规则' })).toBeInTheDocument()
-    expect(fixture.client.getClassificationRules).toHaveBeenCalledTimes(1)
   })
 
   it('clears an open write dialog when siteWrite is revoked', async () => {
@@ -442,7 +416,7 @@ describe('SitesView card grid', () => {
       target_site_id: target.id,
       target_revision: target.revision,
       entries: [],
-      user_tags: [],
+      tags: [],
       identity_keys: [],
       field_conflicts: [],
       requires_resolution: false,
@@ -528,7 +502,7 @@ describe('SitesView card grid', () => {
           { identity_key: 'v1:host:docs.acme.test', eligible_for_new_site: false, owner: 'source' },
           { identity_key: 'v1:github:acme/docs', eligible_for_new_site: true, owner: selectedIdentity === 'v1:github:acme/docs' ? 'new_site' : 'source' },
         ],
-        user_tags: ['docs'],
+        tags: ['docs'],
       })
     })
     const executeSiteSplit = vi.fn(async (_siteID: string, _request: SiteSplitRequest) => ok({ source_site_id: splitDetail.id, source_revision: 4, new_site_id: '88888888-8888-8888-8888-888888888888', new_site_revision: 1, moved_entries: 1 }))
@@ -595,7 +569,7 @@ describe('SitesView card grid', () => {
       payload: request,
       entries: [{ id: splitDetail.entries[1].id, site_id: splitDetail.id, link_id: splitDetail.entries[1].link_id, name: splitDetail.entries[1].name, url: splitDetail.entries[1].url, duplicate: false }],
       identities: [],
-      user_tags: [],
+      tags: [],
     }))
     const executeSiteSplit = vi.fn(async () => err({ kind: 'other', status: 409, errorCode: 'site_merge_conflict', message: 'site was changed' }))
     const onToast = vi.fn()
@@ -657,21 +631,6 @@ describe('SitesView 对话框外壳', () => {
     if (!(element instanceof HTMLElement)) throw new Error('expected dialog backdrop to exist')
     return element
   }
-
-  it('「分类规则」按下 backdrop 关闭，按在对话框内部不关闭', async () => {
-    const fixture = capabilityClient()
-    render(sitesElement(fixture.client, enabledReaderCapabilityLease()))
-    await openCapabilityDetail()
-
-    fireEvent.click(screen.getByRole('button', { name: '分类规则' }))
-    const dialog = await screen.findByRole('dialog', { name: '分类规则' })
-
-    fireEvent.mouseDown(within(dialog).getByText(/规则只影响之后的自动采集/))
-    expect(screen.getByRole('dialog', { name: '分类规则' })).toBeInTheDocument()
-
-    fireEvent.mouseDown(backdropOf(dialog))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '分类规则' })).not.toBeInTheDocument())
-  })
 
   it('「合并网站」空闲时按下 backdrop 关闭', async () => {
     const fixture = capabilityClient()

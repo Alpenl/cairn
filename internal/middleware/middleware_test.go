@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -248,43 +247,6 @@ func TestAccessLogAllowsNilLogger(t *testing.T) {
 	}
 }
 
-func TestHTTPMetricsRecordsRequestCountAndLatency(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	metrics := observability.NewMetrics()
-	router := gin.New()
-	router.Use(HTTPMetrics(metrics))
-	router.GET("/ping", func(c *gin.Context) {
-		c.Status(http.StatusAccepted)
-	})
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ping", nil))
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
-	}
-
-	metricsRec := httptest.NewRecorder()
-	metrics.Handler().ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	body := metricsRec.Body.String()
-	if !strings.Contains(body, `webtag_http_requests_total{method="GET",route="/ping",status="202"} 1`) {
-		t.Fatalf("metrics body = %q, want request counter exposition", body)
-	}
-	// Wave 2 M3：histogram 现在带 status_class 标签（2xx/3xx/4xx/5xx）。
-	// 这条断言锁定 label set，避免后续无意中把 status_class 改成完整
-	// status 码（会把单 (method, route) 的时间序列数 ×N）。
-	if !strings.Contains(body, `webtag_http_request_duration_seconds_bucket{method="GET",route="/ping",status_class="2xx"`) {
-		t.Fatalf("metrics body = %q, want request duration histogram exposition with status_class label", body)
-	}
-	// 新 bucket 上限是 25s（取代 DefBuckets 的 10s），fetcher 的尾部
-	// 慢请求才能落到具体桶而不是 +Inf。断言这条边界值出现，等同于
-	// 锁定 buckets 数组。
-	if !strings.Contains(body, `le="25"`) {
-		t.Fatalf("metrics body = %q, want le=\"25\" bucket boundary present", body)
-	}
-}
-
 func TestCORSPreflightFromUnauthorizedOriginIsRejected(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -331,41 +293,4 @@ type noopWriter struct{}
 
 func (noopWriter) Write(p []byte) (int, error) {
 	return len(p), nil
-}
-
-// TestStatusClass 锁定 HTTP 状态码归桶逻辑——Prometheus
-// `webtag_http_request_duration_seconds_count{status_class="..."}` 指标
-// 用这个桶名做聚合，回归会让 Grafana 的 5xx 错误率告警基于错的 label
-// 漏报或误报。0/600+ 必须归 "0xx" 让标签集闭合，避免高基数指标爆炸。
-func TestStatusClass(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name   string
-		status int
-		want   string
-	}{
-		{"100_continue_is_1xx", 100, "1xx"},
-		{"200_ok_is_2xx", 200, "2xx"},
-		{"299_boundary_is_2xx", 299, "2xx"},
-		{"301_redirect_is_3xx", 301, "3xx"},
-		{"400_bad_request_is_4xx", 400, "4xx"},
-		{"404_not_found_is_4xx", 404, "4xx"},
-		{"500_internal_is_5xx", 500, "5xx"},
-		{"599_boundary_is_5xx", 599, "5xx"},
-		// 兜底：闭合标签集，避免高基数爆炸。
-		{"zero_is_0xx", 0, "0xx"},
-		{"negative_is_0xx", -1, "0xx"},
-		{"below_100_is_0xx", 99, "0xx"},
-		{"at_600_is_0xx", 600, "0xx"},
-		{"way_above_is_0xx", 999, "0xx"},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := statusClass(tc.status); got != tc.want {
-				t.Errorf("statusClass(%d) = %q, want %q", tc.status, got, tc.want)
-			}
-		})
-	}
 }

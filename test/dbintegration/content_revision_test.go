@@ -38,7 +38,7 @@ func TestContentSaveCannotCrossCaptureRevision(t *testing.T) {
 
 	inputA := "captured body A"
 	inputB := "captured body B"
-	link, _, err := repo.SubmitNew(ctx, repository.CreateLinkParams{
+	link, _, err := submitLinkForTest(ctx, pool, repo, repository.CreateLinkParams{
 		URL:        "https://example.com/content-revision",
 		SourceKind: "browser_capture",
 		SourceKey:  "https://example.com/content-revision",
@@ -55,7 +55,7 @@ func TestContentSaveCannotCrossCaptureRevision(t *testing.T) {
 	if err != nil || current == nil {
 		t.Fatalf("GetByID(capture A) = %#v, %v", current, err)
 	}
-	_, stored, err := repo.UpdateContentIfCurrent(ctx, link.ID, current.UpdatedAt, model.SavedContent{
+	savedRevision, stored, err := repo.UpdateContentIfCurrent(ctx, link.ID, current.UpdatedAt, model.SavedContent{
 		Text:   inputA,
 		Format: model.ContentFormatPlain,
 	})
@@ -70,7 +70,7 @@ func TestContentSaveCannotCrossCaptureRevision(t *testing.T) {
 		t.Fatalf("content save changed parse revision from %v to %v", current.UpdatedAt, afterContent.UpdatedAt)
 	}
 	markdown := "# Capture A\n\nStructured body"
-	_, replaced, err := repo.ReplaceContentIfCurrent(ctx, link.ID, current.UpdatedAt, model.SavedContent{
+	_, replaced, err := repo.ReplaceContentIfCurrentWithRevision(ctx, link.ID, current.UpdatedAt, savedRevision, model.SavedContent{
 		Text:     "Capture A\n\nStructured body",
 		Document: &markdown,
 		Format:   model.ContentFormatMarkdown,
@@ -86,7 +86,7 @@ func TestContentSaveCannotCrossCaptureRevision(t *testing.T) {
 		t.Fatalf("structured content = %#v, want markdown snapshot", structured)
 	}
 
-	if _, err := repo.RequeueExisting(ctx, link.ID, &repository.CreateLinkParams{
+	if _, err := requeueLinkForTest(ctx, pool, repo, link.ID, &repository.CreateLinkParams{
 		URL:        link.URL,
 		SourceKind: "browser_capture",
 		SourceKey:  link.SourceKey,
@@ -97,7 +97,7 @@ func TestContentSaveCannotCrossCaptureRevision(t *testing.T) {
 	}
 	assertLinkRevisionState(t, pool, link.ID.String(), model.LinkStatusPending, inputB, nil)
 
-	remote, _, err := repo.SubmitNew(ctx, repository.CreateLinkParams{
+	remote, _, err := submitLinkForTest(ctx, pool, repo, repository.CreateLinkParams{
 		URL:        "https://example.com/remote-before-capture",
 		SourceKind: "url",
 		SourceKey:  "https://example.com/remote-before-capture",
@@ -127,7 +127,7 @@ func TestContentSaveCannotCrossCaptureRevision(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Content Save did not start fetching")
 	}
-	if _, err := repo.RequeueExisting(ctx, remote.ID, &repository.CreateLinkParams{
+	if _, err := requeueLinkForTest(ctx, pool, repo, remote.ID, &repository.CreateLinkParams{
 		URL:        remote.URL,
 		SourceKind: "browser_capture",
 		SourceKey:  remote.SourceKey,
@@ -201,7 +201,7 @@ func TestContentWritesBumpContentRevision(t *testing.T) {
 	repo := repository.NewPGXLinkRepository(pool)
 	ctx := t.Context()
 
-	link, _, err := repo.SubmitNew(ctx, repository.CreateLinkParams{
+	link, _, err := submitLinkForTest(ctx, pool, repo, repository.CreateLinkParams{
 		URL:        "https://example.com/content-revision-bump",
 		SourceKind: "url",
 		SourceKey:  "https://example.com/content-revision-bump",
@@ -248,19 +248,19 @@ func TestContentWritesBumpContentRevision(t *testing.T) {
 		t.Fatalf("UpdateContentIfCurrent returned revision %d but the row is at %d", savedRevision, afterSave)
 	}
 
-	replacedRevision, replaced, err := repo.ReplaceContentIfCurrent(ctx, link.ID, parsedAt.UpdatedAt, model.SavedContent{
+	replacedRevision, replaced, err := repo.ReplaceContentIfCurrentWithRevision(ctx, link.ID, parsedAt.UpdatedAt, afterSave, model.SavedContent{
 		Text:   "replaced original",
 		Format: model.ContentFormatPlain,
 	})
 	if err != nil || !replaced {
-		t.Fatalf("ReplaceContentIfCurrent = %v, %v; want true, nil", replaced, err)
+		t.Fatalf("ReplaceContentIfCurrentWithRevision = %v, %v; want true, nil", replaced, err)
 	}
 	afterReplace := revisionNow("after replace")
 	if afterReplace != afterSave+1 {
 		t.Fatalf("content_revision after replace = %d, want %d — replacing is exactly the case a cached copy goes stale invisibly", afterReplace, afterSave+1)
 	}
 	if replacedRevision != afterReplace {
-		t.Fatalf("ReplaceContentIfCurrent returned revision %d but the row is at %d", replacedRevision, afterReplace)
+		t.Fatalf("ReplaceContentIfCurrentWithRevision returned revision %d but the row is at %d", replacedRevision, afterReplace)
 	}
 	// The read path must report the same generation the write just produced,
 	// otherwise the idempotent "already saved" branch answers with 0.
@@ -291,18 +291,18 @@ func TestContentWritesBumpContentRevision(t *testing.T) {
 	// attempt: that would spuriously invalidate other clients' content cache
 	// keys and shoot down live conversion previews.
 	staleExpectation := parsedAt.UpdatedAt.Add(time.Second)
-	lostRevision, lost, err := repo.ReplaceContentIfCurrent(ctx, link.ID, staleExpectation, model.SavedContent{
+	lostRevision, lost, err := repo.ReplaceContentIfCurrentWithRevision(ctx, link.ID, staleExpectation, afterReplace, model.SavedContent{
 		Text:   "must not be written",
 		Format: model.ContentFormatPlain,
 	})
 	if err != nil {
-		t.Fatalf("ReplaceContentIfCurrent(stale) error = %v; a CAS miss is an expected outcome, not an error", err)
+		t.Fatalf("ReplaceContentIfCurrentWithRevision(stale) error = %v; a CAS miss is an expected outcome, not an error", err)
 	}
 	if lost {
-		t.Fatal("ReplaceContentIfCurrent(stale) = true; the CAS predicate is not holding")
+		t.Fatal("ReplaceContentIfCurrentWithRevision(stale) = true; the CAS predicate is not holding")
 	}
 	if lostRevision != 0 {
-		t.Fatalf("ReplaceContentIfCurrent(stale) revision = %d; a losing write reports no generation", lostRevision)
+		t.Fatalf("ReplaceContentIfCurrentWithRevision(stale) revision = %d; a losing write reports no generation", lostRevision)
 	}
 	if after := revisionNow("after losing CAS"); after != afterReplace {
 		t.Fatalf("content_revision moved to %d on a LOSING write (was %d) — the bump escaped the CAS statement", after, afterReplace)

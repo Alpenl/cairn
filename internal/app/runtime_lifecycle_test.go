@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"slices"
 	"testing"
 	"time"
 
@@ -151,10 +150,6 @@ func TestRuntimeLifecycleClosesAdmissionThenStopsAndDrainsInOrder(t *testing.T) 
 	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
 		cleanupTimeout: time.Second,
 		persistence:    persistence,
-		tracerShutdown: func(context.Context) error {
-			events = append(events, "shutdown tracer")
-			return nil
-		},
 		backgrounds: []namedRuntimeBackground{
 			{name: "recorder", background: &recordingRuntimeBackground{name: "recorder", events: &events}},
 			{name: "queue", background: &recordingRuntimeBackground{name: "queue", events: &events}},
@@ -180,7 +175,6 @@ func TestRuntimeLifecycleClosesAdmissionThenStopsAndDrainsInOrder(t *testing.T) 
 		"revoke owner",
 		"drain persistence",
 		"close pool",
-		"shutdown tracer",
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("lifecycle events = %v, want %v", events, want)
@@ -194,10 +188,6 @@ func TestRuntimeLifecycleCloseBeforeStartStopsConstructedResourcesInReverseOrder
 	persistence := &recordingRuntimePersistence{events: &events}
 	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
 		persistence: persistence,
-		tracerShutdown: func(context.Context) error {
-			events = append(events, "shutdown tracer")
-			return nil
-		},
 		backgrounds: []namedRuntimeBackground{
 			{name: "recorder", background: &recordingRuntimeBackground{name: "recorder", events: &events}},
 			{name: "queue", background: &recordingRuntimeBackground{name: "queue", events: &events}},
@@ -213,23 +203,17 @@ func TestRuntimeLifecycleCloseBeforeStartStopsConstructedResourcesInReverseOrder
 		"stop recorder",
 		"drain persistence",
 		"close pool",
-		"shutdown tracer",
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("close-before-start events = %v, want %v", events, want)
 	}
 }
 
-func TestRuntimeLifecyclePoolCloseDeadlineIsHardBarrierForTracer(t *testing.T) {
+func TestRuntimeLifecyclePoolCloseHonorsDeadline(t *testing.T) {
 	t.Parallel()
 
-	tracerCalled := false
 	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
 		persistence: &deadlineBlockingRuntimePersistence{},
-		tracerShutdown: func(context.Context) error {
-			tracerCalled = true
-			return nil
-		},
 	})
 	if err := lifecycle.Start(t.Context()); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -245,22 +229,15 @@ func TestRuntimeLifecyclePoolCloseDeadlineIsHardBarrierForTracer(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, database.ErrShutdownDeadline) {
 		t.Fatalf("Close() error = %v, want DeadlineExceeded and ErrShutdownDeadline", err)
 	}
-	if tracerCalled {
-		t.Fatal("tracer shutdown ran after persistence close crossed its deadline")
-	}
 }
 
-func TestRuntimeLifecyclePoolCloseErrorIsHardBarrierForTracer(t *testing.T) {
+func TestRuntimeLifecyclePoolCloseErrorPropagates(t *testing.T) {
 	t.Parallel()
 
 	poolErr := errors.New("pool connection close failed")
 	var events []string
 	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
 		persistence: &recordingRuntimePersistence{events: &events, closeErr: poolErr},
-		tracerShutdown: func(context.Context) error {
-			events = append(events, "shutdown tracer")
-			return nil
-		},
 	})
 	if err := lifecycle.Start(t.Context()); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -270,25 +247,17 @@ func TestRuntimeLifecyclePoolCloseErrorIsHardBarrierForTracer(t *testing.T) {
 	if !errors.Is(err, poolErr) || !errors.Is(err, database.ErrShutdownDeadline) {
 		t.Fatalf("Close() error = %v, want pool error and ErrShutdownDeadline", err)
 	}
-	if slices.Contains(events, "shutdown tracer") {
-		t.Fatal("tracer shutdown ran after persistence close returned an error")
-	}
 }
 
-func TestRuntimeLifecycleStopFailureRetainsOwnerAndDoesNotClosePersistenceOrTracer(t *testing.T) {
+func TestRuntimeLifecycleStopFailureRetainsOwnerAndDoesNotClosePersistence(t *testing.T) {
 	t.Parallel()
 
 	stopErr := errors.New("queue stop deadline")
-	tracerErr := errors.New("tracer shutdown failed")
 	var events []string
 	persistence := &recordingRuntimePersistence{events: &events}
 	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
 		cleanupTimeout: time.Second,
 		persistence:    persistence,
-		tracerShutdown: func(context.Context) error {
-			events = append(events, "shutdown tracer")
-			return tracerErr
-		},
 		backgrounds: []namedRuntimeBackground{
 			{name: "recorder", background: &recordingRuntimeBackground{name: "recorder", events: &events}},
 			{name: "queue", background: &recordingRuntimeBackground{name: "queue", events: &events, stopErr: stopErr}},
@@ -303,10 +272,7 @@ func TestRuntimeLifecycleStopFailureRetainsOwnerAndDoesNotClosePersistenceOrTrac
 	if !errors.Is(err, stopErr) || !errors.Is(err, database.ErrShutdownDeadline) {
 		t.Fatalf("Close() error = %v, want stop error and shutdown deadline", err)
 	}
-	if errors.Is(err, tracerErr) {
-		t.Fatalf("Close() error = %v, tracer must not run after incomplete stop", err)
-	}
-	for _, forbidden := range []string{"revoke owner", "drain persistence", "close pool", "shutdown tracer"} {
+	for _, forbidden := range []string{"revoke owner", "drain persistence", "close pool"} {
 		for _, event := range events {
 			if event == forbidden {
 				t.Fatalf("%s ran after incomplete background stop: %v", forbidden, events)
@@ -394,18 +360,14 @@ func TestRuntimeFailedStartUsesOneDetachedSharedCleanupDeadline(t *testing.T) {
 			{name: second.name, background: second},
 			{name: third.name, background: third},
 		},
-		tracerShutdown: func(ctx context.Context) error {
-			observations = append(observations, cleanupContextObservation{name: "tracer", ctx: ctx, err: ctx.Err()})
-			return nil
-		},
 	})
 	runtime := &Runtime{start: lifecycle.Start, close: lifecycle.Close}
 
 	if err := runtime.Start(startCtx); !errors.Is(err, startErr) {
 		t.Fatalf("Start() error = %v, want %v", err, startErr)
 	}
-	if len(observations) != 6 {
-		t.Fatalf("cleanup observations = %d, want rollback, suffix, persistence, and tracer", len(observations))
+	if len(observations) != 5 {
+		t.Fatalf("cleanup observations = %d, want rollback, suffix, and persistence", len(observations))
 	}
 	if got := []string{
 		observations[0].name,
@@ -413,9 +375,8 @@ func TestRuntimeFailedStartUsesOneDetachedSharedCleanupDeadline(t *testing.T) {
 		observations[2].name,
 		observations[3].name,
 		observations[4].name,
-		observations[5].name,
-	}; !reflect.DeepEqual(got, []string{"recorder", "cleaner", "queue", "drain", "pool", "tracer"}) {
-		t.Fatalf("cleanup order = %v, want [recorder cleaner queue drain pool tracer]", got)
+	}; !reflect.DeepEqual(got, []string{"recorder", "cleaner", "queue", "drain", "pool"}) {
+		t.Fatalf("cleanup order = %v, want [recorder cleaner queue drain pool]", got)
 	}
 
 	var sharedDeadline time.Time
@@ -457,10 +418,6 @@ func TestRuntimeCloseDeadlineIsAHardBarrierForPermanentlyBlockedBackground(t *te
 	persistence := &recordingRuntimePersistence{events: &events}
 	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
 		persistence: persistence,
-		tracerShutdown: func(context.Context) error {
-			events = append(events, "shutdown tracer")
-			return nil
-		},
 		backgrounds: []namedRuntimeBackground{{name: "blocked", background: background}},
 	})
 	runtime := &Runtime{start: lifecycle.Start, close: lifecycle.Close}
@@ -478,7 +435,7 @@ func TestRuntimeCloseDeadlineIsAHardBarrierForPermanentlyBlockedBackground(t *te
 	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, database.ErrShutdownDeadline) {
 		t.Fatalf("Close() error = %v, want DeadlineExceeded and ErrShutdownDeadline", err)
 	}
-	for _, forbidden := range []string{"revoke owner", "drain persistence", "close pool", "shutdown tracer"} {
+	for _, forbidden := range []string{"revoke owner", "drain persistence", "close pool"} {
 		for _, event := range events {
 			if event == forbidden {
 				t.Fatalf("%s ran past blocked background deadline: %v", forbidden, events)
@@ -524,10 +481,6 @@ func TestRuntimeLifecycleStartRollbackFailureRetainsPersistenceOwner(t *testing.
 	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
 		cleanupTimeout: time.Second,
 		persistence:    persistence,
-		tracerShutdown: func(context.Context) error {
-			events = append(events, "shutdown tracer")
-			return nil
-		},
 		backgrounds: []namedRuntimeBackground{
 			{name: "recorder", background: &recordingRuntimeBackground{name: "recorder", events: &events, stopErr: stopErr}},
 			{name: "queue", background: &recordingRuntimeBackground{name: "queue", events: &events, startErr: startErr}},
@@ -542,7 +495,7 @@ func TestRuntimeLifecycleStartRollbackFailureRetainsPersistenceOwner(t *testing.
 	if !errors.Is(closeErr, database.ErrShutdownDeadline) {
 		t.Fatalf("Close() error = %v, want ErrShutdownDeadline", closeErr)
 	}
-	for _, forbidden := range []string{"revoke owner", "drain persistence", "close pool", "shutdown tracer"} {
+	for _, forbidden := range []string{"revoke owner", "drain persistence", "close pool"} {
 		for _, event := range events {
 			if event == forbidden {
 				t.Fatalf("%s ran after failed start rollback: %v", forbidden, events)
@@ -551,7 +504,7 @@ func TestRuntimeLifecycleStartRollbackFailureRetainsPersistenceOwner(t *testing.
 	}
 }
 
-func TestRuntimeLifecycleDrainFailureDoesNotClosePoolOrTracer(t *testing.T) {
+func TestRuntimeLifecycleDrainFailureDoesNotClosePool(t *testing.T) {
 	t.Parallel()
 
 	drainErr := errors.Join(database.ErrShutdownDeadline, context.DeadlineExceeded)
@@ -559,10 +512,6 @@ func TestRuntimeLifecycleDrainFailureDoesNotClosePoolOrTracer(t *testing.T) {
 	persistence := &recordingRuntimePersistence{events: &events, drainErr: drainErr}
 	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
 		persistence: persistence,
-		tracerShutdown: func(context.Context) error {
-			events = append(events, "shutdown tracer")
-			return nil
-		},
 	})
 
 	err := lifecycle.Close(context.Background())

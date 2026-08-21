@@ -35,21 +35,21 @@ func TestOnlineUpdateDecisionDefaultsToDeny(t *testing.T) {
 			compatible: false,
 			reason:     "no online-update classification",
 		},
-		"a release-gated step": {
+		"one incompatible target": {
 			steps: []stepClassification{
 				{ID: "a", Class: classAutomatic},
-				{ID: "b", Class: classManualGate},
+				{ID: "b", Class: classIncompatible},
 			},
 			compatible: false,
-			reason:     "may never cross a manual gate",
+			reason:     "incompatible with the previous Core binary",
 		},
-		"a manual gate outranks an unclassified step": {
+		"an incompatible target outranks an unclassified target": {
 			steps: []stepClassification{
 				{ID: "a", Class: classUnclassified},
-				{ID: "b", Class: classManualGate},
+				{ID: "b", Class: classIncompatible},
 			},
 			compatible: false,
-			reason:     "may never cross a manual gate",
+			reason:     "incompatible with the previous Core binary",
 		},
 		"an empty plan": {
 			steps:      nil,
@@ -67,20 +67,17 @@ func TestOnlineUpdateDecisionDefaultsToDeny(t *testing.T) {
 	}
 }
 
-// Manual steps are the only compatibility metadata a Step carries today, so
-// they must be the ones recognised. Everything else stays unclassified, which
-// is what keeps the release marked deny until somebody classifies it.
-func TestClassifyStepRecognisesReleaseGatedSteps(t *testing.T) {
+func TestClassifyStepUsesTheMigrationReview(t *testing.T) {
 	t.Parallel()
 
-	if got := classifyStep(migrate.Step{ID: "gated", Manual: true}); got != classManualGate {
-		t.Errorf("manual step classified %q, want %q", got, classManualGate)
+	if got := classifyStep(migrate.Step{ID: "safe", OnlineUpdate: migrate.OnlineCompatible("additive")}); got != classAutomatic {
+		t.Errorf("compatible step classified %q, want %q", got, classAutomatic)
+	}
+	if got := classifyStep(migrate.Step{ID: "unsafe", OnlineUpdate: migrate.OnlineIncompatible("contract")}); got != classIncompatible {
+		t.Errorf("incompatible step classified %q, want %q", got, classIncompatible)
 	}
 	if got := classifyStep(migrate.Step{ID: "plain"}); got != classUnclassified {
 		t.Errorf("plain step classified %q, want %q", got, classUnclassified)
-	}
-	if got := classifyStep(migrate.Step{ID: "concurrent", NonTransactional: true}); got != classUnclassified {
-		t.Errorf("non-transactional step classified %q, want %q", got, classUnclassified)
 	}
 }
 

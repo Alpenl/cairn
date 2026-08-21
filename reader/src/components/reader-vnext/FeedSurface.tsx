@@ -2,13 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderCapabilityFeature, ReaderCapabilityLease } from '../../lib/capabilities'
 import { isReaderFeedItemResponse } from '../../lib/api/guards'
-import type {
-  ReaderFeedAction,
-  ReaderFeedItemResponse,
-  ReaderFeedSectionResponse,
-  ReaderFeedSourceResponse,
-  ReaderTodoResponse,
-} from '../../lib/api/types'
+import type { ReaderFeedItemResponse, ReaderTodoResponse } from '../../lib/api/types'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { feedScrollAnchorKey } from '../../lib/feed-scroll-anchor'
 import { useFeedScrollAnchor } from '../../hooks/useFeedScrollAnchor'
@@ -41,9 +35,9 @@ export interface FeedSurfaceProps {
 }
 
 type FeedMode = 'recommended' | 'chronological'
-type FeedFeedbackAction = 'save' | 'unsave' | 'hide' | 'not_interested'
+type FeedFeedbackAction = 'save' | 'unsave' | 'hide'
 type FeedSource = 'inbox' | 'reading' | 'subscription'
-/** 两条互相独立的请求线：Feed 快照与右栏 TODO，各自按代次判断迟到回包。 */
+/** 两条互相独立的请求线：Feed 与右栏 TODO，各自按代次判断迟到回包。 */
 type FeedRequestChannel = 'feed' | 'todos'
 type FeedRequestToken = SurfaceRequestToken<FeedRequestChannel>
 
@@ -56,17 +50,13 @@ const FEED_SOURCES: readonly { readonly id: FeedSource; readonly label: string }
 const BATCH_CONFIRM_KEY = '__feed_batch_confirm__'
 
 interface FeedResumeState {
-  readonly snapshotID: string
   readonly nextCursor?: string
   readonly items: ReaderFeedItemResponse[]
-  readonly sourceFilter: FeedSource[]
 }
 
 interface FeedLoadOptions {
   readonly append: boolean
   readonly cursor?: string
-  readonly snapshotID?: string
-  readonly resume?: FeedResumeState
 }
 
 const FEED_PAGE_SIZE = 30
@@ -149,13 +139,6 @@ function resumeStorageKey(client: IdentityBoundReaderClient, mode: FeedMode, sou
     : null
 }
 
-function legacyResumeStorageKey(client: IdentityBoundReaderClient, mode: FeedMode): string | null {
-  const namespace = identityNamespace(client)
-  return namespace
-    ? `${FEED_RESUME_STORAGE_PREFIX}:${encodeURIComponent(namespace)}:${mode}`
-    : null
-}
-
 function modeStorageKey(client: IdentityBoundReaderClient): string | null {
   const namespace = identityNamespace(client)
   return namespace
@@ -186,51 +169,37 @@ function writeStoredMode(client: IdentityBoundReaderClient, mode: FeedMode): voi
 
 function readResume(client: IdentityBoundReaderClient, mode: FeedMode, sourceFilter: readonly FeedSource[]): FeedResumeState | null {
   const key = resumeStorageKey(client, mode, sourceFilter)
-  const legacyKey = sourceFilter.length === FEED_SOURCES.length
-    ? legacyResumeStorageKey(client, mode)
-    : null
-  const keys = [key, legacyKey].filter((candidate): candidate is string => Boolean(candidate))
-  if (keys.length === 0 || typeof window === 'undefined') return null
-  for (const candidate of keys) {
-    try {
-      const raw = window.sessionStorage.getItem(candidate)
-      if (!raw) continue
-      const value: unknown = JSON.parse(raw)
-      if (!isRecord(value) || (value.version !== 1 && value.version !== 2) || typeof value.snapshot_id !== 'string' || !value.snapshot_id) continue
-      if (!Array.isArray(value.items) || !value.items.every(isReaderFeedItemResponse)) continue
-      if (value.next_cursor !== undefined && typeof value.next_cursor !== 'string') continue
-      if (value.source_filter !== undefined && (
-        !Array.isArray(value.source_filter) ||
-        !value.source_filter.every(isFeedSource) ||
-        normalizeSourceFilter(value.source_filter).join(',') !== sourceFilter.join(',')
-      )) continue
-      return {
-        snapshotID: value.snapshot_id,
-        nextCursor: value.next_cursor || undefined,
-        items: dedupeItems(value.items),
-        sourceFilter: [...sourceFilter],
-      }
-    } catch {
-      // Ignore malformed or unavailable position storage and start a new snapshot.
+  if (!key || typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem(key)
+    if (!raw) return null
+    const value: unknown = JSON.parse(raw)
+    if (!isRecord(value) || value.version !== 3) return null
+    if (!Array.isArray(value.items) || !value.items.every(isReaderFeedItemResponse)) return null
+    if (value.next_cursor !== undefined && typeof value.next_cursor !== 'string') return null
+    if (!Array.isArray(value.source_filter) || !value.source_filter.every(isFeedSource)) return null
+    if (normalizeSourceFilter(value.source_filter).join(',') !== sourceFilter.join(',')) return null
+    return {
+      nextCursor: value.next_cursor || undefined,
+      items: dedupeItems(value.items),
     }
+  } catch {
+    return null
   }
-  return null
 }
 
 function writeResume(
   client: IdentityBoundReaderClient,
   mode: FeedMode,
   sourceFilter: readonly FeedSource[],
-  snapshotID: string | undefined,
   nextCursor: string | undefined,
   items: readonly ReaderFeedItemResponse[],
 ): void {
   const key = resumeStorageKey(client, mode, sourceFilter)
-  if (!key || typeof window === 'undefined' || !snapshotID) return
+  if (!key || typeof window === 'undefined') return
   try {
     window.sessionStorage.setItem(key, JSON.stringify({
-      version: 2,
-      snapshot_id: snapshotID,
+      version: 3,
       next_cursor: nextCursor,
       source_filter: sourceFilter,
       items: dedupeItems(items),
@@ -241,7 +210,7 @@ function writeResume(
 }
 
 function feedResourceIdentity(item: ReaderFeedItemResponse): string {
-  return item.resource_key?.trim() || item.key.trim()
+  return item.resource_key
 }
 
 /** Keep the first server occurrence of each resource without changing its position. */
@@ -257,11 +226,10 @@ function dedupeItems(items: readonly ReaderFeedItemResponse[]): ReaderFeedItemRe
   return result
 }
 
-/** Append unseen resources; a resume may restore only mutable local state in place. */
+/** Append unseen resources without changing the order already on screen. */
 function mergeItems(
   current: readonly ReaderFeedItemResponse[],
   incoming: readonly ReaderFeedItemResponse[],
-  restoreIncomingEngagement: boolean,
 ): ReaderFeedItemResponse[] {
   const result = dedupeItems(current)
   const indexes = new Map(result.map((item, index) => [feedResourceIdentity(item), index]))
@@ -273,89 +241,39 @@ function mergeItems(
       result.push(item)
       continue
     }
-    if (restoreIncomingEngagement) {
-      result[index] = { ...result[index], read: item.read, read_later: item.read_later }
-    }
   }
   return result
 }
 
-function supportsItemAction(item: ReaderFeedItemResponse, action: ReaderFeedAction): boolean {
-  return Array.isArray(item.actions) && item.actions.includes(action)
-}
-
 function withSavedFeedAction(item: ReaderFeedItemResponse, saved: boolean): ReaderFeedItemResponse {
-  return {
-    ...item,
-    saved,
-    actions: (item.actions ?? []).map((action) => action === 'save' || action === 'unsave'
-      ? (saved ? 'unsave' : 'save')
-      : action),
-  }
+  return { ...item, saved }
 }
 
 function supportsOpen(item: ReaderFeedItemResponse): boolean {
-  return supportsItemAction(item, 'open') || (supportsItemAction(item, 'open_workspace') && Boolean(item.link_id))
+  return Boolean(item.link_id || item.inbox_id || item.url)
 }
 
 function feedSource(item: ReaderFeedItemResponse): FeedSource | null {
-  const source = item.item_type ?? item.source
-  if (source === 'inbox' || source === 'pending') return 'inbox'
-  if (source === 'subscription' || source === 'feed') return 'subscription'
-  if (source === 'reading' || source === 'saved') return 'reading'
-  if (item.inbox_id) return 'inbox'
-  if (item.feed_item_id) return 'subscription'
-  if (item.link_id) return 'reading'
+  if (item.source === 'inbox' || item.source === 'reading' || item.source === 'subscription') return item.source
   return null
 }
 
-function feedSectionID(item: ReaderFeedItemResponse, sections: readonly ReaderFeedSectionResponse[]): string | null {
-  if (item.section_id && sections.some((section) => section.id === item.section_id)) return item.section_id
+function feedSourceLabel(item: ReaderFeedItemResponse): string {
   const source = feedSource(item)
-  return sections.find((section) => section.source === source)?.id ?? source
-}
-
-function feedSourceLabel(item: ReaderFeedItemResponse, sources: readonly ReaderFeedSourceResponse[]): string {
-  const source = feedSource(item)
-  if (!source) return item.source
-  return sources.find((candidate) => candidate.id === source)?.label ?? FEED_SOURCES.find((candidate) => candidate.id === source)?.label ?? item.source
-}
-
-function feedSectionLabel(item: ReaderFeedItemResponse, sections: readonly ReaderFeedSectionResponse[]): string | null {
-  const sectionID = feedSectionID(item, sections)
-  if (!sectionID) return null
-  return sections.find((section) => section.id === sectionID)?.label ?? null
+  return FEED_SOURCES.find((candidate) => candidate.id === source)?.label ?? item.source
 }
 
 function openActionLabel(item: ReaderFeedItemResponse): string {
-  return item.feed_item_id && !item.link_id && supportsItemAction(item, 'open') ? '打开原文' : '打开'
+  return item.feed_item_id && !item.link_id ? '打开原文' : '打开'
 }
 
-// Feed reasons are frozen server-side snapshot evidence. Reader maps only the
-// discriminated tuple and deliberately ignores compatibility reason_text.
 function feedReasonText(item: ReaderFeedItemResponse): string {
-  switch (item.reason_code) {
-    case 'pending_confirmation':
-      return item.reason_params.source === 'inbox' ? '收件箱采集' : ''
-    case 'saved_library':
-      return item.reason_params.source === 'reading' ? '已保存到资料库' : ''
-    case 'subscription_recent':
-      return item.reason_params.source === 'subscription' ? '订阅更新' : ''
-    case 'unread':
-      return item.reason_params.read === false ? '尚未阅读' : ''
-    case 'read_later':
-      return item.reason_params.read_later === true ? '已加入稍后读' : ''
-    case 'chronological_fallback':
-      return typeof item.reason_params.created_at === 'string' ? '按时间排序' : ''
+  switch (feedSource(item)) {
+    case 'inbox': return '收件箱采集'
+    case 'reading': return '已保存到资料库'
+    case 'subscription': return '订阅更新'
+    default: return '混合 Feed'
   }
-}
-
-function hasFeedCapability(capabilities: readonly string[], capability: string): boolean {
-  return capabilities.includes(capability)
-}
-
-function isRecoverableSnapshotError(status: number | undefined): boolean {
-  return status === 400 || status === 404 || status === 410 || status === 422
 }
 
 export function FeedSurface({
@@ -369,7 +287,6 @@ export function FeedSurface({
   const [mode, setMode] = useState<FeedMode>(() => readStoredMode(client))
   const [enabledSources, setEnabledSources] = useState<Set<FeedSource>>(() => readStoredSources(client))
   const [items, setItems] = useState<ReaderFeedItemResponse[]>([])
-  const [snapshotID, setSnapshotID] = useState<string | undefined>()
   const [nextCursor, setNextCursor] = useState<string | undefined>()
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -378,18 +295,14 @@ export function FeedSurface({
   const [todos, setTodos] = useState<ReaderTodoResponse[]>([])
   const [todosLoading, setTodosLoading] = useState(true)
   const [todoError, setTodoError] = useState<string | null>(null)
-  const [feedCapabilities, setFeedCapabilities] = useState<string[]>([])
-  const [feedSections, setFeedSections] = useState<ReaderFeedSectionResponse[]>([])
-  const [feedSources, setFeedSources] = useState<ReaderFeedSourceResponse[]>([])
   const [showRecommendationHelp, setShowRecommendationHelp] = useState(false)
   const [expandedReasonKey, setExpandedReasonKey] = useState<string | null>(null)
-  // Key whose snapshot is on screen. Distinct from the key being requested, so
-  // a response for an abandoned mode/filter can never move the current view.
+  // Key whose mode/filter is on screen. A response for an abandoned view must
+  // never move the current scroll anchor.
   const [renderedKey, setRenderedKey] = useState<string | null>(null)
   const ownScrollRef = useRef<HTMLDivElement>(null)
   const scrollRef = hostScrollRef ?? ownScrollRef
   const itemsRef = useRef<ReaderFeedItemResponse[]>([])
-  const snapshotRef = useRef<string | undefined>()
   const cursorRef = useRef<string | undefined>()
   const sourceFilter = useMemo(
     () => normalizeSourceFilter(enabledSources).filter((source) => source !== 'inbox' || capabilityLease.policy.inbox),
@@ -417,18 +330,13 @@ export function FeedSurface({
 
   const clearForIdentityLoss = useCallback(() => {
     itemsRef.current = []
-    snapshotRef.current = undefined
     cursorRef.current = undefined
     setItems([])
-    setSnapshotID(undefined)
     setNextCursor(undefined)
     setBusyKeys(new Set())
     setTodos([])
     setTodosLoading(false)
     setTodoError(null)
-    setFeedCapabilities([])
-    setFeedSections([])
-    setFeedSources([])
     setError(SURFACE_IDENTITY_ERROR)
     setLoading(false)
     setLoadingMore(false)
@@ -451,18 +359,15 @@ export function FeedSurface({
 
   const commitState = useCallback((
     nextItems: readonly ReaderFeedItemResponse[],
-    nextSnapshotID: string | undefined,
     nextCursor: string | undefined,
   ) => {
     if (!capabilityLease.isCurrent('feed')) return
     const normalizedItems = dedupeItems(nextItems)
     itemsRef.current = normalizedItems
-    snapshotRef.current = nextSnapshotID
     cursorRef.current = nextCursor
     setItems(normalizedItems)
-    setSnapshotID(nextSnapshotID)
     setNextCursor(nextCursor)
-    writeResume(client, mode, sourceFilter, nextSnapshotID, nextCursor, normalizedItems)
+    writeResume(client, mode, sourceFilter, nextCursor, normalizedItems)
   }, [capabilityLease, client, mode, sourceFilter])
 
   const loadTodos = useCallback(async () => {
@@ -518,7 +423,7 @@ export function FeedSurface({
 
   // 返回本次请求的 token，让调用方可以在自己的 `then` 里问「我发出的那一次还算数吗」。
   // 闸门没有「下一个代次」这种东西，预测 id 只会在别的请求插队时判断错人。
-  const load = useCallback(async ({ append, cursor, snapshotID: requestedSnapshotID, resume }: FeedLoadOptions): Promise<FeedRequestToken | null> => {
+  const load = useCallback(async ({ append, cursor }: FeedLoadOptions): Promise<FeedRequestToken | null> => {
     if (!capabilityCurrent('feed')) return null
     const token = gate.begin('feed')
     if (append) setLoadingMore(true)
@@ -533,23 +438,10 @@ export function FeedSurface({
       const requestParams = {
         mode,
         source: sourceFilter,
-        ...(requestedSnapshotID ? { snapshotID: requestedSnapshotID } : {}),
         ...(cursor ? { after: cursor } : {}),
         limit: FEED_PAGE_SIZE,
       }
-      let result = await client.getReaderFeed(requestParams)
-
-      // A persisted cursor can outlive the server's snapshot retention window.
-      // Start a fresh snapshot instead of turning an expired position into an
-      // apparently empty Feed.
-      if (
-        !result.ok &&
-        !append &&
-        requestedSnapshotID &&
-        isRecoverableSnapshotError(result.error.status)
-      ) {
-        result = await client.getReaderFeed({ mode, source: sourceFilter, limit: FEED_PAGE_SIZE })
-      }
+      const result = await client.getReaderFeed(requestParams)
 
       if (!gate.isSameOwner(token) || !capabilityCurrent('feed')) return token
       if (!identityIsCurrent(client)) {
@@ -562,27 +454,11 @@ export function FeedSurface({
         return token
       }
 
-      setFeedCapabilities(result.data.capabilities ?? [])
-      setFeedSections(result.data.sections ?? [])
-      setFeedSources(result.data.sources ?? [])
-
-      const responseSnapshotID = result.data.snapshot_id || undefined
       const responseCursor = result.data.next_cursor || undefined
       if (append) {
-        const sameSnapshot = Boolean(snapshotRef.current && responseSnapshotID === snapshotRef.current)
-        const nextItems = sameSnapshot
-          ? mergeItems(itemsRef.current, result.data.items, false)
-          : dedupeItems(result.data.items)
-        commitState(nextItems, responseSnapshotID, responseCursor)
-      } else if (resume && responseSnapshotID === resume.snapshotID) {
-        // The server response validates the snapshot and refreshes its first
-        // page. Retain every locally loaded page and local action in the resume
-        // copy, including the cursor for the next page.
-        const nextItems = mergeItems(result.data.items, resume.items, true)
-        commitState(nextItems, responseSnapshotID, resume.nextCursor ?? responseCursor)
-        setRenderedKey(scrollAnchorKey)
+        commitState(mergeItems(itemsRef.current, result.data.items), responseCursor)
       } else {
-        commitState(result.data.items, responseSnapshotID, responseCursor)
+        commitState(result.data.items, responseCursor)
         setRenderedKey(scrollAnchorKey)
       }
     } catch (cause) {
@@ -608,28 +484,29 @@ export function FeedSurface({
     }
     const resume = readResume(client, mode, sourceFilter)
     itemsRef.current = []
-    snapshotRef.current = undefined
     cursorRef.current = undefined
     setItems([])
-    setSnapshotID(undefined)
     setNextCursor(undefined)
     setRenderedKey(null)
     setLoading(sourceFilter.length > 0)
     setLoadingMore(false)
     setError(null)
-    setFeedCapabilities([])
-    setFeedSections([])
-    setFeedSources([])
     if (sourceFilter.length === 0) {
       return () => {
         gate.invalidate('feed')
       }
     }
-    void load({ append: false, snapshotID: resume?.snapshotID, resume: resume ?? undefined })
+    if (resume) {
+      commitState(resume.items, resume.nextCursor)
+      setRenderedKey(scrollAnchorKey)
+      setLoading(false)
+    } else {
+      void load({ append: false })
+    }
     return () => {
       gate.invalidate('feed')
     }
-  }, [clearForIdentityLoss, client, gate, load, mode, sourceFilter])
+  }, [clearForIdentityLoss, client, commitState, gate, load, mode, scrollAnchorKey, sourceFilter])
 
   const selectMode = useCallback((nextMode: FeedMode) => {
     if (nextMode === mode) return
@@ -661,16 +538,9 @@ export function FeedSurface({
     [todos],
   )
 
-  // Re-requests the current key's snapshot without touching its stored anchor.
-  // This is the reload half of the gesture: retrying a failed load is the
-  // reader asking for the content they never got, not for a new place in it.
   const retry = useCallback(() => {
-    const currentSnapshotID = snapshotRef.current
-    const resume = currentSnapshotID
-      ? { snapshotID: currentSnapshotID, nextCursor: cursorRef.current, items: itemsRef.current, sourceFilter: [...sourceFilter] }
-      : undefined
-    void load({ append: false, snapshotID: currentSnapshotID, resume })
-  }, [load, sourceFilter])
+    void load({ append: false })
+  }, [load])
 
   const refresh = useCallback(() => {
     // An explicit refresh is the one gesture that discards the reader's place;
@@ -687,7 +557,7 @@ export function FeedSurface({
   const loadMore = useCallback(() => {
     const cursor = cursorRef.current
     if (!cursor || loadingMore) return
-    void load({ append: true, cursor, snapshotID: snapshotRef.current })
+    void load({ append: true, cursor })
   }, [load, loadingMore])
 
   const patchEngagement = useCallback(async (
@@ -695,12 +565,7 @@ export function FeedSurface({
     patch: { read?: boolean; read_later?: boolean },
   ) => {
     if (!capabilityCurrent('engagement') || !item.link_id && !item.feed_item_id) return
-    const action: ReaderFeedAction | null = patch.read !== undefined
-      ? 'read'
-      : patch.read_later !== undefined
-        ? 'read_later'
-        : null
-    if (!action || !supportsItemAction(item, action)) return
+    if (feedSource(item) === 'inbox' || patch.read === undefined && patch.read_later === undefined) return
     if (!requireIdentity()) return
     markBusy(item.key, true)
     try {
@@ -721,7 +586,7 @@ export function FeedSurface({
         const nextItems = itemsRef.current.map((candidate) => candidate.key === item.key
           ? { ...candidate, read, read_later: readLater }
           : candidate)
-        commitState(nextItems, snapshotRef.current, cursorRef.current)
+        commitState(nextItems, cursorRef.current)
         emitReaderEvent(READER_EVENTS.homeChanged)
         return
       }
@@ -737,7 +602,7 @@ export function FeedSurface({
         const nextItems = itemsRef.current.map((candidate) => candidate.key === item.key
           ? { ...candidate, read: result.data.read, read_later: result.data.read_later }
           : candidate)
-        commitState(nextItems, snapshotRef.current, cursorRef.current)
+        commitState(nextItems, cursorRef.current)
         emitReaderEvent(READER_EVENTS.homeChanged)
         return
       }
@@ -758,7 +623,7 @@ export function FeedSurface({
       const nextItems = itemsRef.current.map((candidate) => candidate.key === item.key
         ? { ...candidate, read, read_later: readLater }
         : candidate)
-      commitState(nextItems, snapshotRef.current, cursorRef.current)
+      commitState(nextItems, cursorRef.current)
       emitReaderEvent(READER_EVENTS.homeChanged)
     } catch (cause) {
       if (requireIdentity()) setError(readerErrorMessage(cause))
@@ -773,7 +638,6 @@ export function FeedSurface({
     action: 'confirm' | 'discard',
   ) => {
     if (!capabilityCurrent('inbox') || !item.inbox_id) return
-    if (!supportsItemAction(item, action)) return
     if (!requireIdentity()) return
     markBusy(item.key, true)
     try {
@@ -787,7 +651,6 @@ export function FeedSurface({
         }
         commitState(
           itemsRef.current.filter((candidate) => candidate.key !== item.key),
-          snapshotRef.current,
           cursorRef.current,
         )
         emitReaderEvent(READER_EVENTS.homeChanged)
@@ -804,7 +667,6 @@ export function FeedSurface({
       }
       commitState(
         itemsRef.current.filter((candidate) => candidate.key !== item.key),
-        snapshotRef.current,
         cursorRef.current,
       )
       emitReaderEvent(READER_EVENTS.homeChanged)
@@ -817,7 +679,7 @@ export function FeedSurface({
   }, [capabilityCurrent, clearForIdentityLoss, client, commitState, markBusy, onOpenLink, requireIdentity])
 
   const confirmPendingBatch = useCallback(async () => {
-    if (!capabilityCurrent('inbox') || !hasFeedCapability(feedCapabilities, 'inbox_batch') || busyKeys.has(BATCH_CONFIRM_KEY)) return
+    if (!capabilityCurrent('inbox') || !sourceFilter.includes('inbox') || busyKeys.has(BATCH_CONFIRM_KEY)) return
     if (!requireIdentity()) return
     // 搭在当前 Feed 代次上：批处理不发 Feed 请求，只需要知道结束时读者是否还停在
     // 同一份视图上——中途换了模式或来源筛选，这次刷新就不该再落地。
@@ -858,46 +720,51 @@ export function FeedSurface({
         clearForIdentityLoss()
       }
     }
-  }, [busyKeys, capabilityCurrent, clearForIdentityLoss, client, feedCapabilities, gate, load, markBusy, requireIdentity, scrollAnchor])
+  }, [busyKeys, capabilityCurrent, clearForIdentityLoss, client, gate, load, markBusy, requireIdentity, scrollAnchor, sourceFilter])
 
   const sendFeedback = useCallback(async (
     item: ReaderFeedItemResponse,
     action: FeedFeedbackAction,
   ) => {
-    if (!capabilityCurrent('feed') || !supportsItemAction(item, action)) return
+    if (!capabilityCurrent('feed')) return
+    if ((action === 'save' || action === 'unsave') && feedSource(item) !== 'subscription') return
     if (!requireIdentity()) return
     markBusy(item.key, true)
     const previousItems = itemsRef.current
-    const optimisticItems = action === 'hide' || action === 'not_interested'
+    const optimisticItems = action === 'hide'
       ? previousItems.filter((candidate) => candidate.key !== item.key)
       : previousItems.map((candidate) => candidate.key === item.key
         ? withSavedFeedAction(candidate, action === 'save')
         : candidate)
-    commitState(optimisticItems, snapshotRef.current, cursorRef.current)
+    commitState(optimisticItems, cursorRef.current)
     emitReaderEvent(READER_EVENTS.homeChanged)
     try {
-      const itemKey = item.action_key?.trim() || item.key
-      const result = await client.sendReaderFeedFeedback(itemKey, { action })
+      const result = await client.sendReaderFeedFeedback(item.key, { action })
       if (!requireIdentity() || !capabilityCurrent('feed')) return
       if (!result.ok) {
         if (isIdentityError(result.error)) clearForIdentityLoss()
         else {
-          commitState(previousItems, snapshotRef.current, cursorRef.current)
+          commitState(previousItems, cursorRef.current)
           emitReaderEvent(READER_EVENTS.homeChanged)
           setError(readerErrorMessage(result.error))
         }
         return
       }
-      const nextItems = action === 'hide' || action === 'not_interested'
+      const nextItems = action === 'hide'
         ? optimisticItems
         : optimisticItems.map((candidate) => candidate.key === item.key
-          ? { ...withSavedFeedAction(candidate, result.data.saved), link_id: result.data.association?.link_id ?? candidate.link_id }
+          ? {
+              ...withSavedFeedAction(candidate, result.data.action === 'save'),
+              link_id: result.data.action === 'save'
+                ? result.data.link_id ?? candidate.link_id
+                : result.data.link_id ?? null,
+            }
           : candidate)
-      commitState(nextItems, snapshotRef.current, cursorRef.current)
+      commitState(nextItems, cursorRef.current)
       emitReaderEvent(READER_EVENTS.homeChanged)
     } catch (cause) {
       if (requireIdentity()) {
-        commitState(previousItems, snapshotRef.current, cursorRef.current)
+        commitState(previousItems, cursorRef.current)
         emitReaderEvent(READER_EVENTS.homeChanged)
         setError(readerErrorMessage(cause))
       }
@@ -908,39 +775,34 @@ export function FeedSurface({
   }, [capabilityCurrent, clearForIdentityLoss, client, commitState, markBusy, requireIdentity])
 
   const openItem = useCallback((item: ReaderFeedItemResponse) => {
-    if (supportsItemAction(item, 'open_workspace') && item.link_id) {
+    if (item.link_id) {
       onOpenLink(item.link_id)
-    } else if (policy.inbox && supportsItemAction(item, 'open') && item.inbox_id) {
+    } else if (policy.inbox && item.inbox_id) {
       onNavigate({ kind: 'library', id: 'pending', inboxId: item.inbox_id })
-    } else if (supportsItemAction(item, 'open') && typeof window !== 'undefined') {
+    } else if (typeof window !== 'undefined') {
       window.open(item.url, '_blank', 'noopener,noreferrer')
     }
   }, [onNavigate, onOpenLink, policy.inbox])
 
   const sourceOptions = useMemo(
-    () => FEED_SOURCES.filter((source) => source.id !== 'inbox' || policy.inbox).map((source) => ({
-      ...source,
-      metadata: feedSources.find((candidate) => candidate.id === source.id),
-    })),
-    [feedSources, policy.inbox],
+    () => FEED_SOURCES.filter((source) => source.id !== 'inbox' || policy.inbox),
+    [policy.inbox],
   )
-  const sourceFilterAvailable = hasFeedCapability(feedCapabilities, 'source_filter')
-  const batchConfirmAvailable = policy.inbox && hasFeedCapability(feedCapabilities, 'inbox_batch')
+  const batchConfirmAvailable = policy.inbox && sourceFilter.includes('inbox')
 
   const renderFeedItem = (item: ReaderFeedItemResponse) => {
     const busy = busyKeys.has(item.key) || busyKeys.has(BATCH_CONFIRM_KEY)
+    const source = feedSource(item)
     const saveAction: FeedFeedbackAction = item.saved ? 'unsave' : 'save'
-    const canRead = policy.engagement && supportsItemAction(item, 'read')
-    const canReadLater = policy.engagement && supportsItemAction(item, 'read_later')
-    const canConfirm = policy.inbox && supportsItemAction(item, 'confirm')
-    const canDiscard = policy.inbox && supportsItemAction(item, 'discard')
-    const canSave = supportsItemAction(item, saveAction)
-    const canHide = supportsItemAction(item, 'hide')
-    const canReject = supportsItemAction(item, 'not_interested')
+    const canRead = policy.engagement && (source === 'reading' || source === 'subscription')
+    const canReadLater = policy.engagement && (source === 'reading' || source === 'subscription')
+    const canConfirm = policy.inbox && source === 'inbox'
+    const canDiscard = policy.inbox && source === 'inbox'
+    const canSave = source === 'subscription'
+    const canHide = source !== null
     const canOpen = supportsOpen(item)
     const reasonExpanded = expandedReasonKey === item.key
-    const sourceLabel = feedSourceLabel(item, feedSources)
-    const sectionLabel = feedSectionLabel(item, feedSections)
+    const sourceLabel = feedSourceLabel(item)
     const reasonText = feedReasonText(item)
     return (
       <ReaderListRow
@@ -951,14 +813,11 @@ export function FeedSurface({
         className="rvx-feed-card"
         dataAttributes={{ 'data-feed-item-key': item.key, 'data-resource-key': feedResourceIdentity(item) }}
         source={<span className="rvx-source-chip">{sourceLabel}</span>}
-        meta={<>
-          {sectionLabel && sectionLabel !== sourceLabel && <span className="rvx-muted">分段：{sectionLabel}</span>}
-          <button className="rvx-reason rvx-link-button" type="button" aria-label={`查看推荐原因：${reasonText}`} aria-expanded={reasonExpanded} onClick={() => setExpandedReasonKey((current) => current === item.key ? null : item.key)}><Icon name="explain" size={13} />{reasonText}</button>
-        </>}
+        meta={<button className="rvx-reason rvx-link-button" type="button" aria-label={`查看推荐原因：${reasonText}`} aria-expanded={reasonExpanded} onClick={() => setExpandedReasonKey((current) => current === item.key ? null : item.key)}><Icon name="explain" size={13} />{reasonText}</button>}
         title={item.title || '未命名内容'}
         onOpen={canOpen ? () => openItem(item) : undefined}
         summary={item.summary || '没有摘要'}
-        details={reasonExpanded ? <p className="rvx-muted" role="note">推荐原因：{reasonText}（规则 {item.reason_code}）</p> : undefined}
+        details={reasonExpanded ? <p className="rvx-muted" role="note">推荐原因：{reasonText}</p> : undefined}
         footer={<time dateTime={item.event_at}>{formatRelativeDate(item.event_at)}</time>}
         actions={<div className="rvx-action-row">
           {canRead && <button type="button" disabled={busy} title={item.read ? '标为未读' : '标为已读'} onClick={() => void patchEngagement(item, { read: !item.read })}><Icon name={item.read ? 'check' : 'dot'} size={15} />{item.read ? '已读' : '未读'}</button>}
@@ -967,7 +826,6 @@ export function FeedSurface({
           {canDiscard && item.inbox_id && <button type="button" disabled={busy} title="丢弃该条目" onClick={() => void resolveInbox(item, 'discard')}><Icon name="trash" size={15} />丢弃</button>}
           {canSave && <button type="button" disabled={busy} title={saveAction === 'save' ? '保存到阅读库' : '取消保存'} onClick={() => void sendFeedback(item, saveAction)}><Icon name="bookmark" size={15} />{saveAction === 'save' ? '保存' : '取消保存'}</button>}
           {canHide && <button type="button" disabled={busy} title="从当前 Feed 隐藏" onClick={() => void sendFeedback(item, 'hide')}><Icon name="x" size={15} />隐藏</button>}
-          {canReject && <button type="button" disabled={busy} title="不再推荐此内容" onClick={() => void sendFeedback(item, 'not_interested')}><Icon name="close" size={15} />不感兴趣</button>}
           {canOpen && <button type="button" className="rvx-open-action" disabled={busy} onClick={() => openItem(item)}><Icon name="arrowright" size={15} />{openActionLabel(item)}</button>}
         </div>}
       />
@@ -1007,13 +865,9 @@ export function FeedSurface({
           ) : (
             <>
               {error && <SurfaceError message={error} onRetry={retry} />}
-              <div className="rvx-feed-meta" data-feed-snapshot={snapshotID ?? undefined}>
+              <div className="rvx-feed-meta">
                 <span>{mode === 'recommended' ? '按推荐顺序' : '按时间倒序'} · 已加载 {visibleItems.length} 条</span>
               </div>
-              {feedSections.length > 0 && <div className="rvx-feed-meta" aria-label="Feed 分段">
-                <span className="rvx-eyebrow">分段</span>
-                {feedSections.map((section) => <span key={section.id} className="rvx-source-chip">{section.label} · {section.count} 条</span>)}
-              </div>}
               {renderBatchConfirmation()}
               <ul className="rvx-feed-list">{visibleItems.map(renderFeedItem)}</ul>
               {nextCursor && <button className="rvx-load-more" type="button" disabled={loadingMore} onClick={loadMore}>{loadingMore ? '加载中' : '加载更多'}</button>}
@@ -1027,14 +881,14 @@ export function FeedSurface({
           </section>}
           <section className="rvx-editor" aria-labelledby="feed-sources">
             <div className="rvx-section-head"><div><span className="rvx-eyebrow">筛选</span><h2 id="feed-sources">流里显示什么</h2></div></div>
-            {sourceFilterAvailable ? <div role="group" aria-label="Feed 来源筛选">
+            <div role="group" aria-label="Feed 来源筛选">
               {sourceOptions.map((source) => {
                 const enabled = enabledSources.has(source.id)
-                return <div key={source.id}><button className={'rvx-button ' + (enabled ? 'secondary' : '')} type="button" role="switch" aria-label={source.label} aria-checked={enabled} onClick={() => toggleSource(source.id)}><Icon name={enabled ? 'check' : 'close'} size={14} />{source.label}</button>{source.metadata && <small className="rvx-muted">{source.metadata.count} 条 · {source.metadata.capabilities.length > 0 ? '有可用动作' : '暂无动作'}</small>}</div>
+                return <button key={source.id} className={'rvx-button ' + (enabled ? 'secondary' : '')} type="button" role="switch" aria-label={source.label} aria-checked={enabled} onClick={() => toggleSource(source.id)}><Icon name={enabled ? 'check' : 'close'} size={14} />{source.label}</button>
               })}
-            </div> : <p className="rvx-muted">服务端未提供来源切换能力。</p>}
+            </div>
             <button className="rvx-link-button" type="button" aria-expanded={showRecommendationHelp} onClick={() => setShowRecommendationHelp((current) => !current)}><Icon name="explain" size={14} />为什么推荐</button>
-            {showRecommendationHelp && <p className="rvx-muted" role="note">推荐只使用当前身份的阅读、收藏和订阅行为；每张卡片都保留服务端返回的推荐原因，关闭来源后只影响当前显示。</p>}
+            {showRecommendationHelp && <p className="rvx-muted" role="note">推荐顺序由来源、未读状态和稍后读状态决定。</p>}
           </section>
         </aside>}
       </div>

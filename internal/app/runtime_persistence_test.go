@@ -196,7 +196,7 @@ func TestOpenPersistenceLayerWiresRuntimePoolLifecycleOptions(t *testing.T) {
 	var captured database.Options
 	layer, err := openPersistenceLayerWithDatabase(
 		t.Context(),
-		config.Config{TranslationSourceRollout: config.TranslationSourceRolloutStrict},
+		config.Config{},
 		func(_ context.Context, _ string, opts database.Options) (*pgxpool.Pool, error) {
 			captured = opts
 			return pool, nil
@@ -227,7 +227,7 @@ func TestOpenPersistenceLayerWiresRuntimePoolLifecycleOptions(t *testing.T) {
 	closed = true
 }
 
-func TestPersistenceLayerMissingPoolShutdownBlocksTracer(t *testing.T) {
+func TestPersistenceLayerMissingPoolShutdownFailsClose(t *testing.T) {
 	t.Parallel()
 
 	poolConfig, err := pgxpool.ParseConfig("postgres://test:test@127.0.0.1:1/test")
@@ -239,15 +239,10 @@ func TestPersistenceLayerMissingPoolShutdownBlocksTracer(t *testing.T) {
 		t.Fatalf("NewWithConfig() error = %v", err)
 	}
 	t.Cleanup(pool.Close)
-	tracerCalled := false
 	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
 		persistence: &persistenceLayer{
 			pool:            pool,
 			acquisitionGate: database.NewAcquisitionGate(),
-		},
-		tracerShutdown: func(context.Context) error {
-			tracerCalled = true
-			return nil
 		},
 	})
 	if err := lifecycle.Start(t.Context()); err != nil {
@@ -257,8 +252,5 @@ func TestPersistenceLayerMissingPoolShutdownBlocksTracer(t *testing.T) {
 	err = lifecycle.Close(t.Context())
 	if !errors.Is(err, database.ErrShutdownDeadline) || !strings.Contains(err.Error(), "NewPoolShutdown") {
 		t.Fatalf("Close() error = %v, want PoolShutdown invariant and ErrShutdownDeadline", err)
-	}
-	if tracerCalled {
-		t.Fatal("tracer shutdown ran after persistence layer lost PoolShutdown capability")
 	}
 }

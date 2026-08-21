@@ -87,6 +87,14 @@ func TestFeedSubscriptionSoftDeleteLifecycleClaimsAndRetention(t *testing.T) {
 		FROM generate_series(1,120) n`, retention.ID); err != nil {
 		t.Fatalf("insert retention fixtures: %v", err)
 	}
+	var savedItemID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM feed_items WHERE subscription_id=$1 AND external_id='ordinary-120'`, retention.ID).Scan(&savedItemID); err != nil {
+		t.Fatalf("select saved retention fixture: %v", err)
+	}
+	savedLinkID := seedReaderVNextSavedLink(t, pool, "https://example.com/o/120", "Saved retention item", "body", "summary")
+	if _, err := pool.Exec(ctx, `INSERT INTO reader_feed_saves (feed_item_id,link_id) VALUES ($1,$2)`, savedItemID, savedLinkID); err != nil {
+		t.Fatalf("save retention fixture: %v", err)
+	}
 	claims, err := feeds.ClaimDue(ctx, 1, 2*time.Minute)
 	if err != nil || len(claims) != 1 || claims[0].ID != retention.ID {
 		t.Fatalf("retention claim=%#v err=%v", claims, err)
@@ -106,8 +114,15 @@ func TestFeedSubscriptionSoftDeleteLifecycleClaimsAndRetention(t *testing.T) {
 		FROM feed_items WHERE subscription_id=$1`, retention.ID).Scan(&ordinaryCount, &unreadCount); err != nil {
 		t.Fatalf("count retained items: %v", err)
 	}
-	if ordinaryCount != 100 || unreadCount != 120 {
-		t.Fatalf("retention counts ordinary=%d unread=%d, want 100/120", ordinaryCount, unreadCount)
+	if ordinaryCount != 101 || unreadCount != 120 {
+		t.Fatalf("retention counts ordinary=%d unread=%d, want 101/120 including one Reader save", ordinaryCount, unreadCount)
+	}
+	var savedItemPresent bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM feed_items WHERE id=$1 AND link_id IS NULL)`, savedItemID).Scan(&savedItemPresent); err != nil {
+		t.Fatalf("read saved retention item: %v", err)
+	}
+	if !savedItemPresent {
+		t.Fatal("retention removed Reader-saved item or conflated it with Analyze link_id")
 	}
 }
 
