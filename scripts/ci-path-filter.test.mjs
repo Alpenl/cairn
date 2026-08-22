@@ -39,6 +39,25 @@ test('runs every surface when the path classifier changes', () => {
   }
 })
 
+test('dispatches native workflows for platform and shared contract changes', () => {
+  for (const path of [
+    'mobile/android/app/build.gradle.kts',
+    'mobile/shared/fixtures/share-payloads.json',
+    'scripts/mobile-x1-check.py',
+    'scripts/mobile-wire-smoke.py',
+  ]) {
+    assert.equal(classifyChangedPaths([path]).android, true, path)
+  }
+  for (const path of [
+    'mobile/ios/WebTagShare/Shared/WebTagShareCore.swift',
+    'mobile/shared/fixtures/share-payloads.json',
+    'scripts/mobile-x1-check.py',
+    'scripts/mobile-wire-smoke.py',
+  ]) {
+    assert.equal(classifyChangedPaths([path]).ios, true, path)
+  }
+})
+
 test('handles a large cross-platform pull request without losing early matches', () => {
   const paths = [
     'internal/service/reader_inbox.go',
