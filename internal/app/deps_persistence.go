@@ -77,10 +77,9 @@ func openPersistenceLayerWithDatabase(
 	return layer, nil
 }
 
-func (l *persistenceLayer) Close(_ context.Context) error {
+func (l *persistenceLayer) Close(ctx context.Context) error {
 	if l == nil || l.pool == nil {
 		return nil
 	}
-	l.pool.Close()
-	return nil
+	return database.ClosePool(ctx, l.pool)
 }

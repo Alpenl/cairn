@@ -309,8 +309,8 @@ func TestLoadAcceptsCustomShutdownTimeout(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsTooShortShutdownTimeout 锁定下界：< 1000ms 的预算无法
-// 完成 worker 排空（阶段 2 拿不到 300ms），Load 必须 fail-fast。
+// TestLoadRejectsTooShortShutdownTimeout 锁定下界：< 1000ms 的总预算无法
+// 可靠完成请求和 worker 排空，Load 必须 fail-fast。
 func TestLoadRejectsTooShortShutdownTimeout(t *testing.T) {
 	setBaseConfigEnv(t)
 	t.Setenv("SHUTDOWN_TIMEOUT_MS", "500")

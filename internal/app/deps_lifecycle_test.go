@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 )
 
 type resourceBackground struct {
@@ -61,5 +62,86 @@ func TestRuntimeResourcesNamesStartAndStopFailures(t *testing.T) {
 	}
 	if err := resources.Close(t.Context()); !errors.Is(err, stopErr) {
 		t.Fatalf("Close() error = %v, want %v", err, stopErr)
+	}
+}
+
+type deadlineBlockingBackground struct {
+	name     string
+	events   *[]string
+	deadline *time.Time
+}
+
+func (b *deadlineBlockingBackground) Start(context.Context) error { return nil }
+
+func (b *deadlineBlockingBackground) Stop(ctx context.Context) error {
+	*b.events = append(*b.events, "stop "+b.name)
+	if deadline, ok := ctx.Deadline(); ok && b.deadline != nil {
+		*b.deadline = deadline
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type deadlinePersistenceCloser struct {
+	events   *[]string
+	deadline *time.Time
+	err      error
+}
+
+func (p *deadlinePersistenceCloser) Close(ctx context.Context) error {
+	*p.events = append(*p.events, "close persistence")
+	if deadline, ok := ctx.Deadline(); ok && p.deadline != nil {
+		*p.deadline = deadline
+	}
+	if p.err != nil {
+		return p.err
+	}
+	return ctx.Err()
+}
+
+func TestRuntimeResourcesUseOneDeadlineAcrossBackgroundsAndPersistence(t *testing.T) {
+	t.Parallel()
+
+	var (
+		events              []string
+		backgroundDeadline  time.Time
+		persistenceDeadline time.Time
+	)
+	resources := newRuntimeResources([]namedRuntimeBackground{
+		{
+			name: "queue",
+			background: &deadlineBlockingBackground{
+				name:     "queue",
+				events:   &events,
+				deadline: &backgroundDeadline,
+			},
+		},
+	}, &deadlinePersistenceCloser{
+		events:   &events,
+		deadline: &persistenceDeadline,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	err := resources.Close(ctx)
+	elapsed := time.Since(startedAt)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() error = %v, want context deadline exceeded", err)
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("Close() elapsed = %v, want bounded by caller deadline", elapsed)
+	}
+	if !reflect.DeepEqual(events, []string{"stop queue", "close persistence"}) {
+		t.Fatalf("events = %v, want stop queue then close persistence", events)
+	}
+	if backgroundDeadline.IsZero() || persistenceDeadline.IsZero() {
+		t.Fatalf("missing observed deadlines: background=%v persistence=%v",
+			backgroundDeadline, persistenceDeadline)
+	}
+	if !backgroundDeadline.Equal(persistenceDeadline) {
+		t.Fatalf("deadlines differ: background=%v persistence=%v",
+			backgroundDeadline, persistenceDeadline)
 	}
 }

@@ -30,6 +30,14 @@ func TestOptionsZeroValue(t *testing.T) {
 	}
 }
 
+func TestClosePoolNilIsNoop(t *testing.T) {
+	t.Parallel()
+
+	if err := ClosePool(t.Context(), nil); err != nil {
+		t.Fatalf("ClosePool(nil) error = %v, want nil", err)
+	}
+}
+
 // TestParseConfigValidURL confirms that pgxpool.ParseConfig accepts a
 // well-formed postgres URL without returning an error. This exercises
 // the same call Open makes before creating the pool.

@@ -16,16 +16,20 @@ type namedRuntimeBackground struct {
 	background runtimeBackground
 }
 
+type persistenceCloser interface {
+	Close(context.Context) error
+}
+
 // runtimeResources owns the process-lifetime resources assembled by
 // BuildRuntime. HTTP shutdown prevents new handlers before Close runs, so the
 // only required order is to stop backgrounds in reverse construction order and
 // close PostgreSQL last.
 type runtimeResources struct {
 	backgrounds []namedRuntimeBackground
-	persistence *persistenceLayer
+	persistence persistenceCloser
 }
 
-func newRuntimeResources(backgrounds []namedRuntimeBackground, persistence *persistenceLayer) *runtimeResources {
+func newRuntimeResources(backgrounds []namedRuntimeBackground, persistence persistenceCloser) *runtimeResources {
 	return &runtimeResources{backgrounds: backgrounds, persistence: persistence}
 }
 

@@ -58,7 +58,7 @@ func run() error {
 		WriteTimeout:      time.Duration(cfg.Server.WriteTimeoutMS) * time.Millisecond,
 		IdleTimeout:       time.Duration(cfg.Server.IdleTimeoutMS) * time.Millisecond,
 		// 优雅停机总预算（默认 30s，可由 SHUTDOWN_TIMEOUT_MS 调整）。
-		// Server.Shutdown 把它按 70/30 拆给 HTTP / Lifecycle 两阶段。
+		// Server.Shutdown 用同一个 deadline 依次覆盖 HTTP 排空与 Lifecycle.Close。
 		ShutdownTimeout: time.Duration(cfg.Server.ShutdownTimeoutMS) * time.Millisecond,
 	})
 	if err := server.Run(ctx); err != nil {

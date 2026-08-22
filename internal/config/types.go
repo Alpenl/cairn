@@ -9,11 +9,9 @@ package config
 // what CORS origins to accept, and the per-request timeout budget.
 //
 // ShutdownTimeoutMS 是优雅停机的总预算（默认 30s）。Server.Shutdown
-// 把它拆成两段：阶段 1（70%）httpServer.Shutdown 拒收新请求 + 等
-// in-flight 请求自然结束；阶段 2（30%）Lifecycle.Close 排空 worker
-// queue、关闭 DB 连接池。值应与 k8s
-// terminationGracePeriodSeconds 对齐（一般留 10%~20% 的余量给容器
-// 自身的退出开销）。
+// 使用同一个 deadline 依次排空 HTTP 请求并执行 Lifecycle.Close；前一段
+// 消耗越久，后台 worker 与持久化资源关闭可用的剩余预算越少。值应低于
+// k8s terminationGracePeriodSeconds，给容器自身退出开销留出余量。
 type ServerConfig struct {
 	ListenAddr          string
 	CORSOrigins         []string
