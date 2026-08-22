@@ -428,12 +428,6 @@ type ReaderHomeResponse struct {
 	Stale   bool `json:"stale"`
 }
 
-const (
-	ReaderHomeFreshnessFresh   = "fresh"
-	ReaderHomeFreshnessPartial = "partial"
-	ReaderHomeFreshnessStale   = "stale"
-)
-
 type ReaderAIRequest struct {
 	Prompt       string `json:"prompt" binding:"required,max=16000"`
 	Scope        string `json:"scope,omitempty" binding:"omitempty,oneof=general selection thought"`

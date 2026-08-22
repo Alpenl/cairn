@@ -83,16 +83,16 @@ func homeCount(counts map[string]int, keys ...string) (int, bool) {
 func homeFreshnessWireState(freshness model.ReaderHomeFreshness) (string, bool, bool) {
 	switch freshness {
 	case model.ReaderHomeFreshnessFresh:
-		return dto.ReaderHomeFreshnessFresh, false, false
+		return string(model.ReaderHomeFreshnessFresh), false, false
 	case model.ReaderHomeFreshnessStale:
-		return dto.ReaderHomeFreshnessStale, false, true
+		return string(model.ReaderHomeFreshnessStale), false, true
 	case model.ReaderHomeFreshnessPartial:
-		return dto.ReaderHomeFreshnessPartial, true, false
+		return string(model.ReaderHomeFreshnessPartial), true, false
 	default:
 		// An absent or future repository state is not evidence of freshness.
 		// Keep the compatibility stale flag false because an unverified result
 		// is not necessarily old; partial is the closed wire state for it.
-		return dto.ReaderHomeFreshnessPartial, true, false
+		return string(model.ReaderHomeFreshnessPartial), true, false
 	}
 }
 

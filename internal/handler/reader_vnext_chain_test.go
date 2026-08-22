@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
+	"webtag/internal/model"
 )
 
 type readerVNextChainHandler struct {
@@ -75,7 +76,7 @@ func newReaderVNextChainHandler() *readerVNextChainHandler {
 		home: dto.ReaderHomeResponse{
 			Today: "2026-08-10", Summary: "继续整理捕获内容", Counts: map[string]int{"pending": 0, "reading": 1, "notes": 1, "todos": 1},
 			ContinueReading: []dto.ReaderFeedItemResponse{{Key: "link:" + linkText, Source: "reading", ResourceKey: "link:" + linkText, Title: "Captured article", Summary: "Captured summary", URL: "https://capture.example.test/article", LinkID: &linkText, EventAt: now}},
-			RecentThoughts:  []dto.ReaderThoughtResponse{}, Todos: []dto.ReaderTodoResponse{}, Freshness: dto.ReaderHomeFreshnessFresh,
+			RecentThoughts:  []dto.ReaderThoughtResponse{}, Todos: []dto.ReaderTodoResponse{}, Freshness: string(model.ReaderHomeFreshnessFresh),
 		},
 	}
 }
