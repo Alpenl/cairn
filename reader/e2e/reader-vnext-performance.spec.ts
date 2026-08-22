@@ -112,10 +112,21 @@ test('Reader vNext scale baseline journey', async ({ page }, testInfo) => {
     const surfaces: Record<string, unknown>[] = []
     for (const step of SURFACE_STEPS) {
       for (let warm = 0; warm < SURFACE_WARMUP; warm += 1) {
-        await page.goto(`/reader/${step.query}`, { waitUntil: 'domcontentloaded' })
+        const warmPage = await context.newPage()
+        try {
+          await backend.install(warmPage)
+          await configureScaleConnection(warmPage)
+          await warmPage.goto(`/reader/${step.query}`, { waitUntil: 'domcontentloaded' })
+        } finally {
+          await warmPage.close()
+        }
       }
 
-      const responsePromise = page
+      const surfacePage = await context.newPage()
+      await backend.install(surfacePage)
+      await configureScaleConnection(surfacePage)
+
+      const responsePromise = surfacePage
         .waitForResponse(
           (response) => new URL(response.url()).pathname === step.apiPath,
           { timeout: 60_000 },
@@ -123,50 +134,54 @@ test('Reader vNext scale baseline journey', async ({ page }, testInfo) => {
         .catch(() => null)
 
       const startedAt = Date.now()
-      await page.goto(`/reader/${step.query}`, { waitUntil: 'domcontentloaded' })
-      const response = await responsePromise
-      const dataReadyMs = Date.now() - startedAt
+      try {
+        await surfacePage.goto(`/reader/${step.query}`, { waitUntil: 'domcontentloaded' })
+        const response = await responsePromise
+        const dataReadyMs = Date.now() - startedAt
 
-      // Two animation frames is the cheapest reliable "React has committed and
-      // the browser has painted" signal. networkidle is not usable here: the
-      // Reader keeps background sync traffic alive, so it would time out rather
-      // than settle.
-      await page.evaluate(
-        () => new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-        }),
-      )
-      const paintedMs = Date.now() - startedAt
+        // Two animation frames is the cheapest reliable "React has committed and
+        // the browser has painted" signal. networkidle is not usable here: the
+        // Reader keeps background sync traffic alive, so it would time out rather
+        // than settle.
+        await surfacePage.evaluate(
+          () => new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+          }),
+        )
+        const paintedMs = Date.now() - startedAt
 
-      const navigation = await page.evaluate(() => {
-        const entry = performance.getEntriesByType('navigation')[0]
-        if (!(entry instanceof PerformanceNavigationTiming)) {
-          return { domContentLoadedMs: null, loadEventMs: null, transferSize: null }
-        }
-        return {
-          domContentLoadedMs: entry.domContentLoadedEventEnd,
-          loadEventMs: entry.loadEventEnd,
-          transferSize: entry.transferSize,
-        }
-      })
+        const navigation = await surfacePage.evaluate(() => {
+          const entry = performance.getEntriesByType('navigation')[0]
+          if (!(entry instanceof PerformanceNavigationTiming)) {
+            return { domContentLoadedMs: null, loadEventMs: null, transferSize: null }
+          }
+          return {
+            domContentLoadedMs: entry.domContentLoadedEventEnd,
+            loadEventMs: entry.loadEventEnd,
+            transferSize: entry.transferSize,
+          }
+        })
 
-      surfaces.push({
-        name: step.name,
-        route: step.query,
-        apiPath: step.apiPath,
-        apiObserved: response !== null,
-        apiStatus: response?.status() ?? null,
-        dataReadyMs,
-        paintedMs,
-        navigation,
-      })
+        surfaces.push({
+          name: step.name,
+          route: step.query,
+          apiPath: step.apiPath,
+          apiObserved: response !== null,
+          apiStatus: response?.status() ?? null,
+          dataReadyMs,
+          paintedMs,
+          navigation,
+        })
 
-      // Without this the surface half asserts nothing: a broken fixture that
-      // stops the app booting produces four 60-second timeouts, records them as
-      // numbers, and passes green. That is not hypothetical — it is what a too
-      // greedy route glob did to this spec while it was being written.
-      expect(response, `${step.name} issued ${step.apiPath}`).not.toBeNull()
-      expect(response?.status(), `${step.name} loaded its data`).toBe(200)
+        // Without this the surface half asserts nothing: a broken fixture that
+        // stops the app booting produces four 60-second timeouts, records them as
+        // numbers, and passes green. That is not hypothetical — it is what a too
+        // greedy route glob did to this spec while it was being written.
+        expect(response, `${step.name} issued ${step.apiPath}`).not.toBeNull()
+        expect(response?.status(), `${step.name} loaded its data`).toBe(200)
+      } finally {
+        await surfacePage.close()
+      }
     }
 
     // ------------------------------------------------------ API timings
@@ -178,6 +193,7 @@ test('Reader vNext scale baseline journey', async ({ page }, testInfo) => {
       name: probe.name,
       path: probe.path.replace('__TOKEN__', encodeURIComponent(fixture.search_token)),
     }))
+    await page.goto('/reader/?surface=home', { waitUntil: 'domcontentloaded' })
 
     const apiTimings: ApiSampleResult[] = await page.evaluate(
       async ({ probeList, warmup, samples }) => {
