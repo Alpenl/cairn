@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"webtag/internal/migrate"
 )
@@ -20,7 +19,6 @@ func TestReaderCategoryCleanupFoldsMembershipNamesIntoTags(t *testing.T) {
 	dsn := isolatedMigrationDatabase(t)
 	pool := migrationTargetPool(t, dsn)
 	prepareProductionUpgradeFixture(t, pool)
-	installLegacyReaderCategorySchema(t, pool)
 
 	inboxID, linkID := uuid.New(), uuid.New()
 	sharedCategoryID, inboxCategoryID, linkCategoryID := uuid.New(), uuid.New(), uuid.New()
@@ -29,10 +27,10 @@ func TestReaderCategoryCleanupFoldsMembershipNamesIntoTags(t *testing.T) {
 		t.Fatalf("seed legacy categorized Inbox: %v", err)
 	}
 	if _, err := pool.Exec(t.Context(), `INSERT INTO public.links (
-			id,url,source_key,status,tags,metadata_revision,first_collected_at
+			id,url,source_key,status,tags,metadata_revision,library_kind,library_kind_source,first_collected_at
 		) VALUES (
 			$1,'https://category.example/link','https://category.example/link',
-			'done',ARRAY['shared','saved'],7,CURRENT_TIMESTAMP
+			'done',ARRAY['shared','saved'],7,'reading','user',CURRENT_TIMESTAMP
 		)`, linkID); err != nil {
 		t.Fatalf("seed legacy categorized Link: %v", err)
 	}
@@ -81,7 +79,6 @@ func TestReaderCategoryCleanupRejectsUnsupportedHostKinds(t *testing.T) {
 	dsn := isolatedMigrationDatabase(t)
 	pool := migrationTargetPool(t, dsn)
 	prepareProductionUpgradeFixture(t, pool)
-	installLegacyReaderCategorySchema(t, pool)
 
 	categoryID, noteID := uuid.New(), uuid.New()
 	if _, err := pool.Exec(t.Context(), `INSERT INTO public.reader_notes (id,title)
@@ -116,24 +113,6 @@ func TestReaderCategoryCleanupRejectsUnsupportedHostKinds(t *testing.T) {
 	if categories != 1 || memberships != 1 {
 		t.Fatalf("Reader Category rollback retained categories/memberships = %d/%d, want 1/1",
 			categories, memberships)
-	}
-}
-
-func installLegacyReaderCategorySchema(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	if _, err := pool.Exec(t.Context(), `
-		CREATE TABLE public.reader_categories (
-			id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-			name text NOT NULL UNIQUE,
-			created_at timestamptz DEFAULT now() NOT NULL
-		);
-		CREATE TABLE public.reader_categorizables (
-			category_id uuid NOT NULL REFERENCES public.reader_categories(id) ON DELETE CASCADE,
-			host_kind text NOT NULL,
-			host_id text NOT NULL,
-			PRIMARY KEY (category_id,host_kind,host_id)
-		)`); err != nil {
-		t.Fatalf("install legacy Reader Category schema: %v", err)
 	}
 }
 

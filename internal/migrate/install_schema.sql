@@ -1,6 +1,6 @@
--- 自动生成；请勿手工编辑。
--- 来源：internal/migrate/schema.sql。
--- 仅包含 Cairn 自管对象；River 与 migration ledger 由各自 runner 创建。
+-- Fresh install DDL authority for Cairn-owned objects.
+-- 改 fresh schema 请先改本文件，再跑 make schema-dump 更新完整快照。
+-- River 与 migration ledger 由各自 runner 创建，不写入本 baseline。
 --
 --
 -- PostgreSQL database dump

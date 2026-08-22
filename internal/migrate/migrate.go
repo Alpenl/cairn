@@ -1,6 +1,6 @@
 // Package migrate provisions the current Cairn schema and upgrades the one
 // production baseline supported by this release. It is forward-only: an empty
-// database installs the generated schema, the exact v0.1.17 ledger runs one
+// database installs the fresh baseline schema, the exact v0.1.17 ledger runs one
 // aggregate upgrade, and the current single-head ledger is a no-op.
 package migrate
 

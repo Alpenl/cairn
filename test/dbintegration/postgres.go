@@ -58,8 +58,10 @@ const (
 	// Local and sandbox runs leave it unset so an unavailable Docker daemon
 	// keeps the opt-in suite skippable; the required Make target sets it.
 	dbIntegrationRequiredEnv = "WEBTAG_DBINTEGRATION_REQUIRED"
-	// Keep the integration image aligned with production's PostgreSQL major.
-	postgresImage = "postgres:16"
+	// Keep the integration image aligned with production's PostgreSQL major
+	// while retaining pgvector so the immutable v0.1.17 baseline fixture can be
+	// restored before the current migration removes that extension.
+	postgresImage = "pgvector/pgvector:pg16"
 )
 
 // containerState holds the singleton container + base pool shared

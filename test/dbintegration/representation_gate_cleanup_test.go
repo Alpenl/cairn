@@ -25,71 +25,10 @@ func TestRepresentationCleanupMigratesLegacyObjects(t *testing.T) {
 	pool := migrationTargetPool(t, dsn)
 	prepareProductionUpgradeFixture(t, pool)
 
-	if _, err := pool.Exec(t.Context(), `
-		CREATE TABLE public.library_read_revision (
-			singleton boolean PRIMARY KEY DEFAULT true,
-			revision bigint NOT NULL DEFAULT 0,
-			updated_at timestamptz NOT NULL DEFAULT now());
-		CREATE TABLE public.global_read_revision (
-			singleton boolean PRIMARY KEY DEFAULT true,
-			revision bigint NOT NULL DEFAULT 0,
-			updated_at timestamptz NOT NULL DEFAULT now());
-		CREATE TABLE public.feed_read_revision (
-			singleton boolean PRIMARY KEY DEFAULT true,
-			revision bigint NOT NULL DEFAULT 0,
-			updated_at timestamptz NOT NULL DEFAULT now());
-		INSERT INTO public.library_read_revision DEFAULT VALUES;
-		INSERT INTO public.global_read_revision DEFAULT VALUES;
-		INSERT INTO public.feed_read_revision DEFAULT VALUES;
-
-		CREATE FUNCTION public.bump_library_read_revision() RETURNS void
-		LANGUAGE sql AS $$
-			UPDATE public.library_read_revision
-			SET revision=revision+1,updated_at=now() WHERE singleton
-		$$;
-		CREATE FUNCTION public.bump_library_revision_trigger() RETURNS trigger
-		LANGUAGE plpgsql AS $$
-		BEGIN
-			PERFORM public.bump_library_read_revision();
-			RETURN NULL;
-		END
-		$$;
-		CREATE TRIGGER trg_reader_notes_bump_library_revision
-		AFTER INSERT ON public.reader_notes FOR EACH STATEMENT
-		EXECUTE FUNCTION public.bump_library_revision_trigger();
-
-		CREATE FUNCTION public.lock_representation_revisions(
-			lock_global boolean,lock_library boolean,lock_feed boolean) RETURNS void
-		LANGUAGE plpgsql AS $$
-		BEGIN
-			PERFORM public.lock_representation_write_gate_exclusive();
-			IF lock_global THEN
-				PERFORM revision FROM public.global_read_revision WHERE singleton FOR UPDATE;
-			END IF;
-			IF lock_library THEN
-				PERFORM revision FROM public.library_read_revision WHERE singleton FOR UPDATE;
-			END IF;
-			IF lock_feed THEN
-				PERFORM revision FROM public.feed_read_revision WHERE singleton FOR UPDATE;
-			END IF;
-		END
-		$$;
-		CREATE FUNCTION public.lock_library_feed_revisions() RETURNS void
-		LANGUAGE sql AS $$
-			SELECT public.lock_representation_revisions(false,true,true)
-		$$;
-		CREATE FUNCTION public.lock_library_global_revisions() RETURNS void
-		LANGUAGE sql AS $$
-			SELECT public.lock_representation_revisions(true,true,false)
-		$$;
-	`); err != nil {
-		t.Fatalf("create legacy representation revision objects: %v", err)
-	}
-
 	before := readRepresentationGateSchemaState(t, pool)
-	if before.revisionTables != 3 || before.bumpTriggers != 1 || before.obsoleteLockFns != 3 ||
-		before.writeGateFns != 3 || before.writeGateTriggers != 14 {
-		t.Fatalf("legacy fixture = tables:%d bump_triggers:%d lock_functions:%d gate_functions:%d gate_triggers:%d, want 3/1/3/3/14",
+	if before.revisionTables != 3 || before.bumpTriggers != 27 || before.obsoleteLockFns != 3 ||
+		before.writeGateFns != 3 || before.writeGateTriggers != 18 {
+		t.Fatalf("legacy fixture = tables:%d bump_triggers:%d lock_functions:%d gate_functions:%d gate_triggers:%d, want 3/27/3/3/18",
 			before.revisionTables, before.bumpTriggers, before.obsoleteLockFns,
 			before.writeGateFns, before.writeGateTriggers)
 	}

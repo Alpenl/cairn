@@ -18,7 +18,7 @@ func TestMigrationPlanHasOneCurrentHead(t *testing.T) {
 		t.Fatalf("current migration has %d statements, want schema cleanup plus two seed statements", len(plan[0].SQL))
 	}
 	if plan[0].SQL[0] != currentInstallSchemaSQL {
-		t.Fatal("current migration does not install the generated application schema")
+		t.Fatal("current migration does not install the fresh baseline schema")
 	}
 	if plan[0].OnlineUpdate.Compatibility != OnlineUpdateIncompatible ||
 		strings.TrimSpace(plan[0].OnlineUpdate.Note) == "" {
@@ -230,6 +230,22 @@ func TestGeneratedSchemaSnapshotsHaveSeparateOwnership(t *testing.T) {
 		if strings.Contains(install, ownedElsewhere) {
 			t.Errorf("application install schema duplicates externally managed object %q", ownedElsewhere)
 		}
+	}
+}
+
+func TestSchemaDumpDoesNotRegenerateFreshBaseline(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("../../scripts/db-dump-schema.sh")
+	if err != nil {
+		t.Fatalf("read schema dump script: %v", err)
+	}
+	body := string(raw)
+	if strings.Contains(body, "render-install-schema") || strings.Contains(body, "INSTALL_OUT_FILE") {
+		t.Fatal("schema dump script still regenerates install_schema.sql from schema.sql")
+	}
+	if !strings.Contains(body, "install_schema.sql") || !strings.Contains(body, "schema.sql 是 *生成产物*") {
+		t.Fatalf("schema dump script no longer documents install_schema.sql as the fresh schema source:\n%s", body)
 	}
 }
 

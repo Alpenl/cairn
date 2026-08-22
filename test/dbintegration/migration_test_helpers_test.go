@@ -3,7 +3,9 @@ package dbintegration
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
@@ -19,6 +21,13 @@ import (
 	"webtag/internal/migrate"
 )
 
+const (
+	productionBaselineSchemaPath   = "testdata/v0.1.17/schema.sql"
+	productionBaselineSchemaSHA256 = "a6c6af7aaf1e19ed83b9bca8ad9abff3a0d3a09c27000c990efefd788b8dda11"
+)
+
+var productionBaselineRiverVersions = []int{1, 2, 3, 4, 5, 6, 7}
+
 type migrationRowQuerier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
@@ -27,7 +36,7 @@ func assertMigrationRecorded(t *testing.T, db migrationRowQuerier, id string, wa
 	t.Helper()
 	var got bool
 	if err := db.QueryRow(t.Context(), `SELECT EXISTS (
-		SELECT 1 FROM schema_migrations WHERE version = $1
+		SELECT 1 FROM public.schema_migrations WHERE version = $1
 	)`, id).Scan(&got); err != nil {
 		t.Fatalf("read migration %s state: %v", id, err)
 	}
@@ -84,140 +93,38 @@ func isolatedMigrationDatabase(t *testing.T) string {
 	return targetURL.String()
 }
 
-// prepareProductionUpgradeFixture converts a current fresh schema back to the
-// structural subset that the sole supported v0.1.17 upgrade edge requires.
-// Individual tests add the retired objects whose data movement they exercise;
-// this helper owns only the common, non-optional baseline and exact ledger.
+// prepareProductionUpgradeFixture installs the immutable v0.1.17 schema
+// fixture and records the exact production baseline ledger. The fixture is a
+// pg_dump snapshot, not a reverse-built current schema. The fixture is
+// schema-only, so this helper also restores the seed rows and River ledger that
+// v0.1.17 migrations had written by the time production reached that tag.
 func prepareProductionUpgradeFixture(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if err := migrate.Up(t.Context(), pool); err != nil {
-		t.Fatalf("install current schema before production upgrade fixture: %v", err)
-	}
-
 	tx, err := pool.Begin(t.Context())
 	if err != nil {
 		t.Fatalf("begin production upgrade fixture: %v", err)
 	}
 	defer func() { _ = tx.Rollback(t.Context()) }()
+	if _, err := tx.Exec(t.Context(), productionBaselineSchemaSQL(t)); err != nil {
+		t.Fatalf("install v0.1.17 schema fixture: %v", err)
+	}
 	if _, err := tx.Exec(t.Context(), `
-		ALTER TABLE public.link_translations
-			ADD COLUMN current_river_job_id bigint,
-			DROP CONSTRAINT chk_link_translations_source_content_revision,
-			ADD CONSTRAINT chk_link_translations_source_content_revision
-			CHECK (source_content_revision IS NULL OR source_content_revision > 0);
-		DROP INDEX public.idx_link_translations_summary_source_unique;
-		CREATE UNIQUE INDEX idx_link_translations_legacy_source_unique
-			ON public.link_translations
-			(link_id,scope,block_key,start_offset,end_offset,source_hash,target_language)
-			WHERE source_content_revision IS NULL;
-
-		ALTER TABLE public.reader_inbox
-			DROP CONSTRAINT reader_inbox_identity_key_check,
-			DROP CONSTRAINT reader_inbox_status_check,
-			ALTER COLUMN identity_key DROP NOT NULL;
-		ALTER TABLE public.reader_inbox
-			ADD CONSTRAINT reader_inbox_status_check
-			CHECK (status IN ('pending','confirmed','discarded'));
-		ALTER TABLE public.reader_thought_ops
-			DROP CONSTRAINT reader_thought_ops_target_kind_check,
-			ALTER COLUMN logical_clock SET DEFAULT 0;
-		ALTER TABLE public.reader_thoughts
-			DROP CONSTRAINT reader_thoughts_target_kind_check,
-			ALTER COLUMN winner_logical_clock SET DEFAULT 0;
-
-		ALTER TABLE public.reader_feed_hides
-			RENAME CONSTRAINT reader_feed_hides_pkey TO reader_feed_feedback_pkey;
-		ALTER TABLE public.reader_feed_hides RENAME TO reader_feed_feedback;
-		ALTER TABLE public.reader_feed_feedback
-			ADD COLUMN action text DEFAULT 'hide' NOT NULL,
-			ADD CONSTRAINT reader_feed_feedback_action_check
-			CHECK (action IN ('hide','save','unsave'));
-		ALTER TABLE public.reader_feed_saves
-			ADD COLUMN created_link boolean DEFAULT false NOT NULL;
-		CREATE INDEX idx_river_job_translation_terminal_history
-			ON public.river_job (finalized_at,id)
-			WHERE kind IN ('translate_link_v2','translate_link_content')
-			  AND state IN ('cancelled','completed','discarded')
-			  AND finalized_at IS NOT NULL;
-
-		CREATE FUNCTION public.guard_representation_write_gate() RETURNS trigger
-		LANGUAGE plpgsql AS $$
-		BEGIN
-			IF NOT pg_try_advisory_xact_lock_shared(4,0) THEN
-				IF NOT EXISTS (
-					SELECT 1 FROM pg_locks
-					WHERE locktype='advisory' AND pid=pg_backend_pid()
-					  AND classid=4 AND objid=0 AND objsubid=2
-					  AND mode='ExclusiveLock' AND granted
-				) THEN
-					RAISE EXCEPTION USING ERRCODE='40001',
-						MESSAGE='representation write conflicts with an exclusive revision operation',
-						HINT='retry the transaction';
-				END IF;
-			END IF;
-			RETURN NULL;
-		END
-		$$;
-		CREATE FUNCTION public.lock_representation_write_gate_exclusive() RETURNS void
-		LANGUAGE sql AS $$ SELECT pg_advisory_xact_lock(4,0) $$;
-		CREATE FUNCTION public.lock_representation_write_gate_shared() RETURNS void
-		LANGUAGE sql AS $$ SELECT pg_advisory_xact_lock_shared(4,0) $$;
-
-		CREATE TRIGGER trg_feed_folders_representation_write_gate_ins_del
-		BEFORE INSERT OR DELETE ON public.feed_folders FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_feed_folders_representation_write_gate_upd
-		BEFORE UPDATE OF created_at,id,name,updated_at ON public.feed_folders FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_feed_items_representation_write_gate_ins_del
-		BEFORE INSERT OR DELETE ON public.feed_items FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_feed_items_representation_write_gate_upd
-		BEFORE UPDATE OF author,content_html,content_text,created_at,id,link_id,published_at,
-			read_at,read_later,starred,subscription_id,summary,title,url
-		ON public.feed_items FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_feed_subscriptions_representation_write_gate_ins_del
-		BEFORE INSERT OR DELETE ON public.feed_subscriptions FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_feed_subscriptions_representation_write_gate_upd
-		BEFORE UPDATE OF active,folder_id,id,title ON public.feed_subscriptions FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_links_representation_write_gate_ins_del
-		BEFORE INSERT OR DELETE ON public.links FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_links_representation_write_gate_upd
-		BEFORE UPDATE OF content,content_cjk_chars,content_document,content_format,
-			content_revision,content_source,content_type,content_words,created_at,description,
-			domain,error_msg,fetcher_type,id,is_low_confidence,library_kind,library_kind_locked,
-			low_confidence_reason,parent_id,parent_path,path_depth,status,summary,tags,title,
-			updated_at,url
-		ON public.links FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_site_entries_representation_write_gate_ins_del
-		BEFORE INSERT OR DELETE ON public.site_entries FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_site_entries_representation_write_gate_upd
-		BEFORE UPDATE OF id,normalized_url,site_id ON public.site_entries FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_site_tags_representation_write_gate_ins_del
-		BEFORE INSERT OR DELETE ON public.site_tags FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_site_tags_representation_write_gate_upd
-		BEFORE UPDATE OF normalized_tag,site_id,tag ON public.site_tags FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_sites_representation_write_gate_ins_del
-		BEFORE INSERT OR DELETE ON public.sites FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-		CREATE TRIGGER trg_sites_representation_write_gate_upd
-		BEFORE UPDATE OF first_collected_at,homepage_url,icon_url,id,intro,last_collected_at,
-			name,pinned,primary_entry_id,revision,site_key,updated_at
-		ON public.sites FOR EACH STATEMENT
-		EXECUTE FUNCTION public.guard_representation_write_gate();
-
+		SELECT pg_catalog.set_config('search_path','public, pg_catalog',false);
+		INSERT INTO public.installation_state (singleton) VALUES (true);
+		INSERT INTO public.library_read_revision (singleton) VALUES (true);
+		INSERT INTO public.global_read_revision (singleton) VALUES (true);
+		INSERT INTO public.feed_read_revision (singleton) VALUES (true);
+		INSERT INTO public.feed_subscriptions (url,canonical_url,title)
+		VALUES (
+			'https://www.ruanyifeng.com/blog/atom.xml',
+			'https://www.ruanyifeng.com/blog/atom.xml',
+			'阮一峰的网络日志'
+		);
+		UPDATE public.feed_read_revision SET revision=0,updated_at=now() WHERE singleton;
 		DELETE FROM public.schema_migrations;
+		DELETE FROM public.river_migration;
 	`); err != nil {
-		t.Fatalf("restore common v0.1.17 schema shape: %v", err)
+		t.Fatalf("seed v0.1.17 baseline rows: %v", err)
 	}
 	for _, version := range migrate.ProductionBaselineVersions() {
 		if _, err := tx.Exec(t.Context(),
@@ -225,10 +132,30 @@ func prepareProductionUpgradeFixture(t *testing.T, pool *pgxpool.Pool) {
 			t.Fatalf("record production baseline migration %s: %v", version, err)
 		}
 	}
+	for _, version := range productionBaselineRiverVersions {
+		if _, err := tx.Exec(t.Context(),
+			`INSERT INTO public.river_migration(line,version) VALUES ($1,$2)`,
+			migrate.RiverLedgerLine, version); err != nil {
+			t.Fatalf("record v0.1.17 River migration %d: %v", version, err)
+		}
+	}
 	if err := tx.Commit(t.Context()); err != nil {
 		t.Fatalf("commit production upgrade fixture: %v", err)
 	}
 	assertProductionBaselineLedger(t, pool)
+}
+
+func productionBaselineSchemaSQL(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(productionBaselineSchemaPath)
+	if err != nil {
+		t.Fatalf("read v0.1.17 schema fixture: %v", err)
+	}
+	sum := sha256.Sum256(raw)
+	if got := fmt.Sprintf("%x", sum); got != productionBaselineSchemaSHA256 {
+		t.Fatalf("v0.1.17 schema fixture checksum = %s, want %s", got, productionBaselineSchemaSHA256)
+	}
+	return string(raw)
 }
 
 func assertProductionBaselineLedger(t *testing.T, pool migrationRowQuerier) {
@@ -244,35 +171,6 @@ func assertCurrentSchemaLedger(t *testing.T, pool migrationRowQuerier) {
 	assertMigrationRecorded(t, pool, migrate.CurrentSchemaMigrationID, true)
 	for _, version := range migrate.ProductionBaselineVersions() {
 		assertMigrationRecorded(t, pool, version, false)
-	}
-}
-
-func installLegacyLinkClassificationSchema(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	if _, err := pool.Exec(t.Context(), `ALTER TABLE public.links
-		ADD COLUMN library_kind_source text,
-		ADD COLUMN predicted_library_kind text,
-		ADD COLUMN classification_confidence real,
-		ADD COLUMN classification_reason text,
-		ADD COLUMN classification_explanation text,
-		ADD COLUMN classifier_version text,
-		ADD COLUMN requested_library_kind text DEFAULT 'auto' NOT NULL,
-		ADD COLUMN requested_library_kind_source text DEFAULT 'auto' NOT NULL,
-		ADD CONSTRAINT chk_links_classification_confidence CHECK (
-			classification_confidence IS NULL OR classification_confidence BETWEEN 0 AND 1),
-		ADD CONSTRAINT chk_links_library_kind_pair CHECK (
-			(library_kind IS NULL) = (library_kind_source IS NULL)),
-		ADD CONSTRAINT chk_links_library_kind_source CHECK (
-			library_kind_source IS NULL OR library_kind_source IN ('auto','user','migration')),
-		ADD CONSTRAINT chk_links_predicted_library_kind CHECK (
-			predicted_library_kind IS NULL OR predicted_library_kind IN ('reading','site')),
-		ADD CONSTRAINT chk_links_requested_library_intent CHECK (
-			requested_library_kind_source <> 'user' OR requested_library_kind IN ('reading','site')),
-		ADD CONSTRAINT chk_links_requested_library_kind CHECK (
-			requested_library_kind IN ('auto','reading','site')),
-		ADD CONSTRAINT chk_links_requested_library_kind_source CHECK (
-			requested_library_kind_source IN ('auto','user'))`); err != nil {
-		t.Fatalf("install legacy Link classification schema: %v", err)
 	}
 }
 
@@ -410,7 +308,7 @@ func migrationTargetPool(t *testing.T, dsn string) *pgxpool.Pool {
 
 func schemaLedgerVersions(t *testing.T, pool *pgxpool.Pool) []string {
 	t.Helper()
-	rows, err := pool.Query(t.Context(), `SELECT version FROM schema_migrations ORDER BY version`)
+	rows, err := pool.Query(t.Context(), `SELECT version FROM public.schema_migrations ORDER BY version`)
 	if err != nil {
 		t.Fatalf("read schema_migrations: %v", err)
 	}

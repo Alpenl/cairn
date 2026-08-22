@@ -1,7 +1,7 @@
 -- 自动生成；请勿手工编辑。
--- 改 schema 请改 internal/migrate/steps.go，然后跑：
+-- 改 fresh schema 请改 internal/migrate/install_schema.sql，然后跑：
 --   make schema-dump
--- 源真相：internal/migrate/steps.go 中的 steps 切片
+-- 源真相：internal/migrate/install_schema.sql 与 River / migration ledger runner
 --
 --
 -- PostgreSQL database dump

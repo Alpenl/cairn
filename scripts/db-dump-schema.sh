@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
-# scripts/db-dump-schema.sh —— 把当前 internal/migrate 应用后的 schema
+# scripts/db-dump-schema.sh —— 把 fresh install migration 应用后的完整 schema
 # 用 pg_dump 落到 internal/migrate/schema.sql。
 #
-# 用途（Wave 2 H7）：
+# 用途：
 #   - schema.sql 是 *生成产物*，不是 source of truth。源真相是
-#     internal/migrate/steps.go 里的 steps 切片。
+#     internal/migrate/install_schema.sql 里的 fresh-install baseline，
+#     以及 River / migration runner 自己创建的 ledger 对象。
 #   - 这份 dump 主要给：
 #       1. PR reviewer 一眼看清"这次迁移到底改了 schema 哪几张表"；
 #       2. DBA / 运维定位字段、索引时不用临时连 prod 跑 \d；
-#       3. CI 可以 diff 这份文件，发现 migration 没有被同步 commit
+#       3. CI 可以 diff 这份文件，发现 install baseline 没有被同步 dump
 #          就让构建失败。
-#   - 每次新增 / 修改 migration step 后必须重新运行本脚本并把更新后
-#     的 schema.sql 一并提交。
+#   - 每次修改 fresh baseline 后必须重新运行本脚本并审查 schema.sql diff。
 #
 # 运行方式：
-#   ./scripts/db-dump-schema.sh        # 默认 image=postgres:16
+#   ./scripts/db-dump-schema.sh        # 默认 image=postgres:16，随机 localhost 端口
 #   PG_IMAGE=postgres:15 ./scripts/db-dump-schema.sh
+#   PG_PORT=55432 ./scripts/db-dump-schema.sh  # 调试时固定端口
 #
 # 退出码：
 #   0 成功；非 0 = docker 不可用 / migrate 失败 / pg_dump 失败。
@@ -27,9 +28,8 @@ PG_IMAGE="${PG_IMAGE:-postgres:16}"
 CONTAINER_NAME="webtag-schema-dump-$$"
 PG_PASSWORD="schema_dump_pw"
 PG_DB="webtag_schema_dump"
-PG_PORT="${PG_PORT:-55432}"
+PG_PORT="${PG_PORT:-}"
 OUT_FILE="${OUT_FILE:-internal/migrate/schema.sql}"
-INSTALL_OUT_FILE="${INSTALL_OUT_FILE:-internal/migrate/install_schema.sql}"
 
 cleanup() {
     # 永远尝试清理容器；忽略 not-found / already-removed 的退出码。
@@ -45,14 +45,31 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
+publish_arg="127.0.0.1::5432"
+if [ -n "$PG_PORT" ]; then
+    publish_arg="127.0.0.1:$PG_PORT:5432"
+    echo ">> starting $PG_IMAGE on 127.0.0.1:$PG_PORT"
+else
+    echo ">> starting $PG_IMAGE on a random localhost port"
+fi
+
 # 1. 启动一次性 postgres 容器。-p 暴露到 host 端口供 migrate 工具连。
-echo ">> starting $PG_IMAGE on localhost:$PG_PORT"
 docker run -d --rm \
     --name "$CONTAINER_NAME" \
     -e POSTGRES_PASSWORD="$PG_PASSWORD" \
     -e POSTGRES_DB="$PG_DB" \
-    -p "$PG_PORT:5432" \
+    -p "$publish_arg" \
     "$PG_IMAGE" >/dev/null
+
+if [ -z "$PG_PORT" ]; then
+    PG_PORT="$(docker port "$CONTAINER_NAME" 5432/tcp | sed -n 's/^127\.0\.0\.1:\([0-9][0-9]*\)$/\1/p' | head -n 1)"
+    if [ -z "$PG_PORT" ]; then
+        echo "could not discover published postgres port" >&2
+        docker logs "$CONTAINER_NAME" >&2 || true
+        exit 1
+    fi
+    echo ">> published postgres on 127.0.0.1:$PG_PORT"
+fi
 
 # 2. 等待 postgres 就绪。pg_isready 在容器内跑，最多等 30 秒。
 echo ">> waiting for postgres to accept connections"
@@ -68,10 +85,23 @@ for i in $(seq 1 30); do
     fi
 done
 
-# 3. 跑迁移。用 go run 而非 make build → bin/migrate，避免对本机构建链
+# 3. 用真正迁移工具会使用的 host DATABASE_URL 做有界连接探测。
+export DATABASE_URL="postgres://postgres:$PG_PASSWORD@127.0.0.1:$PG_PORT/$PG_DB?sslmode=disable"
+for i in $(seq 1 30); do
+    if go run ./cmd/migrate --plan-json >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+    if [ "$i" -eq 30 ]; then
+        echo "postgres accepted container-local probes but not the published endpoint" >&2
+        docker logs "$CONTAINER_NAME" >&2 || true
+        exit 1
+    fi
+done
+
+# 4. 跑迁移。用 go run 而非 make build → bin/migrate，避免对本机构建链
 #    施加额外要求；CI 上 go 必然可用。
 echo ">> applying fresh-install migration plan via cmd/migrate"
-export DATABASE_URL="postgres://postgres:$PG_PASSWORD@localhost:$PG_PORT/$PG_DB?sslmode=disable"
 go run ./cmd/migrate
 
 expect() {
@@ -128,7 +158,7 @@ expect "SELECT count(*) FROM pg_proc AS proc JOIN pg_namespace AS ns ON ns.oid=p
 expect "SELECT count(*) FROM pg_trigger AS trg JOIN pg_class AS rel ON rel.oid=trg.tgrelid JOIN pg_namespace AS ns ON ns.oid=rel.relnamespace JOIN pg_proc AS proc ON proc.oid=trg.tgfoid WHERE NOT trg.tgisinternal AND ns.nspname='public' AND proc.proname='guard_representation_write_gate'" "0"
 expect "SELECT count(*) FROM feed_subscriptions" "1"
 
-# 4. 导出 schema。--schema-only 跳过数据；--no-owner / --no-privileges
+# 5. 导出 schema。--schema-only 跳过数据；--no-owner / --no-privileges
 #    去掉 OWNER TO / GRANT 噪音，让 dump 在不同环境之间稳定（不会因为
 #    本地 postgres 用户名不同而每次 diff 都变化）。
 echo ">> dumping schema to $OUT_FILE"
@@ -158,15 +188,12 @@ awk '{ lines[NR] = $0 } END {
 # 在最前面加一段 banner，提示这是生成产物，避免有人手动改了再 commit。
 {
     echo "-- 自动生成；请勿手工编辑。"
-    echo "-- 改 schema 请改 internal/migrate/steps.go，然后跑："
+    echo "-- 改 fresh schema 请改 internal/migrate/install_schema.sql，然后跑："
     echo "--   make schema-dump"
-    echo "-- 源真相：internal/migrate/steps.go 中的 steps 切片"
+    echo "-- 源真相：internal/migrate/install_schema.sql 与 River / migration ledger runner"
     echo "--"
     cat "$NORMALIZED_FILE"
 } > "$OUT_FILE"
 rm -f "$OUT_FILE.tmp" "$NORMALIZED_FILE"
 
-bash scripts/render-install-schema.sh "$OUT_FILE" "$INSTALL_OUT_FILE"
-
 echo ">> done: $OUT_FILE ($(wc -l < "$OUT_FILE") lines)"
-echo ">> done: $INSTALL_OUT_FILE ($(wc -l < "$INSTALL_OUT_FILE") lines)"

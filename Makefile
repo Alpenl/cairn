@@ -269,9 +269,9 @@ docker-build: ## 构建运行时容器镜像
 db-migrate: ## 在临时 Postgres 容器里跑迁移冒烟
 	sh scripts/db_migrate_smoke.sh
 
-# 快速看当前 schema 全貌：起一次性 postgres、跑迁移、pg_dump 到
-# internal/migrate/schema.sql。schema.sql 是生成产物，不是 source of truth，
-# 每次新增/修改 migration step 后跑一次并把 diff 一起 commit。
+# 快速看当前 schema 全貌：起一次性 postgres、跑 fresh migration、pg_dump 到
+# internal/migrate/schema.sql。schema.sql 是生成产物；fresh install 的权威源是
+# internal/migrate/install_schema.sql，River 和 migration ledger 由各自 runner 创建。
 schema-dump: ## 重新生成 internal/migrate/schema.sql（需要 Docker）
 	@./scripts/db-dump-schema.sh
 
@@ -279,21 +279,16 @@ schema-dump: ## 重新生成 internal/migrate/schema.sql（需要 Docker）
 # bytes. This must never use the tracked snapshot as the dump destination:
 # a failed or interrupted dump must not make the working tree look clean.
 schema-check: ## 机械检查迁移后的真实 schema 与 tracked snapshot 一致（需要 Docker）
-	@tmp=$$(mktemp); install_tmp=$$(mktemp); \
-	cleanup() { rm -f "$$tmp" "$$install_tmp"; }; \
+	@tmp=$$(mktemp); \
+	cleanup() { rm -f "$$tmp"; }; \
 	trap cleanup EXIT; \
-	PG_IMAGE="$${PG_IMAGE:-$(SCHEMA_PG_IMAGE)}" OUT_FILE="$$tmp" INSTALL_OUT_FILE="$$install_tmp" ./scripts/db-dump-schema.sh; \
+	PG_IMAGE="$${PG_IMAGE:-$(SCHEMA_PG_IMAGE)}" OUT_FILE="$$tmp" ./scripts/db-dump-schema.sh; \
 	if ! cmp -s "$$tmp" internal/migrate/schema.sql; then \
 		echo "schema drift detected: internal/migrate/schema.sql is stale" >&2; \
 		diff -u internal/migrate/schema.sql "$$tmp" || true; \
 		exit 1; \
 	fi; \
-	if ! cmp -s "$$install_tmp" internal/migrate/install_schema.sql; then \
-		echo "schema drift detected: internal/migrate/install_schema.sql is stale" >&2; \
-		diff -u internal/migrate/install_schema.sql "$$install_tmp" || true; \
-		exit 1; \
-	fi; \
-	echo "schema-check: generated schema snapshots match"
+	echo "schema-check: generated full schema snapshot matches"
 
 container-smoke: ## 启动完整镜像跑端到端容器冒烟
 	VERSION=$(VERSION) COMMIT=$(COMMIT) sh scripts/container_smoke.sh

@@ -35,6 +35,43 @@ DROP FUNCTION IF EXISTS public.guard_representation_write_gate();
 DROP FUNCTION IF EXISTS public.lock_representation_write_gate_shared();
 DROP FUNCTION IF EXISTS public.lock_representation_write_gate_exclusive()`
 
+const dropRepresentationRevisionBumpSQL = `DO $$
+DECLARE
+	trigger_record record;
+BEGIN
+	FOR trigger_record IN
+		SELECT ns.nspname AS schema_name, rel.relname AS table_name, trg.tgname
+		FROM pg_trigger AS trg
+		JOIN pg_class AS rel ON rel.oid = trg.tgrelid
+		JOIN pg_namespace AS ns ON ns.oid = rel.relnamespace
+		JOIN pg_proc AS proc ON proc.oid = trg.tgfoid
+		WHERE NOT trg.tgisinternal
+		  AND ns.nspname = 'public'
+		  AND proc.proname LIKE 'bump_%'
+	LOOP
+		EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I.%I',
+			trigger_record.tgname, trigger_record.schema_name, trigger_record.table_name);
+	END LOOP;
+END
+$$;
+DROP FUNCTION IF EXISTS
+ public.bump_concept_global_revision_update(),
+ public.bump_feed_folders_revision_update(),
+ public.bump_feed_items_revision_update(),
+ public.bump_feed_revision_trigger(),
+ public.bump_feed_subscriptions_revision_update(),
+ public.bump_global_revision_trigger(),
+ public.bump_library_revision_trigger(),
+ public.bump_link_concept_read_revision_update(),
+ public.bump_links_read_revision_update(),
+ public.bump_site_entries_read_revision_update(),
+ public.bump_site_tags_read_revision_update(),
+ public.bump_sites_read_revision_update();
+DROP FUNCTION IF EXISTS
+ public.bump_feed_read_revision(),
+ public.bump_global_read_revision(),
+ public.bump_library_read_revision()`
+
 var productionBaselineLedger = []string{
 	"f03e51d6911b",
 	"b671c9d2e411",
@@ -75,6 +112,7 @@ var productionUpgradeSegments = []upgradeSegment{
 		// be rolled back against the upgraded database.
 		Name: "obsolete subsystems and protocol constraints",
 		SQL: []string{
+			dropRepresentationRevisionBumpSQL,
 			`DO $$
 BEGIN
 	IF EXISTS (
@@ -181,8 +219,11 @@ $$`,
 				 RENAME CONSTRAINT reader_feed_feedback_pkey TO reader_feed_hides_pkey`,
 			`ALTER TABLE public.reader_feed_saves DROP COLUMN created_link`,
 			`DROP TRIGGER IF EXISTS trg_reader_capture_content_history ON public.links`,
+			`DROP TRIGGER IF EXISTS trg_links_bump_read_revision_upd ON public.links`,
 			`DROP TRIGGER IF EXISTS trg_links_representation_write_gate_upd ON public.links`,
+			`DROP TRIGGER IF EXISTS trg_sites_bump_read_revision_upd ON public.sites`,
 			`DROP TRIGGER IF EXISTS trg_sites_representation_write_gate_upd ON public.sites`,
+			`DROP TRIGGER IF EXISTS trg_site_tags_bump_read_revision_upd ON public.site_tags`,
 			`DROP TABLE IF EXISTS
 			 public.concept_alias,
 			 public.concept_merge_proposal,
@@ -199,6 +240,20 @@ $$`,
 			 CASCADE`,
 			`UPDATE public.links SET library_kind_locked=false WHERE library_kind IS NULL AND library_kind_locked`,
 			`DELETE FROM public.links WHERE status='skeleton'`,
+			`CREATE OR REPLACE FUNCTION public.advance_link_metadata_revision() RETURNS trigger
+			 LANGUAGE plpgsql
+			 AS $$
+BEGIN
+	IF OLD.title IS DISTINCT FROM NEW.title OR OLD.summary IS DISTINCT FROM NEW.summary OR OLD.tags IS DISTINCT FROM NEW.tags THEN
+		IF OLD.metadata_revision >= 9007199254740991 THEN
+			RAISE EXCEPTION USING ERRCODE='23514', CONSTRAINT='chk_links_metadata_revision_safe',
+				MESSAGE='link metadata revision has reached the JavaScript-safe maximum';
+		END IF;
+		NEW.metadata_revision := OLD.metadata_revision + 1;
+	END IF;
+	RETURN NEW;
+END;
+$$`,
 			`ALTER TABLE public.links
 			 DROP CONSTRAINT IF EXISTS chk_links_status,
 			 DROP CONSTRAINT IF EXISTS chk_links_classification_confidence,
@@ -362,42 +417,7 @@ $$`,
 		Name: "representation revisions and write gate",
 		SQL: []string{
 			`SELECT public.lock_representation_write_gate_exclusive()`,
-			`DO $$
-DECLARE
-	trigger_record record;
-BEGIN
-	FOR trigger_record IN
-		SELECT ns.nspname AS schema_name, rel.relname AS table_name, trg.tgname
-		FROM pg_trigger AS trg
-		JOIN pg_class AS rel ON rel.oid = trg.tgrelid
-		JOIN pg_namespace AS ns ON ns.oid = rel.relnamespace
-		JOIN pg_proc AS proc ON proc.oid = trg.tgfoid
-		WHERE NOT trg.tgisinternal
-		  AND ns.nspname = 'public'
-		  AND proc.proname LIKE 'bump_%'
-	LOOP
-		EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I.%I',
-			trigger_record.tgname, trigger_record.schema_name, trigger_record.table_name);
-	END LOOP;
-END
-$$`,
-			`DROP FUNCTION IF EXISTS
-			 public.bump_concept_global_revision_update(),
-			 public.bump_feed_folders_revision_update(),
-			 public.bump_feed_items_revision_update(),
-			 public.bump_feed_revision_trigger(),
-			 public.bump_feed_subscriptions_revision_update(),
-			 public.bump_global_revision_trigger(),
-			 public.bump_library_revision_trigger(),
-			 public.bump_link_concept_read_revision_update(),
-			 public.bump_links_read_revision_update(),
-			 public.bump_site_entries_read_revision_update(),
-			 public.bump_site_tags_read_revision_update(),
-			 public.bump_sites_read_revision_update()`,
-			`DROP FUNCTION IF EXISTS
-			 public.bump_feed_read_revision(),
-			 public.bump_global_read_revision(),
-			 public.bump_library_read_revision()`,
+			dropRepresentationRevisionBumpSQL,
 			`DROP FUNCTION IF EXISTS
 			 public.lock_library_feed_revisions(),
 			 public.lock_library_global_revisions(),

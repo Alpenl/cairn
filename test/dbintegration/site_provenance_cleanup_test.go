@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"webtag/internal/migrate"
 )
@@ -18,7 +17,6 @@ func TestSiteProvenanceCleanupMigratesLegacyRows(t *testing.T) {
 	dsn := isolatedMigrationDatabase(t)
 	pool := migrationTargetPool(t, dsn)
 	prepareProductionUpgradeFixture(t, pool)
-	installLegacySiteProvenanceSchema(t, pool)
 
 	siteID, linkID, entryID := uuid.New(), uuid.New(), uuid.New()
 	seeds := []struct {
@@ -27,8 +25,8 @@ func TestSiteProvenanceCleanupMigratesLegacyRows(t *testing.T) {
 		args []any
 	}{
 		{"link", `INSERT INTO public.links (
-			id,url,source_key,status,library_kind,library_kind_locked,first_collected_at
-		) VALUES ($1,'https://example.com/docs','https://example.com/docs','done','site',true,now())`, []any{linkID}},
+			id,url,source_key,status,library_kind,library_kind_source,library_kind_locked,first_collected_at
+		) VALUES ($1,'https://example.com/docs','https://example.com/docs','done','site','user',true,now())`, []any{linkID}},
 		{"site", `INSERT INTO public.sites (
 			id,site_key,name,name_source,intro,intro_source,homepage_url,homepage_source,
 			icon_url,icon_source,user_note,primary_source,grouping_locked
@@ -81,41 +79,6 @@ func TestSiteProvenanceCleanupMigratesLegacyRows(t *testing.T) {
 		entryName != "Docs" || purpose != "Reference" || tag != "Go" || identity != "v1:host:example.com" {
 		t.Fatalf("migrated Site facts changed: name=%q intro=%q homepage=%q icon=%q note=%q primary=%s entry=%q purpose=%q tag=%q identity=%q",
 			name, intro, homepage, icon, note, primaryID, entryName, purpose, tag, identity)
-	}
-}
-
-func installLegacySiteProvenanceSchema(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	if _, err := pool.Exec(t.Context(), `
-		ALTER TABLE public.sites
-			ADD COLUMN name_source text NOT NULL DEFAULT 'auto',
-			ADD COLUMN intro_source text NOT NULL DEFAULT 'auto',
-			ADD COLUMN homepage_source text,
-			ADD COLUMN icon_source text,
-			ADD COLUMN primary_source text NOT NULL DEFAULT 'auto',
-			ADD COLUMN grouping_locked boolean NOT NULL DEFAULT false,
-			ADD CONSTRAINT chk_sites_optional_sources CHECK (
-				(homepage_source IS NULL OR homepage_source IN ('auto','user','migration')) AND
-				(icon_source IS NULL OR icon_source IN ('auto','user','migration'))),
-			ADD CONSTRAINT chk_sites_sources CHECK (
-				name_source IN ('auto','user','migration') AND
-				intro_source IN ('auto','user','migration') AND
-				primary_source IN ('auto','user','migration'));
-		ALTER TABLE public.site_entries
-			ADD COLUMN entry_name_source text NOT NULL DEFAULT 'auto',
-			ADD COLUMN purpose_source text NOT NULL DEFAULT 'auto',
-			ADD CONSTRAINT chk_site_entries_sources CHECK (
-				entry_name_source IN ('auto','user','migration') AND
-				purpose_source IN ('auto','user','migration'));
-		ALTER TABLE public.site_tags
-			ADD COLUMN source text NOT NULL DEFAULT 'auto',
-			ADD CONSTRAINT chk_site_tags_source CHECK (source IN ('auto','user','migration'));
-		ALTER TABLE public.site_identities
-			ADD COLUMN source text NOT NULL DEFAULT 'auto',
-			ADD COLUMN locked boolean NOT NULL DEFAULT false,
-			ADD CONSTRAINT chk_site_identities_source CHECK (
-				source IN ('auto','manual_merge','manual_split','migration'))`); err != nil {
-		t.Fatalf("install legacy Site provenance schema: %v", err)
 	}
 }
 

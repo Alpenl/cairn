@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-container_id="$(docker run -d --rm --name webtag-db-smoke -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=webtag -p 127.0.0.1::5432 postgres:16)"
+container_name="webtag-db-smoke-$$"
+container_id="$(docker run -d --rm --name "$container_name" -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=webtag -p 127.0.0.1::5432 postgres:16)"
 
 cleanup() {
 	docker rm -f "$container_id" >/dev/null 2>&1 || true
@@ -9,12 +10,26 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-database_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}' "$container_id")"
-until docker exec "$container_id" pg_isready -U postgres >/dev/null 2>&1; do
+binding="$(docker port "$container_id" 5432/tcp)"
+database_port="${binding##*:}"
+database_url="postgres://postgres:postgres@127.0.0.1:${database_port}/webtag?sslmode=disable"
+
+for attempt in $(seq 1 30); do
+	ready_count="$(docker logs "$container_id" 2>&1 |
+		awk '/database system is ready to accept connections/ { count++ } END { print count + 0 }')"
+	if [ "$ready_count" -ge 2 ] &&
+		docker exec "$container_id" pg_isready -U postgres -d webtag >/dev/null 2>&1 &&
+		DATABASE_URL="$database_url" go run ./cmd/migrate --plan-json >/dev/null 2>&1; then
+		break
+	fi
+	if [ "$attempt" -eq 30 ]; then
+		docker logs "$container_id" >&2 || true
+		echo "migration smoke postgres did not become ready through the published endpoint" >&2
+		exit 1
+	fi
 	sleep 1
 done
 
-database_url="postgres://postgres:postgres@127.0.0.1:${database_port}/webtag?sslmode=disable"
 DATABASE_URL="$database_url" go run ./cmd/migrate
 
 # expect <sql> <期望值> —— 精确比较，不是子串匹配。
