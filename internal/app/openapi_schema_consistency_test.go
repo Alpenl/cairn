@@ -25,9 +25,6 @@ func TestOpenAPIFrontendSchemasMatchDTOs(t *testing.T) {
 
 	for name, value := range map[string]any{
 		"LinkCreateRequest":               dto.LinkCreateRequest{},
-		"BatchCreateRequest":              dto.BatchCreateRequest{},
-		"BatchItemResponse":               dto.BatchItemResponse{},
-		"BatchSubmitResponse":             dto.BatchSubmitResponse{},
 		"IngestRequest":                   dto.IngestRequest{},
 		"IngestSource":                    dto.IngestSource{},
 		"SubmitResponse":                  dto.SubmitResponse{},
@@ -38,10 +35,6 @@ func TestOpenAPIFrontendSchemasMatchDTOs(t *testing.T) {
 		"ConversionSiteCandidateResponse": dto.ConversionSiteCandidateResponse{},
 		"ConversionExecuteRequest":        dto.ConversionExecuteRequest{},
 		"ConversionExecuteResponse":       dto.ConversionExecuteResponse{},
-		"ClassificationRuleCreateRequest": dto.ClassificationRuleCreateRequest{},
-		"ClassificationRuleResponse":      dto.ClassificationRuleResponse{},
-		"LibraryReviewResolveRequest":     dto.LibraryReviewResolveRequest{},
-		"LibraryReviewResponse":           dto.LibraryReviewResponse{},
 		"SiteRevisionRef":                 dto.SiteRevisionRef{},
 		"SiteMergePreviewRequest":         dto.SiteMergePreviewRequest{},
 		"SiteMergePreviewEntryResponse":   dto.SiteMergePreviewEntryResponse{},
@@ -61,7 +54,6 @@ func TestOpenAPIFrontendSchemasMatchDTOs(t *testing.T) {
 		"TranslationListResponse":         dto.TranslationListResponse{},
 		"TranslationSourceIdentity":       dto.TranslationSourceIdentity{},
 		"LinkResponse":                    dto.LinkResponse{},
-		"JobResponse":                     dto.JobResponse{},
 		"PaginatedLinksResponse":          dto.PaginatedLinksResponse{},
 		"TagCountResponse":                dto.TagCountResponse{},
 		"DomainTreeSummaryResponse":       dto.DomainTreeSummaryResponse{},
@@ -102,7 +94,7 @@ func TestOpenAPIFrontendSchemasMatchDTOs(t *testing.T) {
 func TestReaderTodoPatchOpenAPIContract(t *testing.T) {
 	t.Parallel()
 
-	data, err := OpenAPISpec()
+	data, err := readOpenAPISpec()
 	if err != nil {
 		t.Fatalf("OpenAPISpec() error: %v", err)
 	}
@@ -181,7 +173,7 @@ func TestTranslationSourceIdentityOpenAPIContract(t *testing.T) {
 		Properties  map[string]schemaShape `json:"properties"`
 	}
 
-	data, err := OpenAPISpec()
+	data, err := readOpenAPISpec()
 	if err != nil {
 		t.Fatalf("OpenAPISpec() returned error: %v", err)
 	}
@@ -207,12 +199,9 @@ func TestTranslationSourceIdentityOpenAPIContract(t *testing.T) {
 	if !ok {
 		t.Fatal("translation POST operation is missing")
 	}
-	const retiredDeepResearchContract = "Historical deep-research rows remain readable, but new deep-research schedules are rejected"
 	for _, phrase := range []string{
 		"content_revision_conflict",
 		"source_block_conflict",
-		"translation_schema_transition",
-		retiredDeepResearchContract,
 		"Strict source identity is required",
 	} {
 		if !strings.Contains(operation.Description, phrase) {
@@ -220,31 +209,32 @@ func TestTranslationSourceIdentityOpenAPIContract(t *testing.T) {
 		}
 	}
 	for _, stalePromise := range []string{
-		"summary/deep-research requests use expected_source_hash",
-		"summary or deep-research selections",
+		"deep-research",
 		"legacy-unverified",
 		"2026-09-01T00:00:00Z",
 		"contract migration",
 		"rollback cutoff",
 		"expand compatibility window",
+		"translation_schema_transition",
 	} {
 		if strings.Contains(string(data), stalePromise) {
 			t.Errorf("OpenAPI still promises retired behavior %q", stalePromise)
 		}
 	}
 	request := spec.Components.Schemas["TranslationCreateRequest"]
-	for _, field := range []string{"expected_content_revision", "expected_source_hash"} {
-		if description := request.Properties[field].Description; !strings.Contains(description, retiredDeepResearchContract) {
-			t.Errorf("TranslationCreateRequest.%s description is missing %q: %q", field, retiredDeepResearchContract, description)
-		}
+	if description := request.Properties["expected_content_revision"].Description; !strings.Contains(description, "It must be omitted for summary") {
+		t.Errorf("TranslationCreateRequest.expected_content_revision does not define the summary boundary: %q", description)
+	}
+	if description := request.Properties["expected_source_hash"].Description; !strings.Contains(description, "Required for summary") {
+		t.Errorf("TranslationCreateRequest.expected_source_hash does not define the summary identity: %q", description)
 	}
 	response := spec.Components.Schemas["TranslationResponse"]
-	if description := response.Properties["source_content_revision"].Description; !strings.Contains(description, retiredDeepResearchContract) {
-		t.Errorf("TranslationResponse.source_content_revision description is missing retired-history semantics %q: %q", retiredDeepResearchContract, description)
+	if description := response.Properties["source_content_revision"].Description; !strings.Contains(description, "Null is reserved for summary identities") {
+		t.Errorf("TranslationResponse.source_content_revision does not define its null case: %q", description)
 	}
 	identity := spec.Components.Schemas["TranslationSourceIdentity"]
-	if !strings.Contains(identity.Description, retiredDeepResearchContract) {
-		t.Errorf("TranslationSourceIdentity description is missing retired-schedule semantics %q: %q", retiredDeepResearchContract, identity.Description)
+	if !strings.Contains(identity.Description, "Saved content uses content_revision and summary uses source_hash") {
+		t.Errorf("TranslationSourceIdentity does not define both current identity domains: %q", identity.Description)
 	}
 	if minimum := identity.Properties["content_revision"].Minimum; minimum == nil {
 		t.Error("TranslationSourceIdentity.content_revision minimum is missing, want 0 because an authoritative empty generation is valid")
@@ -271,7 +261,6 @@ func TestTranslationSourceIdentityOpenAPIContract(t *testing.T) {
 		"#/components/schemas/TranslationOperationalConflictResponse",
 		"#/components/schemas/TranslationContentRevisionConflictResponse",
 		"#/components/schemas/TranslationSourceBlockConflictResponse",
-		"#/components/schemas/TranslationSchemaTransitionConflictResponse",
 	}
 	if len(union.OneOf) != len(wantEnvelopeRefs) {
 		t.Errorf("TranslationConflictErrorResponse oneOf count = %d, want %d", len(union.OneOf), len(wantEnvelopeRefs))
@@ -304,12 +293,6 @@ func TestTranslationSourceIdentityOpenAPIContract(t *testing.T) {
 			envelope: "TranslationSourceBlockConflictResponse",
 			detail:   "TranslationSourceBlockConflictDetail",
 			code:     "source_block_conflict",
-		},
-		{
-			envelope: "TranslationSchemaTransitionConflictResponse",
-			detail:   "TranslationSchemaTransitionConflictDetail",
-			code:     "translation_schema_transition",
-			identity: "#/components/schemas/SavedTranslationSourceIdentity",
 		},
 	}
 	for _, variant := range wantVariants {
@@ -400,32 +383,40 @@ func TestTranslationSourceIdentityOpenAPIContract(t *testing.T) {
 	}
 }
 
-func TestOpenAPIOmitsRetiredWebhookContract(t *testing.T) {
+func TestOpenAPIOmitsRetiredContracts(t *testing.T) {
 	t.Parallel()
 
-	data, err := OpenAPISpec()
+	data, err := readOpenAPISpec()
 	if err != nil {
 		t.Fatalf("OpenAPISpec() returned error: %v", err)
 	}
-	if strings.Contains(strings.ToLower(string(data)), "webhook") {
-		t.Fatal("OpenAPI still publishes the retired webhook contract")
+	lower := strings.ToLower(string(data))
+	for _, retired := range []string{
+		"webhook",
+		`/api/links/batch`,
+		`/api/annotations/{id}/reattach`,
+		`BatchCreateRequest`,
+		`ReaderThoughtReattachRequest`,
+	} {
+		if strings.Contains(lower, strings.ToLower(retired)) {
+			t.Fatalf("OpenAPI still publishes retired contract %q", retired)
+		}
 	}
 }
 
 func TestOpenAPIWireEnumsMatchDomainModels(t *testing.T) {
 	schemas := openAPISchemas(t)
 	linkStatuses := []string{
-		string(model.LinkStatusSkeleton),
 		string(model.LinkStatusPending),
 		string(model.LinkStatusProcessing),
 		string(model.LinkStatusDone),
 		string(model.LinkStatusFailed),
 	}
-	jobStatuses := []string{
-		string(model.JobStatusPending),
-		string(model.JobStatusProcessing),
-		string(model.JobStatusDone),
-		string(model.JobStatusFailed),
+	workStatuses := []string{
+		string(model.LinkStatusPending),
+		string(model.LinkStatusProcessing),
+		string(model.LinkStatusDone),
+		string(model.LinkStatusFailed),
 	}
 	contentTypes := []string{
 		string(model.ContentTypeArticle),
@@ -443,9 +434,8 @@ func TestOpenAPIWireEnumsMatchDomainModels(t *testing.T) {
 		{schema: "TreeNodeResponse", field: "status", want: linkStatuses},
 		{schema: "LinkResponse", field: "content_type", want: contentTypes},
 		{schema: "TreeNodeResponse", field: "content_type", want: contentTypes},
-		{schema: "SubmitResponse", field: "status", want: jobStatuses},
-		{schema: "JobResponse", field: "status", want: jobStatuses},
-		{schema: "FeedItem", field: "analysis_status", want: jobStatuses},
+		{schema: "SubmitResponse", field: "status", want: workStatuses},
+		{schema: "FeedItem", field: "analysis_status", want: workStatuses},
 		{schema: "FeedCandidate", field: "type", want: []string{"rss", "atom"}},
 		{
 			schema: "TranslationCreateRequest",
@@ -497,7 +487,7 @@ func TestOpenAPIWireEnumsMatchDomainModels(t *testing.T) {
 func TestContentSaveOpenAPIDocumentsRuntimeFailureResponses(t *testing.T) {
 	t.Parallel()
 
-	data, err := OpenAPISpec()
+	data, err := readOpenAPISpec()
 	if err != nil {
 		t.Fatalf("OpenAPISpec() returned error: %v", err)
 	}
@@ -527,68 +517,15 @@ func TestContentSaveOpenAPIDocumentsRuntimeFailureResponses(t *testing.T) {
 	}
 }
 
-func TestBatchCreateOpenAPIMatchesRuntimeBounds(t *testing.T) {
+func TestReaderFeedOpenAPIContract(t *testing.T) {
 	t.Parallel()
 
-	schema, ok := openAPISchemas(t)["BatchCreateRequest"]
-	if !ok {
-		t.Fatal("BatchCreateRequest schema is missing")
-	}
-	raw, ok := schema.Properties["items"]
-	if !ok {
-		t.Fatal("BatchCreateRequest.items is missing")
-	}
-	var items struct {
-		Type     string `json:"type"`
-		MinItems int    `json:"minItems"`
-		MaxItems int    `json:"maxItems"`
-	}
-	if err := json.Unmarshal(raw, &items); err != nil {
-		t.Fatalf("BatchCreateRequest.items: unmarshal failed: %v", err)
-	}
-	if items.Type != "array" || items.MinItems != 1 || items.MaxItems != 100 {
-		t.Fatalf("BatchCreateRequest.items = type %q, bounds %d..%d; want array, 1..100", items.Type, items.MinItems, items.MaxItems)
-	}
-}
-
-func TestReaderFeedReasonOpenAPIContract(t *testing.T) {
-	t.Parallel()
-
-	data, err := OpenAPISpec()
-	if err != nil {
-		t.Fatalf("OpenAPISpec() returned error: %v", err)
-	}
-	var spec struct {
-		Components struct {
-			Schemas map[string]json.RawMessage `json:"schemas"`
-		} `json:"components"`
-	}
-	if err := json.Unmarshal(data, &spec); err != nil {
-		t.Fatalf("openapi.json: unmarshal failed: %v", err)
-	}
-
-	var enumSchema struct {
-		Enum []string `json:"enum"`
-	}
-	// Score signals are the reasons the ranking pass can win with: each one owns
-	// a contributions column. Reason codes are the wider vocabulary; Home's
-	// continue_reading is a reason that never scores.
-	wantSignals := []string{"pending_confirmation", "saved_library", "subscription_recent", "unread", "read_later", "chronological_fallback"}
-	if err := json.Unmarshal(spec.Components.Schemas["ReaderFeedScoreSignal"], &enumSchema); err != nil {
-		t.Fatalf("ReaderFeedScoreSignal: unmarshal failed: %v", err)
-	}
-	if !slices.Equal(enumSchema.Enum, wantSignals) {
-		t.Fatalf("ReaderFeedScoreSignal enum = %#v, want %#v", enumSchema.Enum, wantSignals)
-	}
-	wantCodes := append(slices.Clone(wantSignals), "continue_reading")
-	if err := json.Unmarshal(spec.Components.Schemas["ReaderFeedReasonCode"], &enumSchema); err != nil {
-		t.Fatalf("ReaderFeedReasonCode: unmarshal failed: %v", err)
-	}
-	if !slices.Equal(enumSchema.Enum, wantCodes) {
-		t.Fatalf("ReaderFeedReasonCode enum = %#v, want %#v", enumSchema.Enum, wantCodes)
-	}
-
+	schemas := openAPISchemas(t)
 	for _, name := range []string{
+		"ArchiveV2ReaderFeedSnapshot",
+		"ReaderFeedAction",
+		"ReaderFeedSectionResponse",
+		"ReaderFeedSourceResponse",
 		"ReaderFeedPendingConfirmationParams",
 		"ReaderFeedSavedLibraryParams",
 		"ReaderFeedSubscriptionRecentParams",
@@ -597,113 +534,56 @@ func TestReaderFeedReasonOpenAPIContract(t *testing.T) {
 		"ReaderFeedChronologicalFallbackParams",
 		"ReaderFeedScoreContributions",
 		"ReaderFeedScoreSignal",
+		"ReaderFeedReasonCode",
 		"ReaderFeedReasonTuple",
 		"ReaderRankedFeedItemResponse",
+		"ReaderFeedSaveAssociationResponse",
+		"ArchiveV2ReaderFeedFeedback",
 	} {
-		if len(spec.Components.Schemas[name]) == 0 {
-			t.Errorf("OpenAPI schema %q is missing", name)
+		if _, ok := schemas[name]; ok {
+			t.Errorf("obsolete OpenAPI schema %q is still present", name)
 		}
 	}
 
-	type reasonSchema struct {
-		AdditionalProperties *bool    `json:"additionalProperties"`
-		Required             []string `json:"required"`
-		Properties           map[string]struct {
-			Const any    `json:"const"`
-			Ref   string `json:"$ref"`
-		} `json:"properties"`
-		OneOf []struct {
-			Required   []string `json:"required"`
-			Properties map[string]struct {
-				Const any    `json:"const"`
-				Ref   string `json:"$ref"`
-			} `json:"properties"`
-		} `json:"oneOf"`
-		AllOf []struct {
-			Ref        string   `json:"$ref"`
-			Required   []string `json:"required"`
-			Properties map[string]struct {
-				Ref   string `json:"$ref"`
-				Items struct {
-					Ref string `json:"$ref"`
-				} `json:"items"`
-			} `json:"properties"`
-		} `json:"allOf"`
+	item := schemas["ReaderFeedItemResponse"]
+	wantItemFields := []string{
+		"key", "source", "resource_key", "title", "summary", "url", "link_id",
+		"inbox_id", "feed_item_id", "read", "read_later", "saved", "event_at",
 	}
-	decodeReasonSchema := func(name string) reasonSchema {
-		t.Helper()
-		var schema reasonSchema
-		if err := json.Unmarshal(spec.Components.Schemas[name], &schema); err != nil {
-			t.Fatalf("decode %s: %v", name, err)
-		}
-		return schema
+	gotItemFields := make([]string, 0, len(item.Properties))
+	for field := range item.Properties {
+		gotItemFields = append(gotItemFields, field)
+	}
+	slices.Sort(gotItemFields)
+	slices.Sort(wantItemFields)
+	if !slices.Equal(gotItemFields, wantItemFields) {
+		t.Fatalf("ReaderFeedItemResponse fields = %#v, want %#v", gotItemFields, wantItemFields)
 	}
 
-	for _, want := range []struct {
-		name     string
-		field    string
-		constant any
-	}{
-		{"ReaderFeedPendingConfirmationParams", "source", "inbox"},
-		{"ReaderFeedSavedLibraryParams", "source", "reading"},
-		{"ReaderFeedSubscriptionRecentParams", "source", "subscription"},
-		{"ReaderFeedUnreadParams", "read", false},
-		{"ReaderFeedReadLaterParams", "read_later", true},
-		{"ReaderFeedChronologicalFallbackParams", "created_at", nil},
-	} {
-		schema := decodeReasonSchema(want.name)
-		if !slices.Equal(schema.Required, []string{want.field}) || len(schema.Properties) != 1 || schema.AdditionalProperties == nil || *schema.AdditionalProperties {
-			t.Errorf("%s params shape = required %#v properties %#v additionalProperties %v", want.name, schema.Required, schema.Properties, schema.AdditionalProperties)
-			continue
-		}
-		if got := schema.Properties[want.field].Const; want.constant != nil && got != want.constant {
-			t.Errorf("%s.%s const = %#v, want %#v", want.name, want.field, got, want.constant)
-		}
+	response := schemas["ReaderFeedResponse"]
+	if !slices.Equal(response.Required, []string{"items", "mode"}) || len(response.Properties) != 3 {
+		t.Fatalf("ReaderFeedResponse = required %#v properties %#v", response.Required, response.Properties)
+	}
+	var items struct {
+		Items struct {
+			Ref string `json:"$ref"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Properties["items"], &items); err != nil {
+		t.Fatalf("ReaderFeedResponse.items: unmarshal failed: %v", err)
+	}
+	if items.Items.Ref != "#/components/schemas/ReaderFeedItemResponse" {
+		t.Fatalf("ReaderFeedResponse.items ref = %q, want minimal Feed item", items.Items.Ref)
 	}
 
-	tuple := decodeReasonSchema("ReaderFeedReasonTuple")
-	if len(tuple.OneOf) != len(wantSignals) {
-		t.Fatalf("ReaderFeedReasonTuple variants = %d, want %d", len(tuple.OneOf), len(wantSignals))
+	feedback := schemas["ReaderFeedFeedbackResponse"]
+	feedbackFields := make([]string, 0, len(feedback.Properties))
+	for field := range feedback.Properties {
+		feedbackFields = append(feedbackFields, field)
 	}
-	for index, code := range wantSignals {
-		variant := tuple.OneOf[index]
-		if !slices.Equal(variant.Required, []string{"reason_code", "reason_params", "reason_contribution"}) || variant.Properties["reason_code"].Const != code || variant.Properties["reason_params"].Ref == "" {
-			t.Errorf("ReaderFeedReasonTuple variant %d = %#v, want code %q and discriminated params", index, variant, code)
-		}
-	}
-
-	contributions := decodeReasonSchema("ReaderFeedScoreContributions")
-	if !slices.Equal(contributions.Required, wantSignals) || len(contributions.Properties) != len(wantSignals) || contributions.AdditionalProperties == nil || *contributions.AdditionalProperties {
-		t.Errorf("ReaderFeedScoreContributions shape = required %#v properties %#v additionalProperties %v", contributions.Required, contributions.Properties, contributions.AdditionalProperties)
-	}
-	ranked := decodeReasonSchema("ReaderRankedFeedItemResponse")
-	if len(ranked.AllOf) != 3 || ranked.AllOf[0].Ref != "#/components/schemas/ReaderFeedItemResponse" ||
-		!slices.Equal(ranked.AllOf[1].Required, []string{"score", "score_contributions", "enabled_score_signals"}) ||
-		ranked.AllOf[2].Ref != "#/components/schemas/ReaderFeedReasonTuple" {
-		t.Errorf("ReaderRankedFeedItemResponse allOf = %#v", ranked.AllOf)
-	}
-	// The enabled collection is the scoring evidence, so it must stay bound to
-	// the narrow signal enum even as the reason vocabulary grows.
-	if ref := ranked.AllOf[1].Properties["enabled_score_signals"].Items.Ref; ref != "#/components/schemas/ReaderFeedScoreSignal" {
-		t.Errorf("enabled_score_signals items ref = %q, want the score-signal enum", ref)
-	}
-	item := decodeReasonSchema("ReaderFeedItemResponse")
-	if ref := item.Properties["reason_code"].Ref; ref != "#/components/schemas/ReaderFeedReasonCode" {
-		t.Errorf("ReaderFeedItemResponse.reason_code ref = %q, want the reason-code enum", ref)
-	}
-
-	var feedResponse struct {
-		Properties map[string]struct {
-			Items struct {
-				Ref string `json:"$ref"`
-			} `json:"items"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal(spec.Components.Schemas["ReaderFeedResponse"], &feedResponse); err != nil {
-		t.Fatalf("ReaderFeedResponse: unmarshal failed: %v", err)
-	}
-	if ref := feedResponse.Properties["items"].Items.Ref; ref != "#/components/schemas/ReaderRankedFeedItemResponse" {
-		t.Fatalf("ReaderFeedResponse.items ref = %q, want ranked Feed item", ref)
+	slices.Sort(feedbackFields)
+	if !slices.Equal(feedback.Required, []string{"item_key", "action"}) || !slices.Equal(feedbackFields, []string{"action", "item_key", "link_id"}) {
+		t.Fatalf("ReaderFeedFeedbackResponse = required %#v fields %#v", feedback.Required, feedbackFields)
 	}
 }
 
@@ -715,7 +595,7 @@ type openAPISchema struct {
 func openAPISchemas(t *testing.T) map[string]openAPISchema {
 	t.Helper()
 
-	data, err := OpenAPISpec()
+	data, err := readOpenAPISpec()
 	if err != nil {
 		t.Fatalf("OpenAPISpec() returned error: %v", err)
 	}

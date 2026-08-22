@@ -3,6 +3,7 @@ package dbintegration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
@@ -25,15 +26,15 @@ type failAfterLinkQueue struct {
 	cancelAllErr    error
 }
 
-func (q *failAfterLinkQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, linkID, jobID uuid.UUID) error {
-	if err := q.delegate.EnqueueTx(ctx, tx, linkID, jobID); err != nil {
+func (q *failAfterLinkQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, attempt model.ParseAttempt) error {
+	if err := q.delegate.EnqueueTx(ctx, tx, attempt); err != nil {
 		return err
 	}
 	return q.enqueueErr
 }
 
-func (q *failAfterLinkQueue) CancelActiveTx(ctx context.Context, tx pgx.Tx, linkID, keepJobID uuid.UUID) error {
-	if err := q.delegate.CancelActiveTx(ctx, tx, linkID, keepJobID); err != nil {
+func (q *failAfterLinkQueue) CancelActiveTx(ctx context.Context, tx pgx.Tx, linkID uuid.UUID) error {
+	if err := q.delegate.CancelActiveTx(ctx, tx, linkID); err != nil {
 		return err
 	}
 	return q.cancelActiveErr
@@ -63,18 +64,15 @@ func TestDurableSubmitRollsBackBusinessAndRiverAfterRiverInsert(t *testing.T) {
 	if got := rawCountLinks(t, pool); got != 0 {
 		t.Fatalf("links after rollback = %d, want 0", got)
 	}
-	if got := rawCountJobs(t, pool); got != 0 {
-		t.Fatalf("parse jobs after rollback = %d, want 0", got)
-	}
 	assertRiverParseRows(t, pool, 0)
 }
 
 func TestDurableRequeueRollsBackBusinessAndRiverAfterCancellation(t *testing.T) {
 	pool := StartPostgres(t)
-	linkID, oldJobID := insertPendingLinkAndJob(t, pool, "https://durable.example.com/requeue-cancel-rollback")
+	linkID, oldAttempt := insertPendingLinkAttempt(t, pool, "https://durable.example.com/requeue-cancel-rollback")
 	ctx := t.Context()
 	realQueue := newRiverQueue(t, pool, newRecordingProcessor(pool))
-	if err := realQueue.Enqueue(ctx, linkID, oldJobID); err != nil {
+	if err := realQueue.Enqueue(ctx, oldAttempt); err != nil {
 		t.Fatalf("enqueue old attempt: %v", err)
 	}
 	wantErr := errors.New("fail after River cancellation")
@@ -85,16 +83,16 @@ func TestDurableRequeueRollsBackBusinessAndRiverAfterCancellation(t *testing.T) 
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("RequeueLink() error = %v, want %v", err, wantErr)
 	}
-	assertLinkAndAttemptRemain(t, pool, linkID, oldJobID)
-	assertActiveRiverAttempt(t, pool, oldJobID)
+	assertLinkAndAttemptRemain(t, pool, oldAttempt)
+	assertActiveRiverAttempt(t, pool, oldAttempt)
 }
 
 func TestDurableLinkDeleteRollsBackBusinessAndRiverAfterCancellation(t *testing.T) {
 	pool := StartPostgres(t)
-	linkID, jobID := insertPendingLinkAndJob(t, pool, "https://durable.example.com/link-delete-rollback")
+	linkID, attempt := insertPendingLinkAttempt(t, pool, "https://durable.example.com/link-delete-rollback")
 	ctx := t.Context()
 	realQueue := newRiverQueue(t, pool, newRecordingProcessor(pool))
-	if err := realQueue.Enqueue(ctx, linkID, jobID); err != nil {
+	if err := realQueue.Enqueue(ctx, attempt); err != nil {
 		t.Fatalf("enqueue attempt: %v", err)
 	}
 	wantErr := errors.New("fail after link River cancellation")
@@ -105,11 +103,11 @@ func TestDurableLinkDeleteRollsBackBusinessAndRiverAfterCancellation(t *testing.
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("DeleteLink() error = %v, want %v", err, wantErr)
 	}
-	assertLinkAndAttemptRemain(t, pool, linkID, jobID)
-	assertActiveRiverAttempt(t, pool, jobID)
+	assertLinkAndAttemptRemain(t, pool, attempt)
+	assertActiveRiverAttempt(t, pool, attempt)
 }
 
-func TestDurableLinkDeleteTerminalizesAttemptAndResubmitRestoresSameID(t *testing.T) {
+func TestDurableLinkDeleteCancelsAttemptAndResubmitRestoresSameID(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	links := repository.NewPGXLinkRepository(pool)
@@ -119,76 +117,37 @@ func TestDurableLinkDeleteTerminalizesAttemptAndResubmitRestoresSameID(t *testin
 	created, err := commands.SubmitLink(ctx, service.SubmitLinkCommand{Capture: service.LinkCapture{
 		URL: rawURL, Status: model.LinkStatusPending,
 	}})
-	if err != nil || created.Link == nil || created.Job == nil {
+	if err != nil || created.Link == nil || !created.Enqueued {
 		t.Fatalf("SubmitLink() = %#v, %v", created, err)
 	}
-	linkID, oldJobID := created.Link.ID, created.Job.ID
+	linkID := created.Link.ID
+	oldAttempt := parseAttemptForLink(created.Link)
 
 	if err := commands.DeleteLink(ctx, service.DeleteLinkCommand{LinkID: linkID}); err != nil {
 		t.Fatalf("DeleteLink() error = %v", err)
 	}
-	var oldStatus, oldReason string
-	if err := pool.QueryRow(ctx, `SELECT status,COALESCE(error_msg,'') FROM parse_jobs WHERE id=$1`, oldJobID).Scan(&oldStatus, &oldReason); err != nil {
-		t.Fatalf("read deleted attempt: %v", err)
-	}
-	if oldStatus != string(model.JobStatusFailed) || oldReason != "link_deleted" {
-		t.Fatalf("deleted attempt = %s/%s, want failed/link_deleted", oldStatus, oldReason)
-	}
 	assertReaderFeedLinkLive(t, pool, linkID, false)
+	assertCancelledRiverAttempt(t, pool, oldAttempt)
 
 	restored, err := commands.SubmitLink(ctx, service.SubmitLinkCommand{Capture: service.LinkCapture{
 		URL: rawURL, Status: model.LinkStatusPending,
 	}})
-	if err != nil || restored.Link == nil || restored.Link.ID != linkID || restored.Job == nil || restored.Job.ID == oldJobID || !restored.Restored || restored.Inserted {
+	if err != nil || restored.Link == nil || restored.Link.ID != linkID || !restored.Enqueued {
 		t.Fatalf("restored SubmitLink() = %#v, %v", restored, err)
 	}
 	assertReaderFeedLinkLive(t, pool, linkID, true)
-	var runnable int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM parse_jobs WHERE link_id=$1 AND status IN ('pending','processing')`, linkID).Scan(&runnable); err != nil {
-		t.Fatalf("count restored attempts: %v", err)
+	// SubmitLink returns the conflict/restore decision's input snapshot. The
+	// durable restore increments parse_generation in the same transaction, so
+	// read the committed Link before asserting the replacement attempt.
+	restoredLink, err := links.GetByID(ctx, linkID)
+	if err != nil || restoredLink == nil {
+		t.Fatalf("read restored Link: %v", err)
 	}
-	if runnable != 1 {
-		t.Fatalf("runnable restored attempts = %d, want 1", runnable)
+	restoredAttempt := parseAttemptForLink(restoredLink)
+	if restoredAttempt.Generation <= oldAttempt.Generation {
+		t.Fatalf("restored generation = %d, want newer than %d", restoredAttempt.Generation, oldAttempt.Generation)
 	}
-	assertActiveRiverAttempt(t, pool, restored.Job.ID)
-}
-
-func TestDurableLinkDeleteRollsBackRiverAndLinkWhenAttemptTerminalizationFails(t *testing.T) {
-	pool := StartPostgres(t)
-	ctx := t.Context()
-	links := repository.NewPGXLinkRepository(pool)
-	queue := newRiverQueue(t, pool, newRecordingProcessor(pool))
-	commands := dbLinkCommands(pool, links, queue)
-	created, err := commands.SubmitLink(ctx, service.SubmitLinkCommand{Capture: service.LinkCapture{
-		URL: "https://durable.example.com/delete-attempt-rollback", Status: model.LinkStatusPending,
-	}})
-	if err != nil || created.Link == nil || created.Job == nil {
-		t.Fatalf("SubmitLink() = %#v, %v", created, err)
-	}
-	if _, err := pool.Exec(ctx, `
-		CREATE FUNCTION fail_link_deleted_attempt() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN
-			IF NEW.error_msg = 'link_deleted' THEN
-				RAISE EXCEPTION 'injected link_deleted attempt failure';
-			END IF;
-			RETURN NEW;
-		END;
-		$$;
-		CREATE TRIGGER fail_link_deleted_attempt
-		BEFORE UPDATE ON parse_jobs
-		FOR EACH ROW EXECUTE FUNCTION fail_link_deleted_attempt()`); err != nil {
-		t.Fatalf("install attempt failure trigger: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS fail_link_deleted_attempt ON parse_jobs; DROP FUNCTION IF EXISTS fail_link_deleted_attempt()`)
-	})
-
-	if err := commands.DeleteLink(ctx, service.DeleteLinkCommand{LinkID: created.Link.ID}); err == nil {
-		t.Fatal("DeleteLink() with injected attempt failure succeeded")
-	}
-	assertReaderFeedLinkLive(t, pool, created.Link.ID, true)
-	assertLinkAndAttemptRemain(t, pool, created.Link.ID, created.Job.ID)
-	assertActiveRiverAttempt(t, pool, created.Job.ID)
+	assertActiveRiverAttempt(t, pool, restoredAttempt)
 }
 
 func TestDurableConversionRollsBackBusinessAndRiverAfterInsert(t *testing.T) {
@@ -241,36 +200,48 @@ func rawCountLinks(t *testing.T, pool interface {
 
 func assertLinkAndAttemptRemain(t *testing.T, pool interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
-}, linkID, jobID uuid.UUID) {
+}, attempt model.ParseAttempt) {
 	t.Helper()
-	var status string
-	if err := pool.QueryRow(t.Context(), `SELECT status FROM links WHERE id=$1`, linkID).Scan(&status); err != nil {
+	var (
+		status     string
+		generation int64
+	)
+	if err := pool.QueryRow(t.Context(), `SELECT status,parse_generation FROM links WHERE id=$1`, attempt.LinkID).Scan(&status, &generation); err != nil {
 		t.Fatalf("read rolled-back link: %v", err)
 	}
-	if status != string(model.LinkStatusPending) {
-		t.Fatalf("link status after rollback = %q, want pending", status)
-	}
-	var count int
-	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM parse_jobs WHERE id=$1`, jobID).Scan(&count); err != nil {
-		t.Fatalf("read rolled-back parse attempt: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("original parse attempt count = %d, want 1", count)
+	if status != string(model.LinkStatusPending) || generation != attempt.Generation {
+		t.Fatalf("link after rollback = %q generation %d, want pending generation %d", status, generation, attempt.Generation)
 	}
 }
 
 func assertActiveRiverAttempt(t *testing.T, pool interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
-}, parseJobID uuid.UUID) {
+}, attempt model.ParseAttempt) {
 	t.Helper()
 	var state string
 	var cancellationMarked bool
 	if err := pool.QueryRow(t.Context(), `SELECT state::text, metadata ? 'cancel_attempted_at'
-		FROM river_job WHERE kind='parse_link' AND args->>'parse_job_id'=$1`, parseJobID.String()).
+		FROM river_job WHERE kind='parse_link' AND args->>'link_id'=$1 AND args->>'parse_generation'=$2`,
+		attempt.LinkID.String(), fmt.Sprint(attempt.Generation)).
 		Scan(&state, &cancellationMarked); err != nil {
 		t.Fatalf("read River attempt after rollback: %v", err)
 	}
 	if state == "cancelled" || cancellationMarked {
 		t.Fatalf("River attempt after rollback = state %q, cancellation marked %v", state, cancellationMarked)
+	}
+}
+
+func assertCancelledRiverAttempt(t *testing.T, pool interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, attempt model.ParseAttempt) {
+	t.Helper()
+	var state string
+	if err := pool.QueryRow(t.Context(), `SELECT state::text FROM river_job
+		WHERE kind='parse_link' AND args->>'link_id'=$1 AND args->>'parse_generation'=$2`,
+		attempt.LinkID.String(), fmt.Sprint(attempt.Generation)).Scan(&state); err != nil {
+		t.Fatalf("read cancelled River attempt: %v", err)
+	}
+	if state != "cancelled" {
+		t.Fatalf("River attempt state = %q, want cancelled", state)
 	}
 }

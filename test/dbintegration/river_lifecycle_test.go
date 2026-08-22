@@ -19,18 +19,18 @@ import (
 
 func TestLinkDeleteCancelsPendingRiverAttemptAtomically(t *testing.T) {
 	pool := StartPostgres(t)
-	linkID, jobID := insertPendingLinkAndJob(t, pool, "https://example.com/delete-pending")
+	linkID, attempt := insertPendingLinkAttempt(t, pool, "https://example.com/delete-pending")
 	queue := newRiverQueue(t, pool, newRecordingProcessor(pool))
-	if err := queue.Enqueue(t.Context(), linkID, jobID); err != nil {
+	if err := queue.Enqueue(t.Context(), attempt); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	deleteLinkThroughLifecycle(t, pool, queue, linkID)
-	assertLinkLifecycleAndCancelledRiver(t, pool, linkID, jobID)
+	assertLinkLifecycleAndCancelledRiver(t, pool, attempt)
 }
 
 func TestLinkDeleteCancelsPendingTranslationAttemptAtomically(t *testing.T) {
 	pool := StartPostgres(t)
-	linkID, _ := insertPendingLinkAndJob(t, pool, "https://example.com/delete-pending-translation")
+	linkID, _ := insertPendingLinkAttempt(t, pool, "https://example.com/delete-pending-translation")
 	queue := newRiverQueue(t, pool, newRecordingProcessor(pool))
 	translationID := schedulePendingTranslation(t, pool, queue, context.Background(), linkID, "translate before link delete")
 
@@ -38,38 +38,16 @@ func TestLinkDeleteCancelsPendingTranslationAttemptAtomically(t *testing.T) {
 	assertTranslationLifecycleAndRiverCancelled(t, pool, translationID, 1)
 }
 
-func TestLinkDeleteCancelsPendingLegacyTranslationAttemptAtomically(t *testing.T) {
-	pool := StartPostgres(t)
-	linkID, _ := insertPendingLinkAndJob(t, pool, "https://example.com/delete-pending-legacy-translation")
-	translations := repository.NewPGXTranslationRepository(pool)
-	queue, err := worker.NewRiverQueue(worker.RiverQueueOptions{
-		Pool:                   pool,
-		Processor:              newRecordingProcessor(pool),
-		TranslationProcessor:   noopTranslationProcessor{},
-		TranslationAttempts:    translations,
-		TranslationJobsRollout: model.TranslationJobsRolloutCompatV1,
-		MaxWorkers:             1,
-		JobTimeout:             10 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("NewRiverQueue(compat-v1): %v", err)
-	}
-	translationID := schedulePendingTranslation(t, pool, queue, context.Background(), linkID, "legacy translate before link delete")
-
-	deleteLinkThroughLifecycle(t, pool, queue, linkID)
-	assertTranslationLifecycleAndRiverCancelled(t, pool, translationID, 1)
-}
-
 func TestLinkDeleteCancelsRunningWorkerContext(t *testing.T) {
 	pool := StartPostgres(t)
-	linkID, jobID := insertPendingLinkAndJob(t, pool, "https://example.com/delete-running")
+	linkID, attempt := insertPendingLinkAttempt(t, pool, "https://example.com/delete-running")
 	proc := &cancellationAwareProcessor{
-		targetJobID: jobID,
-		started:     make(chan struct{}),
-		cancelled:   make(chan struct{}),
+		target:    attempt,
+		started:   make(chan struct{}),
+		cancelled: make(chan struct{}),
 	}
 	queue := newRiverQueue(t, pool, proc)
-	if err := queue.Enqueue(t.Context(), linkID, jobID); err != nil {
+	if err := queue.Enqueue(t.Context(), attempt); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	if err := queue.Start(t.Context()); err != nil {
@@ -92,7 +70,7 @@ func TestLinkDeleteCancelsRunningWorkerContext(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("running worker context was not cancelled")
 	}
-	assertLinkLifecycleAndCancelledRiver(t, pool, linkID, jobID)
+	assertLinkLifecycleAndCancelledRiver(t, pool, attempt)
 }
 
 func deleteLinkThroughLifecycle(t *testing.T, pool *pgxpool.Pool, queue *worker.RiverQueue, linkID uuid.UUID) {
@@ -109,10 +87,10 @@ func deleteLinkThroughLifecycle(t *testing.T, pool *pgxpool.Pool, queue *worker.
 	}
 }
 
-func assertLinkLifecycleAndCancelledRiver(t *testing.T, pool *pgxpool.Pool, linkID, jobID uuid.UUID) {
+func assertLinkLifecycleAndCancelledRiver(t *testing.T, pool *pgxpool.Pool, attempt model.ParseAttempt) {
 	t.Helper()
 	var trashed bool
-	if err := pool.QueryRow(t.Context(), `SELECT deleted_at IS NOT NULL FROM links WHERE id=$1`, linkID).Scan(&trashed); err != nil {
+	if err := pool.QueryRow(t.Context(), `SELECT deleted_at IS NOT NULL FROM links WHERE id=$1`, attempt.LinkID).Scan(&trashed); err != nil {
 		t.Fatalf("read trashed link: %v", err)
 	}
 	if !trashed {
@@ -122,7 +100,8 @@ func assertLinkLifecycleAndCancelledRiver(t *testing.T, pool *pgxpool.Pool, link
 	for {
 		var state string
 		if err := pool.QueryRow(t.Context(), `SELECT state::text FROM river_job
-			WHERE kind='parse_link' AND args->>'parse_job_id'=$1`, jobID.String()).Scan(&state); err != nil {
+			WHERE kind='parse_link' AND args->>'link_id'=$1 AND args->>'parse_generation'=$2`,
+			attempt.LinkID.String(), fmt.Sprint(attempt.Generation)).Scan(&state); err != nil {
 			t.Fatalf("read River state: %v", err)
 		}
 		if state == "cancelled" {
@@ -138,7 +117,12 @@ func assertLinkLifecycleAndCancelledRiver(t *testing.T, pool *pgxpool.Pool, link
 func schedulePendingTranslation(t *testing.T, pool *pgxpool.Pool, queue *worker.RiverQueue, ctx context.Context, linkID uuid.UUID, source string) uuid.UUID {
 	t.Helper()
 	repo := repository.NewPGXTranslationRepository(pool)
-	item, scheduled, err := repo.SchedulePending(ctx, repository.UpsertTranslationParams{
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin translation schedule: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	item, inserted, err := repo.InsertPendingTranslationTx(ctx, tx, repository.UpsertTranslationParams{
 		LinkID:         linkID,
 		Scope:          model.TranslationScopeSelection,
 		BlockKey:       "summary",
@@ -148,9 +132,18 @@ func schedulePendingTranslation(t *testing.T, pool *pgxpool.Pool, queue *worker.
 		SourceFormat:   model.TranslationFormatPlain,
 		TargetLanguage: model.TranslationTargetChinese,
 		SourceHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(source))),
-	}, queue.EnqueueTranslationTx)
-	if err != nil || !scheduled || item == nil {
-		t.Fatalf("SchedulePending(): item=%+v scheduled=%v error=%v", item, scheduled, err)
+	})
+	if err != nil || !inserted || item == nil {
+		t.Fatalf("InsertPendingTranslationTx(): item=%+v inserted=%v error=%v", item, inserted, err)
+	}
+	if _, err := queue.EnqueueTranslationTx(ctx, tx, model.TranslationAttemptSeed{
+		TranslationID: item.ID, AttemptGeneration: item.AttemptGeneration,
+		SourceHash: item.SourceHash, SourceContentRevision: item.SourceContentRevision,
+	}); err != nil {
+		t.Fatalf("EnqueueTranslationTx(): %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit translation schedule: %v", err)
 	}
 	return item.ID
 }
@@ -168,8 +161,8 @@ func assertTranslationLifecycleAndRiverCancelled(t *testing.T, pool *pgxpool.Poo
 	for {
 		var state string
 		if err := pool.QueryRow(t.Context(), `SELECT state::text FROM river_job
-			WHERE kind IN ('translate_link_content', 'translate_link_v2')
-			  AND args->>'translation_id'=$1`, translationID.String()).Scan(&state); err != nil {
+			WHERE kind = $1 AND args->>'translation_id'=$2`,
+			model.TranslationJobKind, translationID.String()).Scan(&state); err != nil {
 			t.Fatalf("read translation River state: %v", err)
 		}
 		if state == "cancelled" {

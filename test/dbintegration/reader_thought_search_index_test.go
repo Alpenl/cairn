@@ -129,11 +129,14 @@ func TestReaderThoughtSearchUsesTrigramIndexes(t *testing.T) {
 	const scale = 8000
 	updatedAt := time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO reader_thoughts (id,host_kind,host_id,target,quote,body,source,deleted,last_sequence,created_at,updated_at)
+		INSERT INTO reader_thoughts (
+			id,host_kind,host_id,target,quote,body,source,deleted,last_sequence,created_at,updated_at,
+			winner_logical_clock,winner_device_id,winner_op_id
+		)
 		SELECT 'bulk-'||g,'note','host-bulk-'||g,'{"kind":"note"}'::jsonb,
 			jsonb_build_object('exact','bulk quotation number '||g),
 			'bulk thought body with enough prose that a sequential scan has real pages to walk '||g,
-			'user',false,1,$1,$1
+			'user',false,1,$1,$1,1,'search-fixture','bulk-'||g
 		FROM generate_series(1,$2) g`, updatedAt, scale); err != nil {
 		t.Fatalf("seed bulk thoughts: %v", err)
 	}

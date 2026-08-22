@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -12,8 +11,8 @@ import (
 	"github.com/google/uuid"
 
 	feedremote "webtag/internal/feed"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 )
 
 const maxOPMLSubscriptions = 500
@@ -117,14 +116,14 @@ func (s *FeedService) ImportOPML(ctx context.Context, payload []byte) (model.OPM
 func decodeOPMLEntries(payload []byte) ([]opmlEntry, error) {
 	var document opmlDocument
 	if err := xml.Unmarshal(payload, &document); err != nil {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_opml", "invalid OPML document")
+		return nil, problem.NewWithCode(problem.Invalid, "invalid_opml", "invalid OPML document")
 	}
 	entries := make([]opmlEntry, 0)
 	if err := collectOPMLEntries(document.Body.Outlines, &entries); err != nil {
 		return nil, err
 	}
 	if len(entries) == 0 {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "empty_opml", "OPML document contains no subscriptions")
+		return nil, problem.NewWithCode(problem.Invalid, "empty_opml", "OPML document contains no subscriptions")
 	}
 	return entries, nil
 }
@@ -154,7 +153,7 @@ func normalizeOPMLEntries(entries []opmlEntry, response *model.OPMLImportRespons
 		}
 		normalized = append(normalized, opmlEntry{URL: feedURL, Title: title, Folder: entry.Folder})
 		if len(normalized) > maxOPMLSubscriptions {
-			return nil, httperr.NewWithCode(http.StatusRequestEntityTooLarge, "opml_subscription_limit", "OPML document exceeds 500 unique subscriptions")
+			return nil, problem.NewWithCode(problem.TooLarge, "opml_subscription_limit", "OPML document exceeds 500 unique subscriptions")
 		}
 	}
 	return normalized, nil
@@ -221,10 +220,10 @@ func collectOPMLEntries(outlines []opmlOutline, entries *[]opmlEntry) error {
 		stack = stack[:len(stack)-1]
 		visited++
 		if visited > maxOPMLOutlineNodes {
-			return httperr.NewWithCode(http.StatusRequestEntityTooLarge, "opml_outline_limit", "OPML document contains too many outline nodes")
+			return problem.NewWithCode(problem.TooLarge, "opml_outline_limit", "OPML document contains too many outline nodes")
 		}
 		if current.depth > maxOPMLDepth {
-			return httperr.NewWithCode(http.StatusUnprocessableEntity, "opml_depth_limit", "OPML outline nesting exceeds 32 levels")
+			return problem.NewWithCode(problem.Invalid, "opml_depth_limit", "OPML outline nesting exceeds 32 levels")
 		}
 		name := strings.TrimSpace(current.outline.Title)
 		if name == "" {

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -11,15 +10,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
 	"webtag/internal/repository"
 )
 
 type readerMetadataStoreStub struct {
-	repository.ReaderVNextStore
-
+	ReaderLibraryStore
 	calls  int
 	patch  model.ReaderLinkMetadataPatch
 	result model.ReaderLinkMetadataUpdate
@@ -32,71 +29,52 @@ func (s *readerMetadataStoreStub) UpdateLinkMetadata(_ context.Context, patch mo
 	return s.result, s.err
 }
 
-type readerMetadataCacheSpy struct{ calls int }
-
-func (s *readerMetadataCacheSpy) Invalidate(context.Context) { s.calls++ }
-
-func TestPatchLinkMetadataRejectsIncompleteOrInvalidTupleBeforeStore(t *testing.T) {
+func TestPatchLinkMetadataRejectsInvalidCommandBeforeStore(t *testing.T) {
 	tooManyTags := make([]string, maxLinkMetadataTags+1)
 	for index := range tooManyTags {
 		tooManyTags[index] = "tag"
 	}
-	encodedManyTags, err := json.Marshal(map[string]any{"title": nil, "summary": nil, "tags": tooManyTags})
-	if err != nil {
-		t.Fatalf("marshal too-many-tags fixture: %v", err)
-	}
-
 	tests := []struct {
-		name string
-		body string
-		code string
+		name    string
+		command ReaderLinkMetadataCommand
+		code    string
 	}{
-		{name: "empty object", body: `{}`, code: "metadata_fields_required"},
-		{name: "missing tags", body: `{"title":null,"summary":null}`, code: "metadata_fields_required"},
-		{name: "missing summary", body: `{"title":null,"tags":[]}`, code: "metadata_fields_required"},
-		{name: "null tags", body: `{"title":null,"summary":null,"tags":null}`, code: "invalid_link_metadata"},
-		{name: "blank tag", body: `{"title":null,"summary":null,"tags":["   "]}`, code: "invalid_link_metadata"},
-		{name: "too many tags", body: string(encodedManyTags), code: "invalid_link_metadata"},
-		{name: "long title", body: `{"title":"` + strings.Repeat("t", maxLinkMetadataTitleRunes+1) + `","summary":null,"tags":[]}`, code: "invalid_link_metadata"},
-		{name: "long summary", body: `{"title":null,"summary":"` + strings.Repeat("s", maxLinkMetadataSummaryRunes+1) + `","tags":[]}`, code: "invalid_link_metadata"},
+		{name: "null tags", command: ReaderLinkMetadataCommand{Tags: nil}, code: "invalid_link_metadata"},
+		{name: "blank tag", command: ReaderLinkMetadataCommand{Tags: []string{"   "}}, code: "invalid_link_metadata"},
+		{name: "too many tags", command: ReaderLinkMetadataCommand{Tags: tooManyTags}, code: "invalid_link_metadata"},
+		{name: "long title", command: ReaderLinkMetadataCommand{Title: readerStringPointer(strings.Repeat("t", maxLinkMetadataTitleRunes+1)), Tags: []string{}}, code: "invalid_link_metadata"},
+		{name: "long summary", command: ReaderLinkMetadataCommand{Summary: readerStringPointer(strings.Repeat("s", maxLinkMetadataSummaryRunes+1)), Tags: []string{}}, code: "invalid_link_metadata"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &readerMetadataStoreStub{}
-			cache := &readerMetadataCacheSpy{}
-			reader := NewReaderVNextService(store, nil)
-			reader.ConfigureMetadataCacheInvalidator(cache)
+			reader := newReaderTestFeatureSet(readerTestStores(store), nil)
 
-			_, err := reader.PatchLinkMetadata(context.Background(), uuid.NewString(), readerMetadataRequest(t, tc.body), 7)
+			tc.command.LinkID = uuid.New()
+			tc.command.ExpectedRevision = 7
+			_, err := reader.PatchLinkMetadata(context.Background(), tc.command)
 			assertReaderHTTPError(t, err, http.StatusUnprocessableEntity, tc.code)
 			if store.calls != 0 {
 				t.Fatalf("UpdateLinkMetadata calls = %d, want 0", store.calls)
-			}
-			if cache.calls != 0 {
-				t.Fatalf("cache invalidations = %d, want 0", cache.calls)
 			}
 		})
 	}
 }
 
-func TestPatchLinkMetadataNormalizesCompleteReplacementAndInvalidatesChangedTags(t *testing.T) {
+func TestPatchLinkMetadataNormalizesCompleteReplacement(t *testing.T) {
 	linkID := uuid.New()
 	store := &readerMetadataStoreStub{result: model.ReaderLinkMetadataUpdate{MetadataRevision: 8, TagsChanged: true}}
-	cache := &readerMetadataCacheSpy{}
-	reader := NewReaderVNextService(store, nil)
-	reader.ConfigureMetadataCacheInvalidator(cache)
+	reader := newReaderTestFeatureSet(readerTestStores(store), nil)
 
 	response, err := reader.PatchLinkMetadata(
 		context.Background(),
-		linkID.String(),
-		readerMetadataRequest(t, `{"title":null,"summary":null,"tags":[" Go ","go","Rust"," RUST "]}`),
-		7,
+		ReaderLinkMetadataCommand{LinkID: linkID, Tags: []string{" Go ", "go", "Rust", " RUST "}, ExpectedRevision: 7},
 	)
 	if err != nil {
 		t.Fatalf("PatchLinkMetadata() error = %v", err)
 	}
-	if response.LinkID != linkID.String() || response.MetadataRevision != 8 {
-		t.Fatalf("response = %#v, want link %s at revision 8", response, linkID)
+	if response.MetadataRevision != 8 {
+		t.Fatalf("response = %#v, want revision 8", response)
 	}
 	if store.calls != 1 || store.patch.LinkID != linkID || store.patch.ExpectedRevision != 7 {
 		t.Fatalf("store patch identity = %#v", store.patch)
@@ -107,23 +85,16 @@ func TestPatchLinkMetadataNormalizesCompleteReplacementAndInvalidatesChangedTags
 	if !slices.Equal(store.patch.Tags, []string{"Go", "Rust"}) {
 		t.Fatalf("store tags = %#v, want trim/dedupe replacement", store.patch.Tags)
 	}
-	if cache.calls != 1 {
-		t.Fatalf("cache invalidations = %d, want 1 after a changed tag tuple", cache.calls)
-	}
 }
 
 func TestPatchLinkMetadataUsesUnicodeCaseFoldForNoopReplacement(t *testing.T) {
 	linkID := uuid.New()
 	store := &readerMetadataStoreStub{result: model.ReaderLinkMetadataUpdate{MetadataRevision: 7, TagsChanged: false}}
-	cache := &readerMetadataCacheSpy{}
-	reader := NewReaderVNextService(store, nil)
-	reader.ConfigureMetadataCacheInvalidator(cache)
+	reader := newReaderTestFeatureSet(readerTestStores(store), nil)
 
 	response, err := reader.PatchLinkMetadata(
 		context.Background(),
-		linkID.String(),
-		readerMetadataRequest(t, `{"title":"same","summary":null,"tags":[" \u03a3 ","\u03c2","Stra\u00dfe","STRASSE"]}`),
-		7,
+		ReaderLinkMetadataCommand{LinkID: linkID, Title: readerStringPointer("same"), Tags: []string{" \u03a3 ", "\u03c2", "Stra\u00dfe", "STRASSE"}, ExpectedRevision: 7},
 	)
 	if err != nil {
 		t.Fatalf("PatchLinkMetadata() error = %v", err)
@@ -134,14 +105,11 @@ func TestPatchLinkMetadataUsesUnicodeCaseFoldForNoopReplacement(t *testing.T) {
 	if !slices.Equal(store.patch.Tags, []string{"\u03a3", "Stra\u00dfe"}) {
 		t.Fatalf("store tags = %#v, want full Unicode case-fold replacement", store.patch.Tags)
 	}
-	if cache.calls != 0 {
-		t.Fatalf("cache invalidations = %d, want 0 for normalized no-op", cache.calls)
-	}
 }
 
-func TestPatchLinkMetadataDoesNotInvalidateForNoopOrConflict(t *testing.T) {
-	linkID := uuid.NewString()
-	request := readerMetadataRequest(t, `{"title":"same","summary":null,"tags":["same"]}`)
+func TestPatchLinkMetadataHandlesNoopAndConflict(t *testing.T) {
+	linkID := uuid.New()
+	command := ReaderLinkMetadataCommand{LinkID: linkID, Title: readerStringPointer("same"), Tags: []string{"same"}, ExpectedRevision: 7}
 
 	tests := []struct {
 		name       string
@@ -164,11 +132,9 @@ func TestPatchLinkMetadataDoesNotInvalidateForNoopOrConflict(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &readerMetadataStoreStub{result: tc.result, err: tc.err}
-			cache := &readerMetadataCacheSpy{}
-			reader := NewReaderVNextService(store, nil)
-			reader.ConfigureMetadataCacheInvalidator(cache)
+			reader := newReaderTestFeatureSet(readerTestStores(store), nil)
 
-			response, err := reader.PatchLinkMetadata(context.Background(), linkID, request, 7)
+			response, err := reader.PatchLinkMetadata(context.Background(), command)
 			if tc.err == nil {
 				if err != nil || response.MetadataRevision != 7 {
 					t.Fatalf("no-op response/error = %#v, %v", response, err)
@@ -182,15 +148,12 @@ func TestPatchLinkMetadataDoesNotInvalidateForNoopOrConflict(t *testing.T) {
 			if store.calls != 1 {
 				t.Fatalf("UpdateLinkMetadata calls = %d, want 1", store.calls)
 			}
-			if cache.calls != 0 {
-				t.Fatalf("cache invalidations = %d, want 0", cache.calls)
-			}
 		})
 	}
 }
 
 func TestPatchLinkMetadataRejectsOutOfRangeStoreRevision(t *testing.T) {
-	request := readerMetadataRequest(t, `{"title":"same","summary":null,"tags":["same"]}`)
+	command := ReaderLinkMetadataCommand{LinkID: uuid.New(), Title: readerStringPointer("same"), Tags: []string{"same"}, ExpectedRevision: model.LinkMetadataMaxRevision}
 	for _, tc := range []struct {
 		name     string
 		revision int64
@@ -200,27 +163,17 @@ func TestPatchLinkMetadataRejectsOutOfRangeStoreRevision(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &readerMetadataStoreStub{result: model.ReaderLinkMetadataUpdate{MetadataRevision: tc.revision, TagsChanged: true}}
-			cache := &readerMetadataCacheSpy{}
-			reader := NewReaderVNextService(store, nil)
-			reader.ConfigureMetadataCacheInvalidator(cache)
+			reader := newReaderTestFeatureSet(readerTestStores(store), nil)
 
-			_, err := reader.PatchLinkMetadata(context.Background(), uuid.NewString(), request, model.LinkMetadataMaxRevision)
+			_, err := reader.PatchLinkMetadata(context.Background(), command)
 			assertReaderHTTPError(t, err, http.StatusConflict, httperr.CodeMetadataRevisionConflict)
 			if store.calls != 1 {
 				t.Fatalf("UpdateLinkMetadata calls = %d, want 1", store.calls)
-			}
-			if cache.calls != 0 {
-				t.Fatalf("cache invalidations = %d, want 0", cache.calls)
 			}
 		})
 	}
 }
 
-func readerMetadataRequest(t *testing.T, raw string) dto.ReaderLinkMetadataRequest {
-	t.Helper()
-	var request dto.ReaderLinkMetadataRequest
-	if err := json.Unmarshal([]byte(raw), &request); err != nil {
-		t.Fatalf("decode metadata request %s: %v", raw, err)
-	}
-	return request
+func readerStringPointer(value string) *string {
+	return &value
 }

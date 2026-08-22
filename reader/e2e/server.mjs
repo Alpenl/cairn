@@ -248,7 +248,6 @@ function siteFor(index) {
     tags: [],
     entry_count: 1,
     pinned: false,
-    needs_review: false,
     revision: index,
     first_collected_at: '2026-08-01T00:00:00Z',
     last_collected_at: '2026-08-01T00:00:00Z',
@@ -337,13 +336,6 @@ async function handleTestRoute(request, response, url) {
     return true
   }
 
-  if (url.pathname === '/__test__/thought-repair-harness') {
-    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' })
-    response.end(
-      '<!doctype html><html><body><script type="module" src="/reader/e2e/thought-repair-harness.ts"></script></body></html>',
-    )
-    return
-  }
   if (url.pathname === '/__test__/thought-sync-harness') {
     sendText(
       response,
@@ -598,7 +590,6 @@ async function handleAPI(request, response, url) {
     sendJSON(response, 200, {
       library_kinds: true,
       site_library: true,
-      site_auto_classification: false,
       site_management: false,
       site_advanced_management: false,
       archive_versions: [],
@@ -612,7 +603,7 @@ async function handleAPI(request, response, url) {
         home: false,
         feed: false,
         ai: false,
-        semantic: false,
+        related_tags: false,
         activity: false,
         history: false,
         trash: false,

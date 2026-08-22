@@ -10,6 +10,7 @@ import (
 
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -24,8 +25,8 @@ func TestContentServiceRejectsSiteAndUnclassifiedLinks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &contentKindStore{link: &model.Link{ID: uuid.New(), Status: model.LinkStatusDone, LibraryKind: tt.kind}}
 			_, err := NewContentService(store, nil, nil).Save(context.Background(), store.link.ID.String())
-			var statusErr *httperr.Error
-			if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != 409 || statusErr.HTTPErrorCode() != tt.code {
+			var statusErr *problem.Error
+			if !errors.As(err, &statusErr) || problemHTTPStatus(statusErr) != 409 || statusErr.Code() != tt.code {
 				t.Fatalf("Save() error = %v, want 409 %s", err, tt.code)
 			}
 			if store.contentWriteCalled {
@@ -54,7 +55,11 @@ func (s *contentKindStore) UpdateContentIfCurrent(context.Context, uuid.UUID, ti
 	s.contentWriteCalled = true
 	return 0, false, nil
 }
-func (s *contentKindStore) ReplaceContentIfCurrent(context.Context, uuid.UUID, time.Time, model.SavedContent) (int64, bool, error) {
+func (s *contentKindStore) ReplaceContentIfCurrentWithRevision(context.Context, uuid.UUID, time.Time, int64, model.SavedContent) (int64, bool, error) {
+	s.contentWriteCalled = true
+	return 0, false, nil
+}
+func (s *contentKindStore) EditContentIfRevision(context.Context, uuid.UUID, int64, model.SavedContent) (int64, bool, error) {
 	s.contentWriteCalled = true
 	return 0, false, nil
 }

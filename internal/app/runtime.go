@@ -102,8 +102,8 @@ func (r *Runtime) Start(ctx context.Context) error {
 	return startErr
 }
 
-// Close 触发优雅停机：按顺序停掉 poller、排空队列、关闭连接池并
-// flush tracer。同 Start，对 nil 接收者或未装配 close 的实例 no-op。
+// Close 触发优雅停机：按顺序停掉 poller、排空队列并关闭连接池。
+// 同 Start，对 nil 接收者或未装配 close 的实例 no-op。
 func (r *Runtime) Close(ctx context.Context) error {
 	if r == nil {
 		return nil

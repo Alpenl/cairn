@@ -76,8 +76,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -mod=vendor -trimpath
 	-o /out/migrate ./cmd/migrate
 
 # ---------------------------------------------------------------------------
-# slim — the published runtime. yt-dlp is not bundled and is not part of
-# Core release images. `docker build .` (no --target) lands here.
+# slim — the published runtime. `docker build .` (no --target) lands here.
 # ---------------------------------------------------------------------------
 FROM alpine:3.24 AS slim
 

@@ -323,11 +323,6 @@ jobs:
                 exit 1
               }
             done
-            docker run --rm --platform "$platform" --entrypoint /bin/sh "$reference" -ec '
-              test ! -e /usr/share/licenses/cairn/YT_DLP_LICENSE.txt
-              test ! -e /usr/share/licenses/cairn/YT_DLP_SOURCE.txt
-              test ! -e /usr/local/bin/yt-dlp
-            '
           done <<EOF
           slim	linux/amd64	$SLIM_AMD64
           slim	linux/arm64	$SLIM_ARM64

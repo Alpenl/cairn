@@ -11,32 +11,20 @@ import (
 const derivedCursorSigningKeyDomain = "cairn-cursor-signing-key-v1\x00"
 const minimumExplicitCursorSigningKeyBytes = 32
 
-// resolveReaderCursorSigningKey keeps Reader/Thought cursors independent from
-// deployment credentials in every non-development environment. CURSOR_SIGNING_KEY
-// remains a compatibility fallback for operators that already use one explicit
-// key for both Link and Reader cursors.
-func resolveReaderCursorSigningKey(
-	appEnv, explicitReader, explicitLink, databaseURL, analyzerAPIKey string,
-) (string, error) {
-	for _, candidate := range []struct {
-		name  string
-		value string
-	}{
-		{name: "READER_CURSOR_SIGNING_KEY", value: explicitReader},
-		{name: "CURSOR_SIGNING_KEY", value: explicitLink},
-	} {
-		key := strings.TrimSpace(candidate.value)
-		if key == "" {
-			continue
-		}
+// resolveCursorSigningKey returns the one installation-wide key used by every
+// opaque cursor. Development may derive a stable local key; deployed builds
+// must configure one explicitly so cursors survive restarts and replicas.
+func resolveCursorSigningKey(appEnv, explicit, databaseURL, analyzerAPIKey string) (string, error) {
+	key := strings.TrimSpace(explicit)
+	if key != "" {
 		if len([]byte(key)) < minimumExplicitCursorSigningKeyBytes {
-			return "", fmt.Errorf("%s must be at least %d bytes", candidate.name, minimumExplicitCursorSigningKeyBytes)
+			return "", fmt.Errorf("CURSOR_SIGNING_KEY must be at least %d bytes", minimumExplicitCursorSigningKeyBytes)
 		}
 		return key, nil
 	}
 
 	if strings.ToLower(strings.TrimSpace(appEnv)) != "dev" {
-		return "", fmt.Errorf("READER_CURSOR_SIGNING_KEY or CURSOR_SIGNING_KEY is required when APP_ENV is not dev")
+		return "", fmt.Errorf("CURSOR_SIGNING_KEY is required when APP_ENV is not dev")
 	}
 
 	return deriveDevelopmentCursorSigningKey(databaseURL, analyzerAPIKey), nil

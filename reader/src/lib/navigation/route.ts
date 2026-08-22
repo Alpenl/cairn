@@ -12,7 +12,6 @@ export type ReaderRoute =
   | { readonly kind: 'library'; readonly id: 'pending'; readonly inboxId?: string }
   | { readonly kind: 'library'; readonly id: Exclude<ReaderLibraryId, 'pending'> }
   | { readonly kind: 'tool'; readonly id: 'todo' | 'settings' | 'history' | 'trash' }
-  | { readonly kind: 'internal'; readonly id: 'review'; readonly reviewId?: string }
 
 export const READER_LAST_LOCATION_STORAGE_KEY = 'webtag:reader:last-location:v1'
 export const READER_LAST_LOCATION_STORAGE_PREFIX = 'webtag:reader:last-location:v2:'
@@ -49,7 +48,7 @@ function normalizeRouteTarget(value: string | null): string | null {
     : null
 }
 
-function routeFromValue(value: string | null, reviewId: string | null, inboxId: string | null = null): ReaderRoute | null {
+function routeFromValue(value: string | null, inboxId: string | null = null): ReaderRoute | null {
   const normalizedValue = normalizeRouteValue(value)
   if (!normalizedValue) return null
   if (normalizedValue === 'home') return { kind: 'surface', id: 'home' }
@@ -58,12 +57,6 @@ function routeFromValue(value: string | null, reviewId: string | null, inboxId: 
   if (normalizedValue === 'settings' || normalizedValue === 'setting') return { kind: 'tool', id: 'settings' }
   if (normalizedValue === 'history' || normalizedValue === 'thought-history') return { kind: 'tool', id: 'history' }
   if (normalizedValue === 'trash') return { kind: 'tool', id: 'trash' }
-  if (normalizedValue === 'review') {
-    const normalizedReviewId = normalizeRouteTarget(reviewId)
-    return normalizedReviewId
-      ? { kind: 'internal', id: 'review', reviewId: normalizedReviewId }
-      : { kind: 'internal', id: 'review' }
-  }
   const library = LIBRARY_ALIASES[normalizedValue]
   if (!library) return null
   const normalizedInboxId = normalizeRouteTarget(inboxId)
@@ -125,7 +118,7 @@ export function notifyReaderNavigationCommitted(): void {
 function routeFromURL(url: URL): ReaderRoute | null {
   const channel = ROUTE_CHANNELS.find((name) => url.searchParams.has(name))
   const value = channel ? url.searchParams.get(channel) : null
-  return routeFromValue(value, url.searchParams.get('review_id'), url.searchParams.get('inbox_id'))
+  return routeFromValue(value, url.searchParams.get('inbox_id'))
 }
 
 export function readerThoughtViewFromURL(input: URL | string): ReaderThoughtView {
@@ -174,7 +167,6 @@ function storedRouteTargets(route: ReaderRoute, url: URL): ReaderRouteTargets {
   }
   if (route.kind === 'tool' && route.id === 'history') {
     return {
-      contentHistoryLinkId: normalizedStoredTarget(url, 'content_history_link_id'),
       thoughtView: readerThoughtViewFromURL(url),
       thoughtId: readerThoughtIDFromURL(url),
     }
@@ -269,7 +261,6 @@ export interface ReaderRouteTargets {
   readonly linkId?: string
   readonly siteId?: string
   readonly noteId?: string
-  readonly contentHistoryLinkId?: string
   readonly thoughtView?: ReaderThoughtView
   readonly thoughtId?: string
 }
@@ -387,10 +378,6 @@ export function readerRouteURL(
       (thoughtView === 'history' || thoughtView === 'live' || thoughtView === 'superseded')) {
       url.searchParams.set('thought_view', thoughtView)
     }
-  } else {
-    url.searchParams.set('view', 'review')
-    const reviewId = route.reviewId?.trim()
-    if (reviewId) url.searchParams.set('review_id', reviewId)
   }
   const setTarget = (key: string, value: string | undefined) => {
     const normalized = value?.trim()
@@ -403,7 +390,6 @@ export function readerRouteURL(
   } else if (route.kind === 'library' && route.id === 'notes') {
     setTarget('note_id', targets.noteId)
   } else if (route.kind === 'tool' && route.id === 'history') {
-    setTarget('content_history_link_id', targets.contentHistoryLinkId)
     setTarget('thought_id', targets.thoughtId)
   }
   return url
@@ -411,9 +397,6 @@ export function readerRouteURL(
 
 export function sameReaderRoute(left: ReaderRoute, right: ReaderRoute): boolean {
   if (left.kind !== right.kind || left.id !== right.id) return false
-  if (left.kind === 'internal' && right.kind === 'internal') {
-    return (left.reviewId?.trim() || undefined) === (right.reviewId?.trim() || undefined)
-  }
   if (left.kind === 'library' && right.kind === 'library' && left.id === 'pending' && right.id === 'pending') {
     return (left.inboxId?.trim() || undefined) === (right.inboxId?.trim() || undefined)
   }

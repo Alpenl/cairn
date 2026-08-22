@@ -131,7 +131,6 @@ async function seed(
         cursor: '',
         deviceId: 'recovery-device',
         tabToken: 'tab',
-        clockContractVersion: 1,
         logicalClockFloor: 20,
         updatedAt: 1,
       })

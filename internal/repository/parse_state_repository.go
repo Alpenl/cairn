@@ -2,11 +2,12 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"webtag/internal/database"
 	"webtag/internal/model"
 )
 
@@ -24,23 +25,12 @@ import (
 // 并发完成的 reading 链接。需要重复的是**校验动作**，不是**条件定义**——后者只有
 // 下面这一个来源，改措辞时不会有第二处跟不上。
 const (
-	// SQLSiteCandidatePredicate 判定一行是否为 site 候选（已判定为 site，或预测
-	// 为 site 但尚未落地）。仅这类行的抓取素材可以被清除。
-	SQLSiteCandidatePredicate = "(library_kind = 'site' OR predicted_library_kind = 'site')"
+	// SQLSiteCandidatePredicate 判定一行是否已固定或完成为 site。
+	SQLSiteCandidatePredicate = "library_kind = 'site'"
 	// SQLNotReadingPredicate 是清理侧的守卫：已确定为 reading 的行永不清理。
 	//
-	// 注意它与 SQLSiteCandidatePredicate **不是互反**，NULL 的处理尤其不同：
-	//   library_kind = NULL 时
-	//     SQLSiteCandidatePredicate → NULL='site' OR NULL='site' → NULL → 不命中
-	//     SQLNotReadingPredicate    → COALESCE(NULL,'')='' → ''<>'reading' → 命中
-	// 即尚未分类的行**会**被清理侧放行。这是正确的：payload_purge_due_at 仅在
-	// 链接是 site 候选时才被写入（见 link_repo_submit.go 的 CASE WHEN
-	// library_kind='site'），因此能走到清理逻辑的 NULL 行都是预测站点候选，本就
-	// 该清。
-	//
-	// COALESCE 不可省略。若图省事改成 library_kind <> 'reading'，NULL 行会求值为
-	// NULL 而不再命中，预测站点的 payload 清理会被静默关掉——不报错、不告警，
-	// 只是磁盘慢慢涨。
+	// COALESCE keeps an unresolved row eligible for a future deadline, but such
+	// a row is not selected by the cleaner until payload_purge_due_at is set.
 	SQLNotReadingPredicate = "COALESCE(library_kind, '') <> 'reading'"
 )
 
@@ -51,14 +41,12 @@ func purgeSitePayloadColumn(column, purgedValue string) string {
 }
 
 const (
-	updateRunnableParseJobStateSQL = "UPDATE parse_jobs SET status = $2, error_msg = $3, updated_at = NOW() WHERE id = $1 AND link_id = $4 AND status IN ('pending', 'processing')"
-	// completeParseJobStateSQL verifies the immutable metadata lease stored on
-	// the durable job row as it enters its terminal state. The Link update runs
-	// first and holds the Link row lock; a substituted revision therefore turns
-	// this into a zero-row update and rolls the whole transaction back instead
-	// of letting an internal caller forge ownership of a newer metadata tuple.
-	completeParseJobStateSQL            = "UPDATE parse_jobs SET status = 'done', error_msg = NULL, updated_at = NOW() WHERE id = $1 AND link_id = $2 AND status = 'processing' AND expected_metadata_revision = $3"
+	markParseProcessingSQL = `UPDATE links
+		SET status='processing',error_msg=NULL,updated_at=NOW()
+		WHERE id=$1 AND parse_generation=$2
+		  AND status IN ('pending','processing') AND deleted_at IS NULL`
 	clearReadingPayloadPurgeDeadlineSQL = "UPDATE links SET payload_purge_due_at = NULL WHERE id = $1 AND library_kind = 'reading'"
+	selectParseAttemptSQL               = "SELECT parse_generation,status FROM links WHERE id=$1 AND deleted_at IS NULL"
 )
 
 // updateFailedSiteCandidateSQL：解析失败时，site 候选不得保留浏览器正文素材，
@@ -66,46 +54,24 @@ const (
 //
 // 由 purgeSitePayloadColumn 逐列生成，六列共用同一个谓词定义；此前这段 SQL 把
 // 同一个 CASE WHEN 条件手写了六遍。
-var updateFailedSiteCandidateSQL = "UPDATE links SET status = $2, error_msg = $3, " +
+var updateFailedSiteCandidateSQL = "UPDATE links SET status = 'failed', error_msg = $3, " +
 	purgeSitePayloadColumn("input_text", "NULL") + ", " +
 	purgeSitePayloadColumn("input_html", "NULL") + ", " +
 	purgeSitePayloadColumn("input_images", "NULL") + ", " +
 	purgeSitePayloadColumn("source_metadata", "NULL") + ", " +
 	purgeSitePayloadColumn("payload_purge_due_at", "NULL") + ", " +
 	purgeSitePayloadColumn("payload_purged_at", "NOW()") +
-	", updated_at = NOW() WHERE id = $1"
+	", updated_at = NOW() WHERE id = $1 AND parse_generation = $2 AND status IN ('pending','processing') AND deleted_at IS NULL"
 
-func (r *PGXLinkRepository) MarkParseProcessing(ctx context.Context, linkID, jobID uuid.UUID) error {
-	return r.updateParseState(ctx, linkID, jobID, model.LinkStatusProcessing, model.JobStatusProcessing, nil)
+func (r *PGXLinkRepository) MarkParseProcessing(ctx context.Context, attempt model.ParseAttempt) error {
+	return r.updateParseState(ctx, attempt, false, "")
 }
 
-func (r *PGXLinkRepository) MarkParseFailed(ctx context.Context, linkID, jobID uuid.UUID, message string) error {
-	return r.updateParseState(ctx, linkID, jobID, model.LinkStatusFailed, model.JobStatusFailed, &message)
+func (r *PGXLinkRepository) MarkParseFailed(ctx context.Context, attempt model.ParseAttempt, message string) error {
+	return r.updateParseState(ctx, attempt, true, message)
 }
 
-func (r *PGXLinkRepository) CompleteParse(ctx context.Context, params UpdateLinkAnalysisParams, jobID uuid.UUID) error {
-	tx, err := r.tx.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin complete parse tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockRepresentationWriteGateShared(ctx, tx); err != nil {
-		return err
-	}
-
-	if _, err := updateLinkAnalysisForParseOn(ctx, tx, params); err != nil {
-		return err
-	}
-	if err := completeExactParseJob(ctx, tx, params.ID, jobID, params.ExpectedMetadataRevision); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit complete parse tx: %w", err)
-	}
-	return nil
-}
-
-func (r *PGXLinkRepository) CompleteReadingParse(ctx context.Context, params CompleteReadingParseParams, jobID uuid.UUID) (CompleteReadingParseResult, error) {
+func (r *PGXLinkRepository) CompleteReadingParse(ctx context.Context, params CompleteReadingParseParams) (CompleteReadingParseResult, error) {
 	if params.Classification.Kind != model.LibraryKindReading || params.Analysis.ID != params.Classification.ID {
 		return CompleteReadingParseResult{}, fmt.Errorf("complete reading parse: final reading classification and matching link id are required")
 	}
@@ -114,26 +80,18 @@ func (r *PGXLinkRepository) CompleteReadingParse(ctx context.Context, params Com
 		return CompleteReadingParseResult{}, fmt.Errorf("begin complete reading parse tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockRepresentationWriteGateShared(ctx, tx); err != nil {
-		return CompleteReadingParseResult{}, err
-	}
 	result, err := updateLinkAnalysisForParseOn(ctx, tx, params.Analysis)
 	if err != nil {
 		return CompleteReadingParseResult{}, err
 	}
-	if err := updateLibraryClassificationForCompletionOn(ctx, tx, params.Classification, params.ExpectedRequestedLibraryKind, params.ExpectedRequestedLibraryKindSource); err != nil {
+	if err := updateLibraryClassificationForCompletionOn(ctx, tx, params.Classification, params.ExpectedLibraryKind, params.ExpectedLibraryKindLocked); err != nil {
 		return CompleteReadingParseResult{}, err
 	}
-	if params.DetachSiteEntry {
-		if err := detachSiteEntryForReadingOn(ctx, tx, params.Analysis.ID, nil, false); err != nil {
-			return CompleteReadingParseResult{}, fmt.Errorf("detach site entry for reading completion: %w", err)
-		}
+	if err := detachSiteEntryForReadingOn(ctx, tx, params.Analysis.ID, nil, false); err != nil {
+		return CompleteReadingParseResult{}, fmt.Errorf("detach site entry for reading completion: %w", err)
 	}
 	if _, err := tx.Exec(ctx, clearReadingPayloadPurgeDeadlineSQL, params.Analysis.ID); err != nil {
 		return CompleteReadingParseResult{}, fmt.Errorf("clear reading payload purge deadline: %w", err)
-	}
-	if err := completeExactParseJob(ctx, tx, params.Analysis.ID, jobID, params.Analysis.ExpectedMetadataRevision); err != nil {
-		return CompleteReadingParseResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return CompleteReadingParseResult{}, fmt.Errorf("commit complete reading parse tx: %w", err)
@@ -143,33 +101,27 @@ func (r *PGXLinkRepository) CompleteReadingParse(ctx context.Context, params Com
 
 func (r *PGXLinkRepository) updateParseState(
 	ctx context.Context,
-	linkID, jobID uuid.UUID,
-	linkStatus model.LinkStatus,
-	jobStatus model.JobStatus,
-	errorMsg *string,
+	attempt model.ParseAttempt,
+	failed bool,
+	message string,
 ) error {
 	tx, err := r.tx.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin parse state tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := prelockRepresentationWriteGateShared(ctx, tx); err != nil {
-		return err
-	}
-
-	stateSQL := updateLinkStateSQL
-	if linkStatus == model.LinkStatusFailed {
+	stateSQL := markParseProcessingSQL
+	args := []any{attempt.LinkID, attempt.Generation}
+	if failed {
 		stateSQL = updateFailedSiteCandidateSQL
+		args = append(args, message)
 	}
-	tag, err := tx.Exec(ctx, stateSQL, linkID, linkStatus, errorMsg)
+	tag, err := tx.Exec(ctx, stateSQL, args...)
 	if err != nil {
 		return fmt.Errorf("update link parse state: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	if err := updateRunnableParseJobState(ctx, tx, linkID, jobID, jobStatus, errorMsg); err != nil {
-		return err
+		return ErrParseAttemptNotRunnable
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit parse state tx: %w", err)
@@ -177,30 +129,17 @@ func (r *PGXLinkRepository) updateParseState(
 	return nil
 }
 
-func updateRunnableParseJobState(
-	ctx context.Context,
-	tx pgx.Tx,
-	linkID, jobID uuid.UUID,
-	status model.JobStatus,
-	errorMsg *string,
-) error {
-	tag, err := tx.Exec(ctx, updateRunnableParseJobStateSQL, jobID, status, errorMsg, linkID)
-	if err != nil {
-		return fmt.Errorf("update exact parse job state: %w", err)
+func requireCurrentParseAttempt(ctx context.Context, db database.Querier, attempt model.ParseAttempt) error {
+	var generation int64
+	var status model.LinkStatus
+	if err := db.QueryRow(ctx, selectParseAttemptSQL, attempt.LinkID).Scan(&generation, &status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrParseAttemptNotRunnable
+		}
+		return fmt.Errorf("read current parse attempt: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrParseJobNotRunnable
-	}
-	return nil
-}
-
-func completeExactParseJob(ctx context.Context, tx pgx.Tx, linkID, jobID uuid.UUID, expectedMetadataRevision int64) error {
-	tag, err := tx.Exec(ctx, completeParseJobStateSQL, jobID, linkID, expectedMetadataRevision)
-	if err != nil {
-		return fmt.Errorf("complete exact parse job: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrParseJobNotRunnable
+	if generation != attempt.Generation || (status != model.LinkStatusPending && status != model.LinkStatusProcessing) {
+		return ErrParseAttemptNotRunnable
 	}
 	return nil
 }

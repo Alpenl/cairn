@@ -16,7 +16,7 @@ import (
 )
 
 type readerAIHandlerStub struct {
-	ReaderService
+	ReaderLibraryRoutes
 	response dto.ReaderAIResponse
 	err      error
 	calls    int
@@ -37,14 +37,14 @@ func TestReaderAIHandlerPreservesMachineReadableErrors(t *testing.T) {
 	}{
 		{name: "timeout", status: http.StatusGatewayTimeout, code: "ai_timeout"},
 		{name: "canceled", status: 499, code: "ai_request_canceled"},
-		{name: "rate limit", status: http.StatusTooManyRequests, code: "rate_limit_exceeded"},
+		{name: "refresh cooldown", status: http.StatusTooManyRequests, code: "cooldown_active"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stub := &readerAIHandlerStub{err: httperr.NewWithCode(tt.status, tt.code, "safe AI error")}
 			router := gin.New()
-			RegisterReaderRoutes(router, stub)
+			RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/api/ai", bytes.NewBufferString(`{"prompt":"question"}`))
@@ -71,7 +71,7 @@ func TestReaderAIHandlerPreservesMachineReadableErrors(t *testing.T) {
 func TestReaderAIHandlerRejectsOversizedPromptBeforeService(t *testing.T) {
 	stub := &readerAIHandlerStub{}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
 	prompt := strings.Repeat("x", 16001)

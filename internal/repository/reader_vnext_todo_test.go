@@ -380,36 +380,6 @@ func TestDeleteTodoStandaloneSoftDeletesInTransaction(t *testing.T) {
 	}
 }
 
-func TestReconcileTodoProjectionsDoesNotRecreateDeletedProjection(t *testing.T) {
-	t.Parallel()
-
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mock.Close()
-	repo := NewPGXReaderVNextRepository(mock)
-	id := uuid.New()
-	hostID := "thought-1"
-	deletedAt := testReaderTime
-	projection := model.ReaderTodo{
-		Text: "stale task", OriginKind: "thought", OriginHostKind: stringPtrForReaderTodoTest("thought"),
-		OriginHostID: &hostID, OriginRef: []byte(`{"block_ref":"task:stale","occurrence":1}`), HostRevision: 4,
-	}
-
-	mock.ExpectBegin()
-	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
-		WillReturnRows(mock.NewRows([]string{"id", "origin_kind", "origin_host_id", "origin_ref", "deleted_at"}).AddRow(id, "thought", &hostID, []byte(projection.OriginRef), deletedAt))
-	mock.ExpectCommit()
-
-	if err := repo.ReconcileTodoProjections(context.Background(), []model.ReaderTodo{projection}); err != nil {
-		t.Fatalf("ReconcileTodoProjections() error = %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestTodoThoughtWritebackOpIDIsStableForRetries(t *testing.T) {
 	id := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	first := readerTodoThoughtWritebackOpID(id, 7, "task:stable", 2, true)
@@ -452,42 +422,6 @@ func TestPatchTodoProjectedRejectsExplicitDueAtNull(t *testing.T) {
 	}
 }
 
-func TestReconcileTodoProjectionsSetsCompletedAtForNewCompletedProjection(t *testing.T) {
-	t.Parallel()
-
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mock.Close()
-	repo := NewPGXReaderVNextRepository(mock)
-	hostID := "thought-completed"
-	projection := model.ReaderTodo{
-		Text: "already done", Done: true, OriginKind: "thought", OriginHostKind: stringPtrForReaderTodoTest("thought"),
-		OriginHostID: &hostID, OriginRef: []byte(`{"block_ref":"task:done","occurrence":1}`), HostRevision: 4,
-	}
-	row := readerTodoRowForTest(uuid.New(), "thought", true, 4)
-
-	mock.ExpectBegin()
-	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
-		WillReturnRows(mock.NewRows([]string{"id", "origin_kind", "origin_host_id", "origin_ref", "deleted_at"}))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM reader_todos")).
-		WithArgs("thought", hostID, "task:done", "1").
-		WillReturnError(pgx.ErrNoRows)
-	mock.ExpectQuery("(?s)INSERT INTO reader_todos.*VALUES.*CASE WHEN \\$3 THEN COALESCE\\(\\$9::timestamptz,NOW\\(\\)\\) ELSE NULL END.*RETURNING "+regexp.QuoteMeta(readerTodoColumns)).
-		WithArgs(projection.Text, (*time.Time)(nil), projection.Done, projection.OriginKind, projection.OriginHostKind, projection.OriginHostID, []byte(projection.OriginRef), projection.HostRevision, projection.CompletedAt).
-		WillReturnRows(mock.NewRows(readerTodoColumnsForTest()).AddRow(row...))
-	mock.ExpectCommit()
-
-	items := []model.ReaderTodo{projection}
-	if err := repo.ReconcileTodoProjections(context.Background(), items); err != nil {
-		t.Fatalf("ReconcileTodoProjections() error = %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestPatchTodoReturnsNotFoundForMissingRowBeforeRevisionApplicability(t *testing.T) {
 	t.Parallel()
 
@@ -524,43 +458,3 @@ func stringPtrForReaderTodoTest(value string) *string { return &value }
 func boolPtrForReaderTodoTest(value bool) *bool { return &value }
 
 func int64PointerForReaderTodoTest(value int64) *int64 { return &value }
-
-// readerExistingTodoProjectionsPattern matches the one projection inventory
-// every reconcile path now shares. It deliberately includes deleted_at: a
-// reconcile that cannot see the tombstoned keys cannot honour them.
-const readerExistingTodoProjectionsPattern = `(?s)SELECT id,origin_kind,origin_host_id,origin_ref,deleted_at.*FROM reader_todos.*WHERE origin_kind <> 'standalone'.*FOR UPDATE`
-
-func readerExistingTodoProjectionColumns() []string {
-	return []string{"id", "origin_kind", "origin_host_id", "origin_ref", "deleted_at"}
-}
-
-func TestReconcileTodoProjectionsKeepsDismissedProjectionDismissed(t *testing.T) {
-	t.Parallel()
-
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mock.Close()
-	repo := NewPGXReaderVNextRepository(mock)
-
-	body := "- [ ] resurrect me\n"
-	block := readertext.List(body)[0]
-	projection := checklistTodosForSources([]readerTodoHostSource{{originKind: "thought", hostID: "thought-1", hostRevision: 4, body: body, sourceKind: "thought", sourceID: "thought-1", live: true}})[0]
-	projectionID := uuid.New()
-	hostID := "thought-1"
-	dismissedAt := testReaderTime
-
-	mock.ExpectBegin()
-	mock.ExpectQuery(readerExistingTodoProjectionsPattern).
-		WillReturnRows(mock.NewRows(readerExistingTodoProjectionColumns()).
-			AddRow(projectionID, "thought", &hostID, []byte(projection.OriginRef), dismissedAt))
-	mock.ExpectCommit()
-
-	if err := repo.ReconcileTodoProjections(context.Background(), []model.ReaderTodo{projection}); err != nil {
-		t.Fatalf("ReconcileTodoProjections() error = %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("dismissed projection was rewritten: %v; block=%s", err, block.BlockRef)
-	}
-}

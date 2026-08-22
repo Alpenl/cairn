@@ -7,37 +7,21 @@ import (
 	"webtag/internal/migrate"
 )
 
-// TestReconcileLedgersAgainstManifestTargets exercises the check the root-owned
-// updater calls after it migrates: Cairn keeps two independent ledgers —
-// schema_migrations for this repository's steps and river_migration for River's
-// own schema — and a Core update is only complete when BOTH sit exactly on the
-// position the signed release manifest declares.
 func TestReconcileLedgersAgainstManifestTargets(t *testing.T) {
 	dsn := isolatedMigrationDatabase(t)
 	pool := migrationTargetPool(t, dsn)
-
 	riverTarget := migrate.RiverBundleTarget()
-	if riverTarget == 0 {
-		t.Fatal("River bundle head is 0; a manifest could not declare a river_ledger_target")
+	targets := migrate.LedgerTargets{
+		SchemaTarget: migrate.CurrentSchemaMigrationID, RiverLedgerTarget: riverTarget,
 	}
-	// Derive the head instead of naming it: this test asserts "a completed
-	// migration reaches the declared target", and the target it means is
-	// whatever the shipped plan ends with — pinning one ID makes the test fail
-	// on the next migration for a reason that has nothing to do with ledgers.
-	schemaTarget := shippedSchemaHead(t)
 
-	t.Run("before any migration both ledgers are absent", func(t *testing.T) {
-		result, err := migrate.ReconcileLedgers(t.Context(), pool, migrate.LedgerTargets{
-			SchemaTarget: schemaTarget, RiverLedgerTarget: riverTarget,
-		})
+	t.Run("empty database", func(t *testing.T) {
+		result, err := migrate.ReconcileLedgers(t.Context(), pool, targets)
 		if err != nil {
 			t.Fatalf("ReconcileLedgers() error = %v", err)
 		}
-		if result.OK {
-			t.Fatal("an unmigrated database reconciled as ok")
-		}
-		if result.Schema.Present || result.River.Present {
-			t.Fatalf("ledgers reported present on an empty database: %+v", result)
+		if result.OK || result.Schema.Present || result.River.Present {
+			t.Fatalf("empty database reconciliation = %+v, want both ledgers absent", result)
 		}
 		assertHasProblem(t, result, "schema_migrations", string(migrate.LedgerProblemMissingTable))
 		assertHasProblem(t, result, "river_migration", string(migrate.LedgerProblemMissingTable))
@@ -45,63 +29,66 @@ func TestReconcileLedgersAgainstManifestTargets(t *testing.T) {
 
 	runMigrate(t, migrateInvocation{dsn: dsn})
 
-	t.Run("a completed migration reaches both declared targets", func(t *testing.T) {
-		result, err := migrate.ReconcileLedgers(t.Context(), pool, migrate.LedgerTargets{
-			SchemaTarget: schemaTarget, RiverLedgerTarget: riverTarget,
-		})
+	t.Run("current schema and River heads", func(t *testing.T) {
+		result, err := migrate.ReconcileLedgers(t.Context(), pool, targets)
 		if err != nil {
 			t.Fatalf("ReconcileLedgers() error = %v", err)
 		}
-		if !result.OK {
-			t.Fatalf("reconciliation failed after a complete migration: %+v", result.Problems)
+		if !result.OK || !result.Schema.AtTarget || !result.River.AtTarget {
+			t.Fatalf("completed migration reconciliation = %+v", result)
 		}
-		if !result.Schema.AtTarget || result.Schema.Head != schemaTarget {
-			t.Fatalf("schema ledger = %+v, want head %s at target", result.Schema, schemaTarget)
+		if result.Schema.Head != migrate.CurrentSchemaMigrationID ||
+			!slices.Equal(result.Schema.Applied, []string{migrate.CurrentSchemaMigrationID}) {
+			t.Fatalf("schema ledger = %+v, want one current head", result.Schema)
 		}
-		if !result.River.AtTarget || result.River.Head != riverTarget {
-			t.Fatalf("river ledger = %+v, want head %d at target", result.River, riverTarget)
-		}
-		if result.River.Line != migrate.RiverLedgerLine {
-			t.Fatalf("river line = %q, want %q", result.River.Line, migrate.RiverLedgerLine)
-		}
-		if !slices.Contains(result.Schema.Applied, migrate.TranslationSourceContractMigrationID) {
-			t.Fatalf("schema applied list = %v, want it to include the fresh-install step", result.Schema.Applied)
+		if result.River.Head != riverTarget || result.River.Line != migrate.RiverLedgerLine {
+			t.Fatalf("River ledger = %+v, want %s:%d", result.River, migrate.RiverLedgerLine, riverTarget)
 		}
 	})
 
-	t.Run("a manifest declaring an earlier schema target detects the overshoot", func(t *testing.T) {
-		result, err := migrate.ReconcileLedgers(t.Context(), pool, migrate.LedgerTargets{
-			SchemaTarget: exactTargetStep, RiverLedgerTarget: riverTarget,
-		})
+	t.Run("v0.1.17 production ledger is behind", func(t *testing.T) {
+		if _, err := pool.Exec(t.Context(), `DELETE FROM public.schema_migrations`); err != nil {
+			t.Fatalf("clear current ledger: %v", err)
+		}
+		for _, version := range migrate.ProductionBaselineVersions() {
+			if _, err := pool.Exec(t.Context(),
+				`INSERT INTO public.schema_migrations(version) VALUES ($1)`, version); err != nil {
+				t.Fatalf("seed production ledger %s: %v", version, err)
+			}
+		}
+		result, err := migrate.ReconcileLedgers(t.Context(), pool, targets)
 		if err != nil {
 			t.Fatalf("ReconcileLedgers() error = %v", err)
 		}
-		if result.OK {
-			t.Fatal("a database past the declared schema target reconciled as ok")
+		if result.OK || result.Schema.Head != migrate.ProductionBaselineMigrationID ||
+			!slices.Equal(result.Schema.Missing, []string{migrate.CurrentSchemaMigrationID}) {
+			t.Fatalf("production baseline reconciliation = %+v, want one missing current head", result.Schema)
 		}
-		if result.Schema.AtTarget || len(result.Schema.Extra) == 0 {
-			t.Fatalf("schema ledger = %+v, want extra steps past %s", result.Schema, exactTargetStep)
+		assertHasProblem(t, result, "schema_migrations", string(migrate.LedgerProblemBehind))
+
+		if _, err := pool.Exec(t.Context(), `DELETE FROM public.schema_migrations`); err != nil {
+			t.Fatalf("clear production ledger: %v", err)
 		}
-		assertHasProblem(t, result, "schema_migrations", string(migrate.LedgerProblemAhead))
+		if _, err := pool.Exec(t.Context(), `INSERT INTO public.schema_migrations(version) VALUES ($1)`,
+			migrate.CurrentSchemaMigrationID); err != nil {
+			t.Fatalf("restore current ledger: %v", err)
+		}
 	})
 
-	t.Run("a manifest declaring an earlier river target detects the overshoot", func(t *testing.T) {
+	t.Run("River target behind bundle", func(t *testing.T) {
 		result, err := migrate.ReconcileLedgers(t.Context(), pool, migrate.LedgerTargets{
-			SchemaTarget: schemaTarget, RiverLedgerTarget: riverTarget - 1,
+			SchemaTarget: migrate.CurrentSchemaMigrationID, RiverLedgerTarget: riverTarget - 1,
 		})
 		if err != nil {
 			t.Fatalf("ReconcileLedgers() error = %v", err)
 		}
-		if result.OK {
-			t.Fatal("a database past the declared River target reconciled as ok")
-		}
-		if !slices.Contains(result.River.Extra, riverTarget) {
-			t.Fatalf("river ledger = %+v, want %d reported as extra", result.River, riverTarget)
+		if result.OK || !slices.Contains(result.River.Extra, riverTarget) {
+			t.Fatalf("River overshoot reconciliation = %+v", result.River)
 		}
 		assertHasProblem(t, result, "river_migration", string(migrate.LedgerProblemAhead))
 	})
 
-	t.Run("targets this binary cannot produce are refused rather than guessed", func(t *testing.T) {
+	t.Run("unknown manifest targets", func(t *testing.T) {
 		result, err := migrate.ReconcileLedgers(t.Context(), pool, migrate.LedgerTargets{
 			SchemaTarget: "manifest-from-a-newer-release", RiverLedgerTarget: 9999,
 		})
@@ -115,63 +102,38 @@ func TestReconcileLedgersAgainstManifestTargets(t *testing.T) {
 		assertHasProblem(t, result, "river_migration", string(migrate.LedgerProblemUnknownTarget))
 	})
 
-	t.Run("a schema ledger short of its target reports what is missing", func(t *testing.T) {
-		shortDSN := isolatedMigrationDatabase(t)
-		shortPool := migrationTargetPool(t, shortDSN)
-		runMigrate(t, migrateInvocation{dsn: shortDSN, target: exactTargetStep})
-
-		result, err := migrate.ReconcileLedgers(t.Context(), shortPool, migrate.LedgerTargets{
-			SchemaTarget: schemaTarget, RiverLedgerTarget: riverTarget,
-		})
+	t.Run("unknown schema ledger version", func(t *testing.T) {
+		if _, err := pool.Exec(t.Context(),
+			`INSERT INTO public.schema_migrations(version) VALUES ('future2099010101')`); err != nil {
+			t.Fatalf("seed future schema ledger: %v", err)
+		}
+		defer func() {
+			_, _ = pool.Exec(t.Context(),
+				`DELETE FROM public.schema_migrations WHERE version='future2099010101'`)
+		}()
+		result, err := migrate.ReconcileLedgers(t.Context(), pool, targets)
 		if err != nil {
 			t.Fatalf("ReconcileLedgers() error = %v", err)
 		}
-		if result.OK {
-			t.Fatal("a half-migrated database reconciled as ok")
+		if result.OK || !slices.Contains(result.Schema.Extra, "future2099010101") {
+			t.Fatalf("future schema ledger reconciliation = %+v", result.Schema)
 		}
-		if !slices.Contains(result.Schema.Missing, schemaTarget) {
-			t.Fatalf("schema ledger = %+v, want %s reported missing", result.Schema, schemaTarget)
-		}
-		// River always runs its whole bundle, so it is the schema ledger alone
-		// that is behind — which is exactly the asymmetry the two-ledger check
-		// exists to surface.
-		if !result.River.AtTarget {
-			t.Fatalf("river ledger = %+v, want it at target even though the schema ledger is behind", result.River)
-		}
-		assertHasProblem(t, result, "schema_migrations", string(migrate.LedgerProblemBehind))
+		assertHasProblem(t, result, "schema_migrations", string(migrate.LedgerProblemAhead))
 	})
 }
 
-// TestMigrateReportEmbedsTheLedgerReconciliation proves the helper can read the
-// same verdict out of the command's JSON rather than importing Go code.
-func TestMigrateReportEmbedsTheLedgerReconciliation(t *testing.T) {
+func TestMigrateReportEmbedsLedgerReconciliation(t *testing.T) {
 	dsn := isolatedMigrationDatabase(t)
-
 	stdout, _ := runMigrate(t, migrateInvocation{dsn: dsn, args: []string{"--report-json"}})
 	report := decodeMigrationReport(t, stdout)
-	if report.Ledgers == nil {
-		t.Fatal("report carries no ledgers object")
+	if report.Ledgers == nil || !report.Ledgers.OK ||
+		!report.Ledgers.Schema.AtTarget || !report.Ledgers.River.AtTarget {
+		t.Fatalf("report ledgers = %+v, want both at target", report.Ledgers)
 	}
-	if !report.Ledgers.OK || !report.Ledgers.Schema.AtTarget || !report.Ledgers.River.AtTarget {
-		t.Fatalf("ledgers = %+v, want both at target", report.Ledgers)
+	if report.Ledgers.Schema.Head != migrate.CurrentSchemaMigrationID ||
+		report.Ledgers.River.Target != migrate.RiverBundleTarget() {
+		t.Fatalf("report ledgers = %+v, want current schema and bundled River heads", report.Ledgers)
 	}
-	if report.Ledgers.River.Target != migrate.RiverBundleTarget() {
-		t.Fatalf("river target = %d, want the bundle head %d", report.Ledgers.River.Target, migrate.RiverBundleTarget())
-	}
-	if head := shippedSchemaHead(t); report.Ledgers.Schema.Head != head {
-		t.Fatalf("schema head = %q, want %q", report.Ledgers.Schema.Head, head)
-	}
-}
-
-// shippedSchemaHead is the last step of the shipped migration plan — the
-// version a fully migrated database records in schema_migrations.
-func shippedSchemaHead(t *testing.T) string {
-	t.Helper()
-	plan := migrate.Steps()
-	if len(plan) == 0 {
-		t.Fatal("shipped migration plan is empty")
-	}
-	return plan[len(plan)-1].ID
 }
 
 func assertHasProblem(t *testing.T, result migrate.LedgerReconciliation, ledger, kind string) {
@@ -179,10 +141,10 @@ func assertHasProblem(t *testing.T, result migrate.LedgerReconciliation, ledger,
 	for _, problem := range result.Problems {
 		if problem.Ledger == ledger && string(problem.Kind) == kind {
 			if problem.Detail == "" {
-				t.Fatalf("problem %s/%s has no operator-facing detail", ledger, kind)
+				t.Fatalf("problem %s/%s has no detail", ledger, kind)
 			}
 			return
 		}
 	}
-	t.Fatalf("problems = %+v, want one with ledger=%s kind=%s", result.Problems, ledger, kind)
+	t.Fatalf("problems = %+v, want ledger=%s kind=%s", result.Problems, ledger, kind)
 }

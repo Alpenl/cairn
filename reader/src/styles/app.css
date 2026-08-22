@@ -726,8 +726,7 @@ body {
   padding: 0;
   accent-color: var(--accent);
 }
-.classification-rules-note { margin: -2px 0 12px; }.classification-rule-list { list-style: none; padding: 0; margin: 0 0 14px; border-top: .5px solid var(--divider); }.classification-rule-list li { display: flex; align-items: center; gap: 7px; padding: 9px 0; border-bottom: .5px solid var(--divider); }.classification-rule-list li > span { min-width: 0; flex: 1; }.classification-rule-list strong, .classification-rule-list small { display: block; overflow-wrap: anywhere; }.classification-rule-list strong { font-size: 12px; }.classification-rule-list small { margin-top: 2px; color: var(--text-tertiary); font-size: 11px; }.classification-rule-list button { flex: none; border: .5px solid var(--border); border-radius: 4px; padding: 4px 7px; background: var(--bg-list); color: var(--text-secondary); font-size: 11px; cursor: pointer; }.classification-rule-list .tb-btn { border: 0; padding: 4px; }
-.review-view { flex: 1; min-width: 0; overflow-y: auto; padding: 20px; background: var(--bg-reader); }.review-heading { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 17px; }.review-heading h1 { margin: 0; font-size: 20px; }.review-heading span { color: var(--text-tertiary); font: 11px var(--font-mono); }.review-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }.review-card { min-width: 0; border: .5px solid var(--border); border-radius: 7px; padding: 13px; background: var(--bg-list); }.review-card header { display: flex; justify-content: space-between; gap: 8px; color: var(--text-secondary); font-size: 12px; }.review-card time { color: var(--text-faint); font: 10px var(--font-mono); }.review-card pre { max-height: 210px; overflow: auto; margin: 11px 0; padding: 9px; border-radius: 4px; background: var(--bg-sidebar); color: var(--text-secondary); font: 11px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }.review-card footer { display: flex; justify-content: flex-end; gap: 8px; }.review-card button { min-width: 62px; border: .5px solid var(--border); border-radius: 4px; padding: 6px 8px; background: var(--bg-sidebar); color: var(--text-secondary); cursor: pointer; }.review-card button:last-child { border-color: var(--accent); background: var(--accent); color: #fff; }
+.site-selection-list { list-style: none; padding: 0; margin: 0 0 14px; border-top: .5px solid var(--divider); }.site-selection-list li { display: flex; align-items: center; gap: 7px; padding: 9px 0; border-bottom: .5px solid var(--divider); }.site-selection-list li > span { min-width: 0; flex: 1; }.site-selection-list strong, .site-selection-list small { display: block; overflow-wrap: anywhere; }.site-selection-list strong { font-size: 12px; }.site-selection-list small { margin-top: 2px; color: var(--text-tertiary); font-size: 11px; }.site-selection-list button { flex: none; border: .5px solid var(--border); border-radius: 4px; padding: 4px 7px; background: var(--bg-list); color: var(--text-secondary); font-size: 11px; cursor: pointer; }.site-selection-list .tb-btn { border: 0; padding: 4px; }
 
 /* ── body 3-pane ────────────────────────────────────────── */
 .body { flex: 1; display: flex; min-height: 0; }
@@ -2604,7 +2603,7 @@ mark.hl > strong, mark.hl > code { background: transparent; }
    group deliberately does NOT use `margin-top: auto`: pinning it to the bottom
    made its position depend on the surrounding surface, which moved 设置 by
    529px between 首页 and 阅读. Sticky keeps it in place while the contextual
-   panel below (tags, domains, folders, categories) scrolls on its own. */
+   panel below (tags, domains, folders) scrolls on its own. */
 .wt-primary-nav {
   position: sticky;
   top: 0;
@@ -2851,7 +2850,6 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .inbox-state-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--text-faint); }
 .inbox-state-dot.pending { background: var(--accent); }
 .inbox-state-dot.confirmed { background: var(--ok); }
-.inbox-state-dot.discarded { background: var(--text-faint); }
 .inbox-queue-empty, .inbox-detail-empty {
   min-height: 100%;
   display: flex;
@@ -2952,7 +2950,7 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .inbox-section-title svg { flex: 0 0 auto; color: var(--accent); }
 .inbox-clean-field { display: grid; gap: 7px; margin-top: 16px; color: var(--text-tertiary); font-size: 10.5px; }
 .inbox-clean-field > span { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
-.inbox-clean-field input, .inbox-clean-field textarea, .inbox-body-editor, .inbox-categories input {
+.inbox-clean-field input, .inbox-clean-field textarea, .inbox-body-editor {
   width: 100%;
   box-sizing: border-box;
   border: .5px solid var(--border-strong);
@@ -2965,8 +2963,8 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 }
 .inbox-clean-field input { min-height: 38px; padding: 8px 12px; font-size: 13px; }
 .inbox-clean-field textarea { min-height: 96px; padding: 11px 13px; resize: vertical; font-size: 13.5px; line-height: 1.72; }
-.inbox-clean-field input:hover, .inbox-clean-field textarea:hover, .inbox-body-editor:hover, .inbox-categories input:hover { border-color: var(--border-strong); background: var(--bg-elevated); }
-.inbox-clean-field input:focus, .inbox-clean-field textarea:focus, .inbox-body-editor:focus, .inbox-categories input:focus { border-color: var(--accent-line); background: var(--bg-elevated); }
+.inbox-clean-field input:hover, .inbox-clean-field textarea:hover, .inbox-body-editor:hover { border-color: var(--border-strong); background: var(--bg-elevated); }
+.inbox-clean-field input:focus, .inbox-clean-field textarea:focus, .inbox-body-editor:focus { border-color: var(--accent-line); background: var(--bg-elevated); }
 /* Summary reads as the reader's TL;DR card rather than one more form row. */
 .inbox-summary-card {
   display: grid;
@@ -3007,10 +3005,6 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .inbox-suggestions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .inbox-suggestions > span { display: inline-flex; align-items: center; gap: 5px; color: var(--text-tertiary); font-size: 10.5px; white-space: nowrap; }
 .inbox-suggestions > span svg { color: var(--accent); }
-.inbox-categories { display: grid; gap: 9px; margin-top: 20px; color: var(--text-tertiary); font-size: 10.5px; }
-.inbox-categories > span { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
-.inbox-categories > div { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.inbox-categories input { width: 108px; min-height: 24px; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
 .inbox-global-message {
   position: absolute;
   z-index: 20;
@@ -3240,7 +3234,6 @@ mark.hl > strong, mark.hl > code { background: transparent; }
 .rvx-history-panel li strong, .rvx-history-panel li small, .rvx-history-panel li p { display: block; }
 .rvx-history-panel li small { margin-top: 3px; color: var(--text-faint); font: 10px var(--font-mono); }
 .rvx-history-panel li p { margin: 4px 0 0; color: var(--text-secondary); font-size: 11px; }
-.rvx-content-history { margin-top: 0; }
 .rvx-history-current { margin-bottom: 10px; color: var(--text-tertiary); font: 11px var(--font-mono); }
 .rvx-history-current strong { color: var(--text-primary); }
 .rvx-history-copy { min-width: 0; flex: 1; }

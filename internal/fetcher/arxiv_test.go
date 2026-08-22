@@ -89,7 +89,7 @@ func TestArxivFetcherFetchHappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewArxivFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewArxivFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.APIBaseURL = server.URL
 
 	got, err := fetcher.Fetch(context.Background(), "https://arxiv.org/abs/2401.12345v2")
@@ -151,7 +151,7 @@ func TestArxivFetcherFetchExtractsLegacyID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewArxivFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewArxivFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.APIBaseURL = server.URL
 
 	if _, err := fetcher.Fetch(context.Background(), "https://arxiv.org/abs/cs.AI/0703001"); err != nil {
@@ -220,7 +220,7 @@ func TestArxivFetcherErrorBranches(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(c.handler))
 			defer server.Close()
 
-			fetcher := NewArxivFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+			fetcher := NewArxivFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 			fetcher.APIBaseURL = server.URL
 
 			_, err := fetcher.Fetch(context.Background(), "https://arxiv.org/abs/2401.12345")
@@ -237,7 +237,7 @@ func TestArxivFetcherErrorBranches(t *testing.T) {
 func TestArxivFetcherUnknownURLReturnsError(t *testing.T) {
 	t.Parallel()
 
-	fetcher := NewArxivFetcher(NewHTTPClientWithOptions(HTTPClientOptions{AllowUnsafeTargets: true}))
+	fetcher := NewArxivFetcher(NewHTTPClientWithOptions(HTTPClientOptions{allowUnsafeTargets: true}))
 	if _, err := fetcher.Fetch(context.Background(), "https://example.com/abs/2401.12345"); err == nil {
 		t.Fatalf("Fetch() error = nil, want error for non-arxiv URL")
 	}
@@ -257,7 +257,7 @@ func TestArxivFetcherEntryWithoutTitleErrors(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewArxivFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewArxivFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.APIBaseURL = server.URL
 
 	_, err := fetcher.Fetch(context.Background(), "https://arxiv.org/abs/2401.12345")

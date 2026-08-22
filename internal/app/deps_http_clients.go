@@ -60,14 +60,14 @@ func (o *runtimeHTTPClientOwner) register(client idleConnectionCloser) {
 	o.mu.Unlock()
 }
 
-func (o *runtimeHTTPClientOwner) Start(ctx context.Context) error {
+func (o *runtimeHTTPClientOwner) Start(_ context.Context) error {
 	if o == nil {
 		return nil
 	}
-	return ctx.Err()
+	return nil
 }
 
-func (o *runtimeHTTPClientOwner) Stop(ctx context.Context) error {
+func (o *runtimeHTTPClientOwner) Stop(_ context.Context) error {
 	if o == nil {
 		return nil
 	}
@@ -83,7 +83,7 @@ func (o *runtimeHTTPClientOwner) Stop(ctx context.Context) error {
 	for index := len(clients) - 1; index >= 0; index-- {
 		clients[index].CloseIdleConnections()
 	}
-	return ctx.Err()
+	return nil
 }
 
-var _ runtimeManagedBackground = (*runtimeHTTPClientOwner)(nil)
+var _ runtimeBackground = (*runtimeHTTPClientOwner)(nil)

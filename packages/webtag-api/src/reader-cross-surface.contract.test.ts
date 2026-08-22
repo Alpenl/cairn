@@ -7,19 +7,18 @@ type InboxConfirmResponseBody = paths['/api/inbox/{id}/confirm']['post']['respon
 type InboxCard = InboxListResponseBody['items'][number]
 /**
  * A capture accepts a 4 MiB body and a 1 MiB note, and the Inbox list is read
- * on every open. The queue page type must not admit either, nor the raw AI
- * proposal payload or the detail-only category memberships: this alias stops
- * compiling the moment the projection widens back.
+ * on every open. The queue page type must not admit either or the detail-only
+ * category memberships: this alias stops compiling the moment the projection
+ * widens back.
  */
 type DetailOnlyFieldsOnCard = Extract<
   keyof InboxCard,
-  'body' | 'note' | 'summary' | 'suggested_tags' | 'proposal_signals' | 'category_ids'
+  'body' | 'note' | 'summary' | 'suggested_tags'
 >
 export const inboxCardCarriesNoDetailPayload: [DetailOnlyFieldsOnCard] extends [never] ? true : false = true
 type ThoughtOpsRequestBody = NonNullable<paths['/api/annotations/ops']['post']['requestBody']>['content']['application/json']
 type ThoughtOpsResponseBody = paths['/api/annotations/ops']['post']['responses'][200]['content']['application/json']
 type ThoughtSyncResponseBody = paths['/api/annotations/sync']['get']['responses'][200]['content']['application/json']
-type ThoughtReattachRequestBody = NonNullable<paths['/api/annotations/{id}/reattach']['post']['requestBody']>['content']['application/json']
 type SearchResponseBody = paths['/api/search']['get']['responses'][200]['content']['application/json']
 type NoteCreateRequestBody = NonNullable<paths['/api/notes']['post']['requestBody']>['content']['application/json']
 type NoteCreateResponseBody = paths['/api/notes']['post']['responses'][201]['content']['application/json']
@@ -36,9 +35,6 @@ type FeedFeedbackRequestBody = NonNullable<paths['/api/reader-feed/feedback']['p
 type FeedFeedbackResponseBody = paths['/api/reader-feed/feedback']['post']['responses'][200]['content']['application/json']
 type EngagementRequestBody = NonNullable<paths['/api/engagement/{link_id}']['patch']['requestBody']>['content']['application/json']
 type EngagementResponseBody = paths['/api/engagement/{link_id}']['patch']['responses'][200]['content']['application/json']
-type ContentHistoryListResponseBody = paths['/api/links/{link_id}/content-history']['get']['responses'][200]['content']['application/json']
-type ContentHistoryRestoreRequestBody = NonNullable<paths['/api/links/{link_id}/content-history/{history_id}/restore']['post']['requestBody']>['content']['application/json']
-type ContentHistoryRestoreResponseBody = paths['/api/links/{link_id}/content-history/{history_id}/restore']['post']['responses'][200]['content']['application/json']
 
 const linkID = '00000000-0000-0000-0000-000000000001'
 const inboxID = '00000000-0000-0000-0000-000000000002'
@@ -102,11 +98,7 @@ const todo = {
 const feedItem = {
   key: `link:${linkID}`,
   source: 'reading',
-  item_type: 'reading',
-  resource_key: linkID,
-  action_key: `link:${linkID}`,
-  dedupe_key: `link:${linkID}`,
-  actions: ['read', 'read_later', 'open'],
+  resource_key: `link:${linkID}`,
   title: 'Captured article',
   summary: 'Captured summary',
   url: 'https://capture.example.test/article',
@@ -114,26 +106,10 @@ const feedItem = {
   inbox_id: null,
   feed_item_id: null,
   read: false,
-	read_later: false,
-	saved: false,
-	score: 90,
-  score_contributions: {
-    pending_confirmation: 0,
-    saved_library: 70,
-    subscription_recent: 0,
-    unread: 20,
-    read_later: 0,
-    chronological_fallback: 0,
-  },
-  enabled_score_signals: ['saved_library', 'unread', 'read_later', 'chronological_fallback'],
-  reason_code: 'saved_library',
-  reason_params: { source: 'reading' },
-	reason_contribution: 70,
-	reason_text: '已保存到资料库',
-  published_at: null,
+  read_later: false,
+  saved: false,
   event_at: now,
-  created_at: now,
-} satisfies components['schemas']['ReaderRankedFeedItemResponse']
+} satisfies components['schemas']['ReaderFeedItemResponse']
 
 export const readerCrossSurfaceContractExamples = {
   ingestRequest: {
@@ -203,26 +179,6 @@ export const readerCrossSurfaceContractExamples = {
     items: [thought],
     next_cursor: 'cursor-2',
   } satisfies ThoughtSyncResponseBody,
-  thoughtReattachRequests: {
-    link: {
-      target_host_kind: 'link',
-      target_host_id: linkID,
-      expected_last_sequence: thought.last_sequence,
-      expected_host_revision: 3,
-    } satisfies components['schemas']['ReaderThoughtReattachRequest'] & ThoughtReattachRequestBody,
-    note: {
-      target_host_kind: 'note',
-      target_host_id: noteID,
-      expected_last_sequence: thought.last_sequence,
-      expected_host_revision: note.published_revision,
-    } satisfies components['schemas']['ReaderThoughtReattachRequest'] & ThoughtReattachRequestBody,
-    inbox: {
-      target_host_kind: 'inbox',
-      target_host_id: inboxID,
-      expected_last_sequence: thought.last_sequence,
-      expected_host_revision: 1,
-    } satisfies components['schemas']['ReaderThoughtReattachRequest'] & ThoughtReattachRequestBody,
-  },
   groupedSearchResponse: {
     reading: { total_hint: 1, items: [] },
     sites: { total_hint: 0, items: [] },
@@ -273,24 +229,17 @@ export const readerCrossSurfaceContractExamples = {
   } satisfies components['schemas']['ReaderHomeResponse'] & HomeResponseBody,
   feedResponse: {
     items: [feedItem],
-    snapshot_id: '00000000-0000-0000-0000-000000000007',
+    next_cursor: 'live-cursor-1',
     mode: 'recommended',
-    capabilities: ['snapshot', 'reason', 'actions'],
   } satisfies components['schemas']['ReaderFeedResponse'] & FeedResponseBody,
   feedFeedbackRequest: { action: 'save' } satisfies components['schemas']['ReaderFeedFeedbackRequest'] & FeedFeedbackRequestBody,
   feedFeedbackResponse: {
     item_key: `subscription:${inboxID}`,
     action: 'save',
-    saved: true,
-    association: { feed_item_id: inboxID, link_id: linkID, created_link: true },
+    link_id: linkID,
   } satisfies components['schemas']['ReaderFeedFeedbackResponse'] & FeedFeedbackResponseBody,
   engagementRequest: { read: true, read_later: true, progress: 0.5 } satisfies components['schemas']['ReaderEngagementRequest'] & EngagementRequestBody,
   engagementResponse: { link_id: linkID, read: true, read_later: true, progress: 0.5, last_opened: now, updated_at: now } satisfies components['schemas']['ReaderEngagementResponse'] & EngagementResponseBody,
-  contentHistoryResponse: {
-    items: [{ id: 1, revision: 1, content: 'The original body.', content_document: null, content_format: 'plain', content_source: 'fetched', created_at: now }],
-  } satisfies ContentHistoryListResponseBody,
-  contentHistoryRestoreRequest: { expected_content_revision: 3 } satisfies components['schemas']['ReaderContentHistoryRestoreRequest'] & ContentHistoryRestoreRequestBody,
-  contentHistoryRestoreResponse: { link_id: linkID, content_revision: 4 } satisfies components['schemas']['ReaderContentHistoryRestoreResponse'] & ContentHistoryRestoreResponseBody,
 } as const
 
 export const readerCrossSurfaceNoContentResponses = {
@@ -321,10 +270,6 @@ function assertArray(value: unknown, label: string): asserts value is unknown[] 
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`)
 }
 
-function assertField(record: Record<string, unknown>, field: string, label: string): void {
-  if (!(field in record)) throw new Error(`${label}.${field} is required`)
-}
-
 /** Runtime checks keep the executable contract useful when this module is loaded by a test runner. */
 export function assertReaderCrossSurfaceContract(): void {
   const examples = readerCrossSurfaceContractExamples
@@ -337,7 +282,7 @@ export function assertReaderCrossSurfaceContract(): void {
   assertString(examples.inboxPage.items[0].id, 'inboxPage.items[0].id')
   assertString(examples.inboxPage.items[0].preview, 'inboxPage.items[0].preview')
   if (examples.inboxPage.items[0].status !== 'pending') throw new Error('inbox item must start pending')
-  for (const detailOnly of ['body', 'note', 'proposal_signals', 'suggested_tags', 'category_ids']) {
+  for (const detailOnly of ['body', 'note', 'suggested_tags']) {
     if (detailOnly in examples.inboxPage.items[0]) {
       throw new Error(`inbox list card must not carry ${detailOnly}; it belongs to GET /api/inbox/{id}`)
     }
@@ -349,14 +294,6 @@ export function assertReaderCrossSurfaceContract(): void {
   assertArray(examples.thoughtOpsResponse.items, 'thoughtOpsResponse.items')
   assertNumber(examples.thoughtOpsResponse.items[0]?.sequence, 'thoughtOpsResponse.items[0].sequence')
   assertArray(examples.thoughtSyncResponse.items, 'thoughtSyncResponse.items')
-  assertNumber(examples.thoughtReattachRequests.link.expected_host_revision, 'thoughtReattachRequests.link.expected_host_revision')
-  assertNumber(examples.thoughtReattachRequests.note.expected_host_revision, 'thoughtReattachRequests.note.expected_host_revision')
-  assertNumber(examples.thoughtReattachRequests.inbox.expected_host_revision, 'thoughtReattachRequests.inbox.expected_host_revision')
-  if (
-    examples.thoughtReattachRequests.link.expected_host_revision !== 3 ||
-    examples.thoughtReattachRequests.note.expected_host_revision !== note.published_revision ||
-    examples.thoughtReattachRequests.inbox.expected_host_revision !== 1
-  ) throw new Error('reattach requests must use the host-specific revision fields')
   assertString(examples.groupedSearchResponse.thoughts?.items[0]?.snippet, 'groupedSearchResponse.thoughts.items[0].snippet')
   assertString(examples.groupedSearchResponse.thoughts?.next_cursor, 'groupedSearchResponse.thoughts.next_cursor')
   assertString(examples.groupedSearchResponse.notes?.items[0]?.title, 'groupedSearchResponse.notes.items[0].title')
@@ -371,19 +308,12 @@ export function assertReaderCrossSurfaceContract(): void {
   assertNumber(examples.todoPatchRequest.expected_host_revision, 'todoPatchRequest.expected_host_revision')
   assertBoolean(examples.todoPatchResponse.done, 'todoPatchResponse.done')
   assertString(examples.homeResponse.continue_reading[0]?.key, 'homeResponse.continue_reading[0].key')
-  assertString(examples.feedResponse.snapshot_id, 'feedResponse.snapshot_id')
+  assertString(examples.feedResponse.next_cursor, 'feedResponse.next_cursor')
   if (examples.feedFeedbackRequest.action !== 'save') throw new Error('feed feedback must preserve its action')
   assertString(examples.feedFeedbackResponse.item_key, 'feedFeedbackResponse.item_key')
-  assertBoolean(examples.feedFeedbackResponse.saved, 'feedFeedbackResponse.saved')
-  assertString(examples.feedFeedbackResponse.association?.feed_item_id, 'feedFeedbackResponse.association.feed_item_id')
-  assertString(examples.feedFeedbackResponse.association?.link_id, 'feedFeedbackResponse.association.link_id')
-  assertBoolean(examples.feedFeedbackResponse.association?.created_link, 'feedFeedbackResponse.association.created_link')
+  assertString(examples.feedFeedbackResponse.link_id, 'feedFeedbackResponse.link_id')
   assertBoolean(examples.engagementResponse.read, 'engagementResponse.read')
 
-  assertArray(examples.contentHistoryResponse.items, 'contentHistoryResponse.items')
-  assertNumber(examples.contentHistoryResponse.items[0]?.revision, 'contentHistoryResponse.items[0].revision')
-  assertNumber(examples.contentHistoryRestoreResponse.content_revision, 'contentHistoryRestoreResponse.content_revision')
-  assertField(examples.contentHistoryRestoreResponse, 'link_id', 'contentHistoryRestoreResponse')
 }
 
 assertReaderCrossSurfaceContract()

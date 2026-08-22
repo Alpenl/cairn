@@ -46,8 +46,8 @@ import { captureOwnersEqual, type CaptureOwner } from '@/api/capabilities'
 export interface InFlightCapture {
   /** Non-secret installation activation owner; required for every replay. */
   owner: CaptureOwner
-  /** 后端任务 id，续跑轮询时作为 getJob 的入参；提交前暂为空串。 */
-  jobId: string
+  /** 后端 Link id，续跑轮询时作为 getLink 的入参；提交前暂为空串。 */
+  linkId: string
   /** 被采集页面 URL，用于续跑时构造中间态/终态快照。 */
   url: string
   /** 被采集页面标题，同上。 */
@@ -67,7 +67,7 @@ export interface InFlightCapture {
   /** Optional for compatibility with in-flight records persisted by older builds. */
   requestedKind?: RequestedLibraryKind
   /**
-   * 已完成的轮询次数（从 0 计）。每轮 getJob 后递增并落盘——
+   * 已完成的轮询次数（从 0 计）。每轮 getLink 后递增并落盘——
    * SW 被回收后看门狗据此从断点续跑，而非从头重数。
    */
   attempt: number
@@ -235,13 +235,6 @@ export function isCaptureSnapshot(value: unknown): value is CaptureSnapshot {
     return false
   }
   if (
-    value.predictedLibraryKind !== undefined &&
-    (typeof value.predictedLibraryKind !== 'string' ||
-      !FINAL_LIBRARY_KINDS.has(value.predictedLibraryKind))
-  ) {
-    return false
-  }
-  if (
     value.errorMessage !== undefined &&
     typeof value.errorMessage !== 'string'
   ) {
@@ -310,7 +303,7 @@ function isPersistedInFlight(value: unknown): value is InFlightCapture {
   if (
     !isRecord(value) ||
     !isCaptureOwner(value.owner) ||
-    typeof value.jobId !== 'string' ||
+    typeof value.linkId !== 'string' ||
     typeof value.url !== 'string' ||
     typeof value.title !== 'string' ||
     typeof value.note !== 'string' ||

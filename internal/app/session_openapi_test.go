@@ -38,7 +38,7 @@ type sessionOpenAPISecurityScheme struct {
 func TestSessionIdentityOpenAPIContract(t *testing.T) {
 	t.Parallel()
 
-	data, err := OpenAPISpec()
+	data, err := readOpenAPISpec()
 	if err != nil {
 		t.Fatalf("OpenAPISpec: %v", err)
 	}

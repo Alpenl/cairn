@@ -14,7 +14,7 @@ import { resourceStore } from '../lib/cache/store'
 import { makeLink } from '../test/fixtures'
 import { IdentityLease, readerIdentity } from '../lib/identity'
 import { commitAnnotationOperation } from '../lib/user-data/annotation-store'
-import type { LegacyStaleAnnotationAddDraft } from '../lib/user-data/annotation-types'
+import type { SavedContentAnnotationAddDraft } from '../lib/user-data/annotation-types'
 import { resetUserDataDatabaseHandle } from '../lib/user-data/idb'
 
 function bindClient(
@@ -72,10 +72,10 @@ function fakeClient(
   return { client, calls }
 }
 
-function legacyAnnotationDraft(id: string): LegacyStaleAnnotationAddDraft {
+function annotationDraft(id: string): SavedContentAnnotationAddDraft {
   return {
     id,
-    blockKey: 'content-document',
+    blockKey: 'content',
     start: 0,
     end: 4,
     text: 'text',
@@ -91,8 +91,8 @@ async function indexAnnotatedLink(linkId: string): Promise<void> {
     kind: 'add',
     opId: `op-${linkId}`,
     linkId,
-    target: { kind: 'legacy-stale', sourceKey: `quarantine:${linkId}` },
-    draft: legacyAnnotationDraft(`annotation-${linkId}`),
+    target: { kind: 'saved-content', contentRevision: 1 },
+    draft: annotationDraft(`annotation-${linkId}`),
   })
   expect(result).toMatchObject({ ok: true, value: { status: 'committed' } })
 }

@@ -19,60 +19,35 @@ import (
 // removes the previous god-interface that forced every test to mock
 // seven methods even when it only exercised one.
 type Dependencies struct {
-	// WebsiteFeatures controls additive collection capabilities. A nil pointer
-	// preserves the fully enabled legacy behavior for isolated handler tests.
-	WebsiteFeatures   *WebsiteFeatures
-	LinksWrite        LinkWriteService
-	LinksRead         LinkReadService
-	LinksContent      LinkContentService
-	ConversionPreview LinkConversionPreviewService
-	ConversionExecute LinkConversionExecuteService
-	Translations      LinkTranslationService
-	Ingest            IngestService
-	Jobs              JobService
-	Tags              TagService
-	Tree              TreeService
-	Sites             SiteReadService
-	SiteManagement    SiteManagementService
-	SiteMerge         SiteMergeService
-	SiteSplit         SiteSplitService
-	ArchiveV2         interface {
-		ValidateSelection(service.ArchiveV2Selection) error
-		ExportSelected(context.Context, io.Writer, service.ArchiveV2ExportOptions) error
+	ReaderCapabilities *dto.ReaderCapabilitiesResponse
+	LinksWrite         LinkWriteService
+	LinksRead          LinkReadService
+	LinksContent       LinkContentService
+	ConversionPreview  LinkConversionPreviewService
+	ConversionExecute  LinkConversionExecuteService
+	Translations       LinkTranslationService
+	Ingest             IngestService
+	Tags               TagService
+	Tree               TreeService
+	Sites              SiteReadService
+	SiteManagement     SiteManagementService
+	SiteMerge          SiteMergeService
+	SiteSplit          SiteSplitService
+	ArchiveV2          interface {
+		Export(context.Context, io.Writer, service.ArchiveV2ExportOptions) error
 	}
-	ClassificationRules ClassificationRuleService
-	LibraryReviews      LibraryReviewService
-	LibrarySearch       LibrarySearchService
-	ConceptMerges       ConceptMergeService
+	LibrarySearch LibrarySearchService
 	// Feeds is optional for isolated handler tests; production always wires it.
 	Feeds FeedService
-	// Reader is the additive Reader vNext surface. It is optional for legacy
-	// handler tests and deployments that have not run the Reader migration.
-	Reader ReaderService
+	// Reader is optional only for isolated handler tests; production always wires it.
+	Reader ReaderRoutes
 }
 
-type WebsiteFeatures struct {
-	LibraryKindAPI         bool
-	SiteLibraryWrite       bool
-	SiteAutoClassification bool
-	SiteAdvancedManagement bool
-	ReaderVNext            bool
-	ReaderCapabilities     *dto.ReaderCapabilitiesResponse
-}
-
-func (d Dependencies) websiteFeatures() WebsiteFeatures {
-	if d.WebsiteFeatures == nil {
-		return WebsiteFeatures{LibraryKindAPI: true, SiteLibraryWrite: true, SiteAutoClassification: true, SiteAdvancedManagement: true}
-	}
-	return *d.WebsiteFeatures
-}
-
-// LinkWriteService is the per-link write surface — submission, refresh,
-// and batch insert. Production wiring binds this to *service.SubmitService.
+// LinkWriteService is the per-link write surface. Production wiring binds it
+// to *service.SubmitService.
 type LinkWriteService interface {
 	Submit(context.Context, dto.LinkCreateRequest) (dto.SubmitResponse, error)
 	Refresh(context.Context, string) (dto.SubmitResponse, error)
-	Batch(context.Context, dto.BatchCreateRequest) (dto.BatchSubmitResponse, error)
 }
 
 // LinkContentService 是「保存原文」的写surface（POST /api/links/:id/content）。
@@ -115,9 +90,7 @@ type IngestService interface {
 
 // LinkReadService is the per-link read surface; Delete lives here too
 // because it is paired with cache-invalidation that only the read-side
-// service holds. Export streams the full done-link knowledge base as a
-// JSON array (GET /api/export). Production wiring binds this to
-// *service.LinkReadService.
+// service holds. Production wiring binds this to *service.LinkReadService.
 type LinkReadService interface {
 	List(context.Context, dto.ListLinksRequest) (dto.PaginatedLinksResponse, error)
 	Get(context.Context, string) (dto.LinkResponse, error)
@@ -126,21 +99,6 @@ type LinkReadService interface {
 	// 打开一篇文章不再顺带把整篇正文拖过网络。
 	GetWithContent(ctx context.Context, linkID string, includeContent bool) (dto.LinkResponse, error)
 	Delete(context.Context, string) error
-	// Export writes every done link as a single JSON array to w, streamed in
-	// cursor batches so the response never buffers the whole table. input_*
-	// raw fields and the embedding vector are excluded (the streamed DTO has
-	// no such fields).
-	Export(context.Context, io.Writer) error
-	// ExportConcepts streams the installation vocabulary as a JSON array to w,
-	// independently of Export's bare-links array.
-	ExportConcepts(context.Context, io.Writer) error
-}
-
-// JobService 是 /api/jobs/:job_id 的 handler 侧契约：根据 job 主键
-// 查询当前状态。生产实现是 *service.JobReadService。
-type JobService interface {
-	Get(context.Context, string) (dto.JobResponse, error)
-	List(context.Context, []string) ([]dto.JobResponse, error)
 }
 
 // TagService 是 /api/tags 的 handler 侧契约：返回带计数的标签清单。
@@ -176,135 +134,88 @@ const (
 	contentEditMaxJSONBodyBytes int64 = 8 << 20
 )
 
-// apiRoutePrefixes 列出公开 API 挂载使用的所有前缀。第一个元素 "/api"
-// 是历史路径（保持向后兼容），"/api/v1" 是 Wave 9 引入的版本化别名 ——
-// 同一份 handler 在两个前缀下都注册一遍，让调用方可以渐进迁移到
-// /api/v1/* 而不破坏既有客户端。openapi.json 仍只描述 /api/*，v1
-// 走"事实未文档化的同义别名"路线，未来若决定改为破坏式变更，可以单独
-// 发版下线 /api/* 而 v1 继续可用。
-var apiRoutePrefixes = []string{"/api", "/api/v1"}
+const apiRoutePrefix = "/api"
 
 // RegisterRoutes wires the public API surface. It panics on nil required
 // dependencies so a misconfigured runtime fails at boot rather than
 // surfacing 500s at request time.
-//
-// 所有非 admin 的 /api/* 路径都会**同时**挂在 /api/v1/* 下（Wave 9
-// MED M6），调用方读写同一份 handler——别名只是路径前缀不同。
 func RegisterRoutes(router gin.IRouter, deps Dependencies) { //nolint:gocyclo // 路由表：每条 route 一行，分支数等于端点数
 	mustHaveServices(deps)
-	features := deps.websiteFeatures()
-	features.ReaderVNext = deps.Reader != nil
 
-	for _, prefix := range apiRoutePrefixes {
-		router.GET(prefix+"/capabilities", capabilities(features))
-		router.POST(prefix+"/ingest", ingestSubmission(deps.Ingest))
+	prefix := apiRoutePrefix
+	router.GET(prefix+"/capabilities", capabilities(deps.Reader.Enabled(), deps.ReaderCapabilities))
+	router.POST(prefix+"/ingest", ingestSubmission(deps.Ingest))
 
-		links := router.Group(prefix + "/links")
-		links.POST("", submitLink(deps.LinksWrite))
-		links.POST("/batch", batchLinks(deps.LinksWrite))
-		links.POST("/:link_id/refresh", refreshLink(deps.LinksWrite))
-		if deps.LinksContent != nil {
-			links.GET("/:link_id/content", getLinkContent(deps.LinksContent))
-			links.POST("/:link_id/content", saveLinkContent(deps.LinksContent))
-			links.PUT("/:link_id/content", replaceLinkContent(deps.LinksContent))
-			links.PATCH("/:link_id/content", editLinkContent(deps.LinksContent))
-		}
-		if deps.Translations != nil {
-			links.POST("/:link_id/translations", createLinkTranslation(deps.Translations))
-			links.GET("/:link_id/translations", listLinkTranslations(deps.Translations))
-		}
-		if deps.ConversionPreview != nil {
-			links.POST("/:link_id/conversion-preview", conversionPreview(deps.ConversionPreview))
-		}
-		if deps.ConversionExecute != nil {
-			links.POST("/:link_id/convert", convertLink(deps.ConversionExecute))
-		}
-		links.GET("", listLinks(deps.LinksRead))
-		links.GET("/:link_id", getLink(deps.LinksRead))
-		links.DELETE("/:link_id", deleteLink(deps.LinksRead))
+	links := router.Group(prefix + "/links")
+	links.POST("", submitLink(deps.LinksWrite))
+	links.POST("/:link_id/refresh", refreshLink(deps.LinksWrite))
+	if deps.LinksContent != nil {
+		links.GET("/:link_id/content", getLinkContent(deps.LinksContent))
+		links.POST("/:link_id/content", saveLinkContent(deps.LinksContent))
+		links.PUT("/:link_id/content", replaceLinkContent(deps.LinksContent))
+		links.PATCH("/:link_id/content", editLinkContent(deps.LinksContent))
+	}
+	if deps.Translations != nil {
+		links.POST("/:link_id/translations", createLinkTranslation(deps.Translations))
+		links.GET("/:link_id/translations", listLinkTranslations(deps.Translations))
+	}
+	if deps.ConversionPreview != nil {
+		links.POST("/:link_id/conversion-preview", conversionPreview(deps.ConversionPreview))
+	}
+	if deps.ConversionExecute != nil {
+		links.POST("/:link_id/convert", convertLink(deps.ConversionExecute))
+	}
+	links.GET("", listLinks(deps.LinksRead))
+	links.GET("/:link_id", getLink(deps.LinksRead))
+	links.DELETE("/:link_id", deleteLink(deps.LinksRead))
 
-		// GET /api/export streams the full done-link knowledge base. It rides
-		// the same EXTENSION_API_TOKEN group as the rest of the public API
-		// (the caller mounts RegisterRoutes on the token group when the token
-		// is set) — full-table export is sensitive and must stay behind the
-		// extension token whenever one is configured.
-		router.GET(prefix+"/export", exportLinks(deps.LinksRead))
-		if deps.ArchiveV2 != nil && features.LibraryKindAPI {
-			router.GET(prefix+"/export/v2", exportArchiveV2(deps.ArchiveV2))
-		}
+	if deps.ArchiveV2 != nil {
+		router.GET(prefix+"/export/v2", exportArchiveV2(deps.ArchiveV2))
+	}
 
-		// GET /api/export/concepts streams the installation's concept vocabulary.
-		// It uses the same auth
-		// group as /api/export; independent endpoint so the bare-links export
-		// stays byte-for-byte unchanged.
-		router.GET(prefix+"/export/concepts", exportConcepts(deps.LinksRead))
-
-		jobs := router.Group(prefix + "/jobs")
-		jobs.GET("", listJobs(deps.Jobs))
-		jobs.GET("/:job_id", getJob(deps.Jobs))
-
-		tags := router.Group(prefix + "/tags")
-		tags.GET("", listTags(deps.Tags))
-		if deps.LibrarySearch != nil && features.LibraryKindAPI {
-			router.GET(prefix+"/search", groupedSearch(deps.LibrarySearch))
-		}
-		if deps.ClassificationRules != nil && features.SiteAdvancedManagement {
-			rules := router.Group(prefix + "/library-classification-rules")
-			rules.GET("", listClassificationRules(deps.ClassificationRules))
-			rules.POST("", createClassificationRule(deps.ClassificationRules))
-			rules.PATCH("/:rule_id", updateClassificationRule(deps.ClassificationRules))
-			rules.DELETE("/:rule_id", deleteClassificationRule(deps.ClassificationRules))
-		}
-		if deps.LibraryReviews != nil && features.SiteAdvancedManagement {
-			reviews := router.Group(prefix + "/library-reviews")
-			reviews.GET("", listLibraryReviews(deps.LibraryReviews))
-			reviews.POST("/:review_id/resolve", resolveLibraryReview(deps.LibraryReviews))
-		}
-
-		tree := router.Group(prefix + "/tree")
-		tree.GET("", getTree(deps.Tree))
-		sites := router.Group(prefix + "/sites")
-		if deps.Sites != nil && features.LibraryKindAPI {
-			sites.GET("", listSites(deps.Sites))
-			sites.GET("/:site_id", getSite(deps.Sites))
-			if deps.SiteManagement != nil && features.SiteLibraryWrite {
-				sites.PATCH("/:site_id", updateSite(deps.SiteManagement))
-				sites.PATCH("/:site_id/entries/:entry_id", updateSiteEntry(deps.SiteManagement))
-				sites.POST("/:site_id/entries/:entry_id/set-primary", setSitePrimaryEntry(deps.SiteManagement))
-				sites.DELETE("/:site_id/entries/:entry_id", deleteSiteEntry(deps.SiteManagement))
-				sites.DELETE("/:site_id", deleteSite(deps.SiteManagement))
-			} else {
-				sites.PATCH("/:site_id", sitesUnavailable())
-				sites.PATCH("/:site_id/entries/:entry_id", sitesUnavailable())
-				sites.POST("/:site_id/entries/:entry_id/set-primary", sitesUnavailable())
-				sites.DELETE("/:site_id/entries/:entry_id", sitesUnavailable())
-				sites.DELETE("/:site_id", sitesUnavailable())
-			}
+	tags := router.Group(prefix + "/tags")
+	tags.GET("", listTags(deps.Tags))
+	if deps.LibrarySearch != nil {
+		router.GET(prefix+"/search", groupedSearch(deps.LibrarySearch))
+	}
+	tree := router.Group(prefix + "/tree")
+	tree.GET("", getTree(deps.Tree))
+	sites := router.Group(prefix + "/sites")
+	if deps.Sites != nil {
+		sites.GET("", listSites(deps.Sites))
+		sites.GET("/:site_id", getSite(deps.Sites))
+		if deps.SiteManagement != nil {
+			sites.PATCH("/:site_id", updateSite(deps.SiteManagement))
+			sites.PATCH("/:site_id/entries/:entry_id", updateSiteEntry(deps.SiteManagement))
+			sites.POST("/:site_id/entries/:entry_id/set-primary", setSitePrimaryEntry(deps.SiteManagement))
+			sites.DELETE("/:site_id/entries/:entry_id", deleteSiteEntry(deps.SiteManagement))
+			sites.DELETE("/:site_id", deleteSite(deps.SiteManagement))
 		} else {
-			sites.GET("", sitesUnavailable())
-			sites.GET("/:site_id", sitesUnavailable())
 			sites.PATCH("/:site_id", sitesUnavailable())
 			sites.PATCH("/:site_id/entries/:entry_id", sitesUnavailable())
 			sites.POST("/:site_id/entries/:entry_id/set-primary", sitesUnavailable())
 			sites.DELETE("/:site_id/entries/:entry_id", sitesUnavailable())
 			sites.DELETE("/:site_id", sitesUnavailable())
 		}
-		if deps.SiteMerge != nil && features.SiteAdvancedManagement {
-			router.POST(prefix+"/sites/merge-preview", siteMergePreview(deps.SiteMerge))
-			router.POST(prefix+"/sites/merge", siteMergeExecute(deps.SiteMerge))
-		}
-		if deps.SiteSplit != nil && features.SiteAdvancedManagement {
-			router.POST(prefix+"/sites/:site_id/split-preview", siteSplitPreview(deps.SiteSplit))
-			router.POST(prefix+"/sites/:site_id/split", siteSplitExecute(deps.SiteSplit))
-		}
+	} else {
+		sites.GET("", sitesUnavailable())
+		sites.GET("/:site_id", sitesUnavailable())
+		sites.PATCH("/:site_id", sitesUnavailable())
+		sites.PATCH("/:site_id/entries/:entry_id", sitesUnavailable())
+		sites.POST("/:site_id/entries/:entry_id/set-primary", sitesUnavailable())
+		sites.DELETE("/:site_id/entries/:entry_id", sitesUnavailable())
+		sites.DELETE("/:site_id", sitesUnavailable())
 	}
-
+	if deps.SiteMerge != nil {
+		router.POST(prefix+"/sites/merge-preview", siteMergePreview(deps.SiteMerge))
+		router.POST(prefix+"/sites/merge", siteMergeExecute(deps.SiteMerge))
+	}
+	if deps.SiteSplit != nil {
+		router.POST(prefix+"/sites/:site_id/split-preview", siteSplitPreview(deps.SiteSplit))
+		router.POST(prefix+"/sites/:site_id/split", siteSplitExecute(deps.SiteSplit))
+	}
 	RegisterFeedRoutes(router, deps.Feeds)
 	RegisterReaderRoutes(router, deps.Reader)
-
-	// ConceptMerges 路由由 internal/app/router.go 的 registerAdminRoutes
-	// 单独挂载到带 Bearer 鉴权的 group 上 —— /api/admin/* 必须 fail-closed，
-	// 不能由这里直接挂到无鉴权的主 router 上。
 }
 
 // mustHaveServices fails fast at boot when any required service field
@@ -322,9 +233,6 @@ func mustHaveServices(deps Dependencies) {
 	}
 	if deps.Ingest == nil {
 		missing = append(missing, "Ingest")
-	}
-	if deps.Jobs == nil {
-		missing = append(missing, "Jobs")
 	}
 	if deps.Tags == nil {
 		missing = append(missing, "Tags")

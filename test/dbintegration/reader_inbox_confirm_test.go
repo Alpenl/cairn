@@ -38,7 +38,7 @@ func TestReaderConfirmInboxInsertsSavedLinkForNewURL(t *testing.T) {
 	inboxID := seedReaderVNextInbox(t, pool,
 		"https://reader-vnext.example/confirm-fresh", "Fresh capture", "Fresh capture body", "Fresh capture summary")
 
-	linkID, err := reader.ConfirmInbox(ctx, inboxID)
+	linkID, err := reader.ConfirmInbox(ctx, inboxID, nil)
 	if err != nil {
 		t.Fatalf("ConfirmInbox on a URL with no existing link: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestReaderConfirmInboxInsertsSavedLinkForNewURL(t *testing.T) {
 
 	// Confirming again must return the same link rather than inserting a
 	// duplicate: the ON CONFLICT branch has to keep working alongside the fix.
-	again, err := reader.ConfirmInbox(ctx, inboxID)
+	again, err := reader.ConfirmInbox(ctx, inboxID, nil)
 	if err != nil {
 		t.Fatalf("ConfirmInbox idempotent retry: %v", err)
 	}
@@ -81,17 +81,17 @@ func TestReaderConfirmInboxRestoresAndAdoptsFeedManagedTrashLink(t *testing.T) {
 	rawURL := "https://reader-vnext.example/feed-trash-confirm"
 	feedItemID := seedReaderFeedSaveItem(t, pool, rawURL, "feed-trash-confirm")
 	saved, err := reader.FeedbackFeed(ctx, "subscription:"+feedItemID.String(), "save")
-	if err != nil || saved.Association == nil {
+	if err != nil || saved.LinkID == nil {
 		t.Fatalf("seed Feed save = %#v, %v", saved, err)
 	}
-	linkID := saved.Association.LinkID
+	linkID := *saved.LinkID
 	if _, err := reader.FeedbackFeed(ctx, "subscription:"+feedItemID.String(), "unsave"); err != nil {
 		t.Fatalf("seed Feed trash: %v", err)
 	}
 	assertReaderFeedLinkLive(t, pool, linkID, false)
 
 	inboxID := seedReaderVNextInbox(t, pool, rawURL, "Adopt feed Trash", "Inbox-owned body", "Inbox summary")
-	confirmed, err := reader.ConfirmInbox(ctx, inboxID)
+	confirmed, err := reader.ConfirmInbox(ctx, inboxID, nil)
 	if err != nil || confirmed != linkID {
 		t.Fatalf("ConfirmInbox() = %s, %v; want %s", confirmed, err, linkID)
 	}
@@ -123,10 +123,10 @@ func TestReaderFeedResaveAndInboxConfirmSerializeTrashRestore(t *testing.T) {
 	rawURL := "https://reader-vnext.example/concurrent-trash-restore"
 	originalItem := seedReaderFeedSaveItem(t, pool, rawURL, "concurrent-trash-original")
 	saved, err := reader.FeedbackFeed(ctx, "subscription:"+originalItem.String(), "save")
-	if err != nil || saved.Association == nil {
+	if err != nil || saved.LinkID == nil {
 		t.Fatalf("seed Feed save = %#v, %v", saved, err)
 	}
-	linkID := saved.Association.LinkID
+	linkID := *saved.LinkID
 	if _, err := reader.FeedbackFeed(ctx, "subscription:"+originalItem.String(), "unsave"); err != nil {
 		t.Fatalf("seed Feed trash: %v", err)
 	}
@@ -165,23 +165,22 @@ func TestReaderFeedResaveAndInboxConfirmSerializeTrashRestore(t *testing.T) {
 		err    error
 	}, 1)
 	go func() {
-		confirmed, callErr := inboxRepo.ConfirmInbox(ctx, inboxID)
+		confirmed, callErr := inboxRepo.ConfirmInbox(ctx, inboxID, nil)
 		inboxDone <- struct {
 			linkID uuid.UUID
 			err    error
 		}{linkID: confirmed, err: callErr}
 	}()
 
-	// Inbox may wait on the shared representation prelock rather than the
-	// canonical advisory lock, but either wait proves it cannot pass the Feed
-	// transaction and observe a half-restored Link.
+	// Feed holds the canonical URL mutation lock while waiting on the Link row,
+	// so Inbox must remain blocked and cannot observe a half-restored Link.
 	waitForPostgresLock(t, ctx, pool, inboxApplication)
 	if err := blocker.Commit(ctx); err != nil {
 		t.Fatalf("release Trash restore blocker: %v", err)
 	}
 
 	feed := <-feedDone
-	if feed.err != nil || feed.result.Association == nil || feed.result.Association.LinkID != linkID {
+	if feed.err != nil || feed.result.LinkID == nil || *feed.result.LinkID != linkID {
 		t.Fatalf("concurrent Feed restore = %#v, %v; want %s", feed.result, feed.err, linkID)
 	}
 	inbox := <-inboxDone
@@ -215,7 +214,7 @@ func TestReaderBulkConfirmRestoresTrashLinksAtomically(t *testing.T) {
 		rawURL := "https://reader-vnext.example/bulk-trash-" + suffix
 		feedItem := seedReaderFeedSaveItem(t, pool, rawURL, "bulk-trash-"+suffix)
 		saved, err := reader.FeedbackFeed(ctx, "subscription:"+feedItem.String(), "save")
-		if err != nil || saved.Association == nil {
+		if err != nil || saved.LinkID == nil {
 			t.Fatalf("seed bulk Feed save %d = %#v, %v", index, saved, err)
 		}
 		if _, err := reader.FeedbackFeed(ctx, "subscription:"+feedItem.String(), "unsave"); err != nil {
@@ -223,7 +222,7 @@ func TestReaderBulkConfirmRestoresTrashLinksAtomically(t *testing.T) {
 		}
 		inboxID := seedReaderVNextInbox(t, pool, rawURL, "Bulk restore "+suffix, "Inbox body "+suffix, "Inbox summary")
 		confirmations = append(confirmations, model.ReaderInboxBulkConfirmation{ID: inboxID})
-		wantLinks[inboxID] = saved.Association.LinkID
+		wantLinks[inboxID] = *saved.LinkID
 	}
 
 	results, err := reader.BulkConfirmInbox(ctx, confirmations)
@@ -242,41 +241,34 @@ func TestReaderBulkConfirmRestoresTrashLinksAtomically(t *testing.T) {
 	}
 }
 
-func TestReaderConfirmTrashRestoreRollsBackOnCategoryFailure(t *testing.T) {
+func TestReaderConfirmTrashRestoreRollsBackOnFinalizeFailure(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	reader := repository.NewPGXReaderVNextRepository(pool)
 	rawURL := "https://reader-vnext.example/trash-confirm-rollback"
 	feedItem := seedReaderFeedSaveItem(t, pool, rawURL, "trash-confirm-rollback")
 	saved, err := reader.FeedbackFeed(ctx, "subscription:"+feedItem.String(), "save")
-	if err != nil || saved.Association == nil {
+	if err != nil || saved.LinkID == nil {
 		t.Fatalf("seed Feed save = %#v, %v", saved, err)
 	}
-	linkID := saved.Association.LinkID
+	linkID := *saved.LinkID
 	if _, err := reader.FeedbackFeed(ctx, "subscription:"+feedItem.String(), "unsave"); err != nil {
 		t.Fatalf("seed Feed trash: %v", err)
 	}
 	inboxID := seedReaderVNextInbox(t, pool, rawURL, "Rollback adoption", "Inbox-owned body", "Inbox summary")
-	category, err := reader.CreateCategory(ctx, "rollback category")
-	if err != nil {
-		t.Fatalf("create rollback category: %v", err)
-	}
-	if err := reader.SetCategoryMembership(ctx, category.ID, "inbox", inboxID.String(), true); err != nil {
-		t.Fatalf("seed Inbox category: %v", err)
-	}
 	if _, err := pool.Exec(ctx, `
-		CREATE FUNCTION fail_trash_confirm_category_move() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN RAISE EXCEPTION 'injected Trash confirmation category failure'; END;
+		CREATE FUNCTION fail_trash_confirm_finalize() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'injected Trash confirmation finalization failure'; END;
 		$$;
-		CREATE TRIGGER fail_trash_confirm_category_move
-		BEFORE UPDATE ON reader_categorizables
-		FOR EACH ROW EXECUTE FUNCTION fail_trash_confirm_category_move()`); err != nil {
+		CREATE TRIGGER fail_trash_confirm_finalize
+		BEFORE UPDATE ON reader_inbox
+		FOR EACH ROW WHEN (NEW.status='confirmed') EXECUTE FUNCTION fail_trash_confirm_finalize()`); err != nil {
 		t.Fatalf("install Trash confirmation failure trigger: %v", err)
 	}
-	if _, err := reader.ConfirmInbox(ctx, inboxID); err == nil {
-		t.Fatal("ConfirmInbox() with injected category failure succeeded")
+	if _, err := reader.ConfirmInbox(ctx, inboxID, nil); err == nil {
+		t.Fatal("ConfirmInbox() with injected finalization failure succeeded")
 	}
-	if _, err := pool.Exec(ctx, `DROP TRIGGER fail_trash_confirm_category_move ON reader_categorizables`); err != nil {
+	if _, err := pool.Exec(ctx, `DROP TRIGGER fail_trash_confirm_finalize ON reader_inbox`); err != nil {
 		t.Fatalf("drop Trash confirmation failure trigger: %v", err)
 	}
 
@@ -318,7 +310,7 @@ func TestReaderConfirmInboxCarriesTheCaptureDocumentAndFormat(t *testing.T) {
 		t.Fatalf("seed the capture document: %v", err)
 	}
 
-	linkID, err := reader.ConfirmInbox(ctx, structured)
+	linkID, err := reader.ConfirmInbox(ctx, structured, nil)
 	if err != nil {
 		t.Fatalf("ConfirmInbox for a structured capture: %v", err)
 	}
@@ -340,7 +332,7 @@ func TestReaderConfirmInboxCarriesTheCaptureDocumentAndFormat(t *testing.T) {
 	// flattened body 'markdown' is precisely what the reader then rendered.
 	flat := seedReaderVNextInbox(t, pool,
 		"https://reader-vnext.example/confirm-flat", "Flat capture", "just one wall of text", "")
-	flatLink, err := reader.ConfirmInbox(ctx, flat)
+	flatLink, err := reader.ConfirmInbox(ctx, flat, nil)
 	if err != nil {
 		t.Fatalf("ConfirmInbox for a flat capture: %v", err)
 	}

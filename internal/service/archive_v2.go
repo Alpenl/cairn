@@ -8,12 +8,10 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
-	"webtag/internal/httperr"
-	"webtag/internal/repository"
+	"webtag/internal/problem"
 )
 
 const (
@@ -76,9 +74,9 @@ func ParseArchiveV2Sections(values []string, present bool) (ArchiveV2Selection, 
 }
 
 func invalidArchiveV2Sections() error {
-	return httperr.NewWithCode(
-		http.StatusUnprocessableEntity,
-		httperr.CodeInvalidArchiveSections,
+	return problem.NewWithCode(
+		problem.Invalid,
+		problem.CodeInvalidArchiveSections,
 		"sections must be one of base, base,thoughts, base,notes, or base,thoughts,notes",
 	)
 }
@@ -103,85 +101,41 @@ type archiveV2Manifest struct {
 // their dedicated repositories, so no section is fully buffered.
 type ArchiveV2Service struct {
 	links interface {
-		Export(context.Context, io.Writer) error
-		ExportWithCount(context.Context, io.Writer) (int, error)
+		ExportArchiveLinks(context.Context, io.Writer) (int, error)
 	}
-	archive repository.ArchiveV2Reader
-	rules   repository.ArchiveV2RuleReader
-	reader  ReaderArchiveExporter
+	archive archiveV2Reader
+	reader  readerArchiveExporter
+}
+
+type archiveV2Reader interface {
+	StreamArchiveV2Section(context.Context, string, func([]byte) error) error
 }
 
 func NewArchiveV2Service(links interface {
-	Export(context.Context, io.Writer) error
-	ExportWithCount(context.Context, io.Writer) (int, error)
-}, archive repository.ArchiveV2Reader, rules repository.ArchiveV2RuleReader) *ArchiveV2Service {
-	return &ArchiveV2Service{links: links, archive: archive, rules: rules}
+	ExportArchiveLinks(context.Context, io.Writer) (int, error)
+}, archive archiveV2Reader, reader readerArchiveReader) *ArchiveV2Service {
+	return &ArchiveV2Service{links: links, archive: archive, reader: readerArchiveExporter{reader: reader}}
 }
 
-// WithReaderArchive attaches the Reader-owned rows when its schema is ready.
-func (s *ArchiveV2Service) WithReaderArchive(reader ReaderArchiveExporter) *ArchiveV2Service {
-	s.reader = reader
-	return s
-}
-
-// Export keeps the pre-selector complete archive stream for internal callers
-// that do not need a browser-verifiable manifest. The public endpoint uses
-// ExportSelected below.
-func (s *ArchiveV2Service) Export(ctx context.Context, w io.Writer) error {
-	return s.export(ctx, w, FullArchiveV2Selection(), "", false)
-}
-
-// ValidateSelection checks whether the selected private Reader groups can be
-// exported before an HTTP handler commits a streaming success response.
-func (s *ArchiveV2Service) ValidateSelection(selection ArchiveV2Selection) error {
-	if s.reader == nil && (selection.IncludeThoughts || selection.IncludeNotes) {
-		return httperr.NewWithCode(
-			http.StatusServiceUnavailable,
-			httperr.CodeArchiveReaderUnavailable,
-			"selected Reader archive sections are unavailable",
-		)
-	}
-	return nil
-}
-
-// ExportSelected streams only the requested archive groups and appends a
+// Export streams only the requested archive groups and appends a
 // manifest with exact array counts and a SHA-256 over the verbatim JSON bytes
 // that precede `,"manifest":`. The browser validates that same byte prefix
 // before constructing a downloadable Blob.
-func (s *ArchiveV2Service) ExportSelected(ctx context.Context, w io.Writer, options ArchiveV2ExportOptions) error {
+func (s *ArchiveV2Service) Export(ctx context.Context, w io.Writer, options ArchiveV2ExportOptions) error {
 	if options.ClientDataNamespace == "" {
 		return fmt.Errorf("archive v2 requires an authenticated client data namespace")
 	}
-	if err := s.ValidateSelection(options.Selection); err != nil {
-		return err
-	}
-	return s.export(ctx, w, options.Selection, options.ClientDataNamespace, true)
-}
-
-func (s *ArchiveV2Service) export(
-	ctx context.Context,
-	w io.Writer,
-	selection ArchiveV2Selection,
-	clientDataNamespace string,
-	includeManifest bool,
-) error {
-	payloadWriter := w
-	var payloadHash hash.Hash
-	if includeManifest {
-		payloadHash = sha256.New()
-		payloadWriter = io.MultiWriter(w, payloadHash)
-	}
+	payloadHash := sha256.New()
+	payloadWriter := io.MultiWriter(w, payloadHash)
 	if err := writeArchiveV2Preamble(payloadWriter); err != nil {
 		return err
 	}
-	counts, err := s.writeArchiveV2Sections(ctx, payloadWriter, selection, includeManifest)
+	counts, err := s.writeArchiveV2Sections(ctx, payloadWriter, options.Selection)
 	if err != nil {
 		return err
 	}
-	if includeManifest {
-		if err := writeArchiveV2Manifest(w, payloadHash, clientDataNamespace, selection, counts); err != nil {
-			return err
-		}
+	if err := writeArchiveV2Manifest(w, payloadHash, options.ClientDataNamespace, options.Selection, counts); err != nil {
+		return err
 	}
 	_, err = io.WriteString(w, "}")
 	return err
@@ -192,35 +146,29 @@ func writeArchiveV2Preamble(w io.Writer) error {
 	return err
 }
 
-func (s *ArchiveV2Service) writeArchiveV2Sections(ctx context.Context, w io.Writer, selection ArchiveV2Selection, includeCounts bool) (map[string]int, error) {
+func (s *ArchiveV2Service) writeArchiveV2Sections(ctx context.Context, w io.Writer, selection ArchiveV2Selection) (map[string]int, error) {
 	counts := make(map[string]int, 6+len(readerArchiveSections))
-	if err := s.writeArchiveV2Links(ctx, w, includeCounts, counts); err != nil {
+	if err := s.writeArchiveV2Links(ctx, w, counts); err != nil {
 		return nil, err
 	}
-	if err := s.writeArchiveV2SiteSections(ctx, w, includeCounts, counts); err != nil {
+	if err := s.writeArchiveV2SiteSections(ctx, w, counts); err != nil {
 		return nil, err
 	}
-	if err := s.writeArchiveV2ClassificationRules(ctx, w, includeCounts, counts); err != nil {
-		return nil, err
-	}
-	if err := s.writeArchiveV2Reader(ctx, w, selection, includeCounts, counts); err != nil {
+	if err := s.writeArchiveV2Reader(ctx, w, selection, counts); err != nil {
 		return nil, err
 	}
 	return counts, nil
 }
 
-func (s *ArchiveV2Service) writeArchiveV2Links(ctx context.Context, w io.Writer, includeCounts bool, counts map[string]int) error {
-	if !includeCounts {
-		return s.links.Export(ctx, w)
-	}
-	count, err := s.links.ExportWithCount(ctx, w)
+func (s *ArchiveV2Service) writeArchiveV2Links(ctx context.Context, w io.Writer, counts map[string]int) error {
+	count, err := s.links.ExportArchiveLinks(ctx, w)
 	if err == nil {
 		counts["links"] = count
 	}
 	return err
 }
 
-func (s *ArchiveV2Service) writeArchiveV2SiteSections(ctx context.Context, w io.Writer, includeCounts bool, counts map[string]int) error {
+func (s *ArchiveV2Service) writeArchiveV2SiteSections(ctx context.Context, w io.Writer, counts map[string]int) error {
 	for _, section := range []string{"sites", "site_entries", "site_tags", "site_identities"} {
 		count, err := writeArchiveV2Array(w, `,"`+section+`":[`, func(yield func([]byte) error) error {
 			return s.archive.StreamArchiveV2Section(ctx, section, yield)
@@ -228,27 +176,12 @@ func (s *ArchiveV2Service) writeArchiveV2SiteSections(ctx context.Context, w io.
 		if err != nil {
 			return err
 		}
-		if includeCounts {
-			counts[section] = count
-		}
+		counts[section] = count
 	}
 	return nil
 }
 
-func (s *ArchiveV2Service) writeArchiveV2ClassificationRules(ctx context.Context, w io.Writer, includeCounts bool, counts map[string]int) error {
-	count, err := writeArchiveV2Array(w, `,"classification_rules":[`, func(yield func([]byte) error) error {
-		return s.rules.StreamArchiveV2Rules(ctx, yield)
-	})
-	if err == nil && includeCounts {
-		counts["classification_rules"] = count
-	}
-	return err
-}
-
-func (s *ArchiveV2Service) writeArchiveV2Reader(ctx context.Context, w io.Writer, selection ArchiveV2Selection, includeCounts bool, counts map[string]int) error {
-	if s.reader == nil {
-		return nil
-	}
+func (s *ArchiveV2Service) writeArchiveV2Reader(ctx context.Context, w io.Writer, selection ArchiveV2Selection, counts map[string]int) error {
 	if _, err := io.WriteString(w, `,"reader":`); err != nil {
 		return err
 	}
@@ -256,10 +189,8 @@ func (s *ArchiveV2Service) writeArchiveV2Reader(ctx context.Context, w io.Writer
 	if err != nil {
 		return err
 	}
-	if includeCounts {
-		for section, count := range readerCounts {
-			counts["reader."+section] = count
-		}
+	for section, count := range readerCounts {
+		counts["reader."+section] = count
 	}
 	return nil
 }

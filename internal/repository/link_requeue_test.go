@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/pashagolub/pgxmock/v4"
@@ -21,32 +20,23 @@ func TestRequeueExistingTxReturnsCreatedAttemptWithoutOwningCommit(t *testing.T)
 	}
 	defer mock.Close()
 	repo := NewPGXLinkRepository(mock)
-	linkID, jobID := uuid.New(), uuid.New()
+	linkID := uuid.New()
 	inputTitle := "latest title"
 	inputText := "latest snapshot"
 	description := "latest note"
 	images := []string{"https://cdn.example.com/latest.png"}
 	metadata := map[string]any{"capture": "latest"}
-	now := time.Now().UTC()
 
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
-	mock.ExpectExec(regexp.QuoteMeta(requeueLinkCaptureSQL)).
+	mock.ExpectQuery(regexp.QuoteMeta(requeueLinkCaptureSQL)).
 		WithArgs(
 			linkID, "browser_capture", "capture:latest", &inputTitle, &inputText,
 			(*string)(nil), mustJSONString(t, images), mustJSONString(t, metadata),
 			&description, model.RequestedLibraryKindAuto,
-			model.RequestedLibraryKindSourceAuto,
+			false,
 		).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectExec(regexp.QuoteMeta(supersedeParseJobsSQL)).
-		WithArgs(linkID, parseJobSupersededMessage).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectQuery(regexp.QuoteMeta(insertJobSQL)).
-		WithArgs(linkID, parseJobsPerLinkRetention).
-		WillReturnRows(mock.NewRows(jobColumns()).AddRow(
-			jobID, linkID, model.JobStatusPending, nil, now, now, int64(1),
-		))
+		WillReturnRows(mock.NewRows([]string{"parse_generation", "metadata_revision"}).
+			AddRow(int64(3), int64(5)))
 	mock.ExpectRollback()
 
 	ctx := context.Background()
@@ -54,20 +44,21 @@ func TestRequeueExistingTxReturnsCreatedAttemptWithoutOwningCommit(t *testing.T)
 	if err != nil {
 		t.Fatalf("Begin() error = %v", err)
 	}
-	job, err := repo.RequeueExistingTx(ctx, tx, linkID, &CreateLinkParams{
-		SourceKind:     "browser_capture",
-		SourceKey:      "capture:latest",
-		InputTitle:     &inputTitle,
-		InputText:      &inputText,
-		InputImages:    images,
-		SourceMetadata: metadata,
-		Description:    &description,
+	attempt, err := repo.RequeueExistingTx(ctx, tx, linkID, &CreateLinkParams{
+		SourceKind:           "browser_capture",
+		SourceKey:            "capture:latest",
+		InputTitle:           &inputTitle,
+		InputText:            &inputText,
+		InputImages:          images,
+		SourceMetadata:       metadata,
+		Description:          &description,
+		RequestedLibraryKind: model.RequestedLibraryKindAuto,
 	})
 	if err != nil {
 		t.Fatalf("RequeueExistingTx() error = %v", err)
 	}
-	if job == nil || job.ID != jobID || job.LinkID != linkID {
-		t.Fatalf("job = %#v, want %s for link %s", job, jobID, linkID)
+	if attempt.LinkID != linkID || attempt.Generation != 3 || attempt.ExpectedMetadataRevision != 5 {
+		t.Fatalf("attempt = %#v, want link %s generation 3 revision 5", attempt, linkID)
 	}
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatalf("Rollback() error = %v", err)
@@ -84,14 +75,12 @@ func TestRequeueCaptureSQLPreservesDescriptionWhenOmitted(t *testing.T) {
 	}
 }
 
-func TestRequeueCaptureSQLDerivesPurgeDeadlineFromEffectiveIntent(t *testing.T) {
+func TestRequeueCaptureSQLDerivesPurgeDeadlineFromEffectiveSelection(t *testing.T) {
 	t.Parallel()
 
 	for _, want := range []string{
-		"WHEN $11 = 'user' THEN CASE WHEN $10 = 'site' THEN NOW() + INTERVAL '24 hours' ELSE NULL END",
-		"WHEN requested_library_kind_source = 'user' THEN CASE WHEN requested_library_kind = 'site' THEN NOW() + INTERVAL '24 hours' ELSE NULL END",
-		"WHEN $10 = 'reading' THEN NULL",
-		"WHEN requested_library_kind = 'reading' THEN NULL",
+		"WHEN $10 = 'site' AND ($11 OR NOT library_kind_locked) THEN NOW() + INTERVAL '24 hours'",
+		"WHEN $10 = 'reading' AND ($11 OR NOT library_kind_locked) THEN NULL",
 		"WHEN library_kind = 'site' THEN NOW() + INTERVAL '24 hours'",
 	} {
 		if !strings.Contains(requeueLinkCaptureSQL, want) {
@@ -100,11 +89,11 @@ func TestRequeueCaptureSQLDerivesPurgeDeadlineFromEffectiveIntent(t *testing.T) 
 	}
 }
 
-func TestUpdateRequestedLibraryIntentSQLClearsSiteDeadlineForAutomaticReadingRule(t *testing.T) {
+func TestSetLibraryKindSQLMaintainsSiteDeadline(t *testing.T) {
 	t.Parallel()
 
-	if !strings.Contains(updateRequestedLibraryIntentSQL, "WHEN $2 = 'reading' THEN NULL") {
-		t.Fatalf("automatic reading intent must clear a stale site purge deadline: %s", updateRequestedLibraryIntentSQL)
+	if !strings.Contains(setLibraryKindSQL, "WHEN $2 = 'reading' THEN NULL") {
+		t.Fatalf("reading selection must clear a stale site purge deadline: %s", setLibraryKindSQL)
 	}
 }
 
@@ -116,8 +105,6 @@ func TestRequeueCaptureSQLInvalidatesSourceDerivedArtifacts(t *testing.T) {
 		"content_document = NULL",
 		"content_format = 'plain'",
 		"content_revision = content_revision + 1",
-		"embedding = NULL",
-		"embedding_model = NULL",
 	} {
 		if !strings.Contains(requeueLinkCaptureSQL, want) {
 			t.Fatalf("requeueLinkCaptureSQL missing %q: %s", want, requeueLinkCaptureSQL)
@@ -125,7 +112,7 @@ func TestRequeueCaptureSQLInvalidatesSourceDerivedArtifacts(t *testing.T) {
 	}
 }
 
-func TestUpdateRequestedLibraryIntentTxPreservesCommittedUserIntentFromAutomaticRule(t *testing.T) {
+func TestSetLibraryKindTxPreservesExistingLockWithoutOverride(t *testing.T) {
 	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -136,11 +123,10 @@ func TestUpdateRequestedLibraryIntentTxPreservesCommittedUserIntentFromAutomatic
 	linkID := uuid.New()
 
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
-	mock.ExpectQuery(regexp.QuoteMeta(lockRequestedLibraryIntentSQL)).
+	mock.ExpectQuery(regexp.QuoteMeta(lockLibraryKindSQL)).
 		WithArgs(linkID).
-		WillReturnRows(mock.NewRows([]string{"status", "requested_library_kind_source"}).
-			AddRow(model.LinkStatusProcessing, model.RequestedLibraryKindSourceUser))
+		WillReturnRows(mock.NewRows([]string{"status", "library_kind_locked"}).
+			AddRow(model.LinkStatusProcessing, true))
 	mock.ExpectRollback()
 
 	ctx := context.Background()
@@ -148,11 +134,11 @@ func TestUpdateRequestedLibraryIntentTxPreservesCommittedUserIntentFromAutomatic
 	if err != nil {
 		t.Fatalf("Begin() error = %v", err)
 	}
-	result, err := repo.UpdateRequestedLibraryIntentTx(ctx, tx, UpdateRequestedLibraryIntentParams{
-		ID: linkID, Kind: model.RequestedLibraryKindReading, Source: model.RequestedLibraryKindSourceAuto,
+	result, err := repo.SetLibraryKindTx(ctx, tx, SetLibraryKindParams{
+		ID: linkID, Kind: model.LibraryKindReading,
 	})
 	if err != nil {
-		t.Fatalf("UpdateRequestedLibraryIntentTx() error = %v", err)
+		t.Fatalf("SetLibraryKindTx() error = %v", err)
 	}
 	if result.Status != model.LinkStatusProcessing {
 		t.Fatalf("status = %q, want processing", result.Status)
@@ -165,7 +151,7 @@ func TestUpdateRequestedLibraryIntentTxPreservesCommittedUserIntentFromAutomatic
 	}
 }
 
-func TestUpdateRequestedLibraryIntentTxLetsLaterUserChoiceWin(t *testing.T) {
+func TestSetLibraryKindTxLetsExplicitOverrideWin(t *testing.T) {
 	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -176,13 +162,12 @@ func TestUpdateRequestedLibraryIntentTxLetsLaterUserChoiceWin(t *testing.T) {
 	linkID := uuid.New()
 
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
-	mock.ExpectQuery(regexp.QuoteMeta(lockRequestedLibraryIntentSQL)).
+	mock.ExpectQuery(regexp.QuoteMeta(lockLibraryKindSQL)).
 		WithArgs(linkID).
-		WillReturnRows(mock.NewRows([]string{"status", "requested_library_kind_source"}).
-			AddRow(model.LinkStatusPending, model.RequestedLibraryKindSourceUser))
-	mock.ExpectExec(regexp.QuoteMeta(updateRequestedLibraryIntentSQL)).
-		WithArgs(linkID, model.RequestedLibraryKindSite, model.RequestedLibraryKindSourceUser).
+		WillReturnRows(mock.NewRows([]string{"status", "library_kind_locked"}).
+			AddRow(model.LinkStatusPending, true))
+	mock.ExpectExec(regexp.QuoteMeta(setLibraryKindSQL)).
+		WithArgs(linkID, model.LibraryKindSite).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectRollback()
 
@@ -191,11 +176,11 @@ func TestUpdateRequestedLibraryIntentTxLetsLaterUserChoiceWin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin() error = %v", err)
 	}
-	result, err := repo.UpdateRequestedLibraryIntentTx(ctx, tx, UpdateRequestedLibraryIntentParams{
-		ID: linkID, Kind: model.RequestedLibraryKindSite, Source: model.RequestedLibraryKindSourceUser,
+	result, err := repo.SetLibraryKindTx(ctx, tx, SetLibraryKindParams{
+		ID: linkID, Kind: model.LibraryKindSite, Override: true,
 	})
 	if err != nil {
-		t.Fatalf("UpdateRequestedLibraryIntentTx() error = %v", err)
+		t.Fatalf("SetLibraryKindTx() error = %v", err)
 	}
 	if result.Status != model.LinkStatusPending {
 		t.Fatalf("status = %q, want pending", result.Status)
@@ -208,15 +193,10 @@ func TestUpdateRequestedLibraryIntentTxLetsLaterUserChoiceWin(t *testing.T) {
 	}
 }
 
-func TestRequeueRefreshSQLPreservesContentAndInvalidatesEmbedding(t *testing.T) {
+func TestRequeueRefreshSQLPreservesSavedContent(t *testing.T) {
 	t.Parallel()
 
 	if strings.Contains(requeueLinkRefreshSQL, "content") {
 		t.Fatalf("refresh must preserve explicitly saved content: %s", requeueLinkRefreshSQL)
-	}
-	for _, want := range []string{"embedding = NULL", "embedding_model = NULL"} {
-		if !strings.Contains(requeueLinkRefreshSQL, want) {
-			t.Fatalf("requeueLinkRefreshSQL missing %q: %s", want, requeueLinkRefreshSQL)
-		}
 	}
 }

@@ -23,13 +23,13 @@ func statusWhereClause(statuses []string, argPos int) (clause string, arg any, h
 }
 
 // ListDone 列出链接列表，根据 filter 选择搜索 / cursor / offset 路径。
-// filter.Query 非空时进入 Phase 9 混合搜索（语义近邻 ∪ ILIKE，top-N 截断，
+// filter.Query 非空时进入关键词搜索（ILIKE，top-N 截断，
 // 不分页）——优先级最高，分页字段被忽略。否则 filter.Cursor 决定 cursor 或
 // offset 分页。filter.Statuses 为空时只返回 status='done'（历史行为）；非空
 // 时按给定状态集合过滤（pending / processing / failed / done 的任意子集）。
 func (r *PGXLinkRepository) ListDone(ctx context.Context, filter ListLinksFilter) ([]model.Link, int, error) {
 	if filter.Query != nil {
-		return r.searchHybrid(ctx, filter)
+		return r.searchKeyword(ctx, filter)
 	}
 	if filter.Cursor {
 		return r.listDoneByCursor(ctx, filter)

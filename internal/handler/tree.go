@@ -7,7 +7,6 @@ import (
 
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
-	"webtag/internal/middleware"
 	"webtag/internal/model"
 )
 
@@ -36,7 +35,7 @@ func getTree(service TreeService) gin.HandlerFunc {
 				writeError(c, err)
 				return
 			}
-			middleware.CacheableJSON(c, http.StatusOK, response)
+			c.JSON(http.StatusOK, response)
 			return
 		}
 		resp, err := service.Get(c.Request.Context(), c.Query("domain"))
@@ -44,6 +43,6 @@ func getTree(service TreeService) gin.HandlerFunc {
 			writeError(c, err)
 			return
 		}
-		middleware.CacheableJSON(c, http.StatusOK, resp)
+		c.JSON(http.StatusOK, resp)
 	}
 }

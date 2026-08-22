@@ -30,12 +30,10 @@ func TestIngestService_RealDB_PrefersCanonicalSourceKeyOverLegacyURLDuplicate(t 
 	}
 
 	links := repository.NewPGXLinkRepository(conn)
-	jobs := repository.NewPGXJobRepository(conn)
 	queue := &countingSubmitQueue{}
 	commands := dbLinkCommands(pool, links, queue)
 	_, ingest := service.NewLinkServices(
 		links,
-		jobs,
 		commands,
 		urllock.NewInProcessURLLocker(),
 		service.SubmitServiceOptions{},
@@ -65,20 +63,15 @@ func TestIngestService_RealDB_PrefersCanonicalSourceKeyOverLegacyURLDuplicate(t 
 	if err != nil {
 		t.Fatalf("create canonical Submit row: %v", err)
 	}
-	canonicalJob, err := jobs.Create(ctx, canonical.ID)
-	if err != nil {
-		t.Fatalf("create canonical Submit parse attempt: %v", err)
-	}
-
-	urlOnly, err := ingest.Ingest(ctx, dto.IngestRequest{Sources: []dto.IngestSource{{
+	urlOnly, err := ingest.Ingest(ctx, dto.IngestRequest{Destination: "library", Sources: []dto.IngestSource{{
 		Kind: "url",
 		URL:  rawURL,
 	}}})
 	if err != nil {
 		t.Fatalf("URL-only Ingest() error = %v", err)
 	}
-	if urlOnly.LinkID != canonical.ID.String() || urlOnly.JobID == nil || *urlOnly.JobID != canonicalJob.ID.String() {
-		t.Fatalf("URL-only Ingest() = %#v, want canonical link %s job %s", urlOnly, canonical.ID, canonicalJob.ID)
+	if urlOnly.LinkID != canonical.ID.String() || urlOnly.Status != string(model.LinkStatusDone) {
+		t.Fatalf("URL-only Ingest() = %#v, want canonical done link %s", urlOnly, canonical.ID)
 	}
 	if got := queue.enqueueTxCalls.Load(); got != 0 {
 		t.Fatalf("queue calls after URL-only reuse = %d, want 0", got)
@@ -86,7 +79,7 @@ func TestIngestService_RealDB_PrefersCanonicalSourceKeyOverLegacyURLDuplicate(t 
 
 	newTitle := "Current capture"
 	newBody := "Current captured body"
-	rich, err := ingest.Ingest(ctx, dto.IngestRequest{Sources: []dto.IngestSource{{
+	rich, err := ingest.Ingest(ctx, dto.IngestRequest{Destination: "library", Sources: []dto.IngestSource{{
 		Kind:  "browser_capture",
 		URL:   rawURL,
 		Title: newTitle,
@@ -124,12 +117,10 @@ func TestIngestService_RealDB_PrefersCanonicalSourceKeyOverLegacyURLDuplicate(t 
 func TestIngestService_RealDB_NoteOnlyRecaptureInvalidatesUserContent(t *testing.T) {
 	pool := StartPostgres(t)
 	links := repository.NewPGXLinkRepository(pool)
-	jobs := repository.NewPGXJobRepository(pool)
 	queue := &countingSubmitQueue{}
 	commands := dbLinkCommands(pool, links, queue)
 	_, ingest := service.NewLinkServices(
 		links,
-		jobs,
 		commands,
 		urllock.NewInProcessURLLocker(),
 		service.SubmitServiceOptions{},
@@ -145,6 +136,7 @@ func TestIngestService_RealDB_NoteOnlyRecaptureInvalidatesUserContent(t *testing
 	)
 	request := func(note string) dto.IngestRequest {
 		return dto.IngestRequest{
+			Destination:          "library",
 			RequestedLibraryKind: string(model.RequestedLibraryKindReading),
 			Sources: []dto.IngestSource{{
 				Kind:     "browser_capture",
@@ -164,8 +156,8 @@ func TestIngestService_RealDB_NoteOnlyRecaptureInvalidatesUserContent(t *testing
 	if err != nil {
 		t.Fatalf("initial Ingest() link_id = %q: %v", created.LinkID, err)
 	}
-	if created.Status != string(model.LinkStatusPending) || created.JobID == nil {
-		t.Fatalf("initial Ingest() = %#v, want pending link and parse job", created)
+	if created.Status != string(model.LinkStatusPending) {
+		t.Fatalf("initial Ingest() = %#v, want pending link", created)
 	}
 	if err := links.UpdateState(ctx, repository.UpdateLinkStateParams{ID: linkID, Status: model.LinkStatusDone}); err != nil {
 		t.Fatalf("mark initial capture done: %v", err)
@@ -209,8 +201,8 @@ func TestIngestService_RealDB_NoteOnlyRecaptureInvalidatesUserContent(t *testing
 	if err != nil {
 		t.Fatalf("note-only recapture Ingest() error = %v", err)
 	}
-	if recaptured.LinkID != linkID.String() || recaptured.Status != string(model.LinkStatusPending) || recaptured.JobID == nil {
-		t.Fatalf("note-only recapture Ingest() = %#v, want same pending link and a new parse job", recaptured)
+	if recaptured.LinkID != linkID.String() || recaptured.Status != string(model.LinkStatusPending) {
+		t.Fatalf("note-only recapture Ingest() = %#v, want same pending link", recaptured)
 	}
 	if got := queue.enqueueTxCalls.Load(); got != 2 {
 		t.Fatalf("queue calls after initial capture and note-only recapture = %d, want 2", got)

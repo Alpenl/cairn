@@ -12,7 +12,7 @@ import {
   readerRouteIsAvailable,
   type ReaderCapabilityLease,
 } from '../../lib/capabilities'
-import type { ReaderFeedAction, ReaderHomeResponse, ReaderTodoResponse } from '../../lib/api/types'
+import type { ReaderHomeResponse, ReaderTodoResponse } from '../../lib/api/types'
 import type { IdentityLease } from '../../lib/identity'
 import { useExclusiveAction } from '../../hooks/useExclusiveAction'
 import { useSurfaceRequestGate } from '../../hooks/useSurfaceRequestGate'
@@ -123,10 +123,6 @@ function homeStatus(response: ReaderHomeResponse, options: HomeStatusOptions = {
   if (freshness === 'refreshing' || freshness === 'pending') return { freshness, partial, stale, label: '数据更新中', attention: true }
   if (freshness === null || freshness === 'unknown' || freshness === 'unavailable') return { freshness, partial, stale, label: '数据新鲜度未知', attention: true }
   return { freshness, partial, stale, label: '数据已同步', attention: false }
-}
-
-function supportsItemAction(item: ReaderHomeResponse['continue_reading'][number], action: ReaderFeedAction): boolean {
-  return Array.isArray(item.actions) && item.actions.includes(action)
 }
 
 function TodoRow({
@@ -415,10 +411,10 @@ export function HomeSurface({ client, lease, onNavigate, onOpenLink, capabilityL
                           source={item.source}
                           meta={formatRelativeDate(item.event_at)}
                           title={item.title || '未命名内容'}
-                          summary={item.summary || item.reason_text}
-                          actions={item.link_id && supportsItemAction(item, 'open_workspace') ? (
+                          summary={item.summary || '继续阅读'}
+                          actions={item.link_id ? (
                             <button className="rvx-icon-button" type="button" aria-label="打开阅读" title="打开阅读" onClick={() => onOpenLink(item.link_id as string)}><Icon name="arrowright" size={15} /></button>
-                          ) : policy.inbox && item.inbox_id && supportsItemAction(item, 'open') ? (
+                          ) : policy.inbox && item.inbox_id ? (
                             <button className="rvx-icon-button" type="button" aria-label="打开收件箱" title="打开收件箱" onClick={() => navigate({ kind: 'library', id: 'pending', inboxId: item.inbox_id as string })}><Icon name="arrowright" size={15} /></button>
                           ) : null}
                         />

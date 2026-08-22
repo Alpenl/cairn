@@ -26,9 +26,10 @@ import { MainView } from './MainView'
 import { ok } from '../lib/api/result'
 import type { IdentityBoundReaderClient, ReaderClient } from '../lib/api/client'
 import type { LinkResponse, TranslationResponse } from '../lib/api/types'
-import { ownedDatabaseName, writeOwnedStorage } from '../lib/storage-ownership'
+import { ownedDatabaseName } from '../lib/storage-ownership'
 import { makeLink } from '../test/fixtures'
 import { readerIdentity } from '../lib/identity'
+import { commitAnnotationOperation } from '../lib/user-data/annotation-store'
 import { resetUserDataDatabaseHandle } from '../lib/user-data/idb'
 import { ENABLED_READER_CAPABILITIES } from '../test/capabilities'
 
@@ -262,8 +263,8 @@ describe('MainView 调用侧 props 稳定性（PF2 守卫）', () => {
   })
 
   // 上面那条用例没有 annotation，因此 `anns` 走冻结空值，引用天然稳定。这里通过
-  // legacy migration 导入一个当前 summary target 和一个旧 content target，等真实
-  // durable hook 只投影出 summary 后再取基线。这样 `anns` 是非空的合并结果；若
+  // durable store 写入一个当前 summary target 和一个旧 content target，等真实
+  // hook 只投影出 summary 后再取基线。这样 `anns` 是非空的合并结果；若
   // MainView 每次 render 都重建数组，memo(DetailPaneInner) 会随交互线性失效。
   //
   // 失配态并不罕见：任何「先在摘要上划线、之后保存/重抓原文」的链接都会长期停在
@@ -271,24 +272,44 @@ describe('MainView 调用侧 props 稳定性（PF2 守卫）', () => {
   it('当前 summary 与旧正文划线并存时，anns 引用仍然稳定', async () => {
     probe.parses = 0
     probe.detailRenders = 0
-    writeOwnedStorage(
-      'annotationsV2',
-      JSON.stringify({
-        L1: {
-          // 比 link 的 content_revision 大一代：正文换过，envelope 还没迁移。
-          contentRevision: 5,
-          summarySourceHash:
-            '6931fc7a1fde5c1044582fbecbd084a996f1b92dd919bd887fa2e702ec5e63c1',
-          items: [
-            // 摘要划线是幸存者——它让失配分支的结果**非空**，从而必须真的现算
-            // 一个新数组。全被过滤掉的话结果回落 NO_ANNOTATIONS，引用照样稳定，
-            // 这条用例就测了个寂寞。
-            { id: 'keep', blockKey: 'summary', start: 0, end: 2, text: '摘要', note: '', source: 'self', createdAt: 1, updatedAt: 1 },
-            { id: 'drop', blockKey: 'content', start: 0, end: 2, text: '正文', note: '', source: 'self', createdAt: 1, updatedAt: 1 },
-          ],
-        },
-      }),
-    )
+    const lease = readerIdentity.activeLease
+    if (!lease) throw new Error('test identity lease is not active')
+    const summary = '# 摘要标题\n\n这是一段会被 markdown 渲染的摘要正文。'
+    const sourceHash = summarySourceHash(summary)
+    if (!sourceHash) throw new Error('summary source hash is unavailable')
+    await expect(commitAnnotationOperation(lease, {
+      kind: 'add',
+      opId: 'memo-current-summary',
+      linkId: 'L1',
+      target: { kind: 'summary', sourceHash },
+      draft: {
+        id: 'keep',
+        start: 0,
+        end: 2,
+        text: '摘要',
+        note: '',
+        source: 'self',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    })).resolves.toMatchObject({ ok: true, value: { status: 'committed' } })
+    await expect(commitAnnotationOperation(lease, {
+      kind: 'add',
+      opId: 'memo-old-content',
+      linkId: 'L1',
+      target: { kind: 'saved-content', contentRevision: 3 },
+      draft: {
+        id: 'history',
+        blockKey: 'content',
+        start: 0,
+        end: 2,
+        text: '正文',
+        note: '',
+        source: 'self',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    })).resolves.toMatchObject({ ok: true, value: { status: 'committed' } })
     const client = makeMemoClient({ content_revision: 4 })
     render(<TestMainView client={client} onOpenSettings={() => {}} />)
 
@@ -301,6 +322,7 @@ describe('MainView 调用侧 props 稳定性（PF2 守卫）', () => {
 
     await screen.findByRole('heading', { level: 1, name: '真实组件树下的 memo 守卫' })
     await screen.findByText('划线与想法 · 1')
+    await screen.findByRole('button', { name: '已归档想法 (1)' })
     await waitFor(() => expect(client.getLink).toHaveBeenCalledWith('L1'))
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0))

@@ -75,7 +75,6 @@ data class SessionIdentity(
 data class SubmitResponse(
     val linkId: String,
     val status: String,
-    val jobId: String?,
 )
 
 data class CredentialConfig(
@@ -153,7 +152,6 @@ data class QueueView(
 data class RecentResult(
     val url: String,
     val linkId: String,
-    val jobId: String?,
     val status: String,
     val createdAt: Long,
     val identity: QueueIdentity,

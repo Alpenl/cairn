@@ -35,7 +35,6 @@ func (s *IngestService) AnalyzeRSS(ctx context.Context, request RSSIngestRequest
 	if err != nil {
 		return dto.SubmitResponse{}, err
 	}
-	intent := resolveRequestedLibraryIntent(requestedLibraryIntent{}, automaticRequestedLibraryIntent(model.RequestedLibraryKindReading))
 	params := LinkCapture{
 		URL:         strings.TrimSpace(request.URL),
 		Destination: destination,
@@ -48,8 +47,7 @@ func (s *IngestService) AnalyzeRSS(ctx context.Context, request RSSIngestRequest
 			"feed_external_id":     request.ExternalID,
 			"feed_url":             request.FeedURL,
 		}, request.URL, rawURL),
-		RequestedLibraryKind:       intent.Kind,
-		RequestedLibraryKindSource: intent.Source,
+		RequestedLibraryKind: model.RequestedLibraryKindReading,
 	}
 	if destination == captureDestinationInbox {
 		return s.submitToInbox(ctx, rawURL, params)
@@ -77,7 +75,7 @@ func (s *IngestService) AnalyzeRSS(ctx context.Context, request RSSIngestRequest
 			return lookupErr
 		}
 		link := submitCandidateFromLookup(projection)
-		if link.Status == model.LinkStatusFailed || link.Status == model.LinkStatusSkeleton {
+		if link.Status == model.LinkStatusFailed {
 			response, lookupErr = s.core.requeueExisting(lockCtx, link.ID, &params)
 			return lookupErr
 		}

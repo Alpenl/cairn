@@ -12,14 +12,13 @@
  *   - getTree   GET  /api/links（分页拉取后前端按 URL 现算树）
  *   - getLinks  GET  /api/links
  *   - getTags   GET  /api/tags
- *   - getJob    GET  /api/jobs/{job_id}
+ *   - getLink   GET  /api/links/{link_id}
  *   - ingest    POST /api/ingest
  *   - saveLinkContent POST /api/links/{id}/content
  *   - refreshLink POST /api/links/{id}/refresh
  *   - findByUrl   GET  /api/links?url=（v1.1 精确已存检测，带 feature-detect）
  *   - findSubscriptionByUrl GET /api/subscriptions?url=（RSS 已订阅检测）
  *   - createSubscription POST /api/subscriptions（仅由用户明确点击触发）
- *   - exportLibrary GET /api/export（v1.1 全量 done 链接导出，blob 下载，60s 超时）
  *   - testConnection  轻量鉴权探活（复用 GET /api/tags）
  *
  * 错误归一化（核心设计）：所有方法返回判别式联合 ApiResult<T>，调用方
@@ -41,7 +40,7 @@
  *     links.total/page/limit 非 number、200 实为 ApiErrorResponse、非对象/非 JSON）
  *     → 归一化为 { ok: false, error: { kind: 'other' } }，不冒充合法数据。
  *     绝不把缺字段的响应伪装成「空数据成功」——否则真实故障会被掩盖成数据丢失。
- *   - Link / Job / Tag / SubmitResponse 在 wire 边界按 generated contract 完整
+ *   - Link / Tag / SubmitResponse 在 wire 边界按 generated contract 完整
  *     校验；不补缺失字段、不过滤残缺数组项、不把非法 enum 强转为合法类型。
  *
  * 消费者：测试连接 UI（Task 2A）、知识库桌面（Phase 3 3A）、采集编排（Phase 3 3B）。
@@ -60,7 +59,6 @@ import type {
   ApiErrorResponse,
   GetTreeParams,
   IngestRequest,
-  Job,
   Link,
   LinkContentResponse,
   ListLinksParams,
@@ -73,8 +71,8 @@ import type {
 } from './types'
 import { buildTreeFromLinks } from './tree-builder'
 import {
-  isWireJob,
   isWireCapabilitiesResponse,
+  isWireLink,
   isWireLinkContentResponse,
   isWirePaginatedLinksResponse,
   isWireSubmitResponse,
@@ -98,21 +96,6 @@ export type { ApiError, ApiResult } from '@webtag/api'
 export type FindByUrlResult =
   { supported: false } | { supported: true; link: Link | null }
 
-/**
- * exportLibrary 的成功载荷（v1.1 知识库导出）。
- *
- * 客户端只负责拿到响应体的二进制 blob 与建议文件名，实际触发浏览器下载
- * （createObjectURL + <a download>）由 UI 层（options/composables/useExport）完成 ——
- * 避免 api 层依赖 DOM。
- *   - blob     响应体的 Blob（全量 done 链接的 JSON 数组流）。
- *   - filename 后端 Content-Disposition 的 filename（解析失败 / 缺失时为 null，
- *              调用方回退为 webtag-export-<date>.json）。
- */
-export interface ExportResult {
-  blob: Blob
-  filename: string | null
-}
-
 // ── 客户端配置 ──────────────────────────────────────────────
 
 /** 创建客户端所需的运行时配置，由调用方从 useSettings 读取后传入。 */
@@ -125,12 +108,6 @@ export interface WebTagClientConfig {
 
 /** 默认请求超时（毫秒）。与 NaiveTab 既有 api/request.ts 的 8s 保持一致。 */
 const DEFAULT_TIMEOUT = 8000
-
-/**
- * 导出请求超时（毫秒）。GET /api/export 流式返回全量 done 链接，大库时
- * 服务端逐条写出耗时可观，放宽到 60s（远高于普通接口的 8s），避免大库正常导出被误判超时。
- */
-const EXPORT_TIMEOUT = 60000
 
 // ── 内部工具 ────────────────────────────────────────────────
 
@@ -161,42 +138,6 @@ function isApiErrorResponse(data: unknown): data is ApiErrorResponse {
  */
 function parseRetryAfter(headers: Headers): number | undefined {
   return parseRetryAfterValue(headers.get('Retry-After'))
-}
-
-/**
- * 从 Content-Disposition 响应头解析建议文件名（用于导出下载）。
- * 后端对 GET /api/export 设 `Content-Disposition: attachment; filename=...`。
- *
- * 兼容两种写法（取到即返回，优先 RFC 5987 的 filename*）：
- *   - filename*=UTF-8''webtag-export-2026-06-11.json  → decodeURIComponent 解码
- *   - filename="webtag-export-2026-06-11.json"          → 去引号
- * 头缺失 / 解析不出 → 返回 null（调用方回退默认文件名）。
- * 解析出的文件名经 basename 化（剥离路径分隔符），防御响应头注入路径穿越。
- */
-function parseContentDispositionFilename(headers: Headers): string | null {
-  const raw = headers.get('Content-Disposition')
-  if (!raw) return null
-  // 优先 RFC 5987 的 filename*（带编码与可选语言标签）。
-  const extended = raw.match(/filename\*\s*=\s*[^']*''([^;]+)/i)
-  if (extended && extended[1]) {
-    try {
-      return basename(decodeURIComponent(extended[1].trim()))
-    } catch {
-      // decode 失败：继续尝试普通 filename。
-    }
-  }
-  // 普通 filename（可带引号）。
-  const plain = raw.match(/filename\s*=\s*"?([^";]+)"?/i)
-  if (plain && plain[1]) {
-    return basename(plain[1].trim())
-  }
-  return null
-}
-
-/** 取路径的最后一段，剥离 / 与 \，防止文件名携带路径穿越。空段 → null。 */
-function basename(name: string): string | null {
-  const segment = name.split(/[\\/]/).pop()?.trim()
-  return segment ? segment : null
 }
 
 // ── 网络层错误 ──────────────────────────────────────────────
@@ -293,18 +234,16 @@ function validateTagsResponse(body: unknown): ApiResult<Tag[]> {
 }
 
 /**
- * 校验 GET /api/jobs/{id} 响应。
- * body 必须满足 generated JobResponse 的全部必需字段。非 null link 复用
- * generated LinkResponse guard；任何残缺或 enum 非法都失败关闭。
+ * 校验 GET /api/links/{id} 响应。
  */
-function validateJobResponse(body: unknown): ApiResult<Job> {
+function validateLinkResponse(body: unknown): ApiResult<Link> {
   if (isApiErrorResponse(body)) {
     return { ok: false, error: normalizeHttpError(200, body) }
   }
-  if (!isWireJob(body)) {
+  if (!isWireLink(body)) {
     return {
       ok: false,
-      error: shapeError('GET /api/jobs 响应体不是完整 JobResponse'),
+      error: shapeError('GET /api/links/{id} 响应体不是完整 LinkResponse'),
     }
   }
   return { ok: true, data: body }
@@ -313,8 +252,8 @@ function validateJobResponse(body: unknown): ApiResult<Job> {
 /**
  * 校验 POST /api/ingest 响应。
  * body 必须满足 generated SubmitResponse；status 仅允许 generated enum，
- * 且必须带有 link_id 或 inbox_id 之一。可选 job_id / destination 存在时
- * 也必须符合 generated contract。
+ * 且必须带有 link_id 或 inbox_id 之一。Inbox proposal 状态由
+ * GET /api/inbox/{id} 提供。
  */
 function validateSubmitResponse(body: unknown): ApiResult<SubmitResponse> {
   if (isApiErrorResponse(body)) {
@@ -362,12 +301,6 @@ function validateSubmitResponse(body: unknown): ApiResult<SubmitResponse> {
     return {
       ok: false,
       error: shapeError('inbox 响应必须带 inbox_id'),
-    }
-  }
-  if (body.job_id !== undefined && !body.job_id.trim()) {
-    return {
-      ok: false,
-      error: shapeError('SubmitResponse.job_id 不能为空'),
     }
   }
   return { ok: true, data: body }
@@ -840,16 +773,12 @@ export class WebTagClient {
   }
 
   /**
-   * GET /api/jobs/{job_id} — 查询单个解析任务状态。
-   * status=done 时响应 link 字段内嵌完整 Link 快照。
-   *
-   * 响应经运行时校验：必须满足 generated JobResponse 全部 required 字段；
-   * 非 null link 复用完整 LinkResponse guard。
+   * GET /api/links/{link_id} — 查询产品可见的解析状态与结果。
    */
-  getJob(jobId: string): Promise<ApiResult<Job>> {
+  getLink(linkId: string): Promise<ApiResult<Link>> {
     return this.requestValidated(
-      { method: 'GET', path: `/api/jobs/${encodeURIComponent(jobId)}` },
-      validateJobResponse,
+      { method: 'GET', path: `/api/links/${encodeURIComponent(linkId)}` },
+      validateLinkResponse,
     )
   }
 
@@ -996,78 +925,6 @@ export class WebTagClient {
     }
     return { ok: false, error: res.error }
   }
-
-  /**
-   * GET /api/export — 全量导出 done 链接（v1.1 / 后端 Spec v3.1）。
-   *
-   * 与其它 typed 方法不同，本方法不走 request()（那条路径把 body JSON.parse 后做
-   * 形状校验），而是直接拿响应体的二进制 Blob —— 导出是「下载文件」语义，前端不
-   * 解析内容，原样落盘即可，避免把大 JSON 读成字符串再解析的内存浪费。
-   *
-   * 超时：用独立的 EXPORT_TIMEOUT（60s）而非 DEFAULT_TIMEOUT（8s）。后端流式逐条
-   * 写出全量链接，大库耗时远超普通接口；计时器覆盖到 res.blob() 完整读取，
-   * 后端「回了 headers 但 body 挂起」也会被 abort 归一化为 timeout，不会无限挂起。
-   *
-   * 鉴权：复用实例构造时注入的 Authorization 头（Bearer）。后端 /api/export 位于
-   * EXTENSION_API_TOKEN 鉴权组，Token 缺失 / 错误 → 401/403 归一化为 unauthorized。
-   *
-   * feature-detect：旧后端无此端点 → 404，归一化为 { kind: 'other', status: 404 }，
-   * 调用方据 status===404 给「后端版本不支持」类文案。
-   *
-   * 错误归一化与其它方法一致：网络不可达 → network-unreachable、abort → timeout、
-   * 非 2xx → 按状态码（401/403→unauthorized，429→rate-limited，余 → other）。
-   *
-   * @returns 成功时 { blob, filename }（filename 取自 Content-Disposition，缺失为 null）。
-   */
-  async exportLibrary(): Promise<ApiResult<ExportResult>> {
-    return this.sendExportOnce(this.staticToken)
-  }
-
-  /**
-   * 发一次导出请求（不含 401 重试）。读取响应体二进制 Blob，超时用 EXPORT_TIMEOUT。
-   * 401 重试由 exportLibrary 包装。
-   */
-  private async sendExportOnce(
-    token: string,
-  ): Promise<ApiResult<ExportResult>> {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), EXPORT_TIMEOUT)
-    try {
-      const res = await fetch(`${this.baseURL}/api/export`, {
-        method: 'GET',
-        headers: this.buildHeaders(token),
-        signal: controller.signal,
-      })
-      if (!res.ok) {
-        // 非 2xx：先尝试把响应体当 JSON 错误体解析以取 error_code / message；
-        // 非 JSON（如 404 纯文本）则按状态码归一化，不依赖响应体。
-        let body: unknown
-        try {
-          const text = await res.text()
-          body = text.length > 0 ? JSON.parse(text) : undefined
-        } catch {
-          body = undefined
-        }
-        return {
-          ok: false,
-          error: normalizeHttpError(
-            res.status,
-            body,
-            parseRetryAfter(res.headers),
-          ),
-        }
-      }
-      // 成功：读取二进制 blob（计时器仍活跃，body 挂起会被 abort → timeout）。
-      const blob = await res.blob()
-      const filename = parseContentDispositionFilename(res.headers)
-      return { ok: true, data: { blob, filename } }
-    } catch (err) {
-      // fetch 抛错（TypeError 网络层 / AbortError 超时）与其它同步异常统一归一化。
-      return { ok: false, error: normalizeThrownError(err) }
-    } finally {
-      clearTimeout(timer)
-    }
-  }
 }
 
 /**
@@ -1081,7 +938,7 @@ export function createWebTagClient(config: WebTagClientConfig): WebTagClient {
 /**
  * 从扩展设置构造 WebTagClient —— 「未配置后端地址」的统一判定入口。
  *
- * 把多处调用点（useLibrary、background 采集依赖、BackendSettings、useExport、
+ * 把多处调用点（useLibrary、background 采集依赖、BackendSettings、
  * useLibraryRelation、libraryReview）此前各自重复的「trim 地址 / Token + 空地址
  * 视为未配置」逻辑收口到一处：
  *   - 同时 trim backendUrl 与 accessToken；

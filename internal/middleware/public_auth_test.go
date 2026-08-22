@@ -18,15 +18,13 @@ import (
 type publicAuthVersions struct {
 	namespace uuid.UUID
 	err       error
-	keys      []string
 }
 
-func (v *publicAuthVersions) Current(_ context.Context, components representation.ComponentSet) (representation.VersionBase, error) {
-	v.keys = append(v.keys, components.Key())
+func (v *publicAuthVersions) Current(_ context.Context) (representation.ClientIdentity, error) {
 	if v.err != nil {
-		return representation.VersionBase{}, v.err
+		return representation.ClientIdentity{}, v.err
 	}
-	return representation.VersionBase{RepresentationNamespace: v.namespace}, nil
+	return representation.NewClientIdentity(v.namespace)
 }
 
 func publicAuthRouter(opts PublicAuthOptions) *gin.Engine {
@@ -65,15 +63,18 @@ func TestPublicAuthCredentialModesShareInstallationNamespace(t *testing.T) {
 	namespace := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	versions := &publicAuthVersions{namespace: namespace}
 	key := []byte("test-public-auth-session-signing-key")
-	signed, err := session.Sign(session.Claims{ExpiresAt: time.Now().Add(time.Hour)}, key)
+	now := time.Now()
+	signed, err := session.Sign(session.Claims{
+		ExpiresAt:         now.Add(time.Hour),
+		AbsoluteExpiresAt: now.Add(session.DefaultAbsoluteTTL),
+	}, key)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
 	router := publicAuthRouter(PublicAuthOptions{
-		Authenticator:   NewInstallationAuthenticator("installation-secret"),
-		AllowOpenAccess: true,
-		SessionKey:      key,
-		Representations: versions,
+		Authenticator:  NewInstallationAuthenticator("installation-secret"),
+		SessionKey:     key,
+		IdentityReader: versions,
 	})
 
 	requests := []struct {
@@ -84,7 +85,6 @@ func TestPublicAuthCredentialModesShareInstallationNamespace(t *testing.T) {
 	}{
 		{name: "static bearer", authorization: "Bearer installation-secret"},
 		{name: "browser session", cookie: &http.Cookie{Name: session.CookieName, Value: signed}, csrf: true},
-		{name: "explicit open access"},
 	}
 	var wantNamespace string
 	for _, request := range requests {
@@ -101,19 +101,14 @@ func TestPublicAuthCredentialModesShareInstallationNamespace(t *testing.T) {
 			t.Fatalf("%s namespace = %q, want shared namespace %q", request.name, rec.Body.String(), wantNamespace)
 		}
 	}
-	for i, key := range versions.keys {
-		if key != "" {
-			t.Fatalf("representation read %d requested route components %q", i, key)
-		}
-	}
 }
 
 func TestPublicAuthIsFailClosedByDefault(t *testing.T) {
 	t.Parallel()
 	versions := &publicAuthVersions{namespace: uuid.New()}
 	router := publicAuthRouter(PublicAuthOptions{
-		Authenticator:   NewInstallationAuthenticator("installation-secret"),
-		Representations: versions,
+		Authenticator:  NewInstallationAuthenticator("installation-secret"),
+		IdentityReader: versions,
 	})
 	for _, authorization := range []string{"", "Bearer wrong", "Basic Zm9vOmJhcg==", "Bearer"} {
 		rec := requestPublicAuth(router, authorization, nil, false)
@@ -126,31 +121,21 @@ func TestPublicAuthIsFailClosedByDefault(t *testing.T) {
 	}
 }
 
-func TestPublicAuthDoesNotDowngradeSuppliedBadCredentialToOpenAccess(t *testing.T) {
-	t.Parallel()
-	router := publicAuthRouter(PublicAuthOptions{
-		Authenticator:   NewInstallationAuthenticator("installation-secret"),
-		AllowOpenAccess: true,
-		Representations: &publicAuthVersions{namespace: uuid.New()},
-	})
-	for _, authorization := range []string{"Bearer wrong", "Basic Zm9vOmJhcg==", "Bearer"} {
-		if rec := requestPublicAuth(router, authorization, nil, false); rec.Code != http.StatusUnauthorized {
-			t.Errorf("Authorization %q status = %d, want 401", authorization, rec.Code)
-		}
-	}
-}
-
 func TestPublicAuthSessionRequiresCookieAndCSRFHeader(t *testing.T) {
 	t.Parallel()
 	key := []byte("test-public-auth-session-signing-key")
-	signed, err := session.Sign(session.Claims{ExpiresAt: time.Now().Add(time.Hour)}, key)
+	now := time.Now()
+	signed, err := session.Sign(session.Claims{
+		ExpiresAt:         now.Add(time.Hour),
+		AbsoluteExpiresAt: now.Add(session.DefaultAbsoluteTTL),
+	}, key)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
 	router := publicAuthRouter(PublicAuthOptions{
-		Authenticator:   NewInstallationAuthenticator("installation-secret"),
-		SessionKey:      key,
-		Representations: &publicAuthVersions{namespace: uuid.New()},
+		Authenticator:  NewInstallationAuthenticator("installation-secret"),
+		SessionKey:     key,
+		IdentityReader: &publicAuthVersions{namespace: uuid.New()},
 	})
 	validCookie := &http.Cookie{Name: session.CookieName, Value: signed}
 	for _, tc := range []struct {
@@ -174,14 +159,14 @@ func TestPublicAuthSessionRequiresCookieAndCSRFHeader(t *testing.T) {
 
 func TestPublicAuthFailsClosedWhenInstallationNamespaceUnavailable(t *testing.T) {
 	t.Parallel()
-	for _, versions := range []VersionReader{
+	for _, versions := range []IdentityReader{
 		nil,
 		&publicAuthVersions{namespace: uuid.Nil},
 		&publicAuthVersions{namespace: uuid.New(), err: errors.New("database unavailable")},
 	} {
 		router := publicAuthRouter(PublicAuthOptions{
-			Authenticator:   NewInstallationAuthenticator("installation-secret"),
-			Representations: versions,
+			Authenticator:  NewInstallationAuthenticator("installation-secret"),
+			IdentityReader: versions,
 		})
 		rec := requestPublicAuth(router, "Bearer installation-secret", nil, false)
 		if rec.Code != http.StatusInternalServerError {
@@ -194,8 +179,8 @@ func TestPublicAuthFailsClosedWhenInstallationNamespaceUnavailable(t *testing.T)
 // 它，会话每过一个 TTL 就准时死一次，而 Reader 在 session 模式下刻意不保存
 // installation token，届时手里没有任何凭证可以恢复，用户只能看到
 // 「无法确认当前身份：unauthorized」并手动重填 token。滑动续期正是「登录一次
-// 就不再掉线」赖以成立的机制：TTL 放长只是把窗口拉宽，真正让会话无限延续的
-// 是这里每次使用都把期限推回去。
+// 就不再频繁掉线」赖以成立的机制：TTL 放长只是把窗口拉宽，真正让会话在
+// 绝对期限内持续可用的是这里每次使用都把期限推回去。
 func TestPublicAuthRenewsASessionThatIsRunningOut(t *testing.T) {
 	t.Parallel()
 	key := []byte("test-public-auth-renewal-signing-key")
@@ -208,9 +193,9 @@ func TestPublicAuthRenewsASessionThatIsRunningOut(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	router := publicAuthRouter(PublicAuthOptions{
-		Authenticator:   NewInstallationAuthenticator("installation-secret"),
-		SessionKey:      key,
-		Representations: &publicAuthVersions{namespace: uuid.New()},
+		Authenticator:  NewInstallationAuthenticator("installation-secret"),
+		SessionKey:     key,
+		IdentityReader: &publicAuthVersions{namespace: uuid.New()},
 	})
 
 	rec := requestPublicAuth(router, "", &http.Cookie{Name: session.CookieName, Value: signed}, true)
@@ -243,9 +228,9 @@ func TestPublicAuthLeavesAFreshSessionAlone(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	router := publicAuthRouter(PublicAuthOptions{
-		Authenticator:   NewInstallationAuthenticator("installation-secret"),
-		SessionKey:      key,
-		Representations: &publicAuthVersions{namespace: uuid.New()},
+		Authenticator:  NewInstallationAuthenticator("installation-secret"),
+		SessionKey:     key,
+		IdentityReader: &publicAuthVersions{namespace: uuid.New()},
 	})
 
 	rec := requestPublicAuth(router, "", &http.Cookie{Name: session.CookieName, Value: signed}, true)

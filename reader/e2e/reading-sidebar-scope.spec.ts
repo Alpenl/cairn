@@ -42,10 +42,9 @@ test('Reading sidebar requests only the reading aggregate partition', async ({ p
         body: JSON.stringify({
           library_kinds: true,
           site_library: true,
-          site_auto_classification: true,
           site_management: true,
           site_advanced_management: true,
-          archive_versions: [1, 2],
+          archive_versions: [2],
           reader_vnext: true,
           reader: {
             annotations: false,
@@ -56,7 +55,7 @@ test('Reading sidebar requests only the reading aggregate partition', async ({ p
             home: false,
             feed: false,
             ai: false,
-            semantic: false,
+            related_tags: false,
             activity: false,
             history: false,
           },

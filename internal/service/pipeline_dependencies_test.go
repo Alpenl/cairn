@@ -26,27 +26,21 @@ func (minimalPipelineLinkStore) GetParseInputByID(context.Context, uuid.UUID) (*
 	return nil, nil
 }
 
-func (minimalPipelineLinkStore) MarkParseProcessing(context.Context, uuid.UUID, uuid.UUID) error {
+func (minimalPipelineLinkStore) MarkParseProcessing(context.Context, model.ParseAttempt) error {
 	return nil
 }
 
-func (minimalPipelineLinkStore) MarkParseFailed(context.Context, uuid.UUID, uuid.UUID, string) error {
+func (minimalPipelineLinkStore) MarkParseFailed(context.Context, model.ParseAttempt, string) error {
 	return nil
 }
 
 // 终态 completer 与 Links 由同一类型实现，与 deps_services.go 的生产装配一致。
-func (minimalPipelineLinkStore) CompleteReadingParse(context.Context, repository.CompleteReadingParseParams, uuid.UUID) (repository.CompleteReadingParseResult, error) {
+func (minimalPipelineLinkStore) CompleteReadingParse(context.Context, repository.CompleteReadingParseParams) (repository.CompleteReadingParseResult, error) {
 	return repository.CompleteReadingParseResult{MetadataRevision: 1, MetadataApplied: true}, nil
 }
 
-func (minimalPipelineLinkStore) CompleteSiteParse(context.Context, repository.CompleteSiteParseParams, uuid.UUID) (repository.SiteAggregateResult, error) {
+func (minimalPipelineLinkStore) CompleteSiteParse(context.Context, repository.CompleteSiteParseParams) (repository.SiteAggregateResult, error) {
 	return repository.SiteAggregateResult{}, nil
-}
-
-type minimalPipelineJobStore struct{}
-
-func (minimalPipelineJobStore) GetByID(context.Context, uuid.UUID) (*model.ParseJob, error) {
-	return nil, nil
 }
 
 type minimalAncestorLinkLookup struct{}
@@ -83,7 +77,6 @@ func minimalPipelineOptions() ParsePipelineOptions {
 	store := minimalPipelineLinkStore{}
 	return ParsePipelineOptions{
 		Links:            store,
-		Jobs:             minimalPipelineJobStore{},
 		Tags:             minimalTagStore{},
 		Fetcher:          minimalContentFetcher{},
 		Analyzer:         minimalAnalyzer{},
@@ -112,7 +105,6 @@ func TestNewParsePipelineAcceptsExactRepositoryCapabilities(t *testing.T) {
 		got  any
 	}{
 		{"links", pipeline.links},
-		{"jobs", pipeline.jobs},
 		{"tags", pipeline.tags},
 		{"fetcher", pipeline.fetcher},
 		{"analyzer", pipeline.analyzer},
@@ -137,8 +129,7 @@ func TestNewParsePipelineAcceptsExactRepositoryCapabilities(t *testing.T) {
 
 // TestNewParsePipelineRejectsMissingTerminalCompleters 锁死阶段1的核心约束：
 // 终态 completer 缺失必须在装配期崩溃，而不是在运行期静默降级到另一条落库
-// 路径。历史缺陷正源于此——ReadingCompleter 为 nil 时 persist 会走 legacy
-// CompleteParse，使测试与生产写入不同的表。
+// 路径。
 func TestNewParsePipelineRejectsMissingTerminalCompleters(t *testing.T) {
 	t.Parallel()
 
@@ -150,7 +141,6 @@ func TestNewParsePipelineRejectsMissingTerminalCompleters(t *testing.T) {
 		wantMsg string
 	}{
 		{"missing links", func(o *ParsePipelineOptions) { o.Links = nil }, "Links"},
-		{"missing jobs", func(o *ParsePipelineOptions) { o.Jobs = nil }, "Jobs"},
 		{"missing tags", func(o *ParsePipelineOptions) { o.Tags = nil }, "Tags"},
 		{"missing fetcher", func(o *ParsePipelineOptions) { o.Fetcher = nil }, "Fetcher"},
 		{"missing analyzer", func(o *ParsePipelineOptions) { o.Analyzer = nil }, "Analyzer"},

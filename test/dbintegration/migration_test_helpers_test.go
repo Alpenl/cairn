@@ -3,7 +3,9 @@ package dbintegration
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
@@ -15,7 +17,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"webtag/internal/migrate"
 )
+
+const (
+	productionBaselineSchemaPath   = "testdata/v0.1.17/schema.sql"
+	productionBaselineSchemaSHA256 = "a6c6af7aaf1e19ed83b9bca8ad9abff3a0d3a09c27000c990efefd788b8dda11"
+)
+
+var productionBaselineRiverVersions = []int{1, 2, 3, 4, 5, 6, 7}
 
 type migrationRowQuerier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
@@ -25,7 +36,7 @@ func assertMigrationRecorded(t *testing.T, db migrationRowQuerier, id string, wa
 	t.Helper()
 	var got bool
 	if err := db.QueryRow(t.Context(), `SELECT EXISTS (
-		SELECT 1 FROM schema_migrations WHERE version = $1
+		SELECT 1 FROM public.schema_migrations WHERE version = $1
 	)`, id).Scan(&got); err != nil {
 		t.Fatalf("read migration %s state: %v", id, err)
 	}
@@ -80,6 +91,87 @@ func isolatedMigrationDatabase(t *testing.T) string {
 	targetURL := *baseURL
 	targetURL.Path = "/" + databaseName
 	return targetURL.String()
+}
+
+// prepareProductionUpgradeFixture installs the immutable v0.1.17 schema
+// fixture and records the exact production baseline ledger. The fixture is a
+// pg_dump snapshot, not a reverse-built current schema. The fixture is
+// schema-only, so this helper also restores the seed rows and River ledger that
+// v0.1.17 migrations had written by the time production reached that tag.
+func prepareProductionUpgradeFixture(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("begin production upgrade fixture: %v", err)
+	}
+	defer func() { _ = tx.Rollback(t.Context()) }()
+	if _, err := tx.Exec(t.Context(), productionBaselineSchemaSQL(t)); err != nil {
+		t.Fatalf("install v0.1.17 schema fixture: %v", err)
+	}
+	if _, err := tx.Exec(t.Context(), `
+		SELECT pg_catalog.set_config('search_path','public, pg_catalog',false);
+		INSERT INTO public.installation_state (singleton) VALUES (true);
+		INSERT INTO public.library_read_revision (singleton) VALUES (true);
+		INSERT INTO public.global_read_revision (singleton) VALUES (true);
+		INSERT INTO public.feed_read_revision (singleton) VALUES (true);
+		INSERT INTO public.feed_subscriptions (url,canonical_url,title)
+		VALUES (
+			'https://www.ruanyifeng.com/blog/atom.xml',
+			'https://www.ruanyifeng.com/blog/atom.xml',
+			'阮一峰的网络日志'
+		);
+		UPDATE public.feed_read_revision SET revision=0,updated_at=now() WHERE singleton;
+		DELETE FROM public.schema_migrations;
+		DELETE FROM public.river_migration;
+	`); err != nil {
+		t.Fatalf("seed v0.1.17 baseline rows: %v", err)
+	}
+	for _, version := range migrate.ProductionBaselineVersions() {
+		if _, err := tx.Exec(t.Context(),
+			`INSERT INTO public.schema_migrations(version) VALUES ($1)`, version); err != nil {
+			t.Fatalf("record production baseline migration %s: %v", version, err)
+		}
+	}
+	for _, version := range productionBaselineRiverVersions {
+		if _, err := tx.Exec(t.Context(),
+			`INSERT INTO public.river_migration(line,version) VALUES ($1,$2)`,
+			migrate.RiverLedgerLine, version); err != nil {
+			t.Fatalf("record v0.1.17 River migration %d: %v", version, err)
+		}
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatalf("commit production upgrade fixture: %v", err)
+	}
+	assertProductionBaselineLedger(t, pool)
+}
+
+func productionBaselineSchemaSQL(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(productionBaselineSchemaPath)
+	if err != nil {
+		t.Fatalf("read v0.1.17 schema fixture: %v", err)
+	}
+	sum := sha256.Sum256(raw)
+	if got := fmt.Sprintf("%x", sum); got != productionBaselineSchemaSHA256 {
+		t.Fatalf("v0.1.17 schema fixture checksum = %s, want %s", got, productionBaselineSchemaSHA256)
+	}
+	return string(raw)
+}
+
+func assertProductionBaselineLedger(t *testing.T, pool migrationRowQuerier) {
+	t.Helper()
+	assertMigrationRecorded(t, pool, migrate.CurrentSchemaMigrationID, false)
+	for _, version := range migrate.ProductionBaselineVersions() {
+		assertMigrationRecorded(t, pool, version, true)
+	}
+}
+
+func assertCurrentSchemaLedger(t *testing.T, pool migrationRowQuerier) {
+	t.Helper()
+	assertMigrationRecorded(t, pool, migrate.CurrentSchemaMigrationID, true)
+	for _, version := range migrate.ProductionBaselineVersions() {
+		assertMigrationRecorded(t, pool, version, false)
+	}
 }
 
 func runMigrateCommand(t *testing.T, dsn, target string, wantError bool) string {
@@ -216,7 +308,7 @@ func migrationTargetPool(t *testing.T, dsn string) *pgxpool.Pool {
 
 func schemaLedgerVersions(t *testing.T, pool *pgxpool.Pool) []string {
 	t.Helper()
-	rows, err := pool.Query(t.Context(), `SELECT version FROM schema_migrations ORDER BY version`)
+	rows, err := pool.Query(t.Context(), `SELECT version FROM public.schema_migrations ORDER BY version`)
 	if err != nil {
 		t.Fatalf("read schema_migrations: %v", err)
 	}

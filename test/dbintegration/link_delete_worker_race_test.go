@@ -3,6 +3,7 @@ package dbintegration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,9 +17,9 @@ import (
 )
 
 // TestDurableLinkDeleteSerializesWithWorkerTerminalCompletion fixes both
-// possible commit orders around a parser's terminal write. The blocker holds
-// only the Link row; whichever product operation enters PostgreSQL's lock
-// queue first must finish first after the blocker commits.
+// commit orders around a parser's terminal write. The blocker holds only the
+// Link row; whichever product operation enters PostgreSQL's lock queue first
+// must finish first after the blocker commits.
 func TestDurableLinkDeleteSerializesWithWorkerTerminalCompletion(t *testing.T) {
 	pool := StartPostgres(t)
 	setupRepo := repository.NewPGXLinkRepository(pool)
@@ -29,11 +30,7 @@ func TestDurableLinkDeleteSerializesWithWorkerTerminalCompletion(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		fixture := newDeleteWorkerRaceFixture(
-			t,
-			ctx,
-			pool,
-			setupRepo,
-			setupCommands,
+			t, ctx, pool, setupRepo, setupCommands,
 			"https://race.example.com/worker-before-delete",
 		)
 
@@ -48,18 +45,18 @@ func TestDurableLinkDeleteSerializesWithWorkerTerminalCompletion(t *testing.T) {
 			newRiverQueue(t, deletePool, newRecordingProcessor(deletePool)),
 		)
 
-		blocker := lockDeleteWorkerRaceLink(t, ctx, pool, fixture.linkID)
+		blocker := lockDeleteWorkerRaceLink(t, ctx, pool, fixture.attempt.LinkID)
 		defer func() { _ = blocker.Rollback(context.Background()) }()
 
 		workerDone := make(chan error, 1)
 		go func() {
-			workerDone <- workerRepo.CompleteParse(ctx, fixture.completion("worker committed"), fixture.jobID)
+			workerDone <- completeDeleteWorkerRace(workerRepo, ctx, fixture, "worker committed")
 		}()
 		waitForPostgresLock(t, ctx, pool, workerApplication)
 
 		deleteDone := make(chan error, 1)
 		go func() {
-			deleteDone <- deleteCommands.DeleteLink(ctx, service.DeleteLinkCommand{LinkID: fixture.linkID})
+			deleteDone <- deleteCommands.DeleteLink(ctx, service.DeleteLinkCommand{LinkID: fixture.attempt.LinkID})
 		}()
 		waitForPostgresLock(t, ctx, pool, deleteApplication)
 
@@ -67,27 +64,20 @@ func TestDurableLinkDeleteSerializesWithWorkerTerminalCompletion(t *testing.T) {
 			t.Fatalf("release Link blocker: %v", err)
 		}
 		if err := <-workerDone; err != nil {
-			t.Fatalf("CompleteParse() before delete: %v", err)
+			t.Fatalf("CompleteReadingParse() before delete: %v", err)
 		}
 		if err := <-deleteDone; err != nil {
 			t.Fatalf("DeleteLink() after completion: %v", err)
 		}
 
-		assertDeleteWorkerRaceState(t, pool, fixture, deleteWorkerRaceWant{
-			jobStatus: model.JobStatusDone,
-			title:     "worker committed",
-		})
+		assertDeleteWorkerRaceState(t, pool, fixture, "worker committed")
 	})
 
 	t.Run("delete commits before stale worker completion", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		fixture := newDeleteWorkerRaceFixture(
-			t,
-			ctx,
-			pool,
-			setupRepo,
-			setupCommands,
+			t, ctx, pool, setupRepo, setupCommands,
 			"https://race.example.com/delete-before-worker",
 		)
 
@@ -102,18 +92,18 @@ func TestDurableLinkDeleteSerializesWithWorkerTerminalCompletion(t *testing.T) {
 		)
 		workerRepo := repository.NewPGXLinkRepository(workerPool)
 
-		blocker := lockDeleteWorkerRaceLink(t, ctx, pool, fixture.linkID)
+		blocker := lockDeleteWorkerRaceLink(t, ctx, pool, fixture.attempt.LinkID)
 		defer func() { _ = blocker.Rollback(context.Background()) }()
 
 		deleteDone := make(chan error, 1)
 		go func() {
-			deleteDone <- deleteCommands.DeleteLink(ctx, service.DeleteLinkCommand{LinkID: fixture.linkID})
+			deleteDone <- deleteCommands.DeleteLink(ctx, service.DeleteLinkCommand{LinkID: fixture.attempt.LinkID})
 		}()
 		waitForPostgresLock(t, ctx, pool, deleteApplication)
 
 		workerDone := make(chan error, 1)
 		go func() {
-			workerDone <- workerRepo.CompleteParse(ctx, fixture.completion("stale overwrite"), fixture.jobID)
+			workerDone <- completeDeleteWorkerRace(workerRepo, ctx, fixture, "stale overwrite")
 		}()
 		waitForPostgresLock(t, ctx, pool, workerApplication)
 
@@ -123,22 +113,16 @@ func TestDurableLinkDeleteSerializesWithWorkerTerminalCompletion(t *testing.T) {
 		if err := <-deleteDone; err != nil {
 			t.Fatalf("DeleteLink() before completion: %v", err)
 		}
-		workerErr := <-workerDone
-		if !errors.Is(workerErr, repository.ErrNotFound) && !errors.Is(workerErr, repository.ErrParseJobNotRunnable) {
-			t.Fatalf("stale CompleteParse() error = %v, want ErrNotFound or ErrParseJobNotRunnable", workerErr)
+		if workerErr := <-workerDone; !errors.Is(workerErr, repository.ErrParseAttemptNotRunnable) {
+			t.Fatalf("stale CompleteReadingParse() error = %v, want ErrParseAttemptNotRunnable", workerErr)
 		}
 
-		assertDeleteWorkerRaceState(t, pool, fixture, deleteWorkerRaceWant{
-			jobStatus: model.JobStatusFailed,
-			jobReason: "link_deleted",
-		})
+		assertDeleteWorkerRaceState(t, pool, fixture, "")
 	})
 }
 
 type deleteWorkerRaceFixture struct {
-	linkID                   uuid.UUID
-	jobID                    uuid.UUID
-	expectedMetadataRevision int64
+	attempt model.ParseAttempt
 }
 
 func newDeleteWorkerRaceFixture(
@@ -155,28 +139,34 @@ func newDeleteWorkerRaceFixture(
 	result, err := commands.SubmitLink(ctx, service.SubmitLinkCommand{Capture: service.LinkCapture{
 		URL: rawURL, Status: model.LinkStatusPending,
 	}})
-	if err != nil || result.Link == nil || result.Job == nil {
+	if err != nil || result.Link == nil || !result.Enqueued {
 		t.Fatalf("SubmitLink() = %#v, %v", result, err)
 	}
-	if err := repo.MarkParseProcessing(ctx, result.Link.ID, result.Job.ID); err != nil {
+	attempt := parseAttemptForLink(result.Link)
+	if err := repo.MarkParseProcessing(ctx, attempt); err != nil {
 		t.Fatalf("MarkParseProcessing(): %v", err)
 	}
-	assertActiveRiverAttempt(t, pool, result.Job.ID)
-	return deleteWorkerRaceFixture{
-		linkID:                   result.Link.ID,
-		jobID:                    result.Job.ID,
-		expectedMetadataRevision: result.Job.ExpectedMetadataRevision,
-	}
+	assertActiveRiverAttempt(t, pool, attempt)
+	return deleteWorkerRaceFixture{attempt: attempt}
 }
 
-func (f deleteWorkerRaceFixture) completion(title string) repository.UpdateLinkAnalysisParams {
-	return repository.UpdateLinkAnalysisParams{
-		ID:                       f.linkID,
-		ExpectedMetadataRevision: f.expectedMetadataRevision,
-		Title:                    &title,
-		Tags:                     []string{},
-		Status:                   model.LinkStatusDone,
-	}
+func completeDeleteWorkerRace(
+	repo *repository.PGXLinkRepository,
+	ctx context.Context,
+	fixture deleteWorkerRaceFixture,
+	title string,
+) error {
+	_, err := repo.CompleteReadingParse(ctx, repository.CompleteReadingParseParams{
+		Analysis: repository.UpdateLinkAnalysisParams{
+			ID: fixture.attempt.LinkID, ExpectedParseGeneration: fixture.attempt.Generation,
+			ExpectedMetadataRevision: fixture.attempt.ExpectedMetadataRevision,
+			Title:                    &title, Tags: []string{}, Status: model.LinkStatusDone,
+		},
+		Classification: repository.UpdateLibraryClassificationParams{
+			ID: fixture.attempt.LinkID, Kind: model.LibraryKindReading,
+		},
+	})
+	return err
 }
 
 func lockDeleteWorkerRaceLink(t *testing.T, ctx context.Context, pool *pgxpool.Pool, linkID uuid.UUID) pgx.Tx {
@@ -193,51 +183,36 @@ func lockDeleteWorkerRaceLink(t *testing.T, ctx context.Context, pool *pgxpool.P
 	return tx
 }
 
-type deleteWorkerRaceWant struct {
-	jobStatus model.JobStatus
-	jobReason string
-	title     string
-}
-
 func assertDeleteWorkerRaceState(
 	t *testing.T,
 	pool *pgxpool.Pool,
 	fixture deleteWorkerRaceFixture,
-	want deleteWorkerRaceWant,
+	wantTitle string,
 ) {
 	t.Helper()
 	var (
 		trashed    bool
 		title      *string
-		jobStatus  model.JobStatus
-		jobReason  string
 		riverState string
 		cancelled  bool
 	)
-	if err := pool.QueryRow(t.Context(), `SELECT deleted_at IS NOT NULL,title FROM links WHERE id=$1`, fixture.linkID).
+	if err := pool.QueryRow(t.Context(), `SELECT deleted_at IS NOT NULL,title FROM links WHERE id=$1`, fixture.attempt.LinkID).
 		Scan(&trashed, &title); err != nil {
 		t.Fatalf("read final Link state: %v", err)
 	}
 	if !trashed {
 		t.Fatal("final Link is live, want Trash")
 	}
-	if want.title == "" {
+	if wantTitle == "" {
 		if title != nil {
 			t.Fatalf("final Link title = %q, want NULL after rejected stale completion", *title)
 		}
-	} else if title == nil || *title != want.title {
-		t.Fatalf("final Link title = %v, want %q", title, want.title)
-	}
-	if err := pool.QueryRow(t.Context(), `SELECT status,COALESCE(error_msg,'') FROM parse_jobs WHERE id=$1`, fixture.jobID).
-		Scan(&jobStatus, &jobReason); err != nil {
-		t.Fatalf("read final parse attempt: %v", err)
-	}
-	if jobStatus != want.jobStatus || jobReason != want.jobReason {
-		t.Fatalf("final parse attempt = %s/%q, want %s/%q", jobStatus, jobReason, want.jobStatus, want.jobReason)
+	} else if title == nil || *title != wantTitle {
+		t.Fatalf("final Link title = %v, want %q", title, wantTitle)
 	}
 	if err := pool.QueryRow(t.Context(), `SELECT state::text,metadata ? 'cancel_attempted_at'
-		FROM river_job WHERE kind='parse_link' AND args->>'parse_job_id'=$1`, fixture.jobID.String()).
-		Scan(&riverState, &cancelled); err != nil {
+		FROM river_job WHERE kind='parse_link' AND args->>'link_id'=$1 AND args->>'parse_generation'=$2`,
+		fixture.attempt.LinkID.String(), fmt.Sprint(fixture.attempt.Generation)).Scan(&riverState, &cancelled); err != nil {
 		t.Fatalf("read final River attempt: %v", err)
 	}
 	if riverState != "cancelled" || !cancelled {

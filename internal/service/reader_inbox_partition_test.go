@@ -9,11 +9,10 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/model"
-	"webtag/internal/repository"
 )
 
 type readerInboxPartitionStoreStub struct {
-	repository.ReaderVNextStore
+	ReaderInboxStore
 	items            []model.ReaderInboxListItem
 	activeCount      int
 	expiredCount     int
@@ -58,7 +57,7 @@ func TestListInboxDefaultsToActiveAndMapsExpiryCounts(t *testing.T) {
 		next:         "next-page",
 	}
 
-	page, err := NewReaderVNextService(store, nil).ListInbox(context.Background(), "", "", 30)
+	page, err := newReaderTestFeatureSet(readerTestStores(store), nil).ListInbox(context.Background(), model.ReaderInboxPartitionActive, "", 30)
 	if err != nil {
 		t.Fatalf("ListInbox() error = %v", err)
 	}
@@ -79,9 +78,9 @@ func TestListInboxDefaultsToActiveAndMapsExpiryCounts(t *testing.T) {
 
 func TestReaderInboxPartitionValidationStopsStorageCalls(t *testing.T) {
 	store := &readerInboxPartitionStoreStub{}
-	service := NewReaderVNextService(store, nil)
+	service := newReaderTestFeatureSet(readerTestStores(store), nil)
 
-	_, err := service.ListInbox(context.Background(), "other", "", 30)
+	_, err := service.ListInbox(context.Background(), model.ReaderInboxPartition("other"), "", 30)
 	assertReaderHTTPError(t, err, http.StatusUnprocessableEntity, "invalid_inbox_partition")
 	if store.listCalls != 0 {
 		t.Fatalf("ListInbox() storage calls = %d, want 0", store.listCalls)
@@ -104,17 +103,17 @@ func TestConfirmAIProposalsMapsServerSelectedAtomicBatch(t *testing.T) {
 		RemainingCount: 4,
 	}}
 
-	response, err := NewReaderVNextService(store, nil).ConfirmAIProposals(context.Background(), "expired")
+	response, err := newReaderTestFeatureSet(readerTestStores(store), nil).ConfirmAIProposals(context.Background(), model.ReaderInboxPartitionExpired)
 	if err != nil {
 		t.Fatalf("ConfirmAIProposals() error = %v", err)
 	}
 	if store.confirmCalls != 1 || store.confirmPartition != model.ReaderInboxPartitionExpired {
 		t.Fatalf("ConfirmAIProposals() storage calls/partition = %d/%q", store.confirmCalls, store.confirmPartition)
 	}
-	if !response.Atomic || response.RemainingCount != 4 || len(response.Items) != 2 {
+	if response.RemainingCount != 4 || len(response.Items) != 2 {
 		t.Fatalf("ConfirmAIProposals() response = %#v", response)
 	}
-	if response.Items[0].InboxID != first.String() || response.Items[0].LinkID == nil || *response.Items[0].LinkID != linkID.String() || response.Items[1].InboxID != second.String() {
+	if response.Items[0].ID != first || response.Items[0].LinkID == nil || *response.Items[0].LinkID != linkID || response.Items[1].ID != second {
 		t.Fatalf("ConfirmAIProposals() items = %#v", response.Items)
 	}
 }

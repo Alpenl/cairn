@@ -25,14 +25,9 @@ func TestLinkRepositoryDeleteReturnsNotFoundWhenNoRowsAreAffected(t *testing.T) 
 	linkID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(lockLibraryFeedRevisionsSQL)).
-		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery(regexp.QuoteMeta(lockLinkForDeleteSQL)).
 		WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"id"}).AddRow(linkID))
-	mock.ExpectExec(regexp.QuoteMeta(terminalizeDeletedParseAttemptsSQL)).
-		WithArgs(linkID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectExec(regexp.QuoteMeta(terminalizeDeletedTranslationAttemptsSQL)).
 		WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))

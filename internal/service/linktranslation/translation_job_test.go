@@ -1,11 +1,10 @@
 package linktranslation
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,10 +13,11 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"webtag/internal/errsafe"
 	"webtag/internal/model"
 )
 
-func TestTranslationV2JobArgsCarryWholeAttemptIdentity(t *testing.T) {
+func TestTranslationJobArgsCarryWholeAttemptIdentity(t *testing.T) {
 	t.Parallel()
 
 	translationID := uuid.New()
@@ -46,14 +46,11 @@ func TestTranslationV2JobArgsCarryWholeAttemptIdentity(t *testing.T) {
 		t.Fatalf("encoded args = %s", encoded)
 	}
 
-	resolution := ResolveV2Attempt(&rivertype.JobRow{
-		ID: 400, Kind: args.Kind(), EncodedArgs: encoded,
-	})
-	got := resolution.Attempt
-	if resolution.Rejected() || got.TranslationID != translationID ||
+	got, rejection := resolveAttempt(400, args.Kind(), args, false)
+	if rejection != "" || got.TranslationID != translationID ||
 		got.AttemptGeneration != 9 || got.RiverJobID != 400 || got.SourceHash != sourceHash ||
 		got.SourceContentRevision == nil || *got.SourceContentRevision != revision {
-		t.Fatalf("ResolveV2Attempt() = %+v", resolution)
+		t.Fatalf("resolveAttempt() = %+v, %q", got, rejection)
 	}
 }
 
@@ -72,29 +69,30 @@ func TestTranslationJobArgsUseActiveStateUniqueness(t *testing.T) {
 }
 
 type recordingTranslationProcessor struct {
-	attempt             model.TranslationAttempt
-	runCalls            int
-	runErr              error
-	cancellationCalls   int
-	cancellationAttempt model.TranslationAttempt
-	cancellationCtxErr  error
+	attempt        model.TranslationAttempt
+	runCalls       int
+	runErr         error
+	runPanic       any
+	failureCalls   int
+	failureAttempt model.TranslationAttempt
+	failureCtxErr  error
+	failureErr     error
 }
 
 func (p *recordingTranslationProcessor) Run(_ context.Context, attempt model.TranslationAttempt) error {
 	p.runCalls++
 	p.attempt = attempt
+	if p.runPanic != nil {
+		panic(p.runPanic)
+	}
 	return p.runErr
 }
 
-func (*recordingTranslationProcessor) RecordDiscard(context.Context, model.TranslationAttempt, error) error {
-	return nil
-}
-
-func (p *recordingTranslationProcessor) RecordCancellation(ctx context.Context, attempt model.TranslationAttempt, _ error) error {
-	p.cancellationCalls++
-	p.cancellationAttempt = attempt
-	p.cancellationCtxErr = ctx.Err()
-	return nil
+func (p *recordingTranslationProcessor) RecordFailure(ctx context.Context, attempt model.TranslationAttempt, _ error) error {
+	p.failureCalls++
+	p.failureAttempt = attempt
+	p.failureCtxErr = ctx.Err()
+	return p.failureErr
 }
 
 func TestTranslationWorkerRunsCompleteAttempt(t *testing.T) {
@@ -127,7 +125,101 @@ func TestTranslationWorkerRunsCompleteAttempt(t *testing.T) {
 	}
 }
 
-func TestTranslationV2WorkerRejectsIncompleteAttemptIdentity(t *testing.T) {
+func TestTranslationWorkerProjectsOnlyTheFinalFailure(t *testing.T) {
+	t.Parallel()
+
+	attemptErr := errors.New("translator unavailable")
+	processor := &recordingTranslationProcessor{runErr: attemptErr}
+	worker := NewWorkerWithOptions(processor, WorkerOptions{})
+	job := &river.Job[JobArgs]{
+		JobRow: &rivertype.JobRow{ID: 411, Kind: (JobArgs{}).Kind(), Attempt: 2, MaxAttempts: 3},
+		Args: JobArgs{
+			TranslationID: uuid.New(), AttemptGeneration: 2,
+			SourceHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+	}
+	if err := worker.Work(context.Background(), job); !errors.Is(err, attemptErr) {
+		t.Fatalf("intermediate Work() error = %v", err)
+	}
+	if processor.failureCalls != 0 {
+		t.Fatalf("intermediate failure projections = %d, want 0", processor.failureCalls)
+	}
+
+	job.Attempt = job.MaxAttempts
+	if err := worker.Work(context.Background(), job); !errors.Is(err, attemptErr) {
+		t.Fatalf("final Work() error = %v", err)
+	}
+	if processor.failureCalls != 1 || processor.failureAttempt != processor.attempt || processor.failureCtxErr != nil {
+		t.Fatalf("final projection = calls:%d attempt:%+v ctx:%v", processor.failureCalls, processor.failureAttempt, processor.failureCtxErr)
+	}
+}
+
+func TestTranslationWorkerSnoozesUntilTerminalProjectionSucceeds(t *testing.T) {
+	t.Parallel()
+
+	processor := &recordingTranslationProcessor{
+		runErr:     errors.New("translator unavailable"),
+		failureErr: errors.New("database unavailable"),
+	}
+	job := &river.Job[JobArgs]{
+		JobRow: &rivertype.JobRow{ID: 412, Kind: (JobArgs{}).Kind(), Attempt: 3, MaxAttempts: 3},
+		Args: JobArgs{
+			TranslationID: uuid.New(), AttemptGeneration: 3,
+			SourceHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
+	}
+	err := NewWorkerWithOptions(processor, WorkerOptions{}).Work(context.Background(), job)
+	var snooze *rivertype.JobSnoozeError
+	if !errors.As(err, &snooze) || snooze.Duration != terminalProjectionRetryAfter {
+		t.Fatalf("Work() error = %v, want %s snooze", err, terminalProjectionRetryAfter)
+	}
+	if processor.failureCalls != 1 {
+		t.Fatalf("failure projections = %d, want 1", processor.failureCalls)
+	}
+}
+
+func TestTranslationWorkerCancelsPermanentFailureAfterProjection(t *testing.T) {
+	t.Parallel()
+
+	processor := &recordingTranslationProcessor{runErr: fmt.Errorf("provider policy: %w", errsafe.ErrUnsafeTarget)}
+	job := &river.Job[JobArgs]{
+		JobRow: &rivertype.JobRow{ID: 413, Kind: (JobArgs{}).Kind(), Attempt: 1, MaxAttempts: 3},
+		Args: JobArgs{
+			TranslationID: uuid.New(), AttemptGeneration: 4,
+			SourceHash: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		},
+	}
+	err := NewWorkerWithOptions(processor, WorkerOptions{}).Work(context.Background(), job)
+	var cancelErr *rivertype.JobCancelError
+	if !errors.As(err, &cancelErr) {
+		t.Fatalf("Work() error = %v, want JobCancelError", err)
+	}
+	if processor.failureCalls != 1 {
+		t.Fatalf("failure projections = %d, want 1", processor.failureCalls)
+	}
+}
+
+func TestTranslationWorkerProjectsFinalPanic(t *testing.T) {
+	t.Parallel()
+
+	processor := &recordingTranslationProcessor{runPanic: "translator panic"}
+	job := &river.Job[JobArgs]{
+		JobRow: &rivertype.JobRow{ID: 414, Kind: (JobArgs{}).Kind(), Attempt: 3, MaxAttempts: 3},
+		Args: JobArgs{
+			TranslationID: uuid.New(), AttemptGeneration: 5,
+			SourceHash: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		},
+	}
+	err := NewWorkerWithOptions(processor, WorkerOptions{}).Work(context.Background(), job)
+	if err == nil || !strings.Contains(err.Error(), "translation worker panic") {
+		t.Fatalf("Work() error = %v, want recovered panic", err)
+	}
+	if processor.failureCalls != 1 {
+		t.Fatalf("failure projections = %d, want 1", processor.failureCalls)
+	}
+}
+
+func TestTranslationWorkerRejectsIncompleteAttemptIdentity(t *testing.T) {
 	t.Parallel()
 
 	invalidRevision := int64(0)
@@ -142,7 +234,7 @@ func TestTranslationV2WorkerRejectsIncompleteAttemptIdentity(t *testing.T) {
 		{name: "missing job"},
 		{name: "missing row", job: &river.Job[JobArgs]{Args: valid}},
 		{name: "river id", job: &river.Job[JobArgs]{JobRow: &rivertype.JobRow{Kind: valid.Kind()}, Args: valid}},
-		{name: "kind", job: &river.Job[JobArgs]{JobRow: &rivertype.JobRow{ID: 1, Kind: (LegacyJobArgs{}).Kind()}, Args: valid}},
+		{name: "kind", job: &river.Job[JobArgs]{JobRow: &rivertype.JobRow{ID: 1, Kind: "translate_link_content"}, Args: valid}},
 		{name: "translation", job: &river.Job[JobArgs]{
 			JobRow: &rivertype.JobRow{ID: 1, Kind: valid.Kind()},
 			Args:   JobArgs{AttemptGeneration: 1, SourceHash: valid.SourceHash},
@@ -176,162 +268,54 @@ func TestTranslationV2WorkerRejectsIncompleteAttemptIdentity(t *testing.T) {
 	}
 }
 
-type staticLegacyAttemptResolver struct {
-	result model.TranslationAttemptResolution
-	calls  int
-}
-
-func (r *staticLegacyAttemptResolver) ProveCurrentLegacyAttempt(
-	context.Context,
-	uuid.UUID,
-	int64,
-	int64,
-) (model.TranslationAttemptResolution, error) {
-	r.calls++
-	return r.result, nil
-}
-
-func TestLegacyTranslationWorkerRunsProvenHistoricalAttempt(t *testing.T) {
-	t.Parallel()
-
-	translationID := uuid.New()
-	const riverJobID int64 = 402
-	want := model.TranslationAttempt{
-		TranslationID: translationID, AttemptGeneration: 0, RiverJobID: riverJobID,
-	}
-	resolver := &staticLegacyAttemptResolver{result: model.TranslationAttemptResolution{Attempt: want}}
-	processor := &recordingTranslationProcessor{}
-	worker := NewLegacyWorker(resolver, processor, 17*time.Minute, nil)
-	err := worker.Work(context.Background(), &river.Job[LegacyJobArgs]{
-		JobRow: &rivertype.JobRow{ID: riverJobID, Kind: (LegacyJobArgs{}).Kind()},
-		Args:   LegacyJobArgs{TranslationID: translationID},
-	})
-	if err != nil {
-		t.Fatalf("Work() error = %v", err)
-	}
-	if resolver.calls != 1 || processor.runCalls != 1 || processor.attempt != want {
-		t.Fatalf("resolver calls=%d processor calls=%d attempt=%+v", resolver.calls, processor.runCalls, processor.attempt)
-	}
-	if timeout := worker.Timeout(nil); timeout != 17*time.Minute {
-		t.Fatalf("Timeout() = %s, want 17m", timeout)
-	}
-}
-
-func TestLegacyTranslationWorkerRejectsStaleRiverJobObservably(t *testing.T) {
-	t.Parallel()
-
-	translationID := uuid.New()
-	resolver := &staticLegacyAttemptResolver{result: model.TranslationAttemptResolution{
-		Rejection: model.TranslationAttemptRejectionNotCurrent,
-	}}
-	processor := &recordingTranslationProcessor{}
-	var logs bytes.Buffer
-	worker := NewLegacyWorker(resolver, processor, time.Minute, slog.New(slog.NewTextHandler(&logs, nil)))
-	err := worker.Work(context.Background(), &river.Job[LegacyJobArgs]{
-		JobRow: &rivertype.JobRow{ID: 402, Kind: (LegacyJobArgs{}).Kind()},
-		Args:   LegacyJobArgs{TranslationID: translationID},
-	})
-	if err != nil {
-		t.Fatalf("Work() error = %v", err)
-	}
-	if processor.runCalls != 0 {
-		t.Fatalf("processor Run() calls = %d, want 0", processor.runCalls)
-	}
-	if got := logs.String(); !strings.Contains(got, "legacy translation attempt rejected") ||
-		!strings.Contains(got, "reason="+model.TranslationAttemptRejectionNotCurrent.String()) {
-		t.Fatalf("log = %q, want observable not_current rejection", got)
-	}
-}
-
-func TestLegacyTranslationWorkerRejectsWireSourceMismatchAgainstLockedProduct(t *testing.T) {
-	t.Parallel()
-
-	translationID := uuid.New()
-	productRevision, wrongRevision := int64(7), int64(8)
-	const riverJobID int64 = 407
-	const productHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	for _, tc := range []struct {
-		name string
-		args LegacyJobArgs
-	}{
-		{name: "source hash", args: LegacyJobArgs{
-			TranslationID: translationID, AttemptGeneration: 1,
-			SourceHash:            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			SourceContentRevision: &productRevision,
-		}},
-		{name: "source revision", args: LegacyJobArgs{
-			TranslationID: translationID, AttemptGeneration: 1,
-			SourceHash: productHash, SourceContentRevision: &wrongRevision,
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			resolver := &staticLegacyAttemptResolver{result: model.TranslationAttemptResolution{
-				Attempt: model.TranslationAttempt{
-					TranslationID: translationID, AttemptGeneration: 1, RiverJobID: riverJobID,
-					SourceHash: productHash, SourceContentRevision: &productRevision,
-				},
-			}}
-			processor := &recordingTranslationProcessor{}
-			var logs bytes.Buffer
-			worker := NewLegacyWorker(resolver, processor, time.Minute, slog.New(slog.NewTextHandler(&logs, nil)))
-			if err := worker.Work(context.Background(), &river.Job[LegacyJobArgs]{
-				JobRow: &rivertype.JobRow{ID: riverJobID, Kind: (LegacyJobArgs{}).Kind()}, Args: tc.args,
-			}); err != nil {
-				t.Fatalf("Work() error = %v", err)
-			}
-			if processor.runCalls != 0 || !strings.Contains(logs.String(), "reason="+model.TranslationAttemptRejectionIdentityMismatch.String()) {
-				t.Fatalf("processor calls=%d log=%q", processor.runCalls, logs.String())
-			}
-		})
-	}
-}
-
-func TestLegacyTranslationWorkerProjectsRemoteCancellationWithLiveContext(t *testing.T) {
+func TestTranslationWorkerLeavesTransactionalRemoteCancellationAlone(t *testing.T) {
 	t.Parallel()
 
 	translationID := uuid.New()
 	const riverJobID int64 = 404
+	const sourceHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	want := model.TranslationAttempt{
-		TranslationID: translationID, AttemptGeneration: 0, RiverJobID: riverJobID,
+		TranslationID: translationID, AttemptGeneration: 1, RiverJobID: riverJobID,
+		SourceHash: sourceHash,
 	}
-	resolver := &staticLegacyAttemptResolver{result: model.TranslationAttemptResolution{Attempt: want}}
 	processor := &recordingTranslationProcessor{runErr: context.Canceled}
-	worker := NewLegacyWorker(resolver, processor, time.Minute, nil)
+	worker := NewWorkerWithOptions(processor, WorkerOptions{})
 	workCtx, cancel := context.WithCancelCause(context.Background())
 	cancel(rivertype.ErrJobCancelledRemotely)
-	err := worker.Work(workCtx, &river.Job[LegacyJobArgs]{
-		JobRow: &rivertype.JobRow{ID: riverJobID, Kind: (LegacyJobArgs{}).Kind()},
-		Args:   LegacyJobArgs{TranslationID: translationID},
+	err := worker.Work(workCtx, &river.Job[JobArgs]{
+		JobRow: &rivertype.JobRow{ID: riverJobID, Kind: (JobArgs{}).Kind(), Attempt: 3, MaxAttempts: 3},
+		Args: JobArgs{
+			TranslationID: translationID, AttemptGeneration: 1, SourceHash: sourceHash,
+		},
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Work() error = %v, want context.Canceled", err)
 	}
-	if processor.cancellationCalls != 1 || processor.cancellationAttempt != want || processor.cancellationCtxErr != nil {
-		t.Fatalf("cancellations=%d attempt=%+v ctx_err=%v", processor.cancellationCalls, processor.cancellationAttempt, processor.cancellationCtxErr)
+	if processor.attempt != want || processor.failureCalls != 0 {
+		t.Fatalf("attempt=%+v failure projections=%d, want remote cancellation left to its business transaction", processor.attempt, processor.failureCalls)
 	}
 }
 
-func TestLegacyTranslationWorkerLeavesOrdinaryCancellationToRiverErrorHandler(t *testing.T) {
+func TestTranslationWorkerRetriesOrdinaryCancellation(t *testing.T) {
 	t.Parallel()
 
 	translationID := uuid.New()
 	const riverJobID int64 = 405
-	resolver := &staticLegacyAttemptResolver{result: model.TranslationAttemptResolution{Attempt: model.TranslationAttempt{
-		TranslationID: translationID, AttemptGeneration: 0, RiverJobID: riverJobID,
-	}}}
+	const sourceHash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 	processor := &recordingTranslationProcessor{runErr: context.Canceled}
-	err := NewLegacyWorker(resolver, processor, time.Minute, nil).Work(
+	err := NewWorkerWithOptions(processor, WorkerOptions{}).Work(
 		context.Background(),
-		&river.Job[LegacyJobArgs]{
-			JobRow: &rivertype.JobRow{ID: riverJobID, Kind: (LegacyJobArgs{}).Kind()},
-			Args:   LegacyJobArgs{TranslationID: translationID},
+		&river.Job[JobArgs]{
+			JobRow: &rivertype.JobRow{ID: riverJobID, Kind: (JobArgs{}).Kind(), Attempt: 1, MaxAttempts: 3},
+			Args: JobArgs{
+				TranslationID: translationID, AttemptGeneration: 1, SourceHash: sourceHash,
+			},
 		},
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Work() error = %v, want context.Canceled", err)
 	}
-	if processor.cancellationCalls != 0 {
-		t.Fatalf("worker cancellation projections = %d, want 0", processor.cancellationCalls)
+	if processor.failureCalls != 0 {
+		t.Fatalf("worker failure projections = %d, want 0 before final attempt", processor.failureCalls)
 	}
 }

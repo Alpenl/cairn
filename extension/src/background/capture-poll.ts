@@ -8,24 +8,24 @@
  * setTimeout、无副作用），轮询外壳 runCapturePolling 退化为
  * 「延时 → 取任务 → 决策 → 终态则发布并返回」的薄命令式循环。
  *
- * 与后端 JobStatus 的映射关系：
+ * 与后端 Link.status 的映射关系：
  *   - pending             → retry（已提交，继续轮询）
  *   - processing          → retry（解析中，继续轮询）
  *   - done                → done
  *   - failed              → failed
- *   - getJob 网络失败      → retry（临时抖动，继续重试），最后一次仍失败 → failed
+ *   - getLink 网络失败     → retry（临时抖动，继续重试），最后一次仍失败 → failed
  *   - 次数耗尽仍非终态     → failed
  *
  * 消费者：src/background/captureHandler.ts（采集编排）。
  */
 
 import type { ApiResult } from '@/api/webtag-client'
-import type { ApiErrorKind, Job } from '@/api/types'
+import type { ApiErrorKind, Link } from '@/api/types'
 import type { CaptureErrorKind, CaptureStage } from './capture-protocol'
 
 // ── 调优常量 ────────────────────────────────────────────────
 
-/** 轮询 getJob 的间隔（毫秒）。 */
+/** 轮询 getLink 的间隔（毫秒）。 */
 export const POLL_INTERVAL_MS = 2000
 /**
  * 轮询最大次数。attempt 计数跨 SW 回收持久化（见 capture-store.ts），
@@ -46,7 +46,7 @@ export const MAX_POLL_ATTEMPTS = 60
  * 「发布终态快照并返回」还是「继续下一轮」。
  *
  * - done：任务完成，发布 done 快照
- * - failed：任务失败（后端明确返回 failed）或客户端侧错误（最后一次 getJob
+ * - failed：任务失败（后端明确返回 failed）或客户端侧错误（最后一次 getLink
  *   仍网络失败），发布 failed 快照
  *   - errorKind/errorMessage 区分客户端侧错误（只发 kind）与后端失败原因
  *     （动态文案，透传 message）
@@ -67,8 +67,8 @@ export type PollOutcome =
   | { action: 'still-processing' }
   | { action: 'retry'; stage: CaptureStage }
 
-/** 后端 JobStatus → 面向用户的 CaptureStage 映射。 */
-export function mapJobStatus(status: Job['status']): CaptureStage {
+/** 后端 Link.status → 面向用户的 CaptureStage 映射。 */
+export function mapLinkStatus(status: Link['status']): CaptureStage {
   switch (status) {
     case 'pending':
       return 'submitted'
@@ -84,34 +84,34 @@ export function mapJobStatus(status: Job['status']): CaptureStage {
 }
 
 /**
- * 纯函数：根据单次 getJob 结果与当前轮询进度，决定下一步动作。
+ * 纯函数：根据单次 getLink 结果与当前轮询进度，决定下一步动作。
  *
  * 无 await、无 setTimeout、无副作用——仅由入参计算出 PollOutcome，
  * 因此可脱离 fake timer 独立单测所有分支。
  *
- * @param jobResult   本次 getJob 的归一化结果
+ * @param linkResult  本次 getLink 的归一化结果
  * @param attempt     当前轮询序号（从 0 计）
  * @param maxAttempts 轮询最大次数
  */
 export function decidePollOutcome(
-  jobResult: ApiResult<Job>,
+  linkResult: ApiResult<Link>,
   attempt: number,
   maxAttempts: number,
 ): PollOutcome {
   const isLastAttempt = attempt >= maxAttempts - 1
 
-  if (!jobResult.ok) {
+  if (!linkResult.ok) {
     // 单次查询失败不立刻判定采集失败——可能是临时网络抖动，继续重试。
     // 仅在最后一次仍失败时给出失败结果。
     if (isLastAttempt) {
       // 客户端侧错误（网络 / 超时 / 鉴权等）：只发 errorKind，
       // 由 popup 经 vue-i18n 渲染本地化文案。
-      return { action: 'failed', errorKind: jobResult.error.kind }
+      return { action: 'failed', errorKind: linkResult.error.kind }
     }
     return { action: 'retry', stage: 'parsing' }
   }
 
-  const stage = mapJobStatus(jobResult.data.status)
+  const stage = mapLinkStatus(linkResult.data.status)
   if (stage === 'done') {
     return { action: 'done' }
   }
@@ -120,7 +120,7 @@ export function decidePollOutcome(
     // 属于动态文案而非 i18n key，原样透传给 popup 展示。两者皆空时不带
     // errorMessage，由 popup 回退到 capture.error.job-failed 的本地化文案。
     const backendMessage =
-      jobResult.data.error_msg || jobResult.data.error_category
+      linkResult.data.error_msg || linkResult.data.error_category
     return {
       action: 'failed',
       errorKind: 'job-failed',

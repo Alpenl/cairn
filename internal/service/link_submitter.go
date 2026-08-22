@@ -3,8 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -12,8 +10,8 @@ import (
 
 	"webtag/internal/contentdoc"
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -29,37 +27,35 @@ import (
 // its public methods through its own type, and so the shared core has
 // no exported method set of its own.
 type linkSubmitter struct {
-	reader                  linkSubmissionReader
-	jobs                    repository.JobStore
-	commands                LinkSubmissionCommands
-	locker                  URLLocker
-	tagCacheInvalidator     CacheInvalidator
-	disableSiteLibraryWrite bool
-	inboxWriter             InboxCaptureWriter
-	inboxJobScheduler       ReaderInboxJobScheduler
-	inboxProposalCommands   InboxProposalCommands
+	reader                linkSubmissionReader
+	commands              LinkSubmissionCommands
+	locker                URLLocker
+	inboxWriter           InboxCaptureWriter
+	inboxProposalCommands InboxProposalCommands
 }
 
 type linkSubmissionReader interface {
-	repository.LinkSubmitLookupReader
-	repository.LinkParseInputReader
+	GetSubmitLookupByID(context.Context, uuid.UUID) (*repository.LinkSubmitLookup, error)
+	GetSubmitLookupByURL(context.Context, string) (*repository.LinkSubmitLookup, error)
+	GetParseInputByID(context.Context, uuid.UUID) (*repository.LinkParseInput, error)
+	GetParseInputBySourceKeyOrURL(context.Context, string, string) (*repository.LinkParseInput, error)
 }
 
 type submitCandidate struct {
-	ID                         uuid.UUID
-	URL                        string
-	SourceKind                 string
-	SourceKey                  string
-	InputTitle                 *string
-	InputText                  *string
-	InputHTML                  *string
-	InputImages                []string
-	SourceMetadata             map[string]any
-	Description                *string
-	Status                     model.LinkStatus
-	RequestedLibraryKind       model.RequestedLibraryKind
-	RequestedLibraryKindSource model.RequestedLibraryKindSource
-	LibraryKind                *model.LibraryKind
+	ID                uuid.UUID
+	URL               string
+	SourceKind        string
+	SourceKey         string
+	InputTitle        *string
+	InputText         *string
+	InputHTML         *string
+	InputImages       []string
+	SourceMetadata    map[string]any
+	Description       *string
+	Status            model.LinkStatus
+	LibraryKind       *model.LibraryKind
+	LibraryKindLocked bool
+	ParseRequestedAt  time.Time
 }
 
 func submitCandidateFromModel(link *model.Link) *submitCandidate {
@@ -71,6 +67,8 @@ func submitCandidateFromModel(link *model.Link) *submitCandidate {
 		InputTitle: link.InputTitle, InputText: link.InputText, InputHTML: link.InputHTML,
 		InputImages: link.InputImages, SourceMetadata: link.SourceMetadata,
 		Description: link.Description, Status: link.Status, LibraryKind: link.LibraryKind,
+		LibraryKindLocked: link.LibraryKindLocked,
+		ParseRequestedAt:  parseRequestedAt(link.FirstCollectedAt, link.LastRecollectedAt),
 	}
 }
 
@@ -80,9 +78,16 @@ func submitCandidateFromLookup(link *repository.LinkSubmitLookup) *submitCandida
 	}
 	return &submitCandidate{
 		ID: link.ID, URL: link.URL, SourceKey: link.SourceKey, Status: link.Status,
-		RequestedLibraryKind: link.RequestedLibraryKind, RequestedLibraryKindSource: link.RequestedLibraryKindSource,
-		LibraryKind: link.LibraryKind,
+		LibraryKind: link.LibraryKind, LibraryKindLocked: link.LibraryKindLocked,
+		ParseRequestedAt: link.ParseRequestedAt,
 	}
+}
+
+func parseRequestedAt(first time.Time, last *time.Time) time.Time {
+	if last != nil {
+		return *last
+	}
+	return first
 }
 
 func submitCandidateFromParseInput(link *repository.LinkParseInput) *submitCandidate {
@@ -94,52 +99,37 @@ func submitCandidateFromParseInput(link *repository.LinkParseInput) *submitCandi
 		InputTitle: link.InputTitle, InputText: link.InputText, InputHTML: link.InputHTML,
 		InputImages: link.InputImages, SourceMetadata: link.SourceMetadata,
 		Description: link.Description, Status: link.Status,
-		RequestedLibraryKind: link.RequestedLibraryKind, RequestedLibraryKindSource: link.RequestedLibraryKindSource,
-		LibraryKind: link.LibraryKind,
+		LibraryKind: link.LibraryKind, LibraryKindLocked: link.LibraryKindLocked,
 	}
 }
 
 func newLinkSubmitter(
 	reader linkSubmissionReader,
-	jobs repository.JobStore,
 	commands LinkSubmissionCommands,
 	locker URLLocker,
-	tagCacheInvalidator CacheInvalidator,
-	disableSiteLibraryWrite bool,
 	inboxWriter InboxCaptureWriter,
-	inboxJobScheduler ReaderInboxJobScheduler,
 	inboxProposalCommands InboxProposalCommands,
 ) *linkSubmitter {
 	if locker == nil {
 		locker = noopURLLocker{}
 	}
 	return &linkSubmitter{
-		reader:                  reader,
-		jobs:                    jobs,
-		commands:                commands,
-		locker:                  locker,
-		tagCacheInvalidator:     tagCacheInvalidator,
-		disableSiteLibraryWrite: disableSiteLibraryWrite,
-		inboxWriter:             inboxWriter,
-		inboxJobScheduler:       inboxJobScheduler,
-		inboxProposalCommands:   inboxProposalCommands,
+		reader:                reader,
+		commands:              commands,
+		locker:                locker,
+		inboxWriter:           inboxWriter,
+		inboxProposalCommands: inboxProposalCommands,
 	}
 }
 
-// NewLinkServices constructs a single shared *linkSubmitter core and wires
-// both SubmitService and IngestService against it. Wave 13 Phase B M-1:
-// boot wiring uses this factory to avoid building the same core twice.
-// The standalone NewSubmitService / NewIngestService constructors remain for
-// existing callers (notably the test helpers in submit_helpers_test.go); each
-// builds its own private core, while the boot path consolidates both services.
+// NewLinkServices constructs the shared write core used by Submit and Ingest.
 func NewLinkServices(
 	reader linkSubmissionReader,
-	jobs repository.JobStore,
 	commands LinkSubmissionCommands,
 	locker URLLocker,
 	submitOpts SubmitServiceOptions,
 ) (*SubmitService, *IngestService) {
-	core := newLinkSubmitter(reader, jobs, commands, locker, submitOpts.TagCacheInvalidator, submitOpts.DisableSiteLibraryWrite, submitOpts.InboxWriter, submitOpts.InboxJobScheduler, submitOpts.InboxProposalCommands)
+	core := newLinkSubmitter(reader, commands, locker, submitOpts.InboxWriter, submitOpts.InboxProposalCommands)
 	cooldown := submitOpts.RefreshCooldown
 	if cooldown <= 0 {
 		cooldown = defaultRefreshCooldown
@@ -153,25 +143,7 @@ func NewLinkServices(
 		}
 }
 
-// defaultCaptureDestination 返回请求未显式指定 destination 时的采集目的地。
-// 收藏默认进收件箱：收藏是「先收着」，抓取结果、标题与归类都还没确认，直接进
-// 阅读库会把未经确认的条目混进正式书库。
-//
-// 但收件箱是可选特性——未启用 Reader Inbox 的部署里 inboxWriter 为 nil。缺省值
-// 在那里必须退回阅读库，否则一个「默认行为」会把这类部署的每一次收藏都变成 503。
-// 显式请求 inbox 不走这里，仍由 createInbox 明确报 inbox_destination_unavailable，
-// 用户点名要收件箱时不该被静默改道。
-func (s *linkSubmitter) defaultCaptureDestination() string {
-	if s.inboxWriter == nil {
-		return captureDestinationLibrary
-	}
-	return captureDestinationInbox
-}
-
 func (s *linkSubmitter) createInbox(ctx context.Context, capture LinkCapture) (dto.SubmitResponse, error) {
-	if s.inboxWriter == nil {
-		return dto.SubmitResponse{}, httperr.NewWithCode(http.StatusServiceUnavailable, "inbox_destination_unavailable", "inbox destination is not available")
-	}
 	identityKey := capture.SourceKey
 	if identityKey == "" {
 		identityKey = capture.URL
@@ -184,7 +156,7 @@ func (s *linkSubmitter) createInbox(ctx context.Context, capture LinkCapture) (d
 		return s.reuseInbox(ctx, existing)
 	}
 
-	created, jobID, err := s.createInboxRecord(ctx, newInboxCapture(capture, identityKey))
+	created, err := s.createInboxRecord(ctx, newInboxCapture(capture, identityKey))
 	if err != nil {
 		return dto.SubmitResponse{}, err
 	}
@@ -195,23 +167,19 @@ func (s *linkSubmitter) createInbox(ctx context.Context, capture LinkCapture) (d
 	if status == "" {
 		status = "pending"
 	}
-	return inboxSubmitResponse(created.ID, status, jobID), nil
+	return inboxSubmitResponse(created.ID, status), nil
 }
 
 func (s *linkSubmitter) reuseInbox(ctx context.Context, existing *model.ReaderInbox) (dto.SubmitResponse, error) {
-	var jobID *uuid.UUID
-	if s.inboxProposalCommands != nil && existing.ProposalStatus != "completed" {
-		result, err := s.inboxProposalCommands.EnsureInboxProposal(ctx, EnsureInboxProposalCommand{
+	if existing.Status == "pending" && existing.ProposalStatus != "completed" {
+		_, err := s.inboxProposalCommands.EnsureInboxProposal(ctx, EnsureInboxProposalCommand{
 			InboxID: existing.ID, ExpectedMetadataRevision: existing.MetadataRevision,
 		})
 		if err != nil {
 			return dto.SubmitResponse{}, err
 		}
-		if result.Job != nil {
-			jobID = &result.Job.ID
-		}
 	}
-	return inboxSubmitResponse(existing.ID, existing.Status, jobID), nil
+	return inboxSubmitResponse(existing.ID, existing.Status), nil
 }
 
 func newInboxCapture(capture LinkCapture, identityKey string) model.ReaderInbox {
@@ -259,98 +227,44 @@ func inboxCaptureBody(capture LinkCapture) (string, *string, model.ContentFormat
 	return "", nil, model.ContentFormatPlain
 }
 
-func (s *linkSubmitter) createInboxRecord(ctx context.Context, item model.ReaderInbox) (*model.ReaderInbox, *uuid.UUID, error) {
-	if s.inboxProposalCommands != nil {
-		result, commandErr := s.inboxProposalCommands.CreateInboxProposal(ctx, CreateInboxProposalCommand{Inbox: item})
-		if commandErr != nil {
-			return nil, nil, commandErr
-		}
-		var jobID *uuid.UUID
-		if result.Job != nil {
-			jobID = &result.Job.ID
-		}
-		return result.Inbox, jobID, nil
-	}
-
-	created, err := s.inboxWriter.CreateInbox(ctx, item)
+func (s *linkSubmitter) createInboxRecord(ctx context.Context, item model.ReaderInbox) (*model.ReaderInbox, error) {
+	result, err := s.inboxProposalCommands.CreateInboxProposal(ctx, CreateInboxProposalCommand{Inbox: item})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if created == nil {
-		return nil, nil, errors.New("create inbox: writer returned nil item")
-	}
-	jobID, err := scheduleInboxCaptureJob(ctx, s.inboxWriter, s.inboxJobScheduler, created)
-	if err != nil {
-		return nil, nil, err
-	}
-	return created, jobID, nil
+	return result.Inbox, nil
 }
 
-func inboxSubmitResponse(inboxID uuid.UUID, status string, jobID *uuid.UUID) dto.SubmitResponse {
-	response := dto.SubmitResponse{
+func inboxSubmitResponse(inboxID uuid.UUID, status string) dto.SubmitResponse {
+	return dto.SubmitResponse{
 		InboxID:     inboxID.String(),
 		Destination: captureDestinationInbox,
 		Status:      status,
 	}
-	if jobID != nil {
-		id := jobID.String()
-		response.JobID = &id
-	}
-	return response
 }
 
-type inboxCaptureJobWriter interface {
-	BeginInboxResummarizeJob(context.Context, uuid.UUID, int64) (*model.ReaderInboxJob, bool, error)
-	FailInboxJob(context.Context, uuid.UUID, string) error
-}
-
-func scheduleInboxCaptureJob(ctx context.Context, writer InboxCaptureWriter, scheduler ReaderInboxJobScheduler, item *model.ReaderInbox) (*uuid.UUID, error) {
-	jobs, ok := writer.(inboxCaptureJobWriter)
-	if !ok || scheduler == nil {
-		return nil, nil
-	}
-	job, created, err := jobs.BeginInboxResummarizeJob(ctx, item.ID, item.MetadataRevision)
-	if err != nil {
-		return nil, fmt.Errorf("begin Inbox proposal job: %w", err)
-	}
-	if created {
-		args := ReaderInboxSummaryJobArgs{JobID: job.ID, InboxID: item.ID, ExpectedMetadataRevision: job.ExpectedMetadataRevision}
-		if err := scheduler.EnqueueReaderInboxSummary(ctx, args); err != nil {
-			_ = jobs.FailInboxJob(ctx, job.ID, "reader_inbox_job_enqueue_failed")
-			return nil, fmt.Errorf("enqueue Inbox proposal job: %w", err)
-		}
-	}
-	return &job.ID, nil
-}
-
-// createNewLink asks the durable command module to insert the link, initial
-// parse_jobs row, and River parse job in one transaction. This closes the
+// createNewLink asks the durable command module to insert the link and River
+// parse job in one transaction. This closes the
 // legacy commit/enqueue gap: previously a
 // crash between "link committed" and "in-memory Enqueue" stranded the link in
 // pending with no queued work (the old startup ResetProcessingToPending seed
 // existed precisely to mop that up; River + same-tx insert makes it moot).
 func (s *linkSubmitter) createNewLink(ctx context.Context, capture LinkCapture) (dto.SubmitResponse, error) {
-	if s.commands == nil {
-		return dto.SubmitResponse{}, errors.New("submit link: durable commands are not configured")
-	}
 	result, err := s.commands.SubmitLink(ctx, SubmitLinkCommand{Capture: capture})
 	if err != nil {
 		return dto.SubmitResponse{}, err
 	}
-	link, job := result.Link, result.Job
+	link := result.Link
 	if link == nil {
 		return dto.SubmitResponse{}, errors.New("submit link: durable command returned nil link")
 	}
-	if job == nil {
-		// Batch does not take the per-URL lock, so it can commit after the
-		// single-submit lookup but before the durable insert transaction. The repository
-		// returns that existing link with no new job; reconcile its current
-		// attempt instead of treating the idempotent conflict as a failure.
+	if !result.Enqueued {
+		// A soft-deleted identity may be restored without a parse, and a writer
+		// outside the URL-lock boundary may win after the service lookup. Reuse
+		// that persisted state instead of treating either outcome as a failure.
 		return s.submitExisting(ctx, submitCandidateFromModel(link), &capture)
 	}
-	jobIDStr := job.ID.String()
 	return dto.SubmitResponse{
-		JobID:  &jobIDStr,
 		LinkID: link.ID.String(),
 		Status: string(model.LinkStatusPending),
 	}, nil
@@ -360,73 +274,40 @@ func (s *linkSubmitter) createNewLink(ctx context.Context, capture LinkCapture) 
 // parse attempt, and inserts the River job. capture is nil for Refresh; ingest
 // re-submits pass their latest normalized source input for replacement.
 func (s *linkSubmitter) requeueExisting(ctx context.Context, linkID uuid.UUID, capture *LinkCapture) (dto.SubmitResponse, error) {
-	if s.commands == nil {
-		return dto.SubmitResponse{}, errors.New("requeue link: durable commands are not configured")
-	}
 	result, err := s.commands.RequeueLink(ctx, RequeueLinkCommand{LinkID: linkID, Capture: capture})
 	if err != nil {
 		return dto.SubmitResponse{}, err
 	}
-	job := result.Job
-	if job == nil {
-		return dto.SubmitResponse{}, errors.New("requeue link: durable command returned nil parse job")
+	if !result.Enqueued {
+		return dto.SubmitResponse{}, errors.New("requeue link: durable command did not enqueue parse work")
 	}
-	if s.tagCacheInvalidator != nil {
-		s.tagCacheInvalidator.Invalidate(ctx)
-	}
-
-	jobIDStr := job.ID.String()
 	return dto.SubmitResponse{
-		JobID:  &jobIDStr,
 		LinkID: linkID.String(),
 		Status: string(model.LinkStatusPending),
 	}, nil
 }
 
 // submitExisting makes saving the same URL idempotent. Terminal links return
-// their persisted attempt without re-parsing; retry is exclusively the
-// explicit Refresh operation. In-flight links return their current attempt.
-// The sole repair branch is an impossible-under-normal-writes in-flight link
-// with no parse job, which is atomically given a new attempt.
+// their persisted state without re-parsing; retry is exclusively the explicit
+// Refresh operation. In-flight links return their current Link status while
+// River remains the execution source of truth.
 func (s *linkSubmitter) submitExisting(ctx context.Context, link *submitCandidate, input *LinkCapture) (dto.SubmitResponse, error) {
 	switch link.Status {
-	case model.LinkStatusSkeleton:
-		// Skeleton rows were created by the retired tree-ancestor flow and have
-		// never represented a user-saved bookmark. A real save must promote the
-		// row into the normal parse lifecycle instead of exposing the internal
-		// legacy state on the wire. Passing the current input preserves notes,
-		// parse-depth metadata, and capture payloads during the promotion.
-		return s.requeueExisting(ctx, link.ID, input)
 	case model.LinkStatusPending, model.LinkStatusProcessing:
 		if input != nil {
-			kind, source := normalizeCaptureRequestedLibraryIntent(input.RequestedLibraryKind, input.RequestedLibraryKindSource)
-			if kind != model.RequestedLibraryKindAuto {
-				if s.commands == nil {
-					return dto.SubmitResponse{}, errors.New("update link intent: durable commands are not configured")
-				}
-				updated, err := s.commands.UpdateLinkIntent(ctx, UpdateLinkIntentCommand{LinkID: link.ID, Kind: kind, Source: source})
+			if input.RequestedLibraryKind != model.RequestedLibraryKindAuto {
+				updated, err := s.commands.SetLinkLibraryKind(ctx, SetLinkLibraryKindCommand{
+					LinkID:   link.ID,
+					Kind:     model.LibraryKind(input.RequestedLibraryKind),
+					Override: input.UserSelectedLibraryKind,
+				})
 				if err != nil {
 					return dto.SubmitResponse{}, err
 				}
-				if updated.Job != nil {
-					jobID := updated.Job.ID.String()
-					return dto.SubmitResponse{JobID: &jobID, LinkID: link.ID.String(), Status: string(updated.Status)}, nil
-				}
+				return dto.SubmitResponse{LinkID: link.ID.String(), Status: string(updated.Status)}, nil
 			}
 		}
-		job, err := s.jobs.GetLatestByLinkID(ctx, link.ID)
-		if err != nil {
-			return dto.SubmitResponse{}, err
-		}
-		if job != nil {
-			jobIDStr := job.ID.String()
-			return dto.SubmitResponse{
-				JobID:  &jobIDStr,
-				LinkID: link.ID.String(),
-				Status: string(link.Status),
-			}, nil
-		}
-		return s.requeueExisting(ctx, link.ID, nil)
+		return dto.SubmitResponse{LinkID: link.ID.String(), Status: string(link.Status)}, nil
 	default:
 		return s.reuseExisting(ctx, link)
 	}
@@ -437,16 +318,7 @@ func (s *linkSubmitter) submitExisting(ctx context.Context, link *submitCandidat
 // failed attempt; retry is an explicit Refresh action, not a side effect of
 // saving the same snapshot again.
 func (s *linkSubmitter) reuseExisting(ctx context.Context, link *submitCandidate) (dto.SubmitResponse, error) {
-	job, err := s.jobs.GetLatestByLinkID(ctx, link.ID)
-	if err != nil {
-		return dto.SubmitResponse{}, err
-	}
-	response := dto.SubmitResponse{LinkID: link.ID.String(), Status: string(link.Status)}
-	if job != nil {
-		jobID := job.ID.String()
-		response.JobID = &jobID
-	}
-	return response, nil
+	return dto.SubmitResponse{LinkID: link.ID.String(), Status: string(link.Status)}, nil
 }
 
 // requireExisting wraps the "look up by id, 404 on miss" pattern used
@@ -455,14 +327,14 @@ func (s *linkSubmitter) reuseExisting(ctx context.Context, link *submitCandidate
 func (s *linkSubmitter) requireExisting(ctx context.Context, linkID string) (*submitCandidate, error) {
 	id, err := uuid.Parse(linkID)
 	if err != nil {
-		return nil, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return nil, problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 	link, err := s.reader.GetSubmitLookupByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if link == nil {
-		return nil, httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return nil, problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 	return submitCandidateFromLookup(link), nil
 }

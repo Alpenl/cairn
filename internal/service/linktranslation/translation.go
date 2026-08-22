@@ -5,15 +5,14 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"webtag/internal/contentdoc"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/service/translator"
 )
@@ -80,17 +79,17 @@ func (s *Service) List(ctx context.Context, linkID uuid.UUID) (model.Translation
 		return model.TranslationList{}, err
 	}
 	if snapshot == nil {
-		return model.TranslationList{}, httperr.NewWithCode(
-			http.StatusNotFound,
-			httperr.CodeLinkNotFound,
+		return model.TranslationList{}, problem.NewWithCode(
+			problem.NotFound,
+			problem.CodeLinkNotFound,
 			"link not found",
 		)
 	}
 	source := snapshot.Source
 	if source.LibraryKind != nil && *source.LibraryKind == model.LibraryKindSite {
-		return model.TranslationList{}, httperr.NewWithCode(
-			http.StatusConflict,
-			httperr.CodeSiteOriginalContentForbidden,
+		return model.TranslationList{}, problem.NewWithCode(
+			problem.Conflict,
+			problem.CodeSiteOriginalContentForbidden,
 			"website entries cannot be translated",
 		)
 	}

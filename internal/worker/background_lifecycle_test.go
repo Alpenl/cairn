@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"webtag/internal/service"
 )
 
 type terminalLoggingWorker interface {
@@ -45,39 +43,6 @@ func TestBackgroundWorkersLogComponentAndExitReason(t *testing.T) {
 					&sitePayloadCleanupStoreStub{purged: make(map[uuid.UUID]bool)},
 					time.Hour,
 					1,
-					logger,
-				), nil
-			},
-		},
-		{
-			name:      "site embedding backfill",
-			component: "site_embedding_backfill",
-			newWorker: func(logger *slog.Logger) (terminalLoggingWorker, error) {
-				return NewSiteEmbeddingBackfillWorker(SiteEmbeddingBackfillWorkerOptions{
-					Runner: &siteEmbeddingBackfillRunnerStub{}, Interval: time.Hour, Logger: logger,
-				})
-			},
-		},
-		{
-			name:      "historical migration",
-			component: "historical_migration",
-			newWorker: func(logger *slog.Logger) (terminalLoggingWorker, error) {
-				return NewHistoricalMigrationWorker(HistoricalMigrationWorkerOptions{
-					Runner:   service.NewHistoricalMigrationRunner(&migrationWorkerStoreFake{}),
-					Interval: time.Hour,
-					Logger:   logger,
-				})
-			},
-		},
-		{
-			name:      "parse terminal reconciler",
-			component: "parse_terminal_reconciler",
-			newWorker: func(logger *slog.Logger) (terminalLoggingWorker, error) {
-				return newParseTerminalReconciler(
-					&fakeParseTerminalStore{active: make(map[int64]bool)},
-					&fakeParseTerminalProjector{},
-					time.Hour,
-					10,
 					logger,
 				), nil
 			},

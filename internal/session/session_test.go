@@ -13,7 +13,7 @@ import (
 var testSigningKey = []byte("test-signing-key-please-do-not-reuse")
 
 func claims(exp time.Time) session.Claims {
-	return session.Claims{ExpiresAt: exp}
+	return session.Claims{ExpiresAt: exp, AbsoluteExpiresAt: exp}
 }
 
 func TestSignParseRoundTrip(t *testing.T) {
@@ -34,9 +34,7 @@ func TestSignParseRoundTrip(t *testing.T) {
 	}
 }
 
-// v4 载荷带两个期限。第二个是绝对上限，滑动续期不能越过它——没有它，
-// 被窃取的 cookie 只要持续使用就永不过期。省略 AbsoluteExpiresAt 时按
-// ExpiresAt 填入，得到一张不可续期的票。
+// v4 载荷带两个期限。第二个是绝对上限，滑动续期不能越过它。
 func TestSignUsesV4TwoDeadlinePayload(t *testing.T) {
 	t.Parallel()
 	token, err := session.Sign(session.Claims{
@@ -51,14 +49,11 @@ func TestSignUsesV4TwoDeadlinePayload(t *testing.T) {
 	}
 }
 
-func TestSignDefaultsTheAbsoluteDeadlineToTheSlidingOne(t *testing.T) {
+func TestSignRejectsMissingAbsoluteDeadline(t *testing.T) {
 	t.Parallel()
-	token, err := session.Sign(claims(time.Unix(2_000_000_000, 0)), testSigningKey)
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
-	if got, want := decodedPayload(t, token), "v4|2000000000|2000000000"; got != want {
-		t.Fatalf("payload = %q, want %q", got, want)
+	_, err := session.Sign(session.Claims{ExpiresAt: time.Unix(2_000_000_000, 0)}, testSigningKey)
+	if !errors.Is(err, session.ErrInvalid) {
+		t.Fatalf("Sign() error = %v, want ErrInvalid", err)
 	}
 }
 

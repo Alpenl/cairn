@@ -10,23 +10,23 @@ import (
 	"github.com/riverqueue/river/rivertype"
 
 	"webtag/internal/errsafe"
+	"webtag/internal/model"
+	"webtag/internal/repository"
 )
 
 // stubParseProcessor records the link it was asked to run and returns a
 // preconfigured error (nil = success).
 type stubParseProcessor struct {
-	ranLinkID uuid.UUID
-	ranJobID  uuid.UUID
-	err       error
+	ranAttempt model.ParseAttempt
+	err        error
 }
 
-func (s *stubParseProcessor) Run(_ context.Context, linkID, jobID uuid.UUID) error {
-	s.ranLinkID = linkID
-	s.ranJobID = jobID
+func (s *stubParseProcessor) Run(_ context.Context, attempt model.ParseAttempt) error {
+	s.ranAttempt = attempt
 	return s.err
 }
 
-func (s *stubParseProcessor) RecordDiscard(context.Context, uuid.UUID, uuid.UUID, error) error {
+func (s *stubParseProcessor) RecordDiscard(context.Context, model.ParseAttempt, error) error {
 	return nil
 }
 
@@ -83,21 +83,18 @@ func TestParseLinkArgs_KindAndInsertOpts(t *testing.T) {
 
 // TestParseLinkWorker_WorkSuccess delegates to the processor and returns nil.
 func TestParseLinkWorker_WorkSuccess(t *testing.T) {
-	linkID := uuid.New()
-	jobID := uuid.New()
+	attempt := model.ParseAttempt{LinkID: uuid.New(), Generation: 4, ExpectedMetadataRevision: 7}
 	proc := &stubParseProcessor{}
 	w := NewParseLinkWorker(proc, 0)
 	if err := w.Work(context.Background(), &river.Job[ParseLinkArgs]{Args: ParseLinkArgs{
-		LinkID:     linkID,
-		ParseJobID: jobID,
+		LinkID:                   attempt.LinkID,
+		ParseGeneration:          attempt.Generation,
+		ExpectedMetadataRevision: attempt.ExpectedMetadataRevision,
 	}}); err != nil {
 		t.Fatalf("Work() = %v, want nil", err)
 	}
-	if proc.ranLinkID != linkID {
-		t.Fatalf("processor link id = %s, want %s", proc.ranLinkID, linkID)
-	}
-	if proc.ranJobID != jobID {
-		t.Fatalf("processor job id = %s, want %s", proc.ranJobID, jobID)
+	if proc.ranAttempt != attempt {
+		t.Fatalf("processor attempt = %#v, want %#v", proc.ranAttempt, attempt)
 	}
 }
 
@@ -110,7 +107,7 @@ func TestParseLinkWorker_WorkAlreadyPersistedReturnsNil(t *testing.T) {
 	proc := &stubParseProcessor{err: &PipelineRunError{Cause: errors.New("fetch boom")}}
 	w := NewParseLinkWorker(proc, 0)
 	if err := w.Work(context.Background(), &river.Job[ParseLinkArgs]{Args: ParseLinkArgs{
-		LinkID: uuid.New(), ParseJobID: uuid.New(),
+		LinkID: uuid.New(), ParseGeneration: 1, ExpectedMetadataRevision: 1,
 	}}); err != nil {
 		t.Fatalf("Work() = %v, want nil (already-persisted failure ⇒ job done, no retry)", err)
 	}
@@ -127,9 +124,20 @@ func TestParseLinkWorker_WorkUnexpectedErrorBubbles(t *testing.T) {
 	proc := &stubParseProcessor{err: want}
 	w := NewParseLinkWorker(proc, 0)
 	err := w.Work(context.Background(), &river.Job[ParseLinkArgs]{Args: ParseLinkArgs{
-		LinkID: uuid.New(), ParseJobID: uuid.New(),
+		LinkID: uuid.New(), ParseGeneration: 1, ExpectedMetadataRevision: 1,
 	}})
 	if !errors.Is(err, want) {
 		t.Fatalf("Work() = %v, want it to bubble %v (River should retry unexpected errors)", err, want)
+	}
+}
+
+func TestParseLinkWorkerTreatsStaleAttemptAsCompleted(t *testing.T) {
+	proc := &stubParseProcessor{err: repository.ErrParseAttemptNotRunnable}
+	w := NewParseLinkWorker(proc, 0)
+	err := w.Work(context.Background(), &river.Job[ParseLinkArgs]{Args: ParseLinkArgs{
+		LinkID: uuid.New(), ParseGeneration: 2, ExpectedMetadataRevision: 3,
+	}})
+	if err != nil {
+		t.Fatalf("Work() = %v, want nil for stale attempt", err)
 	}
 }

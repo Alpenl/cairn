@@ -11,7 +11,6 @@ import {
 function renderDialog(
   response: ApiResult<SubmitResponse> | Promise<ApiResult<SubmitResponse>> = ok<SubmitResponse>({
       link_id: '11111111-1111-1111-1111-111111111111',
-      job_id: '22222222-2222-2222-2222-222222222222',
       status: 'pending' as const,
     }),
   destination: 'inbox' | 'library' = 'library',

@@ -26,7 +26,7 @@ func TestHTTPClientLimitsRedirects(t *testing.T) {
 	}))
 	defer server.Close()
 	client := NewHTTPClientWithOptions(HTTPClientOptions{
-		Client: server.Client(), AllowUnsafeTargets: true,
+		Client: server.Client(), allowUnsafeTargets: true,
 	})
 	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL+"/loop", nil)
 	if err != nil {
@@ -291,7 +291,7 @@ func TestHTTPClientAllowsUnsafeTargetsWhenExplicitlyEnabled(t *testing.T) {
 
 	client := NewHTTPClientWithOptions(HTTPClientOptions{
 		Client:             server.Client(),
-		AllowUnsafeTargets: true,
+		allowUnsafeTargets: true,
 	})
 	req, cancel, err := client.NewRequest(context.Background(), time.Second, http.MethodGet, server.URL, nil)
 	if err != nil {
@@ -474,7 +474,7 @@ func TestHTTPClientRejectsHTTPSDowngradeBeforeReplayingCredentialsOrBody(t *test
 			t.Parallel()
 			calls := 0
 			client := NewHTTPClientWithOptions(HTTPClientOptions{
-				AllowUnsafeTargets: true,
+				allowUnsafeTargets: true,
 				Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 					calls++
 					if calls > 1 {
@@ -511,7 +511,7 @@ func TestHTTPClientCrossOriginRedirectStripsSensitiveHeaders(t *testing.T) {
 
 	calls := 0
 	client := NewHTTPClientWithOptions(HTTPClientOptions{
-		AllowUnsafeTargets: true,
+		allowUnsafeTargets: true,
 		Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls++
 			if calls == 1 {
@@ -568,7 +568,7 @@ func TestHTTPClientRejectsCredentialedAndNonHTTPRedirectTargets(t *testing.T) {
 			t.Parallel()
 			calls := 0
 			client := NewHTTPClientWithOptions(HTTPClientOptions{
-				AllowUnsafeTargets: true,
+				allowUnsafeTargets: true,
 				Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 					calls++
 					if calls > 1 {
@@ -602,7 +602,7 @@ func TestHTTPClientAllowsSameOriginHTTPSRedirect(t *testing.T) {
 
 	calls := 0
 	client := NewHTTPClientWithOptions(HTTPClientOptions{
-		AllowUnsafeTargets: true,
+		allowUnsafeTargets: true,
 		Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls++
 			if calls == 1 {
@@ -636,7 +636,7 @@ func TestHTTPClientRejectsDowngradeAfterAllowedRedirectHop(t *testing.T) {
 
 	calls := 0
 	client := NewHTTPClientWithOptions(HTTPClientOptions{
-		AllowUnsafeTargets: true,
+		allowUnsafeTargets: true,
 		Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls++
 			header := make(http.Header)
@@ -673,7 +673,7 @@ func TestHTTPClientAllowsExplicitInitialHTTP(t *testing.T) {
 
 	calls := 0
 	client := NewHTTPClientWithOptions(HTTPClientOptions{
-		AllowUnsafeTargets: true,
+		allowUnsafeTargets: true,
 		Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls++
 			if req.URL.Scheme != "http" {
@@ -705,7 +705,7 @@ func TestHTTPClientRejectsCrossOrigin307BodyReplay(t *testing.T) {
 			t.Parallel()
 			calls := 0
 			client := NewHTTPClientWithOptions(HTTPClientOptions{
-				AllowUnsafeTargets: true,
+				allowUnsafeTargets: true,
 				Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 					calls++
 					if calls > 1 {

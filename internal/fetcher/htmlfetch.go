@@ -8,7 +8,7 @@
 //
 // Not appropriate for fetchers that diverge from the HTML/readability
 // shape: arxiv (XML API), github (REST + README path), pdf (binary
-// decode), ytdlp (external subprocess). Those stay in their own files.
+// decode). Those stay in their own files.
 package fetcher
 
 import (

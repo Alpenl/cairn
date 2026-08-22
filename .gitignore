@@ -69,3 +69,12 @@ internal/app/assets/reader/*
 
 # Eval harness run outputs — commit specific baselines manually, ignore the rest
 evals/results/
+
+# design-sync (claude.ai/design) — staged converter + regenerated output
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+reader/node_modules/webtag-reader
+reader/types/

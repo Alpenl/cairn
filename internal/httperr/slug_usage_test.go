@@ -16,14 +16,14 @@ import (
 // TestErrorSlugsAreReferencedAsConstants 禁止在 handler / middleware 里把错误
 // slug 写成字符串字面量。
 //
-// 本测试反向扫描：任何出现在 httperr 常量表里的 slug 值，都不允许再以字面量
+// 本测试反向扫描：任何出现在 problem 常量表里的 slug 值，都不允许再以字面量
 // 形式出现在别处。新增错误码时先加常量再引用，天然满足。
 func TestErrorSlugsAreReferencedAsConstants(t *testing.T) {
 	t.Parallel()
 
 	slugs := knownSlugValues(t)
 	if len(slugs) == 0 {
-		t.Fatal("未从 httperr 解析出任何 Code* 常量，测试失去意义")
+		t.Fatal("未从 problem 解析出任何 Code* 常量，测试失去意义")
 	}
 
 	type offence struct{ file, slug string }
@@ -94,7 +94,7 @@ func TestErrorSlugsAreReferencedAsConstants(t *testing.T) {
 			msgs = append(msgs, f.file+" 写了字面量 "+strconv.Quote(f.slug))
 		}
 		sort.Strings(msgs)
-		t.Fatalf("错误 slug 必须引用 httperr 常量，不得写字面量：\n  %s\n\n"+
+		t.Fatalf("错误 slug 必须引用 problem/httperr 常量，不得写字面量：\n  %s\n\n"+
 			"字面量与常量的值今天一致不代表明天一致——改了常量，字面量不会跟着变，"+
 			"而前端按常量做的分支会静默失配。",
 			strings.Join(msgs, "\n  "))
@@ -112,14 +112,15 @@ func isSlugTableSpec(spec *ast.ValueSpec) bool {
 	return false
 }
 
-// knownSlugValues 解析 httperr 包里所有 Code* 常量的字面量取值。
+// knownSlugValues 解析 problem 包里所有 Code* 常量的字面量取值。
 func knownSlugValues(t *testing.T) map[string]bool {
 	t.Helper()
 
 	// 逐文件 ParseFile 而非 ParseDir：后者自 Go 1.25 起废弃（不考虑 build tag）。
-	entries, err := os.ReadDir(".")
+	const problemDir = "../problem"
+	entries, err := os.ReadDir(problemDir)
 	if err != nil {
-		t.Fatalf("read httperr dir: %v", err)
+		t.Fatalf("read problem dir: %v", err)
 	}
 
 	fset := token.NewFileSet()
@@ -129,9 +130,10 @@ func knownSlugValues(t *testing.T) map[string]bool {
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		file, parseErr := parser.ParseFile(fset, name, nil, 0)
+		path := filepath.Join(problemDir, name)
+		file, parseErr := parser.ParseFile(fset, path, nil, 0)
 		if parseErr != nil {
-			t.Fatalf("parse %s: %v", name, parseErr)
+			t.Fatalf("parse %s: %v", path, parseErr)
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			spec, ok := n.(*ast.ValueSpec)

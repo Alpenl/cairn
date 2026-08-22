@@ -297,8 +297,8 @@ func TestFeedFolderNameConflictMapsTo409(t *testing.T) {
 	if !ok || carrier.HTTPStatus() != 409 {
 		t.Fatalf("mapped error = %v, carrier=%v", err, ok)
 	}
-	var coder httperr.ErrorCoder
-	if !errors.As(err, &coder) || coder.HTTPErrorCode() != "feed_folder_name_conflict" {
+	coder, coded := carrier.(httperr.ErrorCoder)
+	if !coded || coder.HTTPErrorCode() != "feed_folder_name_conflict" {
 		t.Fatalf("mapped code = %v", coder)
 	}
 }

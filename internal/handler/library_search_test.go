@@ -50,7 +50,7 @@ func TestGroupedSearchHandlerWritesServiceError(t *testing.T) {
 	router := gin.New()
 	RegisterRoutes(router, withStubDeps(Dependencies{LibrarySearch: svc}))
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/search?q=too-long", nil))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/search?q=too-long", nil))
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}

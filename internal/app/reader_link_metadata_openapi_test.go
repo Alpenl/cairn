@@ -11,7 +11,7 @@ import (
 func TestLinkMetadataRevisionOpenAPISafeIntegerBounds(t *testing.T) {
 	t.Parallel()
 
-	data, err := OpenAPISpec()
+	data, err := readOpenAPISpec()
 	if err != nil {
 		t.Fatalf("OpenAPISpec() returned error: %v", err)
 	}

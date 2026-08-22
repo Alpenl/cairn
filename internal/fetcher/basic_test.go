@@ -20,7 +20,7 @@ func TestBasicFetcherRejectsOversizedResponses(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.MaxBytes = 16
 
 	_, err := fetcher.Fetch(context.Background(), server.URL)
@@ -47,7 +47,7 @@ func TestBasicFetcherRetriesTransientHTTPFailures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 
 	got, err := fetcher.Fetch(context.Background(), server.URL)
 	if err != nil {
@@ -70,7 +70,7 @@ func TestBasicFetcherRejectsBinaryContentTypes(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 
 	_, err := fetcher.Fetch(context.Background(), server.URL)
 	if err == nil {
@@ -90,7 +90,7 @@ func TestBasicFetcherAllowsPlainTextHTMLFallback(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 
 	got, err := fetcher.Fetch(context.Background(), server.URL)
 	if err != nil {
@@ -110,7 +110,7 @@ func TestBasicFetcherPrefersMetadataTitleOverGenericHTMLTitle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 
 	got, err := fetcher.Fetch(context.Background(), server.URL)
 	if err != nil {
@@ -135,7 +135,7 @@ func TestBasicFetcherKeepsReadableDocumentStructure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	got, err := fetcher.Fetch(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("Fetch() error = %v", err)
@@ -157,7 +157,7 @@ func TestBasicFetcherFallsBackToHeadingWhenTitleIsGeneric(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 
 	got, err := fetcher.Fetch(context.Background(), server.URL)
 	if err != nil {
@@ -194,7 +194,7 @@ func TestWeChatFetcherRevealsTheHiddenArticleBody(t *testing.T) {
 	})}
 	fetcher := NewWeChatFetcher(NewHTTPClientWithOptions(HTTPClientOptions{
 		Client:             client,
-		AllowUnsafeTargets: true,
+		allowUnsafeTargets: true,
 	}))
 
 	got, err := fetcher.Fetch(context.Background(), "https://mp.weixin.qq.com/s/fixture-signature")
@@ -280,7 +280,7 @@ func TestBasicFetcherDecodesV2EXAndExcludesReplies(t *testing.T) {
 	})}
 	fetcher := NewBasicFetcher(NewHTTPClientWithOptions(HTTPClientOptions{
 		Client:             client,
-		AllowUnsafeTargets: true,
+		allowUnsafeTargets: true,
 	}))
 
 	got, err := fetcher.Fetch(context.Background(), "https://v2ex.com/t/1224558")

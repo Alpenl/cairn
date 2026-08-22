@@ -83,17 +83,12 @@ describe('NotePanel', () => {
     expect(screen.getByText('AI 笔记 · 可编辑')).toBeInTheDocument()
   })
 
-  it('已归档想法使用 legacy-stale target 且保持只读', () => {
+  it('旧内容版本上的想法保持只读', () => {
     const onAskAI = vi.fn()
     const onSave = vi.fn()
     render(
       <NotePanel
         ann={mkAnn({ blockKey: 'content', sourceSummaryHash: undefined, sourceContentRevision: 7 })}
-        locator={{
-          id: 'a1',
-          blockKey: 'content',
-          target: { kind: 'legacy-stale', sourceKey: 'saved-content:7:ambiguous-quote' },
-        }}
         readOnly
         onSave={onSave}
         onDelete={() => {}}

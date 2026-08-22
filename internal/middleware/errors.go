@@ -52,19 +52,11 @@ const (
 	ErrCodeIdempotencyResultUnknown = "idempotency_result_unknown"
 	// ErrCodeLinkNotFound —— /api/links/:id 系列：链接不存在。404 路径。
 	ErrCodeLinkNotFound = "link_not_found"
-	// ErrCodeJobNotFound —— /api/jobs/:id：解析任务不存在。404 路径。
-	ErrCodeJobNotFound = "job_not_found"
 	// ErrCodeCooldownActive —— refresh 触发 per-link 冷却窗口。429 路径。
 	ErrCodeCooldownActive = "cooldown_active"
-	// ErrCodeRateLimitExceeded —— 全局 / per-IP 限流被打中。429 路径。
-	ErrCodeRateLimitExceeded = "rate_limit_exceeded"
 	// ErrCodeInvalidCursor —— ?after= 游标 token 解析失败或与 ?page= 冲突。422 路径。
 	ErrCodeInvalidCursor = "invalid_cursor"
-	// ErrCodeProposalAlreadyDecided —— concept-merge 已决策；并发审核冲突。409 路径。
-	ErrCodeProposalAlreadyDecided = "proposal_already_decided"
-	// ErrCodeInvalidProposalID —— concept-merge :id 不是合法 UUID。400 路径。
-	ErrCodeInvalidProposalID = "invalid_proposal_id"
-	// ErrCodeUnauthorized —— 通用鉴权失败（admin Bearer / metrics token）。401 路径。
+	// ErrCodeUnauthorized —— 通用鉴权失败（installation Bearer / browser session）。401 路径。
 	ErrCodeUnauthorized = "unauthorized"
 	// ErrCodeInternalError —— 未被业务层显式分类的 500 兜底。
 	ErrCodeInternalError = "internal_error"

@@ -134,9 +134,7 @@ class WebTagApiClient(
                 "unknown submit status"
             }
             require(isUuid(linkId)) { "invalid link ID" }
-            val jobId = json.optString("job_id").takeIf { it.isNotEmpty() }
-            require(jobId == null || isUuid(jobId)) { "invalid job ID" }
-            SubmitResponse(linkId, status, jobId)
+            SubmitResponse(linkId, status)
         }
     }
 
@@ -171,9 +169,7 @@ class WebTagApiClient(
             require(UUID.fromString(responseLinkId) == UUID.fromString(linkId)) {
                 "refresh response link ID does not match request"
             }
-            val jobId = json.optString("job_id").takeIf { it.isNotEmpty() }
-            require(jobId == null || isUuid(jobId)) { "invalid job ID" }
-            SubmitResponse(responseLinkId, status, jobId)
+            SubmitResponse(responseLinkId, status)
         }
     }
 

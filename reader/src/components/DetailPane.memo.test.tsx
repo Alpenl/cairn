@@ -58,7 +58,7 @@ const stable: DetailPaneProps = {
   corpus: [],
   annotationsEnabled: true,
   aiEnabled: true,
-  semanticEnabled: true,
+  relatedTagsEnabled: true,
   engagementEnabled: true,
   anns: NO_ANNOTATIONS,
   onAddAnn: vi.fn(async (annotation) => {

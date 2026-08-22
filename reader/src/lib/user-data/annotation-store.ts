@@ -25,8 +25,6 @@ import {
   THOUGHT_HISTORY_OUTBOX_STORE,
   THOUGHT_OUTBOX_NAMESPACE_INDEX,
   THOUGHT_OUTBOX_STORE,
-  THOUGHT_REPAIR_READY_STORE,
-  THOUGHT_REPAIR_SOURCE_STORE,
   THOUGHT_SUPERSESSION_EVENTS_STORE,
   THOUGHT_SYNC_STATE_STORE,
   runUserDataTransaction,
@@ -55,15 +53,12 @@ import {
 } from './annotation-types'
 import {
   THOUGHT_CONTRACT_VERSION,
-  hasCompleteThoughtWireBaseline,
-  hydrateThoughtHistoryOutboxWinnerKey,
   isAnnotationThoughtTarget,
+  isValidThoughtHistoryOutboxRecord,
   isValidThoughtMaterializedRecord,
   isValidThoughtOutboxRecord,
   isValidThoughtSupersessionEventRecord,
-  quarantineThoughtHistoryOutboxMissingWinnerKey,
   thoughtSupersessionRecoveryOperationID,
-  quarantineLegacyThoughtOutboxRecord,
   type ThoughtHistoryOutboxRecord,
   type ThoughtMaterializedRecord,
   type ThoughtOutboxRecord,
@@ -871,26 +866,20 @@ export function allocateThoughtClocks(
   const stateStore = transaction.objectStore(THOUGHT_SYNC_STATE_STORE)
   const outboxStore = transaction.objectStore(THOUGHT_OUTBOX_STORE)
   const historyOutboxStore = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
-  const repairReadyStore = transaction.objectStore(THOUGHT_REPAIR_READY_STORE)
-  const repairSourceStore = transaction.objectStore(THOUGHT_REPAIR_SOURCE_STORE)
   const materializedStore = transaction.objectStore(THOUGHT_MATERIALIZED_STORE)
   const stateRequest = stateStore.get(namespace) as IDBRequest<unknown>
   const outboxRequest = outboxStore.index(THOUGHT_OUTBOX_NAMESPACE_INDEX)
     .getAll(namespace) as IDBRequest<unknown[]>
   const historyOutboxRequest = historyOutboxStore.index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
     .getAll(namespace) as IDBRequest<unknown[]>
-  const repairReadyRequest = repairReadyStore.getAll() as IDBRequest<unknown[]>
-  const repairSourceRequest = repairSourceStore.getAll() as IDBRequest<unknown[]>
   const materializedRequest = materializedStore.index(THOUGHT_MATERIALIZED_NAMESPACE_INDEX)
     .getAll(namespace) as IDBRequest<unknown[]>
   let stateDone = false
   let outboxDone = false
   let historyOutboxDone = false
-  let repairReadyDone = false
-  let repairSourceDone = false
   let materializedDone = false
   const finish = () => {
-    if (!stateDone || !outboxDone || !historyOutboxDone || !repairReadyDone || !repairSourceDone || !materializedDone) return
+    if (!stateDone || !outboxDone || !historyOutboxDone || !materializedDone) return
     if (!lease.isCurrent(lease.capture('allocate thought logical clock'))) {
       abortTransaction(transaction)
       return
@@ -900,80 +889,38 @@ export function allocateThoughtClocks(
       abortTransaction(transaction)
       return
     }
-    const legacyOpIds = new Set(repairSourceRequest.result.flatMap((value) => {
-      const record = asRecord(value)
-      return record?.namespace === namespace && typeof record.legacyOpId === 'string'
-        ? [record.legacyOpId]
-        : []
-    }))
-    const liveOutboxRaw = outboxRequest.result.filter((value) => {
-      const opId = asRecord(value)?.opId
-      return typeof opId !== 'string' || !legacyOpIds.has(opId)
-    })
-    const outbox = liveOutboxRaw.filter((value): value is ThoughtOutboxRecord =>
+    const outbox = outboxRequest.result.filter((value): value is ThoughtOutboxRecord =>
       isValidThoughtOutboxRecord(value, namespace))
-    const repairReadyRaw = repairReadyRequest.result.filter((value) =>
-      asRecord(value)?.namespace === namespace)
-    const repairReady = repairReadyRaw.filter((value): value is ThoughtOutboxRecord =>
-      isValidThoughtOutboxRecord(value, namespace))
+    const historyOutbox = historyOutboxRequest.result.filter(
+      (value): value is ThoughtHistoryOutboxRecord =>
+        isValidThoughtHistoryOutboxRecord(value, namespace),
+    )
     const materialized = materializedRequest.result.filter((value): value is ThoughtMaterializedRecord =>
       isValidThoughtMaterializedRecord(value, namespace))
-    if (outbox.length !== liveOutboxRaw.length ||
-      repairReady.length !== repairReadyRaw.length ||
+    if (outbox.length !== outboxRequest.result.length ||
+      historyOutbox.length !== historyOutboxRequest.result.length ||
       materialized.length !== materializedRequest.result.length) {
       abortTransaction(transaction)
       return
     }
-    const materializedByID = new Map(materialized.map((record) => [record.annotationId, record]))
-    const historyOutbox: ThoughtHistoryOutboxRecord[] = []
-    for (const value of historyOutboxRequest.result) {
-      const rawRecord = asRecord(value)
-      const winnerKey = typeof rawRecord?.annotationId === 'string'
-        ? materializedByID.get(rawRecord.annotationId)?.winnerKey
-        : undefined
-      const hydrated = hydrateThoughtHistoryOutboxWinnerKey(value, namespace, winnerKey)
-      if (hydrated) {
-        if (hydrated !== value) historyOutboxStore.put(hydrated)
-        historyOutbox.push(hydrated)
-        continue
-      }
-      const quarantined = quarantineThoughtHistoryOutboxMissingWinnerKey(value, namespace)
-      if (!quarantined) {
-        abortTransaction(transaction)
-        return
-      }
-      if (quarantined !== value) historyOutboxStore.put(quarantined)
-    }
     try {
       const deviceId = stableThoughtDeviceID(lease, rawState)
-      const priorFloor = rawState?.deviceId === deviceId &&
-        rawState.clockContractVersion === THOUGHT_CONTRACT_VERSION
+      const priorFloor = rawState?.deviceId === deviceId
         ? rawState.logicalClockFloor ?? 0
         : 0
       let floor = maximumThoughtClock([
         priorFloor as number,
         ...materialized.map((record) => record.winnerKey.logicalClock),
-        ...outbox
-          .filter(hasCompleteThoughtWireBaseline)
-          .map((record) => record.logicalClock),
-        ...repairReady
-          .filter(hasCompleteThoughtWireBaseline)
-          .map((record) => record.logicalClock),
+        ...outbox.map((record) => record.logicalClock),
         ...historyOutbox.map((record) => record.logicalClock),
         ...historyOutbox.map((record) => record.snapshot.winnerKey.logicalClock),
         ...observedClocks,
       ])
-      const quarantineUpdates: ThoughtOutboxRecord[] = []
-      for (const record of [...outbox].sort((left, right) => left.sequence - right.sequence)) {
-        const quarantined = quarantineLegacyThoughtOutboxRecord(record)
-        if (quarantined !== record) quarantineUpdates.push(quarantined)
-      }
       const clocks: number[] = []
       for (let index = 0; index < count; index += 1) {
         floor = nextThoughtLogicalClock([floor])
         clocks.push(floor)
       }
-      for (const record of quarantineUpdates) outboxStore.put(record)
       const state: ThoughtSyncStateRecord = {
         namespace,
         cursor: typeof rawState?.cursor === 'string' ? rawState.cursor : '',
@@ -981,7 +928,6 @@ export function allocateThoughtClocks(
         tabToken: typeof rawState?.tabToken === 'string' && rawState.tabToken.length > 0
           ? rawState.tabToken
           : randomThoughtToken('tab'),
-        clockContractVersion: THOUGHT_CONTRACT_VERSION,
         logicalClockFloor: floor,
         updatedAt: Date.now(),
         ...(typeof rawState?.lastAckSequence === 'number'
@@ -1027,14 +973,10 @@ export function allocateThoughtClocks(
   stateRequest.onerror = () => abortTransaction(transaction)
   outboxRequest.onerror = () => abortTransaction(transaction)
   historyOutboxRequest.onerror = () => abortTransaction(transaction)
-  repairReadyRequest.onerror = () => abortTransaction(transaction)
-  repairSourceRequest.onerror = () => abortTransaction(transaction)
   materializedRequest.onerror = () => abortTransaction(transaction)
   stateRequest.onsuccess = () => { stateDone = true; finish() }
   outboxRequest.onsuccess = () => { outboxDone = true; finish() }
   historyOutboxRequest.onsuccess = () => { historyOutboxDone = true; finish() }
-  repairReadyRequest.onsuccess = () => { repairReadyDone = true; finish() }
-  repairSourceRequest.onsuccess = () => { repairSourceDone = true; finish() }
   materializedRequest.onsuccess = () => { materializedDone = true; finish() }
 }
 
@@ -1179,8 +1121,6 @@ export async function commitAnnotationOperation(
       ANNOTATION_IMPORTS_STORE,
       THOUGHT_OUTBOX_STORE,
       THOUGHT_HISTORY_OUTBOX_STORE,
-      THOUGHT_REPAIR_READY_STORE,
-      THOUGHT_REPAIR_SOURCE_STORE,
       THOUGHT_SYNC_STATE_STORE,
       THOUGHT_MATERIALIZED_STORE,
     ],
@@ -1391,8 +1331,6 @@ export async function commitSupersessionRecovery(
       ANNOTATION_IMPORTS_STORE,
       THOUGHT_OUTBOX_STORE,
       THOUGHT_HISTORY_OUTBOX_STORE,
-      THOUGHT_REPAIR_READY_STORE,
-      THOUGHT_REPAIR_SOURCE_STORE,
       THOUGHT_SYNC_STATE_STORE,
       THOUGHT_MATERIALIZED_STORE,
       THOUGHT_SUPERSESSION_EVENTS_STORE,
@@ -1692,8 +1630,6 @@ export function importAnnotationOperations(
       ANNOTATION_IMPORTS_STORE,
       THOUGHT_OUTBOX_STORE,
       THOUGHT_HISTORY_OUTBOX_STORE,
-      THOUGHT_REPAIR_READY_STORE,
-      THOUGHT_REPAIR_SOURCE_STORE,
       THOUGHT_SYNC_STATE_STORE,
       THOUGHT_MATERIALIZED_STORE,
     ],

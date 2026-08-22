@@ -110,8 +110,8 @@ func TestExportStreamsAllDoneLinksSingleBatch(t *testing.T) {
 	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	var buf bytes.Buffer
-	if err := svc.Export(context.Background(), &buf); err != nil {
-		t.Fatalf("Export: %v", err)
+	if _, err := svc.ExportArchiveLinks(context.Background(), &buf); err != nil {
+		t.Fatalf("ExportArchiveLinks: %v", err)
 	}
 
 	items := decodeExport(t, buf.Bytes())
@@ -144,8 +144,8 @@ func TestExportPaginatesAcrossBatchesAndTerminates(t *testing.T) {
 	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	var buf bytes.Buffer
-	if err := svc.Export(context.Background(), &buf); err != nil {
-		t.Fatalf("Export: %v", err)
+	if _, err := svc.ExportArchiveLinks(context.Background(), &buf); err != nil {
+		t.Fatalf("ExportArchiveLinks: %v", err)
 	}
 
 	items := decodeExport(t, buf.Bytes())
@@ -182,15 +182,15 @@ func TestExportEmptyKnowledgeBase(t *testing.T) {
 	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	var buf bytes.Buffer
-	if err := svc.Export(context.Background(), &buf); err != nil {
-		t.Fatalf("Export: %v", err)
+	if _, err := svc.ExportArchiveLinks(context.Background(), &buf); err != nil {
+		t.Fatalf("ExportArchiveLinks: %v", err)
 	}
 	if buf.String() != "[]" {
 		t.Fatalf("empty export = %q, want []", buf.String())
 	}
 }
 
-func TestExportWithCountMatchesStreamedRows(t *testing.T) {
+func TestExportArchiveLinksCountMatchesStreamedRows(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	rows := []model.Link{
@@ -201,9 +201,9 @@ func TestExportWithCountMatchesStreamedRows(t *testing.T) {
 	svc := NewLinkReadService(LinkReadServiceOptions{Links: &exportPagingStore{rows: rows}})
 
 	var buf bytes.Buffer
-	count, err := svc.ExportWithCount(context.Background(), &buf)
+	count, err := svc.ExportArchiveLinks(context.Background(), &buf)
 	if err != nil {
-		t.Fatalf("ExportWithCount: %v", err)
+		t.Fatalf("ExportArchiveLinks: %v", err)
 	}
 	if got := len(decodeExport(t, buf.Bytes())); got != count {
 		t.Fatalf("streamed rows = %d, returned count = %d", got, count)
@@ -218,8 +218,8 @@ func TestExportPropagatesFirstBatchError(t *testing.T) {
 	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	var buf bytes.Buffer
-	err := svc.Export(context.Background(), &buf)
+	_, err := svc.ExportArchiveLinks(context.Background(), &buf)
 	if err == nil {
-		t.Fatal("Export must surface the first-batch DB error")
+		t.Fatal("ExportArchiveLinks must surface the first-batch DB error")
 	}
 }

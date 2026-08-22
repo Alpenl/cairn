@@ -20,7 +20,8 @@ import (
 )
 
 type readerHostLifecycleHTTPStore struct {
-	repository.ReaderVNextStore
+	readerservice.ReaderInboxStore
+	readerservice.ReaderHostStore
 	state string
 }
 
@@ -55,6 +56,11 @@ func (s *readerHostLifecycleHTTPStore) RestoreHost(_ context.Context, kind model
 // generic route coverage remains focused on transport status mapping.
 func (s *readerHostLifecycleHTTPStore) RestoreInbox(ctx context.Context, id uuid.UUID) error {
 	_, err := s.RestoreHost(ctx, model.ReaderHostInbox, id)
+	return err
+}
+
+func (s *readerHostLifecycleHTTPStore) DiscardInbox(ctx context.Context, id uuid.UUID) error {
+	_, err := s.SoftDeleteHost(ctx, model.ReaderHostInbox, id)
 	return err
 }
 
@@ -109,7 +115,11 @@ func TestReaderHostLifecycleHTTPStateAndMachineCodeMatrix(t *testing.T) {
 						router.DELETE("/api/links/:link_id", deleteLink(&readerHostLifecycleLinkHTTPService{err: err}))
 					} else {
 						store := &readerHostLifecycleHTTPStore{state: state}
-						RegisterReaderRoutes(router, readerservice.NewReaderVNextService(store, nil))
+						reader := readerservice.NewReaderApplications(
+							readerServiceTestStores(store), nil,
+							readerservice.ReaderApplicationOptions{HostRestoreCommands: store},
+						)
+						RegisterReaderRoutes(router, readerTestRoutes(reader))
 					}
 
 					var body *bytes.Reader

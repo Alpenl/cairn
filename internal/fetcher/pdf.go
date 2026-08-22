@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"webtag/internal/errsafe"
-	"webtag/internal/observability"
 )
 
 const (
@@ -65,17 +64,10 @@ type PDFFetcher struct {
 	ParseTimeout   time.Duration
 	MaxMemoryBytes int64
 	MaxCPUSeconds  uint64
-	metrics        *observability.Metrics
 }
 
 // NewPDFFetcher 构造默认配置（20s 超时 / 20MiB 体积上限 / 20000 字符正文上限）的 PDF 抓取器。
 func NewPDFFetcher(client *HTTPClient) *PDFFetcher {
-	return newPDFFetcherWithMetrics(client, nil)
-}
-
-// newPDFFetcherWithMetrics constructs a PDF fetcher that records only bounded
-// isolated-parser outcome and resource-limit labels.
-func newPDFFetcherWithMetrics(client *HTTPClient, metrics *observability.Metrics) *PDFFetcher {
 	return &PDFFetcher{
 		client:         ensureHTTPClient(client),
 		Timeout:        defaultPDFTimeout,
@@ -86,7 +78,6 @@ func newPDFFetcherWithMetrics(client *HTTPClient, metrics *observability.Metrics
 		ParseTimeout:   defaultPDFParseTimeout,
 		MaxMemoryBytes: defaultPDFMaxMemoryBytes,
 		MaxCPUSeconds:  defaultPDFMaxCPUSeconds,
-		metrics:        metrics,
 	}
 }
 
@@ -145,7 +136,6 @@ func (f *PDFFetcher) Fetch(ctx context.Context, url string) (Content, error) {
 		maxMemoryBytes: f.MaxMemoryBytes,
 		maxCPUSeconds:  f.MaxCPUSeconds,
 	})
-	f.recordParseOutcome(err)
 	if err != nil {
 		reason := "open PDF failed"
 		if errors.Is(err, errPDFResourceBudget) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
@@ -164,14 +154,6 @@ func (f *PDFFetcher) Fetch(ctx context.Context, url string) (Content, error) {
 		Metadata:    nil,
 		FetcherType: "pdf",
 	}, nil
-}
-
-func (f *PDFFetcher) recordParseOutcome(err error) {
-	if f == nil || f.metrics == nil || f.metrics.PDFParseOutcomesTotal == nil {
-		return
-	}
-	outcome, limit := pdfParseMetricLabels(err)
-	f.metrics.PDFParseOutcomesTotal.WithLabelValues(string(outcome), string(limit)).Inc()
 }
 
 func pdfTitleFromURL(rawURL string) string {

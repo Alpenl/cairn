@@ -89,43 +89,6 @@ func (r *PGXLinkRepository) UpdateContentIfCurrent(
 	return revision, true, nil
 }
 
-// ReplaceContentIfCurrent explicitly replaces a saved snapshot while the link
-// still represents the parsed revision the caller fetched. Unlike Save, this
-// method intentionally has no content IS NULL predicate.
-//
-// Bumps content_revision for the same reasons as UpdateContentIfCurrent — and
-// this is the path where it matters most, because replacing is exactly the
-// case where a cached copy elsewhere is now wrong while every other column the
-// client can see (updated_at, has_content) stays identical.
-func (r *PGXLinkRepository) ReplaceContentIfCurrent(
-	ctx context.Context,
-	id uuid.UUID,
-	expectedUpdatedAt time.Time,
-	content model.SavedContent,
-) (int64, bool, error) {
-	var revision int64
-	err := r.db.QueryRow(ctx,
-		`UPDATE links
-		 SET content = $1, content_document = $2, content_format = $3,
-		     content_cjk_chars = $4, content_words = $5,
-		     content_source = 'fetched',
-		     content_revision = content_revision + 1
-		 WHERE id = $6
-		   AND updated_at = $7
-		   AND status = 'done'
-		   AND deleted_at IS NULL
-		 RETURNING content_revision`,
-		content.Text, content.Document, content.Format, content.CJKChars, content.Words,
-		id, expectedUpdatedAt).Scan(&revision)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, fmt.Errorf("replace link content if current: %w", err)
-	}
-	return revision, true, nil
-}
-
 // ReplaceContentIfCurrentWithRevision is the production PUT CAS. The parsed
 // source timestamp and the saved-content generation are both observed before
 // the network fetch starts; requiring both at write time prevents a slow PUT

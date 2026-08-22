@@ -6,7 +6,7 @@
  * 真实数据流（当前列表 + truthful 标签/域名摘要 + 有界已见语料）、
  * Mail 式「详情永不因筛选自动切换」原则、⌘K/⌘J 快捷键、Toast。
  *
- * R3 接线：CommandPalette（⌘K 接后端 q= 混合搜索）、BrowsePanel（标签 / 域名全集浏览）、
+ * R3 接线：CommandPalette（⌘K 接后端 q= 关键词搜索）、BrowsePanel（标签 / 域名全集浏览）、
  * 划线笔记全流程（durable annotation document 提升到此处，DetailPane 与 NotePanel 共享同一投影）。
  * R4 接线：ChatSidebar（AI 助手，离线回退）、SubsView（订阅源）、网站转换与原文保存。
  * 右栏互斥：NotePanel 与 ChatSidebar 共用同一条
@@ -28,7 +28,6 @@ import { NotePanel } from './NotePanel'
 import { ChatSidebar, type ChatDraft } from './ChatSidebar'
 import { SubsView } from './SubsView'
 import { SitesView } from './SitesView'
-import { ReviewView } from './ReviewView'
 import { LinkConversionDialog } from './LinkConversionDialog'
 import { Titlebar } from './Titlebar'
 import { AddLinkDialog } from './AddLinkDialog'
@@ -41,7 +40,6 @@ import { TodoSurface } from './reader-vnext/TodoSurface'
 import { SettingsSurface } from './reader-vnext/SettingsSurface'
 import { ThoughtHistorySurface } from './reader-vnext/ThoughtHistorySurface'
 import { TrashSurface } from './reader-vnext/TrashSurface'
-import { ContentHistorySurface } from './reader-vnext/ContentHistorySurface'
 import { PendingInboxCountProvider, refreshPendingInboxCount } from './reader-vnext/PendingInboxCount'
 import type { LibraryView } from './LibraryModeNav'
 import { useLinks, type Selection, type SmartId } from '../hooks/useLinks'
@@ -69,7 +67,6 @@ import {
   type ArticleAnnotationRevisionChange,
   type HistoricalArticleAnnotation,
 } from '../hooks/useArticleAnnotations'
-import { migrateLegacyAnnotations } from '../lib/user-data/annotation-migration'
 import { readAnnotationSnapshot } from '../lib/user-data/annotation-store'
 import {
   EMPTY_THOUGHT_SYNC_SNAPSHOT,
@@ -147,7 +144,7 @@ function libraryReloadFailed(
   outcome: PromiseSettledResult<ApiResult<unknown> | null>,
 ): boolean {
   if (outcome.status === 'rejected' || outcome.value === null) return true
-  return !outcome.value.ok && outcome.value.error.kind !== 'not-modified'
+  return !outcome.value.ok
 }
 
 function startLibraryReload<T>(reload: () => Promise<T>): Promise<T> {
@@ -158,13 +155,11 @@ function startLibraryReload<T>(reload: () => Promise<T>): Promise<T> {
   }
 }
 
-// 三个码同属「翻译来源已变」这一类 CAS 冲突，服务端都会附带权威的
-// current_identity。漏掉 translation_schema_transition 会让恢复链整条不触发，
-// 用户只看到一个无类型的「翻译失败」toast，重试仍然撞同一个冲突。
+// 两个码同属「翻译来源已变」这一类 CAS 冲突，服务端都会附带权威的
+// current_identity，Reader 据此刷新来源后重试。
 const TRANSLATION_SOURCE_CONFLICTS = new Set([
   'content_revision_conflict',
   'source_block_conflict',
-  'translation_schema_transition',
 ])
 
 function thoughtSyncOutcome(snapshot: ThoughtSyncSnapshot): string {
@@ -306,10 +301,9 @@ async function sha256Hex(text: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-type MainViewRoute = 'home' | 'feed' | 'pending' | 'reading' | 'sites' | 'subs' | 'notes' | 'todo' | 'settings' | 'history' | 'trash' | 'review'
+type MainViewRoute = 'home' | 'feed' | 'pending' | 'reading' | 'sites' | 'subs' | 'notes' | 'todo' | 'settings' | 'history' | 'trash'
 
 function mainViewFromRoute(route: ReaderRoute): MainViewRoute {
-  if (route.kind === 'internal' && route.id === 'review') return 'review'
   if (route.kind === 'surface') return route.id
   if (route.kind === 'tool') return route.id
   if (route.kind === 'library') {
@@ -324,7 +318,6 @@ function mainViewFromRoute(route: ReaderRoute): MainViewRoute {
 
 interface MainViewRouteTargets extends ReaderRouteTargets {
   readonly inboxId?: string
-  readonly reviewId?: string
 }
 
 interface OpenLinkOptions {
@@ -343,7 +336,6 @@ function readerRouteForMainView(view: MainViewRoute, targets: MainViewRouteTarge
   if (view === 'history') return { kind: 'tool', id: 'history' }
   if (view === 'sites') return { kind: 'library', id: 'sites' }
   if (view === 'subs') return { kind: 'library', id: 'subs' }
-  if (view === 'review') return { kind: 'internal', id: 'review', reviewId: targets.reviewId }
   return { kind: 'library', id: 'reading' }
 }
 
@@ -365,20 +357,6 @@ function inboxIDFromLocation(): string | undefined {
 	const route = parseReaderRoute(window.location.href)
 	if (route.kind !== 'library' || route.id !== 'pending') return undefined
 	return route.inboxId?.trim() || undefined
-}
-
-function contentHistoryLinkIDFromLocation(): string | undefined {
-	const route = parseReaderRoute(window.location.href)
-	if (route.kind !== 'tool' || route.id !== 'history') return undefined
-  const linkID = new URLSearchParams(window.location.search).get('content_history_link_id')?.trim()
-  return linkID || undefined
-}
-
-function reviewIDFromLocation(): string | undefined {
-	const route = parseReaderRoute(window.location.href)
-	if (route.kind !== 'internal' || route.id !== 'review') return undefined
-	const reviewID = route.reviewId?.trim()
-	return reviewID || undefined
 }
 
 function linkIDFromLocation(): string | undefined {
@@ -484,10 +462,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
 			? initialRoute.inboxId
 			: inboxIDFromLocation()
 	))
-	const [contentHistoryLinkID, setContentHistoryLinkID] = useState<string | undefined>(contentHistoryLinkIDFromLocation)
-	const [reviewTargetID, setReviewTargetID] = useState<string | undefined>(() => (
-		initialRoute.kind === 'internal' ? initialRoute.reviewId : reviewIDFromLocation()
-	))
   const [subsSyncRequest, setSubsSyncRequest] = useState(0)
   const [sel, setSel] = useState<Selection>({ type: 'smart', id: 'all', name: '全部链接' })
   const [activeId, setActiveId] = useState<string | null>(initialLinkTargetID ?? null)
@@ -546,8 +520,8 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   const createNoteIntent = useRef<Promise<void> | null>(null)
   const [creatingNote, setCreatingNote] = useState(false)
   const requestedRoute = useMemo(
-    () => readerRouteForMainView(view, { inboxId: inboxTargetID, reviewId: reviewTargetID }),
-    [inboxTargetID, reviewTargetID, view],
+    () => readerRouteForMainView(view, { inboxId: inboxTargetID }),
+    [inboxTargetID, view],
   )
   const requestedRouteAvailable = readerRouteIsAvailable(requestedRoute, capabilityPolicy)
   const effectiveRoute = useMemo(
@@ -581,10 +555,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
 
   // 数据流
   const list = useLinks(client, sel)
-  useEffect(() => {
-    if (!capabilityLease.isCurrent('annotations')) return
-    void migrateLegacyAnnotations(lease)
-  }, [capabilityLease, lease])
   useEffect(() => thoughtSyncController?.start(), [thoughtSyncController])
   const { patchLink } = list
   const tagsData = useTags(client)
@@ -677,7 +647,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       linkId: view === 'reading' && activeLinkAddressed ? activeId ?? undefined : undefined,
       siteId: view === 'sites' ? siteTargetID : undefined,
       noteId: view === 'notes' ? noteTargetID : undefined,
-      contentHistoryLinkId: view === 'history' ? contentHistoryLinkID : undefined,
       thoughtView: view === 'history' ? readerThoughtViewFromURL(window.location.href) : undefined,
       thoughtId: view === 'history' ? readerThoughtIDFromURL(window.location.href) : undefined,
     } : {}
@@ -686,7 +655,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       window.history.replaceState(window.history.state, '', canonical)
     }
     rememberReaderRoute(effectiveRoute, undefined, targets, lease.context)
-  }, [activeId, activeLinkAddressed, contentHistoryLinkID, effectiveRoute, lease, noteTargetID, requestedRouteAvailable, siteTargetID, view])
+  }, [activeId, activeLinkAddressed, effectiveRoute, lease, noteTargetID, requestedRouteAvailable, siteTargetID, view])
 
   useEffect(() => {
     const restoreView = () => {
@@ -696,8 +665,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       setSiteTargetID(siteIDFromLocation())
       setNoteTargetID(noteIDFromLocation())
       setInboxTargetID(inboxIDFromLocation())
-      setContentHistoryLinkID(contentHistoryLinkIDFromLocation())
-      setReviewTargetID(reviewIDFromLocation())
       setActiveId(nextLinkID ?? null)
       setActiveLinkAddressed(Boolean(nextLinkID))
       pendingLinkTarget.current = nextLinkID ?? null
@@ -814,8 +781,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     setSiteTargetID(route.kind === 'library' && route.id === 'sites' ? targets.siteId?.trim() || undefined : undefined)
     setNoteTargetID(route.kind === 'library' && route.id === 'notes' ? targets.noteId?.trim() || undefined : undefined)
     setInboxTargetID(route.kind === 'library' && route.id === 'pending' ? route.inboxId?.trim() || undefined : undefined)
-    setContentHistoryLinkID(route.kind === 'tool' && route.id === 'history' ? targets.contentHistoryLinkId?.trim() || undefined : undefined)
-    setReviewTargetID(route.kind === 'internal' && route.id === 'review' ? route.reviewId?.trim() || undefined : undefined)
     setActiveId(nextLinkID ?? null)
     setActiveLinkAddressed(Boolean(nextLinkID) && addressLink)
     pendingLinkTarget.current = nextLinkID && addressLink ? nextLinkID : null
@@ -887,7 +852,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     }
     if (!policy.todos) setTodoCompletedExpanded(false)
     if (!policy.history) {
-      setContentHistoryLinkID(undefined)
       setHistoricalNote(null)
     }
     if (!policy.siteRead) {
@@ -897,7 +861,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     } else if (!policy.siteWrite) {
       setConvertingLink(null)
     }
-    if (!policy.semantic) invalidateReaderRelatedTags()
+    if (!policy.relatedTags) invalidateReaderRelatedTags()
     if (!policy.activity) invalidateReaderActivity()
     if (!policy.feed) clearFeedSessionState(client)
   }, [capabilityLease, client])
@@ -929,12 +893,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     })
     return intent
   }, [canCreateNote, capabilityLease, client, commitRoute, confirmDiscardNavigation, flash])
-
-  const openContentHistory = useCallback((linkID: string) => {
-    const normalizedID = linkID.trim()
-    if (!normalizedID) return
-    navigateRoute({ kind: 'tool', id: 'history' }, { contentHistoryLinkId: normalizedID })
-  }, [navigateRoute])
 
   const openSettings = useCallback(() => {
     const result = confirmDiscardNavigation()
@@ -1219,9 +1177,8 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     contentRevisionOrUndefined(renderedActive?.content_revision) ??
     null
   const {
-    items: translationSnapshot,
-    staleItems: staleTranslations,
-    legacyItems: legacyTranslations,
+	items: translationSnapshot,
+	staleItems: staleTranslations,
     currentContentRevision: translationsContentRevision,
     loading: translationSnapshotLoading,
     error: translationsError,
@@ -2003,7 +1960,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           libraryMessage = '资料库同步失败'
           break
         }
-        if (!outcome.value.ok && outcome.value.error.kind !== 'not-modified') {
+        if (!outcome.value.ok) {
           libraryMessage = `资料库同步失败：${outcome.value.error.message}`
           break
         }
@@ -2683,14 +2640,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       : null,
     [anns, noteEd],
   )
-  const historicalNoteLocator = useMemo<AnnotationLocator | undefined>(() => {
-    if (!historicalNote) return undefined
-    return {
-      id: historicalNote.annotation.id,
-      blockKey: historicalNote.annotation.blockKey,
-      target: { kind: 'legacy-stale', sourceKey: historicalNote.sourceKey },
-    }
-  }, [historicalNote])
   const notePanelAnnotation = editingAnn ?? historicalNote?.annotation ?? null
   const activeListIndex = activeId
     ? protectedListLinks.findIndex((link) => link.id === activeId)
@@ -2700,26 +2649,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     activeListIndex >= 0 && activeListIndex < protectedListLinks.length - 1
       ? protectedListLinks[activeListIndex + 1]
       : null
-
-  const contentHistoryTarget = contentHistoryLinkID
-    ? renderedActive?.id === contentHistoryLinkID
-      ? renderedActive
-      : protectedListLinks.find((link) => link.id === contentHistoryLinkID) ??
-        corpus.find((link) => link.id === contentHistoryLinkID) ??
-        null
-    : null
-  const contentHistoryRevision = contentHistoryTarget?.content_revision ?? 0
-
-  const onContentHistoryRestored = useCallback((revision: number) => {
-    const linkID = contentHistoryLinkID
-    if (!linkID) return
-    invalidateLink(linkID)
-    invalidateLinkContent(linkID)
-    invalidateLinkProjection(linkID)
-    list.reload()
-    openLink(linkID)
-    flash(`正文已恢复到版本 ${revision}`, 'refresh')
-  }, [contentHistoryLinkID, flash, list, openLink])
 
   // 以下几个回调与两个 pager 对象过去都是 JSX 里的内联字面量，每渲染新建一次。
   // DetailPane 加上 memo 之后它们必须稳定，否则 memo 的浅比较每次都判定
@@ -2839,7 +2768,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           archiveDownloading={archiveDownloading}
           onDownloadArchive={() => setArchiveDialogOpen(true)}
           canUseAI={capabilityPolicy.ai}
-          semanticSearchEnabled={capabilityPolicy.semantic}
           canDownloadArchive={capabilityPolicy.archiveDownload}
         />
 
@@ -2915,18 +2843,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           ) : displayedView === 'settings' ? (
             <SettingsSurface client={client} capabilityPolicy={capabilityPolicy} onNavigate={navigateRoute} onOpenConnectionSettings={openSettings} />
           ) : displayedView === 'history' ? (
-            contentHistoryLinkID ? (
-              <ContentHistorySurface
-                client={client}
-                linkID={contentHistoryLinkID}
-                expectedContentRevision={contentHistoryRevision}
-                onNavigate={navigateRoute}
-                onRestored={onContentHistoryRestored}
-                capabilityPolicy={capabilityPolicy}
-              />
-            ) : (
-              <ThoughtHistorySurface client={client} lease={lease} capabilityLease={capabilityLease} onNavigate={navigateRoute} />
-            )
+			<ThoughtHistorySurface client={client} lease={lease} capabilityLease={capabilityLease} onNavigate={navigateRoute} />
           ) : displayedView === 'trash' ? (
             <TrashSurface client={client} onNavigate={navigateRoute} capabilityPolicy={capabilityPolicy} onToast={flash} />
           ) : displayedView === 'subs' ? (
@@ -2955,8 +2872,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
               navigationOpen={mobileNavOpen}
               onCloseNavigation={() => setMobileNavOpen(false)}
             />
-          ) : displayedView === 'review' ? (
-            <ReviewView client={client} capabilityLease={capabilityLease} reviewID={reviewTargetID} onToast={flash} />
           ) : (
             <>
               <Sidebar
@@ -3014,11 +2929,10 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
                 onAddAnn={addAnnotation}
                 onRemoveAnn={removeAnnotation}
                 onOpenNote={openNote}
-                onOpenContentHistory={openContentHistory}
                 onAskAI={onAskAI}
                 annotationsEnabled={capabilityPolicy.annotations}
                 aiEnabled={capabilityPolicy.ai}
-                semanticEnabled={capabilityPolicy.semantic}
+                relatedTagsEnabled={capabilityPolicy.relatedTags}
                 engagementEnabled={capabilityPolicy.engagement}
                 onSaveContent={onSaveContent}
                 onReplaceContent={onReplaceContent}
@@ -3031,7 +2945,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
                 loadingDetail={detailLoading}
                 translations={translations}
                 staleTranslations={staleTranslations}
-                legacyTranslations={legacyTranslations}
                 translationsLoading={translationsLoading}
                 onSummaryBlockText={onSummaryBlockText}
                 summarySourceHash={summaryBlock?.sourceHash ?? null}
@@ -3050,7 +2963,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           {capabilityPolicy.annotations && notePanelAnnotation && displayedView === 'reading' && (
             <NotePanel
               ann={notePanelAnnotation}
-              locator={historicalNoteLocator}
               readOnly={historicalNote !== null}
               onSave={async (v) => {
                 if (!editingAnn || historicalNote) return

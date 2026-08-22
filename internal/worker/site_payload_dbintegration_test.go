@@ -36,28 +36,28 @@ func TestWebsiteCollectionPayloadRetention(t *testing.T) {
 
 	repo := repository.NewPGXLinkRepository(pool)
 
-	successLinkID, successJobID := seedPayloadIntegrationLink(t, ctx, pool, "success", "pending", nil, nil, true)
-	classification := repository.UpdateLibraryClassificationParams{ID: successLinkID, Kind: model.LibraryKindSite, Source: model.LibraryKindSourceAuto}
+	successLinkID := seedPayloadIntegrationLink(t, ctx, pool, "success", "pending", nil)
+	classification := repository.UpdateLibraryClassificationParams{ID: successLinkID, Kind: model.LibraryKindSite}
 	if _, err := repo.CompleteSiteParse(ctx, repository.CompleteSiteParseParams{
-		Analysis:       repository.UpdateLinkAnalysisParams{ID: successLinkID, Title: stringRef("Payload Example"), Tags: []string{"tool"}, FetcherType: stringRef("http"), Domain: stringRef("payload.example"), ContentType: stringRef("homepage")},
+		Analysis:       repository.UpdateLinkAnalysisParams{ID: successLinkID, Title: stringRef("Payload Example"), Tags: []string{"tool"}, FetcherType: stringRef("http"), Domain: stringRef("payload.example"), ContentType: stringRef("homepage"), ExpectedParseGeneration: 1, ExpectedMetadataRevision: 1},
 		Classification: classification,
 		Site:           repository.AggregateSiteParams{LinkID: successLinkID, IdentityKey: "v1:host:payload-success-" + uuid.NewString(), NormalizedURL: "https://payload.example/success", Name: "Payload Example", EntryName: "Payload Example"},
-	}, successJobID); err != nil {
+	}); err != nil {
 		t.Fatalf("complete site parse: %v", err)
 	}
 	assertPayloadState(t, ctx, pool, successLinkID, "site", "done", false, true)
 
-	failureLinkID, failureJobID := seedPayloadIntegrationLink(t, ctx, pool, "failure", "pending", nil, stringRef("site"), true)
-	if err := repo.MarkParseFailed(ctx, failureLinkID, failureJobID, "expected parse failure"); err != nil {
+	failureLinkID := seedPayloadIntegrationLink(t, ctx, pool, "failure", "pending", stringRef("site"))
+	if err := repo.MarkParseFailed(ctx, model.ParseAttempt{LinkID: failureLinkID, Generation: 1, ExpectedMetadataRevision: 1}, "expected parse failure"); err != nil {
 		t.Fatalf("mark predicted-site parse failed: %v", err)
 	}
-	assertPayloadState(t, ctx, pool, failureLinkID, "", "failed", false, true)
+	assertPayloadState(t, ctx, pool, failureLinkID, "site", "failed", false, true)
 
-	stuckLinkID, _ := seedPayloadIntegrationLink(t, ctx, pool, "stuck", "processing", stringRef("site"), nil, false)
+	stuckLinkID := seedPayloadIntegrationLink(t, ctx, pool, "stuck", "processing", stringRef("site"))
 	if _, err := pool.Exec(ctx, "UPDATE links SET payload_purge_due_at = NOW() - INTERVAL '1 minute' WHERE id = $1", stuckLinkID); err != nil {
 		t.Fatalf("expire stuck site payload: %v", err)
 	}
-	readingLinkID, _ := seedPayloadIntegrationLink(t, ctx, pool, "reading", "processing", stringRef("reading"), nil, false)
+	readingLinkID := seedPayloadIntegrationLink(t, ctx, pool, "reading", "processing", stringRef("reading"))
 	if _, err := pool.Exec(ctx, "UPDATE links SET payload_purge_due_at = NOW() - INTERVAL '1 minute' WHERE id = $1", readingLinkID); err != nil {
 		t.Fatalf("expire reading payload: %v", err)
 	}
@@ -82,21 +82,14 @@ func TestWebsiteCollectionPayloadRetention(t *testing.T) {
 	}
 }
 
-func seedPayloadIntegrationLink(t *testing.T, ctx context.Context, pool *pgxpool.Pool, suffix, status string, kind, predicted *string, withJob bool) (uuid.UUID, uuid.UUID) {
+func seedPayloadIntegrationLink(t *testing.T, ctx context.Context, pool *pgxpool.Pool, suffix, status string, kind *string) uuid.UUID {
 	t.Helper()
 	linkID := uuid.New()
-	if _, err := pool.Exec(ctx, `INSERT INTO links (id, url, source_key, status, input_text, input_html, input_images, source_metadata, library_kind, library_kind_source, predicted_library_kind, first_collected_at)
-VALUES ($1, $2, $2, $3, 'captured body', '<main>captured body</main>', '["https://payload.example/image.png"]'::jsonb, '{"capture_source":"dbintegration"}'::jsonb, $4, CASE WHEN $4::text IS NULL THEN NULL ELSE 'auto' END, $5, NOW())`, linkID, "https://payload.example/"+suffix+"/"+uuid.NewString(), status, kind, predicted); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO links (id, url, source_key, status, input_text, input_html, input_images, source_metadata, library_kind, library_kind_locked, first_collected_at)
+VALUES ($1, $2, $2, $3, 'captured body', '<main>captured body</main>', '["https://payload.example/image.png"]'::jsonb, '{"capture_source":"dbintegration"}'::jsonb, $4, $4::text IS NOT NULL, NOW())`, linkID, "https://payload.example/"+suffix+"/"+uuid.NewString(), status, kind); err != nil {
 		t.Fatalf("seed %s link: %v", suffix, err)
 	}
-	if !withJob {
-		return linkID, uuid.Nil
-	}
-	jobID := uuid.New()
-	if _, err := pool.Exec(ctx, "INSERT INTO parse_jobs (id, link_id, status) VALUES ($1, $2, 'processing')", jobID, linkID); err != nil {
-		t.Fatalf("seed %s parse job: %v", suffix, err)
-	}
-	return linkID, jobID
+	return linkID
 }
 
 func assertPayloadState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, linkID uuid.UUID, wantKind, wantStatus string, wantPayload, wantPurged bool) {

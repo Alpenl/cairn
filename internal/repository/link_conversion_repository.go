@@ -20,20 +20,21 @@ FROM links WHERE id = $1 FOR UPDATE`
 	lockConvertibleLinkWithSummarySQL = `SELECT url, COALESCE(title, ''), COALESCE(summary, ''), status, library_kind, content_revision
 FROM links WHERE id = $1 FOR UPDATE`
 	deleteConversionContentSQL = `DELETE FROM link_translations WHERE link_id = $1`
-	convertReadingToSiteSQL    = `UPDATE links SET requested_library_kind='site', requested_library_kind_source='user', library_kind='site', library_kind_source='user', library_kind_locked=true,
+	convertReadingToSiteSQL    = `UPDATE links SET library_kind='site', library_kind_locked=true,
 summary=NULL, content=NULL, content_cjk_chars=0, content_words=0, content_document=NULL, content_format='plain', content_source='fetched', input_text=NULL, input_html=NULL, input_images=NULL,
-source_metadata=NULL, embedding=NULL, embedding_model=NULL, payload_purge_due_at=NULL, payload_purged_at=NOW(),
+source_metadata=NULL, payload_purge_due_at=NULL, payload_purged_at=NOW(),
 content_revision=content_revision+1, updated_at=NOW() WHERE id=$1`
-	convertSiteToReadingSQL = `UPDATE links SET requested_library_kind='reading', requested_library_kind_source='user', library_kind='reading', library_kind_source='user', library_kind_locked=true,
-content=NULL, content_cjk_chars=0, content_words=0, content_document=NULL, content_format='plain', content_source='fetched', embedding=NULL, embedding_model=NULL,
+	convertSiteToReadingSQL = `UPDATE links SET library_kind='reading', library_kind_locked=true,
+content=NULL, content_cjk_chars=0, content_words=0, content_document=NULL, content_format='plain', content_source='fetched',
 status='pending', error_msg=NULL, payload_purge_due_at=NULL, payload_purged_at=NOW(),
-content_revision=content_revision+1, updated_at=NOW() WHERE id=$1`
+content_revision=content_revision+1, parse_generation=parse_generation+1, updated_at=NOW() WHERE id=$1
+RETURNING parse_generation, metadata_revision`
 	lockEntryByLinkSQL          = "SELECT site_id, id FROM site_entries WHERE link_id=$1 FOR UPDATE"
 	deleteEntryByLinkSQL        = "DELETE FROM site_entries WHERE link_id=$1"
-	advanceSiteForConversionSQL = "UPDATE sites SET embedding=NULL, embedding_model=NULL, revision=revision+1, updated_at=NOW() WHERE id=$1 AND revision=$2"
-	appendConversionNoteSQL     = "UPDATE sites SET user_note = CASE WHEN $1 IS NULL OR $1 = '' THEN user_note WHEN user_note = '' THEN $1 ELSE user_note || E'\\n\\n' || $1 END, embedding=NULL, embedding_model=NULL, revision=revision+1, updated_at=NOW() WHERE id=$2 AND revision=$3"
-	appendNewConversionNoteSQL  = "UPDATE sites SET user_note = CASE WHEN user_note = '' THEN $1 ELSE user_note || E'\\n\\n' || $1 END, embedding=NULL, embedding_model=NULL, revision=revision+1, updated_at=NOW() WHERE id=$2"
-	copyLinkTagsToSiteSQL       = "INSERT INTO site_tags (site_id, tag, normalized_tag, source, created_at, updated_at) SELECT $1, tag, lower(tag), 'auto', NOW(), NOW() FROM unnest((SELECT tags FROM links WHERE id=$2)) AS tag WHERE btrim(tag) <> '' ON CONFLICT (site_id, normalized_tag) DO NOTHING"
+	advanceSiteForConversionSQL = "UPDATE sites SET revision=revision+1, updated_at=NOW() WHERE id=$1 AND revision=$2"
+	appendConversionNoteSQL     = "UPDATE sites SET user_note = CASE WHEN $1 IS NULL OR $1 = '' THEN user_note WHEN user_note = '' THEN $1 ELSE user_note || E'\\n\\n' || $1 END, revision=revision+1, updated_at=NOW() WHERE id=$2 AND revision=$3"
+	appendNewConversionNoteSQL  = "UPDATE sites SET user_note = CASE WHEN user_note = '' THEN $1 ELSE user_note || E'\\n\\n' || $1 END, revision=revision+1, updated_at=NOW() WHERE id=$2"
+	copyLinkTagsToSiteSQL       = "INSERT INTO site_tags (site_id, tag, normalized_tag, created_at, updated_at) SELECT $1, tag, lower(tag), NOW(), NOW() FROM unnest((SELECT tags FROM links WHERE id=$2)) AS tag WHERE btrim(tag) <> '' ON CONFLICT (site_id, normalized_tag) DO NOTHING"
 )
 
 // ConvertLink performs both collection transitions in one repository-owned
@@ -58,16 +59,13 @@ func (r *PGXLinkRepository) ConvertLink(ctx context.Context, params ConvertLinkP
 // ConvertLinkTx is the transaction-bound conversion implementation. The
 // initial link lock repeats all service checks so a preview cannot race a
 // refresh, delete, or another conversion. It never commits and does not know
-// about River; a non-nil ParseJobID tells the durable adapter what to enqueue.
+// about River; a non-nil ParseAttempt tells the durable adapter what to enqueue.
 func (r *PGXLinkRepository) ConvertLinkTx(ctx context.Context, tx pgx.Tx, params ConvertLinkParams) (ConvertLinkResult, error) {
 	if params.LinkID == uuid.Nil {
 		return ConvertLinkResult{}, fmt.Errorf("convert link: link id is required")
 	}
 	if params.TargetKind != model.LibraryKindReading && params.TargetKind != model.LibraryKindSite {
 		return ConvertLinkResult{}, fmt.Errorf("convert link: invalid target kind")
-	}
-	if err := prelockRepresentationWriteGateShared(ctx, tx); err != nil {
-		return ConvertLinkResult{}, err
 	}
 	var url, title, summary, status, kind string
 	var revision int64
@@ -243,15 +241,11 @@ func convertSiteToReadingOn(ctx context.Context, tx pgx.Tx, params ConvertLinkPa
 	if err := detachSiteEntryForReadingOn(ctx, tx, params.LinkID, params.ExpectedSiteRevision, true); err != nil {
 		return ConvertLinkResult{}, err
 	}
-	if _, err := tx.Exec(ctx, convertSiteToReadingSQL, params.LinkID); err != nil {
+	attempt := model.ParseAttempt{LinkID: params.LinkID}
+	if err := tx.QueryRow(ctx, convertSiteToReadingSQL, params.LinkID).Scan(&attempt.Generation, &attempt.ExpectedMetadataRevision); err != nil {
 		return ConvertLinkResult{}, fmt.Errorf("convert site link to reading: %w", err)
 	}
-	row := tx.QueryRow(ctx, insertJobSQL, params.LinkID, parseJobsPerLinkRetention)
-	job, err := scanJob(row)
-	if err != nil {
-		return ConvertLinkResult{}, fmt.Errorf("create conversion parse job: %w", err)
-	}
-	return ConvertLinkResult{LinkID: params.LinkID, Kind: model.LibraryKindReading, ContentRevision: params.ExpectedContentRevision + 1, Status: model.LinkStatusPending, ParseJobID: &job.ID}, nil
+	return ConvertLinkResult{LinkID: params.LinkID, Kind: model.LibraryKindReading, ContentRevision: params.ExpectedContentRevision + 1, Status: model.LinkStatusPending, ParseAttempt: &attempt}, nil
 }
 
 // detachSiteEntryForReadingOn removes the site aggregate edge before a link is

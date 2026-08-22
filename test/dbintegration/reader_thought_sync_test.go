@@ -19,13 +19,13 @@ import (
 	"webtag/internal/repository"
 )
 
-// TestReaderThoughtReattachAndAppendShareHostFirstLockOrder holds the target
-// host in SHARE mode, which makes ReattachThought wait at its first lock. A
+// TestReaderThoughtReattachOpAndAppendShareHostFirstLockOrder holds the target
+// host in SHARE mode, which makes the reattach operation wait at its first lock. A
 // concurrent append for the same Thought and host must still finish while that
-// blocker is held. With Thought -> host reattach ordering, reattach would hold
+// blocker is held. With Thought -> host ordering, reattach would hold
 // the Thought row while waiting on the host and the append would form a real
 // PostgreSQL deadlock cycle after taking its host SHARE lock.
-func TestReaderThoughtReattachAndAppendShareHostFirstLockOrder(t *testing.T) {
+func TestReaderThoughtReattachOpAndAppendShareHostFirstLockOrder(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -76,20 +76,35 @@ func TestReaderThoughtReattachAndAppendShareHostFirstLockOrder(t *testing.T) {
 		t.Fatalf("hold target host share lock: %v", err)
 	}
 
-	reattachDone := make(chan error, 1)
-	go func() {
-		_, reattachErr := reattachRepo.ReattachThought(ctx, model.ReaderThoughtReattachCommand{
-			ThoughtID: thoughtID, TargetHostKind: "link", TargetHostID: targetID.String(),
-			ExpectedLastSequence: seeded.LastSequence, ExpectedHostRevision: 1,
-		})
-		reattachDone <- reattachErr
-	}()
-	waitForPostgresLock(t, ctx, pool, "webtag_reader_reattach_host_order")
-
 	target := readerVNextJSON(t, map[string]any{
 		"kind": "saved-content", "host_id": targetID.String(),
 		"version": map[string]any{"content_revision": 1},
 	})
+	reattachPayload := readerVNextJSON(t, map[string]any{
+		"reattach": map[string]any{
+			"expected_last_sequence": seeded.LastSequence,
+			"expected_host_revision": 1,
+		},
+	})
+	type reattachOutcome struct {
+		acks []model.ReaderThoughtAck
+		err  error
+	}
+	reattachDone := make(chan reattachOutcome, 1)
+	go func() {
+		acks, reattachErr := reattachRepo.AppendThoughtOps(ctx, []model.ReaderThoughtOp{{
+			OpID: "reattach-command-" + uuid.NewString(), DeviceID: "device-reattach",
+			LogicalClock: seeded.WinnerKey.LogicalClock + 1, OperationKind: "update",
+			AnnotationID: thoughtID, HostKind: "link", HostID: targetID.String(),
+			Target: target, Payload: reattachPayload,
+			Reattach: &model.ReaderThoughtReattachOperation{
+				ExpectedLastSequence: seeded.LastSequence, ExpectedHostRevision: 1,
+			},
+		}})
+		reattachDone <- reattachOutcome{acks: acks, err: reattachErr}
+	}()
+	waitForPostgresLock(t, ctx, pool, "webtag_reader_reattach_host_order")
+
 	appendPayload := readerVNextJSON(t, map[string]any{
 		"body": "append wins", "link_id": targetID.String(), "source": "self",
 		"quote": map[string]any{"exact": "shared quote", "start": 0, "end": 12},
@@ -117,7 +132,7 @@ func TestReaderThoughtReattachAndAppendShareHostFirstLockOrder(t *testing.T) {
 	select {
 	case appended = <-appendDone:
 	case <-time.After(2 * time.Second):
-		t.Fatal("AppendThoughtOps remained blocked behind a ReattachThought waiting on the same host")
+		t.Fatal("AppendThoughtOps remained blocked behind a reattach operation waiting on the same host")
 	}
 	assertNotDeadlock(t, "append", appended.err)
 	if appended.err != nil || len(appended.acks) != 1 || appended.acks[0].Disposition != "applied" {
@@ -127,10 +142,10 @@ func TestReaderThoughtReattachAndAppendShareHostFirstLockOrder(t *testing.T) {
 	if err := blocker.Commit(ctx); err != nil {
 		t.Fatalf("release target host blocker: %v", err)
 	}
-	reattachErr := <-reattachDone
-	assertNotDeadlock(t, "reattach", reattachErr)
-	if !errors.Is(reattachErr, repository.ErrRevisionConflict) {
-		t.Fatalf("ReattachThought() error = %v, want ErrRevisionConflict after append changed the Thought", reattachErr)
+	reattached := <-reattachDone
+	assertNotDeadlock(t, "reattach", reattached.err)
+	if !errors.Is(reattached.err, repository.ErrRevisionConflict) || len(reattached.acks) != 0 {
+		t.Fatalf("reattach op = acks=%#v error=%v, want ErrRevisionConflict after append changed the Thought", reattached.acks, reattached.err)
 	}
 	current, err := reader.GetThought(ctx, thoughtID)
 	if err != nil {

@@ -258,21 +258,13 @@ type ReaderInbox struct {
 	Note             string
 	Summary          *string
 	SuggestedTags    []string
-	ProposalSignals  json.RawMessage
 	ProposalStatus   string
 	Tags             []string
-	CategoryIDs      []uuid.UUID
 	Status           string
 	MetadataRevision int64
-	JobID            *uuid.UUID
 	// ExpiresAt is the authoritative deadline for the pending Inbox item. A
-	// nil value means the item has no expiry policy; it is never inferred from
-	// created_at or updated_at.
+	// nil value means the item has no expiry policy.
 	ExpiresAt *time.Time
-	// ExpiredAt records that the expiry worker observed ExpiresAt and moved the
-	// item into the expired partition. It does not replace ExpiresAt as the
-	// expiry predicate.
-	ExpiredAt *time.Time
 	DeletedAt *time.Time
 	Expired   bool
 	CreatedAt time.Time
@@ -301,8 +293,8 @@ type ReaderInboxListItem struct {
 }
 
 // ReaderInboxPartition is the stable, server-owned split of pending Inbox
-// items. Expiry never changes the pending lifecycle: it only moves an item
-// from Active to Expired after the maintenance worker records ExpiredAt.
+// items. Expiry never changes the pending lifecycle; PostgreSQL compares the
+// authoritative ExpiresAt deadline with its own clock when serving the list.
 type ReaderInboxPartition string
 
 const (
@@ -339,13 +331,6 @@ type ReaderInboxAIProposalConfirmation struct {
 	RemainingCount int
 }
 
-type ReaderCategory struct {
-	ID        uuid.UUID
-	Name      string
-	Count     int
-	CreatedAt time.Time
-}
-
 type ReaderTodo struct {
 	ID             uuid.UUID
 	Text           string
@@ -376,112 +361,27 @@ type ReaderEngagement struct {
 	UpdatedAt  time.Time
 }
 
-// ReaderFeedScoreSignal is a ranking signal. Every signal owns one field of
-// ReaderFeedScoreContributions, so the set is closed by construction: adding a
-// signal without a contribution field would leave the score unauditable.
-type ReaderFeedScoreSignal string
-
-const (
-	ReaderFeedSignalPendingConfirmation   ReaderFeedScoreSignal = "pending_confirmation"
-	ReaderFeedSignalSavedLibrary          ReaderFeedScoreSignal = "saved_library"
-	ReaderFeedSignalSubscriptionRecent    ReaderFeedScoreSignal = "subscription_recent"
-	ReaderFeedSignalUnread                ReaderFeedScoreSignal = "unread"
-	ReaderFeedSignalReadLater             ReaderFeedScoreSignal = "read_later"
-	ReaderFeedSignalChronologicalFallback ReaderFeedScoreSignal = "chronological_fallback"
-)
-
-// ReasonCode is the reason code a winning signal becomes. Every score signal is
-// also a reason code; the reverse does not hold.
-func (signal ReaderFeedScoreSignal) ReasonCode() ReaderFeedReasonCode {
-	return ReaderFeedReasonCode(signal)
-}
-
-// ReaderFeedReasonCode explains why a card is on screen. The scoring pass owns
-// the six codes that are also ReaderFeedScoreSignal values; Home's
-// continue_reading is a reason without a ranking signal behind it, so it carries
-// no score contribution and never appears in EnabledScoreSignals.
-type ReaderFeedReasonCode string
-
-const (
-	ReaderFeedReasonPendingConfirmation   = ReaderFeedReasonCode(ReaderFeedSignalPendingConfirmation)
-	ReaderFeedReasonSavedLibrary          = ReaderFeedReasonCode(ReaderFeedSignalSavedLibrary)
-	ReaderFeedReasonSubscriptionRecent    = ReaderFeedReasonCode(ReaderFeedSignalSubscriptionRecent)
-	ReaderFeedReasonUnread                = ReaderFeedReasonCode(ReaderFeedSignalUnread)
-	ReaderFeedReasonReadLater             = ReaderFeedReasonCode(ReaderFeedSignalReadLater)
-	ReaderFeedReasonChronologicalFallback = ReaderFeedReasonCode(ReaderFeedSignalChronologicalFallback)
-
-	// ReaderFeedReasonContinueReading is Home-only: it reports resumable reading
-	// progress rather than a ranking decision.
-	ReaderFeedReasonContinueReading ReaderFeedReasonCode = "continue_reading"
-)
-
-// ReaderFeedReasonParams carries only evidence consumed by the scoring pass.
-// Exactly one field is present for each score signal; a reason code that is not
-// a signal carries no params at all.
-type ReaderFeedReasonParams struct {
-	Source    *string    `json:"source,omitempty"`
-	Read      *bool      `json:"read,omitempty"`
-	ReadLater *bool      `json:"read_later,omitempty"`
-	CreatedAt *time.Time `json:"created_at,omitempty"`
-}
-
-// ReaderFeedScoreContributions is deliberately fixed-width so snapshots and
-// clients can audit every ranking signal without relying on map iteration.
-type ReaderFeedScoreContributions struct {
-	PendingConfirmation   int `json:"pending_confirmation"`
-	SavedLibrary          int `json:"saved_library"`
-	SubscriptionRecent    int `json:"subscription_recent"`
-	Unread                int `json:"unread"`
-	ReadLater             int `json:"read_later"`
-	ChronologicalFallback int `json:"chronological_fallback"`
-}
-
 type ReaderFeedItem struct {
-	Key    string
-	Source string
-	// ResourceKey identifies the durable resource represented by the card.
-	// ActionKey identifies the command target within this installation. They are kept
-	// separate because a subscription item can act on its feed-item identity
-	// while pointing at an already-saved link resource.
-	ResourceKey         string
-	ActionKey           string
-	DedupeKey           string
-	SectionID           string
-	Actions             []string
-	Title               string
-	Summary             string
-	URL                 string
-	LinkID              *uuid.UUID
-	InboxID             *uuid.UUID
-	FeedItemID          *uuid.UUID
-	Read                bool
-	ReadLater           bool
-	Saved               bool
-	Score               int
-	ScoreContributions  ReaderFeedScoreContributions
-	EnabledScoreSignals []ReaderFeedScoreSignal
-	ReasonCode          ReaderFeedReasonCode
-	ReasonParams        ReaderFeedReasonParams
-	ReasonContribution  int
-	ReasonText          string
-	PublishedAt         *time.Time
-	CreatedAt           time.Time
-}
-
-// ReaderFeedSaveAssociation is the stable installation-local identity of a
-// subscription item's saved-reading association. It intentionally carries the
-// creator bit because that bit governs the last-association trash transition.
-type ReaderFeedSaveAssociation struct {
-	FeedItemID  uuid.UUID
-	LinkID      uuid.UUID
-	CreatedLink bool
+	Key         string
+	Source      string
+	Title       string
+	Summary     string
+	URL         string
+	LinkID      *uuid.UUID
+	InboxID     *uuid.UUID
+	FeedItemID  *uuid.UUID
+	Read        bool
+	ReadLater   bool
+	Saved       bool
+	Score       int
+	PublishedAt *time.Time
+	CreatedAt   time.Time
 }
 
 type ReaderFeedFeedback struct {
-	ItemKey     string
-	Action      string
-	Saved       bool
-	Association *ReaderFeedSaveAssociation
+	ItemKey string
+	Action  string
+	LinkID  *uuid.UUID
 }
 
 // VisibleEventAt is the single timestamp used for Feed chronology and card
@@ -494,38 +394,16 @@ func (item ReaderFeedItem) VisibleEventAt() time.Time {
 	return item.CreatedAt
 }
 
-type ReaderFeedSection struct {
-	ID           string
-	Source       string
-	Label        string
-	Count        int
-	Capabilities []string
-}
-
-type ReaderFeedSource struct {
-	ID           string
-	Label        string
-	Enabled      bool
-	Count        int
-	Capabilities []string
-}
-
 type ReaderFeedPage struct {
-	Items        []ReaderFeedItem
-	NextCursor   string
-	SnapshotID   string
-	Mode         string
-	Capabilities []string
-	Sections     []ReaderFeedSection
-	Sources      []ReaderFeedSource
+	Items      []ReaderFeedItem
+	NextCursor string
+	Mode       string
 }
 
-// ResourceIdentity returns the stable resource identity while retaining the
-// old Key-based representation for snapshots created before WP-24.
+// ResourceIdentity identifies the durable resource represented by a card. A
+// saved subscription item points at its linked reading resource while commands
+// continue to use Key, the subscription item identity.
 func (item ReaderFeedItem) ResourceIdentity() string {
-	if strings.TrimSpace(item.ResourceKey) != "" {
-		return strings.TrimSpace(item.ResourceKey)
-	}
 	if item.LinkID != nil {
 		return "link:" + item.LinkID.String()
 	}
@@ -538,66 +416,12 @@ func (item ReaderFeedItem) ResourceIdentity() string {
 	return strings.TrimSpace(item.Key)
 }
 
-// ActionIdentity is the canonical installation-local key accepted by Feed action
-// endpoints. Key remains its legacy wire alias.
-func (item ReaderFeedItem) ActionIdentity() string {
-	if strings.TrimSpace(item.ActionKey) != "" {
-		return strings.TrimSpace(item.ActionKey)
-	}
-	if strings.TrimSpace(item.Key) != "" {
-		return strings.TrimSpace(item.Key)
-	}
-	return item.ResourceIdentity()
-}
-
-// DedupeIdentity keeps URL-level dedupe explicit without replacing resource
-// identity. The repository uses the same value before snapshot creation.
+// DedupeIdentity collapses the same URL across Reading and subscriptions.
 func (item ReaderFeedItem) DedupeIdentity() string {
-	if strings.TrimSpace(item.DedupeKey) != "" {
-		return strings.TrimSpace(item.DedupeKey)
-	}
 	if url := strings.TrimSpace(item.URL); url != "" {
 		return "url:" + url
 	}
 	return item.ResourceIdentity()
-}
-
-func (item ReaderFeedItem) SectionIdentity() string {
-	if strings.TrimSpace(item.SectionID) != "" {
-		return strings.TrimSpace(item.SectionID)
-	}
-	return strings.TrimSpace(item.Source)
-}
-
-// ActionCapabilities is deliberately a closed, source-derived list. A
-// non-nil empty Actions slice is an explicit capability-off result and must
-// not be replaced by inferred defaults.
-func (item ReaderFeedItem) ActionCapabilities() []string {
-	if item.Actions != nil {
-		cloned := make([]string, len(item.Actions))
-		copy(cloned, item.Actions)
-		return cloned
-	}
-	var actions []string
-	switch item.Source {
-	case "inbox", "pending":
-		actions = []string{"confirm", "discard", "hide", "not_interested", "open"}
-	case "reading", "saved":
-		actions = []string{"read", "read_later", "hide", "not_interested", "open"}
-	case "subscription", "feed":
-		actions = []string{"read", "read_later", "hide", "not_interested", "open"}
-		if item.Saved {
-			actions = append(actions, "unsave")
-		} else {
-			actions = append(actions, "save")
-		}
-	default:
-		actions = []string{}
-	}
-	if item.LinkID != nil {
-		actions = append(actions, "open_workspace")
-	}
-	return actions
 }
 
 const (
@@ -632,30 +456,6 @@ type ReaderActivityQuery struct {
 type ReaderActivityPage struct {
 	Items   []ReaderActivity
 	HasMore bool
-}
-
-type ReaderContentHistory struct {
-	ID              int64
-	LinkID          uuid.UUID
-	Revision        int64
-	Content         *string
-	ContentDocument *string
-	ContentFormat   string
-	ContentSource   string
-	CreatedAt       time.Time
-}
-
-type ReaderInboxJob struct {
-	ID                       uuid.UUID
-	InboxID                  uuid.UUID
-	ExpectedMetadataRevision int64
-	Status                   string
-	Attempts                 int
-	ErrorMessage             *string
-	CreatedAt                time.Time
-	UpdatedAt                time.Time
-	StartedAt                *time.Time
-	FinishedAt               *time.Time
 }
 
 type ReaderNoteDraftCommand struct {

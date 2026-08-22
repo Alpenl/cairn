@@ -19,15 +19,11 @@ const DefaultGzipMinLength = 1024
 
 // gzipExcludedPaths 是恒不压缩的路径集合。
 //
-//   - /metrics：Prometheus 抓取端自己会协商编码，且抓取器与服务端通常同机
-//     部署，压缩纯属浪费。
 //   - /health、/ready：响应体只有几十字节，恒低于任何合理的 minLength，
 //     列在这里是为了连"判断一次"都省掉——它们是被高频轮询的端点。
-//   - /debug/pprof：profile 产物是二进制，部分端点本身已压缩。
 var gzipExcludedPaths = map[string]struct{}{
-	"/metrics": {},
-	"/health":  {},
-	"/ready":   {},
+	"/health": {},
+	"/ready":  {},
 }
 
 // Gzip 返回响应压缩中间件。
@@ -39,8 +35,7 @@ var gzipExcludedPaths = map[string]struct{}{
 // Vary 头，包括 CORS 中间件设置的 Vary: Origin——而 cors.go 里那行上面
 // 挂着一整段注释说明它为什么必须恒在（防止 CDN / 共享缓存把不同 Origin
 // 的请求折叠进同一条缓存项）。引入该库等于让绝大多数响应静默丢掉那个
-// 不变量。它另外还 Del("ETag") 并把强 ETag 改写成弱 ETag，与后续
-// 条件请求（If-None-Match）的设计直接冲突。
+// 不变量。它另外还会删除或改写业务端点用于乐观锁的 ETag。
 //
 // # 中间件顺序约束（改动 installRouterMiddleware 时必须一并复核）
 //
@@ -126,7 +121,7 @@ func gzipEligible(req *http.Request) bool {
 	if _, excluded := gzipExcludedPaths[req.URL.Path]; excluded {
 		return false
 	}
-	return !strings.HasPrefix(req.URL.Path, "/debug/pprof")
+	return true
 }
 
 // acceptsGzip 按 RFC 9110 §12.5.3 解析 Accept-Encoding。
@@ -294,7 +289,7 @@ func (w *gzipWriter) addVary() {
 	header.Add("Vary", "Accept-Encoding")
 }
 
-// Flush 让流式端点（/api/export 系列按游标批次直写 c.Writer）能把已产出的
+// Flush 让流式端点（/api/export/v2 按游标批次直写 c.Writer）能把已产出的
 // 部分推给客户端。仍在缓冲态时，显式 Flush 表达的是「现在就出字节」，
 // 因此当场按当前缓冲量决定走哪条路，不再等阈值。
 func (w *gzipWriter) Flush() {

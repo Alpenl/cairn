@@ -86,13 +86,12 @@ describe('ResourceStore in-flight 去重', () => {
 })
 
 describe('ResourceStore success response 动态提交键', () => {
-  it('仍按 request key 合并请求，成功数据与 ETag 只写入 response target key', async () => {
+  it('仍按 request key 合并请求，成功数据只写入 response target key', async () => {
     const store = new ResourceStore()
     const requestKey = 'GET content:/api/links/L1/content?revision=7'
     const targetKey = 'GET content:/api/links/L1/content?revision=8'
     const gate = deferred<void>()
-    const fetcher = vi.fn(async (conditional: { onETag: (tag: string) => void }) => {
-      conditional.onETag('"revision-8"')
+    const fetcher = vi.fn(async () => {
       await gate.promise
       return ok({ revision: 8, body: 'new body' })
     })
@@ -112,7 +111,6 @@ describe('ResourceStore success response 动态提交键', () => {
     expect(firstResult).toEqual(secondResult)
     const requestSnapshot = store.peek(requestKey)
     expect(requestSnapshot.data).toBeUndefined()
-    expect(requestSnapshot.etag).toBeUndefined()
     expect(requestSnapshot).toMatchObject({
       revalidating: false,
       attemptedGeneration: 0,
@@ -120,7 +118,6 @@ describe('ResourceStore success response 动态提交键', () => {
     })
     expect(store.peek(targetKey)).toMatchObject({
       data: { revision: 8, body: 'new body' },
-      etag: '"revision-8"',
       revalidating: false,
       desiredGeneration: 0,
       attemptedGeneration: 0,
@@ -375,61 +372,6 @@ describe('ResourceStore 乐观更新', () => {
   })
 })
 
-describe('ResourceStore 条件请求（PF5）', () => {
-  it('把上一次的 ETag 作为 If-None-Match 交给 fetcher', async () => {
-    const store = new ResourceStore()
-    const seen: (string | null)[] = []
-
-    await store.fetch('k', async (conditional) => {
-      seen.push(conditional.ifNoneMatch)
-      conditional.onETag('"v1"')
-      return ok({ id: 'a' })
-    })
-    await store.fetch('k', async (conditional) => {
-      seen.push(conditional.ifNoneMatch)
-      return ok({ id: 'a' })
-    })
-
-    expect(seen).toEqual([null, '"v1"'])
-  })
-
-  it('304 视为"缓存仍有效"：保留原数据引用、清错误、不当成失败', async () => {
-    const store = new ResourceStore()
-    await store.fetch('k', async (conditional) => {
-      conditional.onETag('"v1"')
-      return ok({ items: [{ id: '1' }] })
-    })
-    const data = store.peek('k').data
-
-    await store.fetch('k', async () => ({
-      ok: false as const,
-      error: { kind: 'not-modified' as const, message: 'not modified', status: 304 },
-    }))
-
-    expect(store.peek('k').error).toBeNull()
-    // 引用必须原样保留——换了引用等于让下游 memo 全部白失效一次。
-    expect(store.peek('k').data).toBe(data)
-  })
-
-  it('304 之后仍然继续携带同一个 ETag', async () => {
-    const store = new ResourceStore()
-    const seen: (string | null)[] = []
-    await store.fetch('k', async (conditional) => {
-      conditional.onETag('"v1"')
-      return ok({ id: 'a' })
-    })
-    await store.fetch('k', async (conditional) => {
-      seen.push(conditional.ifNoneMatch)
-      return { ok: false as const, error: { kind: 'not-modified' as const, message: '', status: 304 } }
-    })
-    await store.fetch('k', async (conditional) => {
-      seen.push(conditional.ifNoneMatch)
-      return ok({ id: 'a' })
-    })
-    expect(seen).toEqual(['"v1"', '"v1"'])
-  })
-})
-
 describe('ResourceStore 失效代际（invalidate 半边）', () => {
   it('回源途中发生 invalidate，迟到的结果不得落盘', async () => {
     const store = new ResourceStore()
@@ -562,24 +504,5 @@ describe('ResourceStore force 重取与 in-flight 记账', () => {
     await Promise.all([second, third])
 
     expect(calls).toBe(2)
-  })
-
-  it('force 不携带 If-None-Match —— 用户主动重取永远有逃生舱', async () => {
-    const store = new ResourceStore()
-    const seen: (string | null)[] = []
-    await store.fetch('k', async (conditional) => {
-      conditional.onETag('"v1"')
-      return ok({ id: 'a' })
-    })
-    await store.fetch('k', async (conditional) => {
-      seen.push(conditional.ifNoneMatch)
-      return ok({ id: 'a' })
-    }, { force: true })
-    await store.fetch('k', async (conditional) => {
-      seen.push(conditional.ifNoneMatch)
-      return ok({ id: 'a' })
-    })
-
-    expect(seen).toEqual([null, '"v1"'])
   })
 })

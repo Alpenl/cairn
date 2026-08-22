@@ -2,22 +2,13 @@ package service
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
-	"webtag/internal/dto"
 	"webtag/internal/model"
 )
-
-type stubDisplayLookup struct {
-	result map[uuid.UUID][]string
-	err    error
-	calls  int
-}
 
 type stubContentReader struct {
 	content *model.SavedContent
@@ -25,113 +16,6 @@ type stubContentReader struct {
 
 func (s stubContentReader) GetContent(context.Context, uuid.UUID) (*model.SavedContent, error) {
 	return s.content, nil
-}
-
-func (s *stubDisplayLookup) ListDisplayNamesByLinkIDs(_ context.Context, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
-	s.calls++
-	if s.err != nil {
-		return nil, s.err
-	}
-	return s.result, nil
-}
-
-func TestListOverridesTagsWithConceptDisplayNames(t *testing.T) {
-	t.Parallel()
-
-	link := model.Link{
-		ID:        uuid.MustParse("11111111-1111-1111-1111-111111111111"),
-		Tags:      []string{"检索增强生成"}, // LLM original
-		Status:    model.LinkStatusDone,
-		CreatedAt: time.Unix(0, 0).UTC(),
-	}
-	store := &readFakeLinkStore{
-		listDoneResult: []model.Link{link},
-		listDoneTotal:  1,
-	}
-	display := &stubDisplayLookup{
-		result: map[uuid.UUID][]string{
-			link.ID: {"RAG"}, // canonical display
-		},
-	}
-	svc := NewLinkReadService(LinkReadServiceOptions{Links: store, ConceptDisplay: display})
-
-	resp, err := svc.List(context.Background(), dto.ListLinksRequest{Limit: 10})
-	if err != nil {
-		t.Fatalf("List err = %v", err)
-	}
-	if len(resp.Items) != 1 {
-		t.Fatalf("items = %d, want 1", len(resp.Items))
-	}
-	got := resp.Items[0].Tags
-	if len(got) != 1 || got[0] != "RAG" {
-		t.Fatalf("Tags = %v, want [RAG]", got)
-	}
-}
-
-func TestListFallsBackToRawTagsWhenDisplayLookupFails(t *testing.T) {
-	t.Parallel()
-
-	link := model.Link{
-		ID:     uuid.New(),
-		Tags:   []string{"LLM original"},
-		Status: model.LinkStatusDone,
-	}
-	store := &readFakeLinkStore{
-		listDoneResult: []model.Link{link},
-		listDoneTotal:  1,
-	}
-	display := &stubDisplayLookup{err: errors.New("DB down")}
-	svc := NewLinkReadService(LinkReadServiceOptions{Links: store, ConceptDisplay: display})
-
-	resp, err := svc.List(context.Background(), dto.ListLinksRequest{Limit: 10})
-	if err != nil {
-		t.Fatalf("List err = %v", err)
-	}
-	got := resp.Items[0].Tags
-	if len(got) != 1 || got[0] != "LLM original" {
-		t.Fatalf("Tags = %v, want fallback to raw LLM tag", got)
-	}
-}
-
-func TestListKeepsRawTagsWhenNoConceptAttached(t *testing.T) {
-	t.Parallel()
-	link := model.Link{
-		ID:     uuid.New(),
-		Tags:   []string{"only LLM tag"},
-		Status: model.LinkStatusDone,
-	}
-	store := &readFakeLinkStore{
-		listDoneResult: []model.Link{link},
-		listDoneTotal:  1,
-	}
-	display := &stubDisplayLookup{result: map[uuid.UUID][]string{}} // empty
-	svc := NewLinkReadService(LinkReadServiceOptions{Links: store, ConceptDisplay: display})
-	resp, _ := svc.List(context.Background(), dto.ListLinksRequest{Limit: 10})
-	if resp.Items[0].Tags[0] != "only LLM tag" {
-		t.Fatalf("expected unchanged tags when no concept attached")
-	}
-}
-
-func TestGetOverridesTagsWithDisplayNames(t *testing.T) {
-	t.Parallel()
-	id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
-	link := model.Link{
-		ID:     id,
-		Tags:   []string{"rag"},
-		Status: model.LinkStatusDone,
-	}
-	store := &readFakeLinkStore{byID: map[uuid.UUID]*model.Link{id: &link}}
-	display := &stubDisplayLookup{
-		result: map[uuid.UUID][]string{id: {"RAG"}},
-	}
-	svc := NewLinkReadService(LinkReadServiceOptions{Links: store, ConceptDisplay: display})
-	resp, err := svc.Get(context.Background(), id.String())
-	if err != nil {
-		t.Fatalf("Get err = %v", err)
-	}
-	if resp.Tags[0] != "RAG" {
-		t.Fatalf("Tags = %v, want [RAG]", resp.Tags)
-	}
 }
 
 func TestGetIncludesStructuredSavedContentOnlyOnDetail(t *testing.T) {
@@ -217,24 +101,6 @@ func TestGetWithoutSavedContentReportsHasContentFalse(t *testing.T) {
 	}
 	if resp.HasContent {
 		t.Fatal("has_content = true，但这条链接根本没有已保存原文")
-	}
-}
-
-func TestListWithNilConceptDisplayKeepsRawTags(t *testing.T) {
-	t.Parallel()
-	link := model.Link{
-		ID:     uuid.New(),
-		Tags:   []string{"raw"},
-		Status: model.LinkStatusDone,
-	}
-	store := &readFakeLinkStore{
-		listDoneResult: []model.Link{link},
-		listDoneTotal:  1,
-	}
-	svc := NewLinkReadService(LinkReadServiceOptions{Links: store}) // no display dep
-	resp, _ := svc.List(context.Background(), dto.ListLinksRequest{Limit: 10})
-	if resp.Items[0].Tags[0] != "raw" {
-		t.Fatalf("nil display dep should keep raw tags")
 	}
 }
 

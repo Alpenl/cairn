@@ -208,10 +208,6 @@ validate_security_evidence() {
 			rm -rf "$temporary"
 			fail "SBOM evidence omits Alpine packages for slim/$arch"
 		}
-		if [[ -e $directory/yt-dlp-advisories.json || -e $directory/yt-dlp-coverage.json ]]; then
-			rm -rf "$temporary"
-			fail "security evidence unexpectedly includes yt-dlp files for slim/$arch"
-		fi
 	done
 	rm -rf "$temporary"
 }

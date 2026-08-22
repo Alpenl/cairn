@@ -32,16 +32,7 @@ const defaultAnalyzerMaxResponseBytes int64 = 1 << 20
 type AnalyzeRequest struct {
 	Content      fetcher.Content
 	ExistingTags []string
-	// Candidates is the v3 retrieve-then-select candidate concept name
-	// list: the topK concepts recalled by cosine similarity to the
-	// content embedding. When non-empty (and SystemPromptOverride is
-	// unset), Analyze builds the candidate-based system prompt instructing
-	// the model to pick 2-4 tags from this list and propose at most one
-	// new tag. Empty Candidates keeps the legacy free-generation prompt
-	// (ExistingTags injection), which is also the cold-start / fail-soft
-	// fallback path the pipeline drops to.
-	Candidates  []string
-	ContentType string
+	ContentType  string
 	// RequestedLibraryKind carries the capture selector into the single
 	// analyzer call. Auto permits a discriminated decision; an explicit choice
 	// asks the model only for the corresponding profile and never grants it
@@ -77,14 +68,11 @@ type AnalysisResult struct {
 	Title string
 	// LibraryKind and the profiles are populated for schema_version=2
 	// responses. Legacy responses remain a compatible reading projection.
-	LibraryKind               model.LibraryKind
-	ClassificationConfidence  float32
-	ClassificationReason      string
-	ClassificationExplanation string
-	SiteName                  string
-	SiteIntro                 string
-	EntryName                 string
-	EntryPurpose              string
+	LibraryKind  model.LibraryKind
+	SiteName     string
+	SiteIntro    string
+	EntryName    string
+	EntryPurpose string
 }
 
 // Analyzer 是内容分析器的抽象接口，便于服务装配时替换实现或在测试中打桩。
@@ -109,8 +97,7 @@ type OpenAIAnalyzerOptions struct {
 	Model      string
 	HTTPClient *http.Client
 	// VisionHTTPClient fetches caller-supplied remote images inside Cairn's
-	// SSRF boundary. Production wires the ordinary fetch client here, never
-	// the provider client controlled by AI_ALLOW_UNSAFE_TARGETS.
+	// SSRF boundary.
 	VisionHTTPClient     *fetcher.HTTPClient
 	RequestTimeout       time.Duration
 	EmptyResponseRetries int
@@ -121,13 +108,6 @@ type OpenAIAnalyzerOptions struct {
 	// process-wide capability loss, and without a log line an operator can
 	// only infer it from a rise in malformed-JSON retries.
 	Logger *slog.Logger
-
-	// DisableStructuredOutput is the operator escape hatch for gateways that
-	// choke on the strict json_schema response_format block. Phrased as a
-	// negative so the zero value keeps structured output on — the analyzer
-	// also demotes itself automatically on a 4xx rejection, so this is only
-	// needed for a gateway that accepts the block and then misbehaves.
-	DisableStructuredOutput bool
 
 	// Shape — internal defaults, override only in tests.
 	BodyPreviewChars int
@@ -157,13 +137,10 @@ type OpenAIAnalyzer struct {
 	maxTagChars          int
 	maxResponseBytes     int64
 
-	// disableStructuredOutput is the static operator opt-out;
 	// structuredUnsupported is the runtime latch set the first time an
-	// upstream rejects the response_format block. Both are consulted by
-	// wantsStructuredOutput. The atomic makes the latch safe for the
+	// upstream rejects the response_format block. The atomic makes the latch safe for the
 	// concurrent Analyze calls the parse workers issue against one analyzer.
-	disableStructuredOutput bool
-	structuredUnsupported   atomic.Bool
+	structuredUnsupported atomic.Bool
 	// structuredProven latches once a request carrying response_format has
 	// come back 2xx, i.e. the gateway has demonstrated it understands the
 	// field. Before that, demoteStructuredOutput treats any 400/422 as a
@@ -240,8 +217,7 @@ func NewOpenAIAnalyzer(opts OpenAIAnalyzerOptions) *OpenAIAnalyzer {
 		maxTagChars:          opts.MaxTagChars,
 		maxResponseBytes:     opts.MaxResponseBytes,
 
-		disableStructuredOutput: opts.DisableStructuredOutput,
-		logger:                  opts.Logger,
+		logger: opts.Logger,
 	}
 	return a
 }
@@ -323,8 +299,9 @@ func (a *OpenAIAnalyzer) SummarizeInbox(ctx context.Context, body string, existi
 			SourceKind:  "reader_inbox",
 			FetcherType: "reader_inbox",
 		},
-		ExistingTags: append([]string(nil), existingTags...),
-		ContentType:  "article",
+		ExistingTags:         append([]string(nil), existingTags...),
+		ContentType:          "article",
+		RequestedLibraryKind: model.RequestedLibraryKindReading,
 	})
 	if err != nil {
 		return "", nil, err
@@ -425,12 +402,9 @@ func (a *OpenAIAnalyzer) Analyze(ctx context.Context, req AnalyzeRequest) (Analy
 				result.Summary = ensureDigestCoverage(result.Summary, req.Content.Body, summaryLimit)
 				result.Tags = canonicalizeDigestTags(result.Tags, req.Content.Body)
 			}
-			result.Summary = canonicalizeEvidenceBackedSummary(result.Summary, req.Content)
-			result.Tags = canonicalizeEvidenceBackedTags(result.Tags, req.Content)
 			if len(result.Tags) > a.maxTags {
 				result.Tags = result.Tags[:a.maxTags]
 			}
-			result.Title = canonicalizeEvidenceBackedTitle(result.Title, result.Summary, req.Content)
 			result.Summary = summarypolicy.Clamp(result.Summary, summaryLimit)
 			if strings.TrimSpace(result.Summary) == "" {
 				lastErr = fmt.Errorf("analyzer summary empty after profile conformance")
@@ -467,10 +441,8 @@ func (a *OpenAIAnalyzer) summaryLimit(req AnalyzeRequest) int {
 	return limit
 }
 
-// buildAnalyzePayload 组装 chat completion 请求体。system prompt 三态选择：
-// override（最高优先）> 候选制（v3 retrieve-then-select，非空候选集把自由
-// 生成 prompt 换成"从候选中选择"，候选清单而非 ExistingTags 是模型词表）
-// > 自由生成（含 existing_tags 注入）。
+// buildAnalyzePayload 组装 chat completion 请求体。显式 override 优先；默认
+// prompt 会注入已有标签作为复用提示。
 func (a *OpenAIAnalyzer) buildAnalyzePayload(req AnalyzeRequest) map[string]any {
 	policyInput := summarypolicy.Input{
 		URL:         req.Content.URL,
@@ -478,12 +450,9 @@ func (a *OpenAIAnalyzer) buildAnalyzePayload(req AnalyzeRequest) map[string]any 
 		FetcherType: req.Content.FetcherType,
 	}
 	systemPrompt := buildSystemPromptFor(req.ExistingTags, policyInput)
-	if len(req.Candidates) > 0 {
-		systemPrompt = buildRetrieveSelectPromptFor(req.Candidates, policyInput)
-	}
 	if req.URLDirect {
-		// grok 直连：让模型自己抓取 URL，覆盖前面基于已抓内容的 prompt 选择。
-		systemPrompt = buildURLDirectPromptFor(req.ExistingTags, req.Candidates, policyInput)
+		// grok 直连：让模型自己抓取 URL，覆盖基于已抓内容的 prompt。
+		systemPrompt = buildURLDirectPromptFor(req.ExistingTags, policyInput)
 	}
 	if strings.TrimSpace(req.SystemPromptOverride) != "" {
 		systemPrompt = req.SystemPromptOverride

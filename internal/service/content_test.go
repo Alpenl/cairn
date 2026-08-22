@@ -14,6 +14,7 @@ import (
 	"webtag/internal/fetcher"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -52,8 +53,8 @@ func (f *fakeContentStore) UpdateContentIfCurrent(_ context.Context, id uuid.UUI
 	}
 	return f.record(id, content), true, nil
 }
-func (f *fakeContentStore) ReplaceContentIfCurrent(_ context.Context, id uuid.UUID, expectedUpdatedAt time.Time, content model.SavedContent) (int64, bool, error) {
-	if f.link == nil || f.link.Status != model.LinkStatusDone || !f.link.UpdatedAt.Equal(expectedUpdatedAt) {
+func (f *fakeContentStore) ReplaceContentIfCurrentWithRevision(_ context.Context, id uuid.UUID, expectedUpdatedAt time.Time, expectedContentRevision int64, content model.SavedContent) (int64, bool, error) {
+	if f.link == nil || f.link.Status != model.LinkStatusDone || !f.link.UpdatedAt.Equal(expectedUpdatedAt) || f.link.ContentRevision != expectedContentRevision {
 		return 0, false, nil
 	}
 	return f.record(id, content), true, nil
@@ -474,8 +475,8 @@ func TestContentSaveFetchErrorIsBadGateway(t *testing.T) {
 	store := &fakeContentStore{link: contentDoneLink()}
 	svc := NewContentService(store, fakeContentFetcher{err: errors.New("blocked")}, nil)
 	_, err := svc.Save(context.Background(), store.link.ID.String())
-	var he *httperr.Error
-	if !errors.As(err, &he) || he.HTTPStatus() != 502 {
+	var he *problem.Error
+	if !errors.As(err, &he) || problemHTTPStatus(he) != 502 {
 		t.Fatalf("err = %v, want 502", err)
 	}
 	if store.saved != "" {
@@ -489,8 +490,8 @@ func TestContentSaveWithoutConfiguredFetcherIsServiceUnavailable(t *testing.T) {
 	svc := NewContentService(store, nil, nil)
 
 	_, err := svc.Save(context.Background(), store.link.ID.String())
-	var httpErr *httperr.Error
-	if !errors.As(err, &httpErr) || httpErr.HTTPStatus() != 503 {
+	var httpErr *problem.Error
+	if !errors.As(err, &httpErr) || problemHTTPStatus(httpErr) != 503 {
 		t.Fatalf("err = %v, want 503", err)
 	}
 	if store.saved != "" {
@@ -506,8 +507,8 @@ func TestContentSaveRejectsSearchSummaryAsOriginalContent(t *testing.T) {
 	}, nil)
 
 	_, err := svc.Save(context.Background(), store.link.ID.String())
-	var httpErr *httperr.Error
-	if !errors.As(err, &httpErr) || httpErr.HTTPStatus() != 502 {
+	var httpErr *problem.Error
+	if !errors.As(err, &httpErr) || problemHTTPStatus(httpErr) != 502 {
 		t.Fatalf("err = %v, want 502", err)
 	}
 	if store.saved != "" {
@@ -520,8 +521,8 @@ func TestContentSaveEmptyBodyIsBadGateway(t *testing.T) {
 	store := &fakeContentStore{link: contentDoneLink()}
 	svc := NewContentService(store, fakeContentFetcher{content: fetcher.Content{Body: "   "}}, nil)
 	_, err := svc.Save(context.Background(), store.link.ID.String())
-	var he *httperr.Error
-	if !errors.As(err, &he) || he.HTTPStatus() != 502 {
+	var he *problem.Error
+	if !errors.As(err, &he) || problemHTTPStatus(he) != 502 {
 		t.Fatalf("err = %v, want 502 on empty body", err)
 	}
 }
@@ -779,11 +780,11 @@ func TestContentEditNormalizesLegacyHTMLBeforeEditing(t *testing.T) {
 
 func assertHTTPCode(t *testing.T, err error, wantCode string) {
 	t.Helper()
-	var he *httperr.Error
+	var he *problem.Error
 	if !errors.As(err, &he) {
-		t.Fatalf("err = %v, want *httperr.Error", err)
+		t.Fatalf("err = %v, want *problem.Error", err)
 	}
-	if he.HTTPErrorCode() != wantCode {
-		t.Fatalf("error code = %q, want %q", he.HTTPErrorCode(), wantCode)
+	if he.Code() != wantCode {
+		t.Fatalf("error code = %q, want %q", he.Code(), wantCode)
 	}
 }

@@ -17,7 +17,7 @@ import (
 )
 
 type noteDraftHandlerStub struct {
-	ReaderService
+	ReaderNoteRoutes
 	errors map[string]error
 	note   dto.ReaderNoteResponse
 }
@@ -41,40 +41,38 @@ func TestReaderSaveNoteDraftHTTPContractAcrossAliases(t *testing.T) {
 		note: dto.ReaderNoteResponse{ID: successID, Title: "Draft", PublishedRevision: 1, DraftRevision: 2, CreatedAt: now, UpdatedAt: now},
 	}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
-	for _, prefix := range []string{"/api", "/api/v1"} {
-		for _, test := range []struct {
-			name       string
-			id         string
-			wantStatus int
-			wantCode   string
-		}{
-			{name: "missing", id: missingID, wantStatus: http.StatusNotFound, wantCode: "reader_not_found"},
-			{name: "stale", id: staleID, wantStatus: http.StatusConflict, wantCode: "revision_conflict"},
-			{name: "matching", id: successID, wantStatus: http.StatusOK},
-		} {
-			t.Run(prefix+"/"+test.name, func(t *testing.T) {
-				recording := httptest.NewRecorder()
-				request := httptest.NewRequest(http.MethodPatch, prefix+"/notes/"+test.id+"/draft", bytes.NewBufferString(`{"content":"draft","expected_draft_revision":1}`))
-				request.Header.Set("Content-Type", "application/json")
-				router.ServeHTTP(recording, request)
-				if recording.Code != test.wantStatus {
-					t.Fatalf("status = %d, want %d; body=%s", recording.Code, test.wantStatus, recording.Body.String())
+	for _, test := range []struct {
+		name       string
+		id         string
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "missing", id: missingID, wantStatus: http.StatusNotFound, wantCode: "reader_not_found"},
+		{name: "stale", id: staleID, wantStatus: http.StatusConflict, wantCode: "revision_conflict"},
+		{name: "matching", id: successID, wantStatus: http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recording := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPatch, "/api/notes/"+test.id+"/draft", bytes.NewBufferString(`{"content":"draft","expected_draft_revision":1}`))
+			request.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(recording, request)
+			if recording.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", recording.Code, test.wantStatus, recording.Body.String())
+			}
+			if test.wantCode != "" {
+				var body struct {
+					Error struct {
+						ErrorCode string `json:"error_code"`
+					} `json:"error"`
 				}
-				if test.wantCode != "" {
-					var body struct {
-						Error struct {
-							ErrorCode string `json:"error_code"`
-						} `json:"error"`
-					}
-					if err := json.Unmarshal(recording.Body.Bytes(), &body); err != nil || body.Error.ErrorCode != test.wantCode {
-						t.Fatalf("error body = %s, decode=%v; want error_code=%q", recording.Body.String(), err, test.wantCode)
-					}
-				} else if got := recording.Header().Get("ETag"); got != `"2"` {
-					t.Fatalf("ETag = %q, want %q", got, `"2"`)
+				if err := json.Unmarshal(recording.Body.Bytes(), &body); err != nil || body.Error.ErrorCode != test.wantCode {
+					t.Fatalf("error body = %s, decode=%v; want error_code=%q", recording.Body.String(), err, test.wantCode)
 				}
-			})
-		}
+			} else if got := recording.Header().Get("ETag"); got != `"2"` {
+				t.Fatalf("ETag = %q, want %q", got, `"2"`)
+			}
+		})
 	}
 }

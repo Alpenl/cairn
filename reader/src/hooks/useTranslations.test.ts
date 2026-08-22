@@ -138,8 +138,8 @@ describe('useTranslations', () => {
       source_content_revision: null,
       stale: true,
     })
-    const retiredDeepResearch = translation({
-      id: 'retired-dr',
+    const unknownBlock = translation({
+      id: 'unknown-block',
       scope: 'selection',
       block_key: 'dr',
       source_content_revision: null,
@@ -148,7 +148,7 @@ describe('useTranslations', () => {
       getTranslations: vi.fn(async () => ({
         ok: true as const,
         data: translationList(
-          [current, stale, legacy, currentSummary, staleSummary, retiredDeepResearch],
+          [current, stale, legacy, currentSummary, staleSummary, unknownBlock],
           8,
           SUMMARY_HASH_A,
         ),
@@ -165,10 +165,9 @@ describe('useTranslations', () => {
     expect(result.current.currentContentRevision).toBe(8)
     expect(result.current.items.map((item) => item.id)).toEqual(['current', 'summary-current'])
     expect(result.current.staleItems.map((item) => item.id)).toEqual(['stale', 'summary-stale'])
-    expect(result.current.legacyItems.map((item) => item.id)).toEqual(['legacy', 'retired-dr'])
   })
 
-  it('将缺失 revision envelope 的旧缓存 saved-content 译文关在 legacy 区', async () => {
+  it('忽略缺失 revision envelope 的旧缓存 saved-content 译文', async () => {
     const legacyRuntimePayload = {
       items: [
         {
@@ -196,7 +195,6 @@ describe('useTranslations', () => {
     expect(result.current.currentContentRevision).toBeNull()
     expect(result.current.items).toEqual([])
     expect(result.current.staleItems).toEqual([])
-    expect(result.current.legacyItems.map((item) => item.id)).toEqual(['legacy-v4'])
   })
 
   it('零 envelope revision 表示尚无 saved generation，不能证明译文当前有效', async () => {
@@ -310,7 +308,6 @@ describe('useTranslations', () => {
       'restored-old-full',
       'restored-old-selection',
     ])
-    expect(result.current.legacyItems.map((item) => item.id)).toEqual(['restored-legacy'])
   })
 
   it('active revision 高于内部自洽的缓存 envelope 时立即隔离旧译文并回源', async () => {
@@ -389,7 +386,7 @@ describe('useTranslations', () => {
     )
 
     expect(result.current.items).toEqual([])
-    expect(result.current.legacyItems).toEqual([cachedSummary])
+    expect(result.current.staleItems).toEqual([cachedSummary])
     await waitFor(() => expect(client.getTranslations).toHaveBeenCalledTimes(1))
 
     await act(async () => {
@@ -423,7 +420,7 @@ describe('useTranslations', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.items).toEqual([])
-    expect(result.current.legacyItems).toEqual([summary])
+    expect(result.current.staleItems).toEqual([summary])
   })
 
   it('summary hash 未验证时仍恢复并轮询 saved-content，且隔离 summary 子资源', async () => {
@@ -465,7 +462,7 @@ describe('useTranslations', () => {
     await act(async () => {})
     expect(client.getTranslations).toHaveBeenCalledTimes(1)
     expect(result.current.items).toEqual([savedPending])
-    expect(result.current.legacyItems).toEqual([summary])
+    expect(result.current.staleItems).toEqual([summary])
     expect(result.current.hasActiveJobs).toBe(true)
 
     await act(async () => {
@@ -473,7 +470,7 @@ describe('useTranslations', () => {
     })
     expect(client.getTranslations).toHaveBeenCalledTimes(2)
     expect(result.current.items).toEqual([savedDone])
-    expect(result.current.legacyItems).toEqual([summary])
+    expect(result.current.staleItems).toEqual([summary])
     expect(result.current.hasActiveJobs).toBe(false)
   })
 
@@ -703,7 +700,7 @@ describe('useTranslations', () => {
     })
   })
 
-  it('不把 saved create 响应并入不同 revision 的 list envelope', async () => {
+  it('拒绝 revision 不匹配的 saved create 响应并权威回源', async () => {
     const created = translation({
       id: 'created-rev-8',
       scope: 'full',
@@ -719,7 +716,9 @@ describe('useTranslations', () => {
       createTranslation: vi.fn(async () => ({ ok: true as const, data: created })),
       isIdentityCurrent: vi.fn(() => true),
     } as unknown as ReaderClient
-    const { result } = renderHook(() => useTranslations(client, 'L1'))
+    const { result } = renderHook(() =>
+      useTranslations(client, 'L1', { contentRevision: 7 }),
+    )
     await waitFor(() => expect(result.current.currentContentRevision).toBe(7))
 
     await act(async () => {
@@ -727,15 +726,19 @@ describe('useTranslations', () => {
         scope: 'full',
         force: false,
       })
-      expect(response.ok).toBe(true)
+      expect(response).toMatchObject({
+        ok: false,
+        error: { kind: 'identity-mismatch' },
+      })
     })
 
     await waitFor(() => expect(client.getTranslations).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(result.current.currentContentRevision).toBe(8))
-    expect(result.current.items).toEqual([created])
-    expect(resourceStore.peek<TranslationListResponse>(translationsKey('L1')).data).toEqual(
-      authoritative,
-    )
+    expect(result.current.items).toEqual([])
+    expect(result.current.staleItems).toEqual([created])
+    expect(
+      resourceStore.peek<TranslationListResponse>(translationsKey('L1', 7)).data,
+    ).toEqual(authoritative)
   })
 
   it('summary 改变后拒绝旧来源的迟到 create 响应且不污染当前缓存', async () => {
@@ -812,7 +815,9 @@ describe('useTranslations', () => {
       createTranslation: vi.fn(() => createRequest),
       isIdentityCurrent: vi.fn(() => leaseA.isCurrent(ownershipA)),
     } as unknown as ReaderClient
-    const { result } = renderHook(() => useTranslations(client, 'L1'))
+    const { result } = renderHook(() =>
+      useTranslations(client, 'L1', { contentRevision: 7 }),
+    )
     await waitFor(() => expect(result.current.items).toEqual([existingA]))
 
     let pending!: Promise<unknown>
@@ -831,7 +836,7 @@ describe('useTranslations', () => {
         physicalNamespace: 'physical-B',
       })
       resourceStore.activateIdentity(leaseB)
-      resourceStore.set(translationsKey('L1'), bSnapshot)
+      resourceStore.set(translationsKey('L1', 7), bSnapshot)
     })
 
     await act(async () => {
@@ -839,7 +844,7 @@ describe('useTranslations', () => {
       await pending
     })
 
-    expect(resourceStore.peek(translationsKey('L1')).data).toBe(bSnapshot)
+    expect(resourceStore.peek(translationsKey('L1', 7)).data).toBe(bSnapshot)
   })
 
   it('仅在存在活动任务时轮询并合并完成结果', async () => {
@@ -854,7 +859,9 @@ describe('useTranslations', () => {
       createTranslation: vi.fn(async () => ({ ok: true as const, data: pending })),
       isIdentityCurrent: vi.fn(() => true),
     } as unknown as ReaderClient
-    const { result } = renderHook(() => useTranslations(client, 'L1'))
+    const { result } = renderHook(() =>
+      useTranslations(client, 'L1', { contentRevision: 7 }),
+    )
     await act(async () => {})
 
     await act(async () => {
@@ -901,7 +908,9 @@ describe('useTranslations', () => {
       isIdentityCurrent: vi.fn(() => true),
     } as unknown as ReaderClient
 
-    const { result } = renderHook(() => useTranslations(client, 'L1'))
+    const { result } = renderHook(() =>
+      useTranslations(client, 'L1', { contentRevision: 7 }),
+    )
     await act(async () => {})
 
     expect(result.current.items).toEqual([])
@@ -930,7 +939,9 @@ describe('useTranslations', () => {
       createTranslation: vi.fn(async () => ({ ok: true as const, data: pending })),
       isIdentityCurrent: vi.fn(() => true),
     } as unknown as ReaderClient
-    const { result } = renderHook(() => useTranslations(client, 'L1'))
+    const { result } = renderHook(() =>
+      useTranslations(client, 'L1', { contentRevision: 7 }),
+    )
     await act(async () => {})
 
     await act(async () => {

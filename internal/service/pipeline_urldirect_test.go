@@ -15,7 +15,6 @@ import (
 	"webtag/internal/errsafe"
 	"webtag/internal/fetcher"
 	"webtag/internal/model"
-	"webtag/internal/observability"
 	"webtag/internal/repository/repotest"
 	analyzerpkg "webtag/internal/service/analyzer"
 )
@@ -23,20 +22,17 @@ import (
 // urlDirectHarness wires a minimal pipeline with URLDirect enabled and a
 // fetcher that records whether it was called (so a test can assert the
 // grok-direct path skipped local fetching vs fell back to it).
-func urlDirectHarness(t *testing.T, sourceKind string, analyzer analyzerpkg.Analyzer) (*ParsePipeline, uuid.UUID, *bool, *repotest.ObservableLinkStore) {
+func urlDirectHarness(t *testing.T, sourceKind string, analyzer analyzerpkg.Analyzer) (*ParsePipeline, model.ParseAttempt, *bool, *repotest.ObservableLinkStore) {
 	t.Helper()
 	linkID := uuid.MustParse("a1a1a1a1-0000-0000-0000-000000000001")
-	jobID := uuid.MustParse("b2b2b2b2-0000-0000-0000-000000000002")
+	attempt := model.ParseAttempt{LinkID: linkID, Generation: 1, ExpectedMetadataRevision: 1}
 	now := time.Now().UTC()
 
 	linkStore := newPipelineLinkStore(map[uuid.UUID]*model.Link{
 		linkID: {
 			ID: linkID, URL: "https://x.com/example/status/2073708506319098344", SourceKind: sourceKind,
-			Status: model.LinkStatusPending, CreatedAt: now, UpdatedAt: now,
+			Status: model.LinkStatusPending, MetadataRevision: 1, ParseGeneration: 1, CreatedAt: now, UpdatedAt: now,
 		},
-	})
-	jobStore := newPipelineJobStore(map[uuid.UUID]*model.ParseJob{
-		linkID: {ID: jobID, LinkID: linkID, Status: model.JobStatusPending, CreatedAt: now, UpdatedAt: now},
 	})
 	tagStore := &pipelineFakeTagStore{tags: []string{"Go"}}
 	treeStore := newPipelineTreeStore(map[string]*model.Link{
@@ -53,15 +49,13 @@ func urlDirectHarness(t *testing.T, sourceKind string, analyzer analyzerpkg.Anal
 		Links:            linkStore,
 		ReadingCompleter: linkStore,
 		SiteCompleter:    linkStore,
-		Jobs:             jobStore,
 		Tags:             tagStore,
 		Tree:             treeStore,
 		Fetcher:          fetch,
 		Analyzer:         analyzer,
-		Metrics:          observability.NewMetrics(),
 		URLDirect:        true,
 	})
-	return p, jobID, &fetched, linkStore
+	return p, attempt, &fetched, linkStore
 }
 
 func TestURLDirectPrefersFetchedContentForStructuredArticle(t *testing.T) {
@@ -79,9 +73,9 @@ func TestURLDirectPrefersFetchedContentForStructuredArticle(t *testing.T) {
 		}, nil
 	})
 
-	pipeline, jobID, fetched, linkStore := urlDirectHarness(t, "url", analyzer)
+	pipeline, attempt, fetched, linkStore := urlDirectHarness(t, "url", analyzer)
 	linkStore.ByID[linkID].URL = "https://www.seangoedecke.com/good-api-design/"
-	if err := pipeline.Run(context.Background(), linkID, jobID); err != nil {
+	if err := pipeline.Run(context.Background(), attempt); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if !*fetched {
@@ -100,7 +94,6 @@ func TestURLDirectPrefersFetchedContentForStructuredArticle(t *testing.T) {
 // model's title/summary/tags and fetcher_type "grok".
 func TestURLDirectAccessibleSkipsFetcher(t *testing.T) {
 	t.Parallel()
-	linkID := uuid.MustParse("a1a1a1a1-0000-0000-0000-000000000001")
 
 	var gotURLDirect bool
 	analyzer := pipelineAnalyzerFunc(func(_ context.Context, req analyzerpkg.AnalyzeRequest) (analyzerpkg.AnalysisResult, error) {
@@ -113,8 +106,8 @@ func TestURLDirectAccessibleSkipsFetcher(t *testing.T) {
 		}, nil
 	})
 
-	p, jobID, fetched, linkStore := urlDirectHarness(t, "url", analyzer)
-	if err := p.Run(context.Background(), linkID, jobID); err != nil {
+	p, attempt, fetched, linkStore := urlDirectHarness(t, "url", analyzer)
+	if err := p.Run(context.Background(), attempt); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if !gotURLDirect {
@@ -143,7 +136,6 @@ func TestURLDirectAccessibleSkipsFetcher(t *testing.T) {
 
 func TestURLDirectLoadsExistingTagsForCanonicalReuse(t *testing.T) {
 	t.Parallel()
-	linkID := uuid.MustParse("a1a1a1a1-0000-0000-0000-000000000001")
 
 	var gotExistingTags []string
 	analyzer := pipelineAnalyzerFunc(func(_ context.Context, req analyzerpkg.AnalyzeRequest) (analyzerpkg.AnalysisResult, error) {
@@ -156,8 +148,8 @@ func TestURLDirectLoadsExistingTagsForCanonicalReuse(t *testing.T) {
 		}, nil
 	})
 
-	pipeline, jobID, fetched, _ := urlDirectHarness(t, "url", analyzer)
-	if err := pipeline.Run(context.Background(), linkID, jobID); err != nil {
+	pipeline, attempt, fetched, _ := urlDirectHarness(t, "url", analyzer)
+	if err := pipeline.Run(context.Background(), attempt); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if *fetched {
@@ -182,9 +174,9 @@ func TestURLDirectDoesNotPersistSocialPostBodyAsTitle(t *testing.T) {
 		}, nil
 	})
 
-	pipeline, jobID, fetched, linkStore := urlDirectHarness(t, "url", analyzer)
+	pipeline, attempt, fetched, linkStore := urlDirectHarness(t, "url", analyzer)
 	linkStore.ByID[linkID].URL = "https://x.com/GitHub_Daily/status/1941500000000000000"
-	if err := pipeline.Run(context.Background(), linkID, jobID); err != nil {
+	if err := pipeline.Run(context.Background(), attempt); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if *fetched {
@@ -211,7 +203,6 @@ func TestURLDirectDoesNotPersistSocialPostBodyAsTitle(t *testing.T) {
 // and still complete via the fetched-content analyze path.
 func TestURLDirectInaccessibleFallsBackToFetcher(t *testing.T) {
 	t.Parallel()
-	linkID := uuid.MustParse("a1a1a1a1-0000-0000-0000-000000000001")
 
 	calls := 0
 	analyzer := pipelineAnalyzerFunc(func(_ context.Context, req analyzerpkg.AnalyzeRequest) (analyzerpkg.AnalysisResult, error) {
@@ -223,8 +214,8 @@ func TestURLDirectInaccessibleFallsBackToFetcher(t *testing.T) {
 		return analyzerpkg.AnalysisResult{Accessible: true, Summary: "回退摘要", Tags: []string{"Go", "AI"}}, nil
 	})
 
-	p, jobID, fetched, linkStore := urlDirectHarness(t, "", analyzer)
-	if err := p.Run(context.Background(), linkID, jobID); err != nil {
+	p, attempt, fetched, linkStore := urlDirectHarness(t, "", analyzer)
+	if err := p.Run(context.Background(), attempt); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if !*fetched {
@@ -244,16 +235,15 @@ func TestURLDirectInaccessibleFallsBackToFetcher(t *testing.T) {
 
 func TestURLDirectSecurityFailureDoesNotFallbackOrResubmit(t *testing.T) {
 	t.Parallel()
-	linkID := uuid.MustParse("a1a1a1a1-0000-0000-0000-000000000001")
 
 	calls := 0
 	analyzer := pipelineAnalyzerFunc(func(context.Context, analyzerpkg.AnalyzeRequest) (analyzerpkg.AnalysisResult, error) {
 		calls++
 		return analyzerpkg.AnalysisResult{}, fetcher.ErrUnsafeRedirect
 	})
-	pipeline, jobID, fetched, linkStore := urlDirectHarness(t, "url", analyzer)
+	pipeline, attempt, fetched, linkStore := urlDirectHarness(t, "url", analyzer)
 
-	err := pipeline.Run(context.Background(), linkID, jobID)
+	err := pipeline.Run(context.Background(), attempt)
 	if !errors.Is(err, errsafe.ErrAlreadyPersisted) || !errors.Is(err, fetcher.ErrUnsafeRedirect) {
 		t.Fatalf("Run() error = %v, want persisted unsafe redirect", err)
 	}
@@ -270,7 +260,6 @@ func TestURLDirectSecurityFailureDoesNotFallbackOrResubmit(t *testing.T) {
 
 func TestURLDirectFailureLogRedactsUpstreamSecrets(t *testing.T) {
 	t.Parallel()
-	linkID := uuid.MustParse("a1a1a1a1-0000-0000-0000-000000000001")
 	const secret = "sk-abcdef0123456789ABCDEF"
 
 	calls := 0
@@ -282,11 +271,11 @@ func TestURLDirectFailureLogRedactsUpstreamSecrets(t *testing.T) {
 		return analyzerpkg.AnalysisResult{Summary: "fallback summary", Tags: []string{"safe"}}, nil
 	})
 
-	pipeline, jobID, fetched, _ := urlDirectHarness(t, "url", analyzer)
+	pipeline, attempt, fetched, _ := urlDirectHarness(t, "url", analyzer)
 	var logs bytes.Buffer
 	pipeline.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	if err := pipeline.Run(context.Background(), linkID, jobID); err != nil {
+	if err := pipeline.Run(context.Background(), attempt); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if !*fetched || calls != 2 {
@@ -321,7 +310,7 @@ func TestURLDirectUsesStoredContentForNonURLSources(t *testing.T) {
 			t.Parallel()
 
 			linkID := uuid.New()
-			jobID := uuid.New()
+			attempt := model.ParseAttempt{LinkID: linkID, Generation: 1, ExpectedMetadataRevision: 1}
 			now := time.Now().UTC()
 			title := "Stored title"
 			var inputText *string
@@ -331,28 +320,25 @@ func TestURLDirectUsesStoredContentForNonURLSources(t *testing.T) {
 
 			linkStore := newPipelineLinkStore(map[uuid.UUID]*model.Link{
 				linkID: {
-					ID:          linkID,
-					URL:         "https://example.com/articles/captured",
-					SourceKind:  tt.sourceKind,
-					InputTitle:  &title,
-					InputText:   inputText,
-					InputImages: append([]string(nil), tt.images...),
-					Status:      model.LinkStatusPending,
-					CreatedAt:   now,
-					UpdatedAt:   now,
+					ID:               linkID,
+					URL:              "https://example.com/articles/captured",
+					SourceKind:       tt.sourceKind,
+					InputTitle:       &title,
+					InputText:        inputText,
+					InputImages:      append([]string(nil), tt.images...),
+					Status:           model.LinkStatusPending,
+					MetadataRevision: 1,
+					ParseGeneration:  1,
+					CreatedAt:        now,
+					UpdatedAt:        now,
 				},
 			})
-			jobStore := newPipelineJobStore(map[uuid.UUID]*model.ParseJob{
-				linkID: {ID: jobID, LinkID: linkID, Status: model.JobStatusPending, CreatedAt: now, UpdatedAt: now},
-			})
-
 			fetcherCalls := 0
 			analyzerCalls := 0
 			pipeline := NewParsePipeline(ParsePipelineOptions{
 				Links:            linkStore,
 				ReadingCompleter: linkStore,
 				SiteCompleter:    linkStore,
-				Jobs:             jobStore,
 				Tags:             &pipelineFakeTagStore{},
 				Tree:             newPipelineTreeStore(nil),
 				Fetcher: pipelineFetcherFunc(func(context.Context, string) (fetcher.Content, error) {
@@ -378,7 +364,7 @@ func TestURLDirectUsesStoredContentForNonURLSources(t *testing.T) {
 				URLDirect: true,
 			})
 
-			if err := pipeline.Run(context.Background(), linkID, jobID); err != nil {
+			if err := pipeline.Run(context.Background(), attempt); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
 			if fetcherCalls != 0 {

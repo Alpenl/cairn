@@ -144,7 +144,6 @@ func TestProductionPayloadPinsLibrarySchema(t *testing.T) {
 	props, _ := schema["properties"].(map[string]any)
 	for _, want := range []string{
 		"schema_version", "library_kind",
-		"classification_confidence", "classification_reason", "classification_explanation",
 		"reading_profile", "site_profile",
 	} {
 		if _, present := props[want]; !present {
@@ -219,27 +218,6 @@ func TestExplicitKindPinsLibraryKindEnum(t *testing.T) {
 	}
 }
 
-// TestPlainSchemaStillAvailableWithoutKind covers the defensive branch: no
-// production caller leaves the kind empty today, but outputContract is still
-// the base every prompt builds on, so a future caller that skips the v2
-// append must land on a matching schema instead of silently losing it.
-func TestPlainSchemaStillAvailableWithoutKind(t *testing.T) {
-	t.Parallel()
-
-	a := newStructuredTestAnalyzer(t, "https://example.invalid", http.DefaultClient)
-	req := productionAnalyzeRequest()
-	req.RequestedLibraryKind = ""
-	schema := schemaOf(t, responseFormatOf(t, a.buildAnalyzePayload(req)))
-	assertStrictModeInvariants(t, "schema", schema)
-
-	props, _ := schema["properties"].(map[string]any)
-	for _, want := range []string{"title", "summary", "tags"} {
-		if _, present := props[want]; !present {
-			t.Fatalf("plain schema is missing %q: %#v", want, props)
-		}
-	}
-}
-
 // TestUnpinnedPathsOmitStructuredOutput guards the two shapes that must stay
 // free-form. URL-direct replies {"accessible":false} alone when the model
 // cannot fetch — a shape strict mode would reject, and the one runURLDirect
@@ -272,25 +250,13 @@ func TestUnpinnedPathsOmitStructuredOutput(t *testing.T) {
 	}
 }
 
-func TestDisableStructuredOutputOptionSuppressesSchema(t *testing.T) {
-	t.Parallel()
-
-	a := newStructuredTestAnalyzer(t, "https://example.invalid", http.DefaultClient, func(o *OpenAIAnalyzerOptions) {
-		o.DisableStructuredOutput = true
-	})
-	if block := responseFormatOf(t, a.buildAnalyzePayload(productionAnalyzeRequest())); block != nil {
-		t.Fatalf("DisableStructuredOutput did not suppress the schema: %#v", block)
-	}
-}
-
 // v2Reply is a well-formed schema_version=2 reading response, i.e. what the
 // prompt actually asks production for.
-const v2Reply = `{"choices":[{"message":{"content":"{\"schema_version\":2,\"library_kind\":\"reading\",\"classification_confidence\":0.9,\"classification_reason\":\"article\",\"classification_explanation\":\"正文文章\",\"reading_profile\":{\"title\":\"T\",\"summary\":\"这是一段足够长的中文摘要，用来通过摘要校验。\",\"tags\":[\"Go\"]},\"site_profile\":null}"}}]}`
+const v2Reply = `{"choices":[{"message":{"content":"{\"schema_version\":2,\"library_kind\":\"reading\",\"reading_profile\":{\"title\":\"T\",\"summary\":\"这是一段足够长的中文摘要，用来通过摘要校验。\",\"tags\":[\"Go\"]},\"site_profile\":null}"}}]}`
 
 // Asserted at the parser rather than through Analyze: Analyze additionally
 // runs summary conformance, which rejects any result with an empty summary —
 // and a site result never has one. That is a pre-existing defect on main
-// (reproduced with DisableStructuredOutput and main's own response shape),
 // independent of this schema, and fixing it is not this change's business.
 // What IS this change's business is that the schema's mandatory
 // "reading_profile": null does not disturb site parsing.
@@ -299,8 +265,7 @@ func TestSiteResponseWithNullReadingProfileParses(t *testing.T) {
 
 	a := &OpenAIAnalyzer{maxTags: 5, maxTagChars: 20}
 	result, err := a.parseAnalysisResponseForRequest(
-		`{"schema_version":2,"library_kind":"site","classification_confidence":0.9,`+
-			`"classification_reason":"tool","classification_explanation":"在线工具站",`+
+		`{"schema_version":2,"library_kind":"site",`+
 			`"reading_profile":null,`+
 			`"site_profile":{"name":"Excalidraw","intro":"一个手绘风格的在线白板工具。",`+
 			`"entry_name":"白板","purpose":"画架构草图","tags":["白板"]}}`,
@@ -327,8 +292,7 @@ func TestReadingResponseWithNullSiteProfileParses(t *testing.T) {
 
 	a := &OpenAIAnalyzer{maxTags: 5, maxTagChars: 20}
 	result, err := a.parseAnalysisResponseForRequest(
-		`{"schema_version":2,"library_kind":"reading","classification_confidence":0.9,`+
-			`"classification_reason":"article","classification_explanation":"正文文章",`+
+		`{"schema_version":2,"library_kind":"reading",`+
 			`"reading_profile":{"title":"T","summary":"这是一段中文摘要。","tags":["Go"]},`+
 			`"site_profile":null}`,
 		120, model.RequestedLibraryKindReading,
@@ -501,7 +465,7 @@ func TestUnrelated400DoesNotDemoteAfterProvenSuccess(t *testing.T) {
 // that rejects response_format without naming it (`{"error":"Invalid request
 // body"}`, an empty body, a WAF HTML page) would otherwise fail EVERY link:
 // 400 is non-retryable, so each parse dies on its first attempt and the site
-// stops tagging until an operator sets AI_DISABLE_STRUCTURED_OUTPUT by hand.
+// stops tagging unless automatic compatibility demotion handles the rejection.
 //
 // Before any structured request has succeeded, response_format is the only
 // thing that changed about our request shape, so an unexplained 400/422 is

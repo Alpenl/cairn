@@ -112,7 +112,7 @@ function makeInFlight(
 ): InFlightCapture {
   return {
     owner: makeOwner(),
-    jobId: 'job-1',
+    linkId: 'link-1',
     url: 'https://example.com/x',
     title: '示例',
     note: '备注',
@@ -238,7 +238,7 @@ describe('createSessionCaptureStore — in-flight', () => {
   it('round-trips an exact persisted site request for service-worker replay', async () => {
     const store = createTestCaptureStore(makeMemoryArea())
     const inFlight = makeInFlight({
-      jobId: '',
+      linkId: '',
       phase: 'submitting',
       destination: 'site',
       requestedKind: 'site',
@@ -276,7 +276,7 @@ describe('createSessionCaptureStore — in-flight', () => {
       metadata: { client_data_namespace: privateNamespace },
     }
     const inFlight = makeInFlight({
-      jobId: '',
+      linkId: '',
       phase: 'submitting',
       url: privateUrl,
       title: privateTitle,
@@ -549,7 +549,7 @@ describe('isInFlightStale — in-flight 记录陈旧判定', () => {
   it('缺失 startedAt（老数据）的记录一律视为陈旧', () => {
     // 模拟旧版本写入、无 startedAt 字段的脏记录。
     const legacy = {
-      jobId: 'job-1',
+      linkId: 'link-1',
       url: 'https://example.com/x',
       title: '示例',
       note: '',

@@ -39,8 +39,7 @@ func NewPGXTreeRepository(db database.Querier) *PGXTreeRepository {
 }
 
 // LookupByURLs returns a map keyed by URL containing every existing done link
-// row that matches one of the supplied URLs. Historical skeleton rows are
-// deliberately ignored so new parses never attach to invisible ancestors.
+// row that matches one of the supplied URLs.
 func (r *PGXTreeRepository) LookupByURLs(ctx context.Context, urls []string) (map[string]*model.Link, error) {
 	out := make(map[string]*model.Link, len(urls))
 	if len(urls) == 0 {

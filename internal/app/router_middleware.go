@@ -6,10 +6,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"webtag/internal/middleware"
-	"webtag/internal/observability"
 )
 
-func installRouterMiddleware(router *gin.Engine, logger *slog.Logger, metrics *observability.Metrics, opts RouterOptions, extraMiddleware ...gin.HandlerFunc) {
+func installRouterMiddleware(router *gin.Engine, logger *slog.Logger, opts RouterOptions, extraMiddleware ...gin.HandlerFunc) {
 	// 安全响应头放在 RequestID 之后、CORS 之前：RequestID 写的是
 	// 响应头同样的位置（不会冲突），CORS 也会写 Vary/Access-Control-*
 	// 头，二者互不覆盖；SecurityHeaders 早于业务 handler 跑，确保
@@ -27,12 +26,9 @@ func installRouterMiddleware(router *gin.Engine, logger *slog.Logger, metrics *o
 	//     字节即将出去」那一刻才追加的，而那一刻 CORS 的 before-Next 段
 	//     早已跑完，两个 Vary 值因此能叠加而不是互相覆盖。详见
 	//     middleware/gzip.go 顶部的顺序约束说明。
-	if opts.GzipEnabled {
-		router.Use(middleware.Gzip(opts.GzipMinLength))
-	}
+	router.Use(middleware.Gzip(middleware.DefaultGzipMinLength))
 	router.Use(
 		middleware.AccessLog(logger),
-		middleware.HTTPMetrics(metrics),
 		middleware.Recovery(logger),
 	)
 	// MaxRequestBody / RequestDeadline 都挂在 SecurityHeaders 之后、

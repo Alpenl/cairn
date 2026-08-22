@@ -2,27 +2,25 @@ package service
 
 import (
 	"context"
-	"net/http"
 	"strings"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
 // List 处理 /api/links 列表：支持页码或游标两种分页（互斥）、可选的标签 /
-// 内容类型 / 域名过滤。每页响应里会把 link.tags 替换成 concept 显示名，让
-// 同义标签（如「RAG」与「检索增强生成」）在 UI 上收敛到同一字符串。
+// 内容类型 / 域名过滤。
 //
-//nolint:gocyclo // reason: 请求参数归一化 + 多过滤维度组合 + concept 显示名替换，是 list endpoint 的典型组装路径；拆函数会把 req/filters/links 在多 helper 间反复传递。
+//nolint:gocyclo // 请求参数归一化与多过滤维度组合共享同一组局部状态。
 func (s *LinkReadService) List(ctx context.Context, req dto.ListLinksRequest) (dto.PaginatedLinksResponse, error) {
 	createdFrom, createdBefore, err := validateCreatedRange(req.CreatedFrom, req.CreatedBefore)
 	if err != nil {
 		return dto.PaginatedLinksResponse{}, err
 	}
 
-	// Phase 9 precedence: url= (exact existence check) beats q= (hybrid
+	// url= (exact existence check) beats q= (keyword
 	// search), which beats the normal list path. Both ignore pagination. A
 	// blank q/url falls through to the historical list path (back-compat).
 	if strings.TrimSpace(req.URL) != "" {
@@ -83,7 +81,7 @@ func (s *LinkReadService) List(ctx context.Context, req dto.ListLinksRequest) (d
 		// invalid_cursor slug 同时覆盖"游标与 page 冲突"和"游标 token 无法解码"
 		// 两条 422 路径——客户端按 error_code 分支就能命中"换成另一种分页方式"
 		// 的统一处理逻辑。
-		return dto.PaginatedLinksResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCursor, "cursor pagination cannot be combined with a page parameter")
+		return dto.PaginatedLinksResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCursor, "cursor pagination cannot be combined with a page parameter")
 	}
 
 	filter := repository.ListLinksFilter{
@@ -105,7 +103,7 @@ func (s *LinkReadService) List(ctx context.Context, req dto.ListLinksRequest) (d
 		if strings.TrimSpace(req.After) != "" {
 			cursor, err := s.decodeListCursor(req.After)
 			if err != nil {
-				return dto.PaginatedLinksResponse{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCursor, "invalid after cursor")
+				return dto.PaginatedLinksResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCursor, "invalid after cursor")
 			}
 			filter.After = cursor
 		}
@@ -118,21 +116,9 @@ func (s *LinkReadService) List(ctx context.Context, req dto.ListLinksRequest) (d
 		return dto.PaginatedLinksResponse{}, err
 	}
 
-	// Override link.Tags with concept display names so synonymous
-	// surface forms ("RAG" vs "检索增强生成") collapse to one
-	// canonical string per concept across the whole page. A lookup
-	// failure or empty result leaves the original LLM tags
-	// untouched — search/filter still works because filter.Tags hits
-	// the links.tags GIN index directly.
-	displayByLink := s.fetchDisplayNames(ctx, links)
-
 	items := make([]dto.LinkResponse, 0, len(links))
 	for _, link := range links {
-		resp := linkToResponse(link)
-		if names, ok := displayByLink[link.ID]; ok && len(names) > 0 {
-			resp.Tags = names
-		}
-		items = append(items, resp)
+		items = append(items, linkToResponse(link))
 	}
 
 	resp := dto.PaginatedLinksResponse{

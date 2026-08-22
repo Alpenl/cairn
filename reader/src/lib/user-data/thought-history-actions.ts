@@ -7,8 +7,6 @@ import {
   THOUGHT_HISTORY_OUTBOX_STORE,
   THOUGHT_MATERIALIZED_STORE,
   THOUGHT_OUTBOX_STORE,
-  THOUGHT_REPAIR_READY_STORE,
-  THOUGHT_REPAIR_SOURCE_STORE,
   THOUGHT_SYNC_STATE_STORE,
   runUserDataTransaction,
   type UserDataTransactionResult,
@@ -68,9 +66,7 @@ function frozenTargetFromMaterialized(record: ThoughtMaterializedRecord): Record
       ? { source_hash: record.target.sourceHash }
       : record.target.kind === 'note'
         ? { note_revision: record.target.noteRevision }
-        : record.target.kind === 'inbox'
-          ? { metadata_revision: record.target.metadataRevision }
-          : { source_key: record.target.sourceKey }
+        : { metadata_revision: record.target.metadataRevision }
   return { kind: record.target.kind, host_id: record.hostId, version }
 }
 
@@ -173,12 +169,6 @@ function thoughtTargetFromWire(raw: unknown, hostId: string): ThoughtTarget | nu
         ? null
         : canonicalThoughtTarget({ kind: raw.kind, metadataRevision })
     }
-    case 'legacy-stale': {
-      const sourceKey = readField(version, 'sourceKey', 'source_key')
-      return typeof sourceKey === 'string' && sourceKey.length > 0
-        ? canonicalThoughtTarget({ kind: raw.kind, sourceKey })
-        : null
-    }
     default:
       return null
   }
@@ -211,7 +201,7 @@ function frozenSnapshot(input: ThoughtHistorySnapshotInput): ThoughtFrozenSnapsh
     : cloneJSON(input.quote)
   const winnerKey = cloneJSON(input.winnerKey)
   if (!isRecord(target) || (quote !== null && !isRecord(quote)) ||
-    !isValidThoughtVersionKey(winnerKey, true)) return null
+    !isValidThoughtVersionKey(winnerKey)) return null
   const originalHostSnapshot = input.originalHostSnapshot === undefined
     ? undefined
     : cloneJSON(input.originalHostSnapshot)
@@ -305,8 +295,6 @@ export async function commitThoughtHistoryAction(
     [
       THOUGHT_HISTORY_OUTBOX_STORE,
       THOUGHT_OUTBOX_STORE,
-      THOUGHT_REPAIR_READY_STORE,
-      THOUGHT_REPAIR_SOURCE_STORE,
       THOUGHT_SYNC_STATE_STORE,
       THOUGHT_MATERIALIZED_STORE,
     ],

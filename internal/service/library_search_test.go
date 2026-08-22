@@ -13,6 +13,7 @@ import (
 
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/repository/repotest"
 	"webtag/internal/representation"
@@ -33,14 +34,11 @@ func (f *librarySearchLinksFake) ListDone(_ context.Context, filter repository.L
 }
 
 type librarySearchSitesFake struct {
-	items         []repository.SiteSearchMatch
-	total         int
-	query         string
-	limit         int
-	calls         int
-	semanticCalls int
-	vector        []float32
-	model         string
+	items []repository.SiteSearchMatch
+	total int
+	query string
+	limit int
+	calls int
 }
 
 type librarySearchReaderFake struct {
@@ -66,31 +64,10 @@ func (f *librarySearchReaderFake) SearchPublishedNotes(_ context.Context, query 
 	return f.notes, f.noteTotal, nil
 }
 
-func (f *librarySearchSitesFake) SearchSitesSemantic(_ context.Context, query string, vector []float32, model string, limit int) ([]repository.SiteSearchMatch, int, error) {
-	f.semanticCalls++
-	f.query, f.limit, f.vector, f.model = query, limit, vector, model
-	return f.items, f.total, nil
-}
-
 func (f *librarySearchSitesFake) SearchSites(_ context.Context, query string, limit int) ([]repository.SiteSearchMatch, int, error) {
 	f.calls++
 	f.query, f.limit = query, limit
 	return f.items, f.total, nil
-}
-
-func TestLibrarySearchUsesOneQueryVectorForBothGroups(t *testing.T) {
-	t.Parallel()
-	links, sites := &librarySearchLinksFake{}, &librarySearchSitesFake{}
-	embedder := &stubQueryEmbedder{enabled: true, vec: []float32{0.1, 0.2}}
-	if _, err := newLibrarySearchService(links, sites, embedder, nil, LibrarySearchServiceOptions{}).Search(context.Background(), "tools", 10, 10, 20, ""); err != nil {
-		t.Fatalf("Search() error = %v", err)
-	}
-	if embedder.calls != 1 || links.filter == nil || len(links.filter.QueryEmbedding) != 2 || links.filter.EmbeddingModel != "test-model" {
-		t.Fatalf("reading semantic filter = %#v, embed calls = %d", links.filter, embedder.calls)
-	}
-	if sites.semanticCalls != 1 || len(sites.vector) != 2 || sites.model != "test-model" {
-		t.Fatalf("site semantic call = calls:%d vector:%v model:%q", sites.semanticCalls, sites.vector, sites.model)
-	}
 }
 
 func TestLibrarySearchReturnsReadingAndSiteGroups(t *testing.T) {
@@ -99,7 +76,7 @@ func TestLibrarySearchReturnsReadingAndSiteGroups(t *testing.T) {
 	links := &librarySearchLinksFake{items: []model.Link{{ID: linkID, URL: "https://example.com/read", Status: model.LinkStatusDone}}, total: 12}
 	sites := &librarySearchSitesFake{items: []repository.SiteSearchMatch{{SiteID: siteID, SiteName: "Example", MatchedEntries: []repository.SiteSearchEntry{{ID: entryID, Name: "Documentation", URL: "https://example.com/docs"}}}}, total: 3}
 
-	got, err := newLibrarySearchService(links, sites, nil, nil, LibrarySearchServiceOptions{}).Search(context.Background(), "  docs  ", 7, 8, 20, "")
+	got, err := NewLibrarySearchService(links, sites, &librarySearchReaderFake{}, LibrarySearchServiceOptions{}).Search(context.Background(), "  docs  ", 7, 8, 20, "")
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -131,7 +108,7 @@ func TestLibrarySearchAddsPublishedReaderGroupsWhenStoreIsWired(t *testing.T) {
 	}
 
 	ctx := librarySearchIdentityContext(t, "30000000-0000-0000-0000-000000000003")
-	got, err := NewLibrarySearchServiceWithMetrics(links, sites, nil, nil, reader).Search(ctx, "matching", 7, 8, 3, "")
+	got, err := NewLibrarySearchService(links, sites, reader, LibrarySearchServiceOptions{}).Search(ctx, "matching", 7, 8, 3, "")
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -155,10 +132,9 @@ func TestLibrarySearchThoughtCursorRejectsTamperingAndCrossBinding(t *testing.T)
 	installationA := librarySearchIdentityContext(t, "10000000-0000-0000-0000-000000000001")
 	installationB := librarySearchIdentityContext(t, "20000000-0000-0000-0000-000000000002")
 	reader := &librarySearchReaderFake{thoughtNext: inner}
-	service := NewLibrarySearchServiceWithMetricsAndOptions(
-		&librarySearchLinksFake{}, &librarySearchSitesFake{}, nil, nil,
+	service := NewLibrarySearchService(
+		&librarySearchLinksFake{}, &librarySearchSitesFake{}, reader,
 		LibrarySearchServiceOptions{CursorSigningKey: "thought-search-cursor-key"},
-		reader,
 	)
 
 	first, err := service.Search(installationA, query, 10, 10, 20, "")
@@ -219,10 +195,9 @@ func TestLibrarySearchThoughtCursorRejectsTamperingAndCrossBinding(t *testing.T)
 	assertInvalidThoughtCursor(t, service, installationA, "different query", cursor)
 	assertInvalidThoughtCursor(t, service, installationA, " ", cursor)
 	assertInvalidThoughtCursor(t, service, installationB, query, cursor)
-	otherKeyService := NewLibrarySearchServiceWithMetricsAndOptions(
-		&librarySearchLinksFake{}, &librarySearchSitesFake{}, nil, nil,
+	otherKeyService := NewLibrarySearchService(
+		&librarySearchLinksFake{}, &librarySearchSitesFake{}, &librarySearchReaderFake{},
 		LibrarySearchServiceOptions{CursorSigningKey: "different-thought-search-cursor-key"},
-		&librarySearchReaderFake{},
 	)
 	assertInvalidThoughtCursor(t, otherKeyService, installationA, query, cursor)
 	tamperedSignature := parts[1][:len(parts[1])-1] + "A"
@@ -238,7 +213,7 @@ func TestLibrarySearchThoughtCursorRejectsTamperingAndCrossBinding(t *testing.T)
 
 func librarySearchIdentityContext(t *testing.T, installationID string) context.Context {
 	t.Helper()
-	identity, err := representation.NewClientIdentity(representation.VersionBase{RepresentationNamespace: uuid.MustParse(installationID)})
+	identity, err := representation.NewClientIdentity(uuid.MustParse(installationID))
 	if err != nil {
 		t.Fatalf("NewClientIdentity(%q): %v", installationID, err)
 	}
@@ -270,8 +245,8 @@ func mutateThoughtCursorPayload(t *testing.T, cursor string, mutate func(map[str
 func assertInvalidThoughtCursor(t *testing.T, service *LibrarySearchService, ctx context.Context, query, cursor string) {
 	t.Helper()
 	_, err := service.Search(ctx, query, 10, 10, 20, cursor)
-	var coder interface{ HTTPErrorCode() string }
-	if !errors.As(err, &coder) || coder.HTTPErrorCode() != httperr.CodeInvalidCursor {
+	applicationError, ok := problem.As(err)
+	if !ok || applicationError.Code() != httperr.CodeInvalidCursor {
 		t.Fatalf("Search(cursor=%q) error = %v, want %q", cursor, err, httperr.CodeInvalidCursor)
 	}
 }
@@ -279,7 +254,7 @@ func assertInvalidThoughtCursor(t *testing.T, service *LibrarySearchService, ctx
 func TestLibrarySearchEmptyQueryAvoidsStores(t *testing.T) {
 	t.Parallel()
 	links, sites := &librarySearchLinksFake{}, &librarySearchSitesFake{}
-	got, err := newLibrarySearchService(links, sites, nil, nil, LibrarySearchServiceOptions{}).Search(context.Background(), " \t", 10, 10, 20, "")
+	got, err := NewLibrarySearchService(links, sites, &librarySearchReaderFake{}, LibrarySearchServiceOptions{}).Search(context.Background(), " \t", 10, 10, 20, "")
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -291,7 +266,7 @@ func TestLibrarySearchEmptyQueryAvoidsStores(t *testing.T) {
 func TestLibrarySearchClampsLimitsAndRejectsLongQuery(t *testing.T) {
 	t.Parallel()
 	links, sites := &librarySearchLinksFake{}, &librarySearchSitesFake{}
-	svc := newLibrarySearchService(links, sites, nil, nil, LibrarySearchServiceOptions{})
+	svc := NewLibrarySearchService(links, sites, &librarySearchReaderFake{}, LibrarySearchServiceOptions{})
 	if _, err := svc.Search(context.Background(), "find", 99, 0, 0, ""); err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -300,8 +275,8 @@ func TestLibrarySearchClampsLimitsAndRejectsLongQuery(t *testing.T) {
 	}
 	tooLong := strings.Repeat("x", maxListQueryLen+1)
 	_, err := svc.Search(context.Background(), tooLong, 1, 1, 20, "")
-	var httpErr *httperr.Error
-	if !errors.As(err, &httpErr) || httpErr.HTTPStatus() != http.StatusUnprocessableEntity || httpErr.HTTPErrorCode() != httperr.CodeQueryTooLong {
+	var httpErr *problem.Error
+	if !errors.As(err, &httpErr) || problemHTTPStatus(httpErr) != http.StatusUnprocessableEntity || httpErr.Code() != httperr.CodeQueryTooLong {
 		t.Fatalf("long query error = %v, want 422 query_too_long", err)
 	}
 	if links.calls != 1 || sites.calls != 1 {

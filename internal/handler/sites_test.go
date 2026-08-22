@@ -59,17 +59,16 @@ func (f *siteHandlerFake) Delete(_ context.Context, siteID, ifMatch, count strin
 	return f.err
 }
 
-func TestSiteRoutesSupportAliasesAndQueryParameters(t *testing.T) {
+func TestSiteRoutesSupportQueryParameters(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &siteHandlerFake{list: dto.PaginatedSitesResponse{Page: 2, Limit: 20}}
 	router := gin.New()
 	RegisterRoutes(router, withStubDeps(Dependencies{Sites: svc}))
-	for _, path := range []string{"/api/sites?view=recent&tags=go,tools&recent_cutoff=2026-07-01T00%3A00%3A00Z&page=2&limit=20", "/api/v1/sites?view=recent&tags=go,tools&recent_cutoff=2026-07-01T00%3A00%3A00Z&page=2&limit=20"} {
-		recorder := httptest.NewRecorder()
-		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
-		if recorder.Code != http.StatusOK {
-			t.Fatalf("%s status = %d body=%s", path, recorder.Code, recorder.Body.String())
-		}
+	path := "/api/sites?view=recent&tags=go,tools&recent_cutoff=2026-07-01T00%3A00%3A00Z&page=2&limit=20"
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("%s status = %d body=%s", path, recorder.Code, recorder.Body.String())
 	}
 	if svc.view != "recent" || svc.tags != "go,tools" || svc.cutoff != "2026-07-01T00:00:00Z" || svc.page != 2 || svc.limit != 20 {
 		t.Fatalf("query mapping = %#v", svc)
@@ -140,7 +139,7 @@ func TestSiteUpdateRouteForwardsIfMatchAndBody(t *testing.T) {
 	RegisterRoutes(router, withStubDeps(Dependencies{Sites: svc, SiteManagement: svc}))
 	id := "11111111-1111-1111-1111-111111111111"
 	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPatch, "/api/v1/sites/"+id, strings.NewReader(`{"name":"Example","pinned":true}`))
+	req := httptest.NewRequest(http.MethodPatch, "/api/sites/"+id, strings.NewReader(`{"name":"Example","pinned":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("If-Match", `"3"`)
 	router.ServeHTTP(recorder, req)

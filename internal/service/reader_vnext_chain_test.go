@@ -3,21 +3,23 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"webtag/internal/dto"
 	"webtag/internal/model"
 	"webtag/internal/readertext"
 	"webtag/internal/repository"
 )
 
 type readerVNextChainStore struct {
-	repository.ReaderVNextStore
-
+	ReaderThoughtStore
+	ReaderNoteStore
+	ReaderInboxStore
+	ReaderTodoStore
+	ReaderLibraryStore
+	ReaderHostStore
 	inbox             model.ReaderInbox
 	linkID            uuid.UUID
 	thoughts          map[string]model.ReaderThought
@@ -28,8 +30,6 @@ type readerVNextChainStore struct {
 	feed              *model.ReaderFeedPage
 	feedbackKey       string
 	feedback          string
-	history           []model.ReaderContentHistory
-	contentRev        int64
 	bulkConfirmations []model.ReaderInboxBulkConfirmation
 	now               time.Time
 }
@@ -48,20 +48,14 @@ func newReaderVNextChainStore() *readerVNextChainStore {
 		thoughts:   make(map[string]model.ReaderThought),
 		engagement: model.ReaderEngagement{LinkID: linkID, UpdatedAt: now},
 		feed: &model.ReaderFeedPage{
-			SnapshotID: "snapshot-1",
-			Mode:       "recommended",
+			Mode: "recommended",
 			Items: []model.ReaderFeedItem{{
 				Key: "link:" + linkID.String(), Source: "reading", LinkID: &linkID,
 				Title: "Captured article", Summary: "Captured summary", URL: "https://capture.example.test/article",
-				ReasonCode: "reading_progress", ReasonText: "来自最近捕获的内容", CreatedAt: now,
+				CreatedAt: now,
 			}},
 		},
-		history: []model.ReaderContentHistory{
-			{ID: 1, LinkID: linkID, Revision: 1, Content: stringPointer("The original body."), ContentFormat: "plain", ContentSource: "fetched", CreatedAt: now},
-			{ID: 2, LinkID: linkID, Revision: 2, Content: stringPointer("The edited body."), ContentFormat: "plain", ContentSource: "user", CreatedAt: now},
-		},
-		contentRev: 3,
-		now:        now,
+		now: now,
 	}
 }
 
@@ -76,11 +70,23 @@ func (s *readerVNextChainStore) CreateInbox(_ context.Context, item model.Reader
 	return cloneReaderInbox(s.inbox), nil
 }
 
+func (s *readerVNextChainStore) CreateInboxProposal(ctx context.Context, command CreateInboxProposalCommand) (InboxProposalResult, error) {
+	item, err := s.CreateInbox(ctx, command.Inbox)
+	return InboxProposalResult{Inbox: item}, err
+}
+
+func (s *readerVNextChainStore) EnsureInboxProposal(_ context.Context, command EnsureInboxProposalCommand) (InboxProposalResult, error) {
+	if command.InboxID != s.inbox.ID {
+		return InboxProposalResult{}, repository.ErrNotFound
+	}
+	return InboxProposalResult{Inbox: cloneReaderInbox(s.inbox)}, nil
+}
+
 func (s *readerVNextChainStore) ListInbox(_ context.Context, partition model.ReaderInboxPartition, _ string, _ int) ([]model.ReaderInboxListItem, int, int, string, error) {
 	if s.inbox.Status != "pending" {
 		return []model.ReaderInboxListItem{}, 0, 0, "", nil
 	}
-	if partition != model.ReaderInboxPartitionActive || s.inbox.ExpiredAt != nil {
+	if partition != model.ReaderInboxPartitionActive || s.inbox.Expired {
 		return []model.ReaderInboxListItem{}, 0, 1, "", nil
 	}
 	return []model.ReaderInboxListItem{readerInboxListItemFixture(*cloneReaderInbox(s.inbox))}, 1, 0, "", nil
@@ -104,7 +110,7 @@ func readerInboxListItemFixture(item model.ReaderInbox) model.ReaderInboxListIte
 		Tags:             append([]string(nil), item.Tags...),
 		Status:           item.Status,
 		MetadataRevision: item.MetadataRevision,
-		Expired:          item.ExpiredAt != nil,
+		Expired:          item.Expired,
 		UpdatedAt:        item.UpdatedAt,
 	}
 }
@@ -116,7 +122,7 @@ func (s *readerVNextChainStore) GetInbox(_ context.Context, id uuid.UUID) (*mode
 	return cloneReaderInbox(s.inbox), nil
 }
 
-func (s *readerVNextChainStore) ConfirmInbox(_ context.Context, id uuid.UUID) (uuid.UUID, error) {
+func (s *readerVNextChainStore) ConfirmInbox(_ context.Context, id uuid.UUID, _ *int64) (uuid.UUID, error) {
 	if id != s.inbox.ID {
 		return uuid.Nil, repository.ErrNotFound
 	}
@@ -262,22 +268,6 @@ func (s *readerVNextChainStore) SearchPublishedNotes(context.Context, string, in
 	return []model.ReaderNoteSearch{{ID: s.note.ID, Title: s.note.Title, Snippet: s.note.PublishedContent, PublishedRevision: s.note.PublishedRevision, UpdatedAt: s.note.UpdatedAt}}, 1, nil
 }
 
-func (s *readerVNextChainStore) ReconcileTodoProjections(_ context.Context, projections []model.ReaderTodo) error {
-	s.todos = make([]model.ReaderTodo, 0, len(projections))
-	for index, projection := range projections {
-		if projection.ID == uuid.Nil {
-			if index == 0 {
-				projection.ID = uuid.MustParse("00000000-0000-0000-0000-000000000005")
-			} else {
-				projection.ID = uuid.New()
-			}
-		}
-		projection.CreatedAt, projection.UpdatedAt = s.now, s.now
-		s.todos = append(s.todos, projection)
-	}
-	return nil
-}
-
 func (s *readerVNextChainStore) ListTodos(context.Context, string, int) (model.ReaderTodoPage, error) {
 	return model.ReaderTodoPage{Items: append([]model.ReaderTodo(nil), s.todos...)}, nil
 }
@@ -301,13 +291,13 @@ func (s *readerVNextChainStore) PatchTodo(_ context.Context, command model.Reade
 	return nil, repository.ErrNotFound
 }
 
-func (s *readerVNextChainStore) ListFeed(context.Context, string, string, string, int) (*model.ReaderFeedPage, error) {
+func (s *readerVNextChainStore) ListFeedWithSources(context.Context, string, string, []string, int) (*model.ReaderFeedPage, error) {
 	return s.feed, nil
 }
 
 func (s *readerVNextChainStore) FeedbackFeed(_ context.Context, itemKey, action string) (model.ReaderFeedFeedback, error) {
 	s.feedbackKey, s.feedback = itemKey, action
-	return model.ReaderFeedFeedback{ItemKey: itemKey, Action: action, Saved: action == "save"}, nil
+	return model.ReaderFeedFeedback{ItemKey: itemKey, Action: action}, nil
 }
 
 func (s *readerVNextChainStore) PatchEngagement(_ context.Context, patch model.ReaderEngagementPatch) (*model.ReaderEngagement, error) {
@@ -324,26 +314,14 @@ func (s *readerVNextChainStore) PatchEngagement(_ context.Context, patch model.R
 	return &s.engagement, nil
 }
 
-func (s *readerVNextChainStore) LoadHomeAggregate(context.Context) (repository.ReaderHomeAggregate, error) {
-	return repository.ReaderHomeAggregate{
-		Freshness:       repository.ReaderHomeFreshnessFresh,
+func (s *readerVNextChainStore) LoadHomeAggregate(context.Context) (model.ReaderHomeAggregate, error) {
+	return model.ReaderHomeAggregate{
+		Freshness:       model.ReaderHomeFreshnessFresh,
 		Counts:          map[string]int{"pending": boolCount(s.inbox.Status == "pending"), "todos": len(s.todos), "reading": 1, "notes": 1},
 		ContinueReading: s.feed.Items,
 		RecentThoughts:  mapReaderThoughts(s.thoughts),
 		Todos:           append([]model.ReaderTodo(nil), s.todos...),
 	}, nil
-}
-
-func (s *readerVNextChainStore) ListContentHistory(context.Context, uuid.UUID, int) ([]model.ReaderContentHistory, error) {
-	return append([]model.ReaderContentHistory(nil), s.history...), nil
-}
-
-func (s *readerVNextChainStore) RestoreContentHistory(_ context.Context, linkID uuid.UUID, historyID, expectedRevision int64) (int64, error) {
-	if linkID != s.linkID || expectedRevision != s.contentRev || historyID < 1 {
-		return 0, repository.ErrRevisionConflict
-	}
-	s.contentRev++
-	return s.contentRev, nil
 }
 
 func cloneReaderInbox(item model.ReaderInbox) *model.ReaderInbox {
@@ -376,13 +354,14 @@ func mapReaderThoughts(thoughts map[string]model.ReaderThought) []model.ReaderTh
 	return items
 }
 
-func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
+func TestReaderFeatureApplicationsCrossSurfaceChain(t *testing.T) {
 	store := newReaderVNextChainStore()
-	service := NewReaderVNextService(store, nil)
-	service.now = func() time.Time { return store.now }
+	service := newReaderTestFeatureSet(readerTestStores(store), nil, ReaderApplicationOptions{InboxProposalCommands: store})
+	service.ReaderThoughtApplication.now = func() time.Time { return store.now }
+	service.ReaderLibraryApplication.now = func() time.Time { return store.now }
 	ctx := context.Background()
 
-	inbox, err := service.CreateInbox(ctx, dto.ReaderInboxCreateRequest{
+	inbox, err := service.CreateInbox(ctx, ReaderInboxCreateCommand{
 		URL: "https://capture.example.test/article", SourceKind: "browser_capture", Title: stringPointer("Captured article"), Body: "Captured body from the browser extension.",
 	})
 	if err != nil {
@@ -391,23 +370,24 @@ func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 	if inbox.Status != "pending" {
 		t.Fatalf("CreateInbox() status = %q, want pending", inbox.Status)
 	}
-	pending, err := service.ListInbox(ctx, "", "", 30)
+	pending, err := service.ListInbox(ctx, model.ReaderInboxPartitionActive, "", 30)
 	if err != nil || len(pending.Items) != 1 || pending.Items[0].ID != inbox.ID {
 		t.Fatalf("ListInbox() = %#v, error = %v", pending, err)
 	}
 	if pending.ActiveCount != 1 || pending.ExpiredCount != 0 {
 		t.Fatalf("ListInbox() partition counts = active %d expired %d, want 1/0", pending.ActiveCount, pending.ExpiredCount)
 	}
-	confirmed, err := service.ConfirmInbox(ctx, inbox.ID, inbox.MetadataRevision)
+	expectedInboxRevision := inbox.MetadataRevision
+	confirmed, err := service.ConfirmInbox(ctx, inbox.ID, &expectedInboxRevision)
 	if err != nil {
 		t.Fatalf("ConfirmInbox() error = %v", err)
 	}
-	if confirmed["target_kind"] != "link" || confirmed["link_id"] != store.linkID.String() || store.inbox.Status != "confirmed" {
+	if confirmed != store.linkID || store.inbox.Status != "confirmed" {
 		t.Fatalf("ConfirmInbox() = %#v, inbox status = %q", confirmed, store.inbox.Status)
 	}
 
 	thoughtID := "thought-1"
-	thoughtRequest := dto.ReaderThoughtOpsRequest{Ops: []dto.ReaderThoughtOpRequest{{
+	thoughtRequest := ReaderThoughtOpsCommand{Ops: []ReaderThoughtOpCommand{{
 		ContractVersion: 1, OpID: "thought-op-1", DeviceID: "reader-device-1", LogicalClock: 2,
 		OperationKind: "add", AnnotationID: thoughtID,
 		HostKind: "link", HostID: store.linkID.String(),
@@ -416,8 +396,7 @@ func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 	}}}
 	acks, err := service.PushThoughtOps(ctx, thoughtRequest)
 	if err != nil || len(acks) != 1 || acks[0].Sequence != 2 ||
-		acks[0].ContractVersion != 1 || acks[0].Disposition != "applied" ||
-		acks[0].CurrentWinnerKey.LogicalClock != 2 {
+		acks[0].Disposition != "applied" || acks[0].WinnerKey.LogicalClock != 2 {
 		t.Fatalf("PushThoughtOps() = %#v, error = %v", acks, err)
 	}
 	synced, err := service.SyncThoughts(ctx, "0", 100)
@@ -425,58 +404,49 @@ func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 		t.Fatalf("SyncThoughts() = %#v, error = %v", synced, err)
 	}
 
-	search, err := NewLibrarySearchServiceWithMetrics(&librarySearchLinksFake{}, &librarySearchSitesFake{}, nil, nil, store).Search(ctx, "searchable", 10, 10, 20, "")
+	search, err := NewLibrarySearchService(&librarySearchLinksFake{}, &librarySearchSitesFake{}, store, LibrarySearchServiceOptions{}).Search(ctx, "searchable", 10, 10, 20, "")
 	if err != nil || search.Thoughts == nil || len(search.Thoughts.Items) != 1 || search.Thoughts.Items[0].ID != thoughtID {
 		t.Fatalf("Search() thought projection = %#v, error = %v", search.Thoughts, err)
 	}
 
-	note, err := service.CreateNote(ctx, dto.ReaderNoteCreateRequest{Title: "Captured idea note"})
+	note, err := service.CreateNote(ctx, ReaderNoteCreateCommand{Title: "Captured idea note"})
 	if err != nil {
 		t.Fatalf("CreateNote() error = %v", err)
 	}
-	draft, err := service.SaveNoteDraft(ctx, note.ID, dto.ReaderNoteDraftRequest{Content: "# Follow up\n\n- [ ] Re-read the captured article", ExpectedDraftRevision: note.DraftRevision})
-	if err != nil || !draft.Dirty || draft.DraftContent == nil {
+	draft, err := service.SaveNoteDraft(ctx, model.ReaderNoteDraftCommand{NoteID: note.ID, Content: "# Follow up\n\n- [ ] Re-read the captured article", ExpectedDraftRevision: note.DraftRevision})
+	if err != nil || draft.DraftContent == nil || *draft.DraftContent == draft.PublishedContent {
 		t.Fatalf("SaveNoteDraft() = %#v, error = %v", draft, err)
 	}
 	expectedDraftRevision, expectedPublishedRevision := draft.DraftRevision, note.PublishedRevision
-	published, err := service.PublishNote(ctx, note.ID, dto.ReaderNotePublishRequest{
-		ExpectedDraftRevision: &expectedDraftRevision, ExpectedPublishedRevision: &expectedPublishedRevision,
+	published, err := service.PublishNote(ctx, model.ReaderNotePublishCommand{
+		NoteID: note.ID, ExpectedDraftRevision: expectedDraftRevision, ExpectedPublishedRevision: expectedPublishedRevision,
 		ReanchorOps: []json.RawMessage{json.RawMessage(`{"thought_id":"` + thoughtID + `","status":"reanchored"}`)},
 	})
-	if err != nil || published.Dirty || published.DraftContent != nil || published.PublishedContent == "" {
+	if err != nil || published.DraftContent != nil || published.PublishedContent == "" {
 		t.Fatalf("PublishNote() = %#v, error = %v", published, err)
 	}
 
 	todos, err := service.ListTodos(ctx, "", 200)
-	if err != nil || len(todos.Items) != 1 || todos.Items[0].OriginKind != "note" || todos.Items[0].OriginHostID == nil || *todos.Items[0].OriginHostID != note.ID {
+	if err != nil || len(todos.Items) != 1 || todos.Items[0].OriginKind != "note" || todos.Items[0].OriginHostID == nil || *todos.Items[0].OriginHostID != note.ID.String() {
 		t.Fatalf("ListTodos() projection = %#v, error = %v", todos, err)
 	}
 	done := true
-	completed, err := service.PatchTodo(ctx, todos.Items[0].ID, dto.ReaderTodoPatchRequest{Done: &done})
+	completed, err := service.PatchTodo(ctx, ReaderTodoPatchCommand{ID: todos.Items[0].ID, Done: &done})
 	if err != nil || !completed.Done || completed.CompletedAt == nil {
 		t.Fatalf("PatchTodo() = %#v, error = %v", completed, err)
 	}
 
-	feed, err := service.Feed(ctx, "recommended", "", "", 30)
+	feed, err := service.FeedWithSources(ctx, "recommended", "", nil, 30)
 	if err != nil || len(feed.Items) != 1 || feed.Items[0].Key != "link:"+store.linkID.String() {
 		t.Fatalf("Feed() = %#v, error = %v", feed, err)
 	}
-	if _, err := service.FeedbackFeed(ctx, feed.Items[0].Key, "save"); err != nil || store.feedbackKey != feed.Items[0].Key || store.feedback != "save" {
+	if _, err := service.FeedbackFeed(ctx, feed.Items[0].Key, "hide"); err != nil || store.feedbackKey != feed.Items[0].Key || store.feedback != "hide" {
 		t.Fatalf("FeedbackFeed() = (%q, %q), error = %v", store.feedbackKey, store.feedback, err)
 	}
 	read := true
-	engagement, err := service.PatchEngagement(ctx, store.linkID.String(), dto.ReaderEngagementRequest{Read: &read})
-	if err != nil || !engagement.Read || engagement.LinkID != store.linkID.String() {
+	engagement, err := service.PatchEngagement(ctx, model.ReaderEngagementPatch{LinkID: store.linkID, Read: &read})
+	if err != nil || !engagement.Read || engagement.LinkID != store.linkID {
 		t.Fatalf("PatchEngagement() = %#v, error = %v", engagement, err)
-	}
-
-	history, err := service.ListContentHistory(ctx, store.linkID.String(), 50)
-	if err != nil || len(history) != 2 || history[0].Revision != 1 {
-		t.Fatalf("ListContentHistory() = %#v, error = %v", history, err)
-	}
-	restored, err := service.RestoreContentHistory(ctx, store.linkID.String(), history[0].ID, store.contentRev)
-	if err != nil || restored.LinkID != store.linkID.String() || restored.ContentRevision != 4 {
-		t.Fatalf("RestoreContentHistory() = %#v, error = %v", restored, err)
 	}
 
 	home, err := service.Home(ctx)
@@ -490,13 +460,14 @@ func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 
 func TestReaderVNextBulkConfirmCarriesEveryExpectedRevision(t *testing.T) {
 	store := newReaderVNextChainStore()
-	service := NewReaderVNextService(store, nil)
+	service := newReaderTestFeatureSet(readerTestStores(store), nil)
 	first := store.inbox.ID
 	second := uuid.MustParse("00000000-0000-0000-0000-000000000003")
 
-	_, err := service.ConfirmInboxBulk(context.Background(), []string{first.String(), second.String(), first.String()}, map[string]int64{
-		first.String():  4,
-		second.String(): 9,
+	firstRevision, secondRevision := int64(4), int64(9)
+	_, err := service.ConfirmInboxBulk(context.Background(), []model.ReaderInboxBulkConfirmation{
+		{ID: first, ExpectedRevision: &firstRevision},
+		{ID: second, ExpectedRevision: &secondRevision},
 	})
 	if err != nil {
 		t.Fatalf("ConfirmInboxBulk() error = %v", err)
@@ -509,18 +480,5 @@ func TestReaderVNextBulkConfirmCarriesEveryExpectedRevision(t *testing.T) {
 	}
 	if store.bulkConfirmations[1].ExpectedRevision == nil || *store.bulkConfirmations[1].ExpectedRevision != 9 {
 		t.Fatalf("second expected revision = %#v, want 9", store.bulkConfirmations[1].ExpectedRevision)
-	}
-}
-
-func TestReaderVNextBulkConfirmRejectsPartialExpectedRevisions(t *testing.T) {
-	store := newReaderVNextChainStore()
-	service := NewReaderVNextService(store, nil)
-	first := store.inbox.ID
-	second := uuid.MustParse("00000000-0000-0000-0000-000000000003")
-
-	_, err := service.ConfirmInboxBulk(context.Background(), []string{first.String(), second.String()}, map[string]int64{first.String(): 4})
-	assertReaderHTTPError(t, err, http.StatusUnprocessableEntity, "invalid_inbox_batch_revision")
-	if store.bulkConfirmations != nil {
-		t.Fatalf("store called for partial expected revisions: %#v", store.bulkConfirmations)
 	}
 }

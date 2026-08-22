@@ -308,7 +308,6 @@ class ShareSubmissionCoordinatorInstrumentedTest {
                 errorCode = null,
                 statusCode = null,
                 linkId = null,
-                jobId = null,
                 activation = activation,
                 now = now + 1,
             ),

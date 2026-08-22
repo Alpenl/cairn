@@ -10,7 +10,7 @@ import (
 	"webtag/internal/repository"
 )
 
-func TestReaderActivityRefreshScopesProjectionToReading(t *testing.T) {
+func TestReaderActivityDirectQueryScopesAggregationToReading(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	links := repository.NewPGXLinkRepository(pool)
@@ -18,20 +18,17 @@ func TestReaderActivityRefreshScopesProjectionToReading(t *testing.T) {
 	readingID := mustCreateDoneLink(t, links, ctx, "https://reading.example/article", "reading-only", "reading.example")
 	siteID := mustCreateDoneLink(t, links, ctx, "https://site.example/app", "site-only", "site.example")
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE links SET library_kind = 'reading', library_kind_source = 'user'
+		UPDATE links SET library_kind = 'reading', library_kind_locked = true
 		WHERE id = $1`, readingID); err != nil {
 		t.Fatalf("mark reading activity fixture: %v", err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE links SET library_kind = 'site', library_kind_source = 'user'
+		UPDATE links SET library_kind = 'site', library_kind_locked = true
 		WHERE id = $1`, siteID); err != nil {
 		t.Fatalf("mark site activity fixture: %v", err)
 	}
 
 	repo := repository.NewPGXReaderVNextRepository(pool)
-	if err := repo.RefreshActivity(ctx); err != nil {
-		t.Fatalf("RefreshActivity() error = %v", err)
-	}
 	page, err := repo.ListActivity(ctx, model.ReaderActivityQuery{Kind: model.ReaderActivityKindAll, Limit: 10})
 	if err != nil {
 		t.Fatalf("ListActivity() error = %v", err)
@@ -61,27 +58,39 @@ func TestReaderActivityRefreshScopesProjectionToReading(t *testing.T) {
 func TestReaderActivityCursorPaginationRunsAgainstPostgres(t *testing.T) {
 	pool := StartPostgres(t)
 
+	ctx := t.Context()
+	links := repository.NewPGXLinkRepository(pool)
 	pageTime := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	bulkTags := make([]string, 0, 102)
 	for index := 0; index < 102; index++ {
-		key := fmt.Sprintf("tag-%03d", index)
-		if _, err := pool.Exec(t.Context(), `
-			INSERT INTO reader_tag_activity (tag, last_at)
-			VALUES ($1, $2)`, key, pageTime.Add(-time.Duration(index+1)*time.Second)); err != nil {
-			t.Fatalf("insert tag activity %s: %v", key, err)
+		bulkTags = append(bulkTags, fmt.Sprintf("tag-%03d", index))
+	}
+	bulkID := mustCreateDoneLink(t, links, ctx, "https://activity.example/bulk", "placeholder", "bulk.example")
+	if _, err := pool.Exec(ctx, `
+		UPDATE links
+		SET tags=$2,library_kind='reading',library_kind_locked=true,
+			created_at=$3,first_collected_at=$3,last_recollected_at=NULL
+		WHERE id=$1`, bulkID, bulkTags, pageTime.Add(-time.Second)); err != nil {
+		t.Fatalf("prepare bulk activity fixture: %v", err)
+	}
+	for _, fixture := range []struct {
+		url    string
+		tag    string
+		domain string
+	}{
+		{url: "https://z.example/tie", tag: "Zulu", domain: "z.example"},
+		{url: "https://a.example/tie", tag: "alpha", domain: "A.example"},
+	} {
+		linkID := mustCreateDoneLink(t, links, ctx, fixture.url, fixture.tag, fixture.domain)
+		if _, err := pool.Exec(ctx, `
+			UPDATE links
+			SET library_kind='reading',library_kind_locked=true,
+				created_at=$2,first_collected_at=$2,last_recollected_at=NULL
+			WHERE id=$1`, linkID, pageTime); err != nil {
+			t.Fatalf("prepare tie activity fixture %s: %v", fixture.tag, err)
 		}
 	}
-	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO reader_tag_activity (tag, last_at) VALUES
-			('Zulu', $1), ('alpha', $1)`, pageTime); err != nil {
-		t.Fatalf("insert tag activity tie fixtures: %v", err)
-	}
-	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO reader_domain_activity (domain, last_at) VALUES
-			('z.example', $1), ('A.example', $1)`, pageTime); err != nil {
-		t.Fatalf("insert domain activity tie fixtures: %v", err)
-	}
 	repo := repository.NewPGXReaderVNextRepository(pool)
-	ctx := t.Context()
 	tiePage, err := repo.ListActivity(ctx, model.ReaderActivityQuery{Kind: "all", Limit: 4})
 	if err != nil {
 		t.Fatalf("ListActivity(ties) error = %v", err)

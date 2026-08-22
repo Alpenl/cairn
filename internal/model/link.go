@@ -10,15 +10,22 @@ import (
 // LinkStatus 表示一条链接（links 表）的整体处理状态。
 type LinkStatus string
 
-// 链接的五种状态：skeleton 仅保留给历史占位行，新的解析流程不再自动创建；
-// 其余四种与解析任务对齐。
+// 链接状态与解析任务生命周期对齐。
 const (
-	LinkStatusSkeleton   LinkStatus = "skeleton"   // 历史占位行，保留兼容旧数据
 	LinkStatusPending    LinkStatus = "pending"    // 已入库，等待解析
 	LinkStatusProcessing LinkStatus = "processing" // 正在解析
 	LinkStatusDone       LinkStatus = "done"       // 解析完成
 	LinkStatusFailed     LinkStatus = "failed"     // 解析失败
 )
+
+// ParseAttempt is the immutable identity of one durable parse request. River
+// owns execution and retry state; the Link row owns the current generation and
+// product-visible result.
+type ParseAttempt struct {
+	LinkID                   uuid.UUID
+	Generation               int64
+	ExpectedMetadataRevision int64
+}
 
 // ContentType 标记一条链接的内容形态，用于前端分组和路由展示策略。
 type ContentType string
@@ -54,35 +61,14 @@ func NormalizeOptionalLibraryKind(raw string) (LibraryKind, bool) {
 	}
 }
 
-// RequestedLibraryKind records the capture-time collection intent. Auto must
-// never be persisted as Link.LibraryKind, but it is persisted independently so
-// a later refresh cannot mistake an automatic final partition for user intent.
+// RequestedLibraryKind is the capture-time command input. Auto delegates the
+// final partition to the analyzer; a concrete value fixes the Link's partition.
 type RequestedLibraryKind string
 
 const (
 	RequestedLibraryKindAuto    RequestedLibraryKind = "auto"
 	RequestedLibraryKindReading RequestedLibraryKind = "reading"
 	RequestedLibraryKindSite    RequestedLibraryKind = "site"
-)
-
-// RequestedLibraryKindSource records who selected the persisted capture
-// intent. System hard rules (for example RSS -> reading) use auto even when the
-// requested kind is concrete; only an explicit public reading/site selection
-// uses user.
-type RequestedLibraryKindSource string
-
-const (
-	RequestedLibraryKindSourceAuto RequestedLibraryKindSource = "auto"
-	RequestedLibraryKindSourceUser RequestedLibraryKindSource = "user"
-)
-
-// LibraryKindSource records how the final collection partition was chosen.
-type LibraryKindSource string
-
-const (
-	LibraryKindSourceAuto      LibraryKindSource = "auto"
-	LibraryKindSourceUser      LibraryKindSource = "user"
-	LibraryKindSourceMigration LibraryKindSource = "migration"
 )
 
 // ContentFormat declares how SavedContent.Document should be interpreted.
@@ -137,48 +123,41 @@ type Link struct {
 	// HasContent / ContentCJKChars / ContentWords 是「已保存原文」的三项派生
 	// 事实，PF6 起落成列并进入列表投影。此前列表恒报 has_content=false，
 	// 而详情端为了这三个数字要把整篇正文读出来再扔掉。
-	HasContent                 bool
-	ContentCJKChars            int
-	ContentWords               int
-	URL                        string
-	SourceKind                 string         // 来源类型：url / text / html / image 等
-	SourceKey                  string         // 用于去重的唯一键（通常是规范化后的 URL 或哈希）
-	InputTitle                 *string        // 调用方预提供的标题
-	InputText                  *string        // 调用方预提供的纯文本正文
-	InputHTML                  *string        // 调用方预提供的 HTML 片段
-	InputImages                []string       // 关联图片 URL 列表
-	SourceMetadata             map[string]any // 透传的来源元数据，例如 parse_depth
-	Title                      *string        // 解析后的标题
-	Summary                    *string        // 解析生成的摘要
-	Tags                       []string       // 解析生成的原始标签（未经过 concept 规范化）
-	FetcherType                *string        // 实际使用的抓取器类型
-	IsLowConfidence            bool           // 是否被判定为低置信度结果
-	LowConfidenceReason        *string        // 低置信度具体原因
-	Status                     LinkStatus
-	ErrorMsg                   *string // 失败时的简短错误描述
-	Description                *string // 用户备注
-	Domain                     *string // 链接所属域名
-	ContentType                *string // 内容形态：article / listing / homepage / unknown
-	RequestedLibraryKind       RequestedLibraryKind
-	RequestedLibraryKindSource RequestedLibraryKindSource
-	LibraryKind                *LibraryKind
-	LibraryKindSource          *LibraryKindSource
-	LibraryKindLocked          bool
-	PredictedLibraryKind       *LibraryKind
-	ClassificationConfidence   *float32
-	ClassificationReason       *string
-	ClassificationExplanation  *string
-	ClassifierVersion          *string
-	ContentRevision            int64
-	MetadataRevision           int64
-	ContentSource              ContentSource
-	FirstCollectedAt           time.Time
-	LastRecollectedAt          *time.Time
-	PayloadPurgeDueAt          *time.Time
-	PayloadPurgedAt            *time.Time
-	PathDepth                  *int       // URL 路径深度
-	ParentPath                 *string    // 父路径字符串
-	ParentID                   *uuid.UUID // 父链接 ID（构成域名内树形结构）
-	CreatedAt                  time.Time
-	UpdatedAt                  time.Time
+	HasContent          bool
+	ContentCJKChars     int
+	ContentWords        int
+	URL                 string
+	SourceKind          string         // 来源类型：url / text / html / image 等
+	SourceKey           string         // 用于去重的唯一键（通常是规范化后的 URL 或哈希）
+	InputTitle          *string        // 调用方预提供的标题
+	InputText           *string        // 调用方预提供的纯文本正文
+	InputHTML           *string        // 调用方预提供的 HTML 片段
+	InputImages         []string       // 关联图片 URL 列表
+	SourceMetadata      map[string]any // 透传的来源元数据
+	Title               *string        // 解析后的标题
+	Summary             *string        // 解析生成的摘要
+	Tags                []string       // 解析生成的标签
+	FetcherType         *string        // 实际使用的抓取器类型
+	IsLowConfidence     bool           // 是否被判定为低置信度结果
+	LowConfidenceReason *string        // 低置信度具体原因
+	Status              LinkStatus
+	ErrorMsg            *string // 失败时的简短错误描述
+	Description         *string // 用户备注
+	Domain              *string // 链接所属域名
+	ContentType         *string // 内容形态：article / listing / homepage / unknown
+	LibraryKind         *LibraryKind
+	LibraryKindLocked   bool
+	ContentRevision     int64
+	MetadataRevision    int64
+	ParseGeneration     int64
+	ContentSource       ContentSource
+	FirstCollectedAt    time.Time
+	LastRecollectedAt   *time.Time
+	PayloadPurgeDueAt   *time.Time
+	PayloadPurgedAt     *time.Time
+	PathDepth           *int       // URL 路径深度
+	ParentPath          *string    // 父路径字符串
+	ParentID            *uuid.UUID // 父链接 ID（构成域名内树形结构）
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }

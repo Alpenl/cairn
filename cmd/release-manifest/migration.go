@@ -29,9 +29,9 @@ const (
 	// classAutomatic is a step the updater may apply inside the maintenance
 	// window without an operator decision.
 	classAutomatic onlineUpdateClass = "automatic"
-	// classManualGate is a release-gated step. It can never be crossed
-	// implicitly by a page-triggered update.
-	classManualGate onlineUpdateClass = "manual-gate"
+	// classIncompatible is a reviewed refusal: the previous Core cannot serve
+	// after this schema target lands.
+	classIncompatible onlineUpdateClass = "incompatible"
 	// classUnclassified is a step nobody has classified yet. Treated as deny.
 	classUnclassified onlineUpdateClass = "unclassified"
 )
@@ -41,16 +41,15 @@ type stepClassification struct {
 	Class onlineUpdateClass
 }
 
-// classifyStep is the single seam the internal/migrate side will grow into.
-// Today the only compatibility metadata a Step carries is Manual, which is
-// enough to recognise the release-gated steps; everything else is unclassified
-// and therefore denied. When Step gains an explicit online-update field, this
-// function is the only place that has to learn about it.
 func classifyStep(step migrate.Step) onlineUpdateClass {
-	if step.Manual {
-		return classManualGate
+	switch step.OnlineUpdate.Compatibility {
+	case migrate.OnlineUpdateCompatible:
+		return classAutomatic
+	case migrate.OnlineUpdateIncompatible:
+		return classIncompatible
+	default:
+		return classUnclassified
 	}
-	return classUnclassified
 }
 
 func classifySteps(steps []migrate.Step) []stepClassification {
@@ -79,21 +78,21 @@ func schemaTarget(steps []migrate.Step) (string, error) {
 // onlineUpdateDecision folds the per-step classification into the manifest
 // flag plus the reason the UI shows the operator.
 func onlineUpdateDecision(classifications []stepClassification) (bool, string) {
-	var gated []string
+	var incompatible []string
 	var unclassified []string
 	for _, classification := range classifications {
 		switch classification.Class {
-		case classManualGate:
-			gated = append(gated, classification.ID)
+		case classIncompatible:
+			incompatible = append(incompatible, classification.ID)
 		case classUnclassified:
 			unclassified = append(unclassified, classification.ID)
 		case classAutomatic:
 		}
 	}
 	switch {
-	case len(gated) > 0:
-		return false, fmt.Sprintf("release-gated migration step(s) %s must be applied by hand; "+
-			"a page-triggered update may never cross a manual gate", strings.Join(gated, ", "))
+	case len(incompatible) > 0:
+		return false, fmt.Sprintf("migration target(s) %s are incompatible with the previous Core binary; "+
+			"apply them only after stopping the old service", strings.Join(incompatible, ", "))
 	case len(unclassified) > 0:
 		return false, fmt.Sprintf("%d migration step(s) carry no online-update classification "+
 			"(first: %s); classification defaults to deny", len(unclassified), unclassified[0])

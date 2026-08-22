@@ -9,31 +9,7 @@ import (
 	"github.com/pashagolub/pgxmock/v4"
 )
 
-func TestDeleteLifecyclePrelocksLibraryAndFeedBeforeLink(t *testing.T) {
-	t.Parallel()
-
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock.NewPool() error = %v", err)
-	}
-	defer mock.Close()
-
-	prelockErr := errors.New("library/feed prelock rejected")
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SELECT lock_library_feed_revisions()")).
-		WillReturnError(prelockErr)
-	mock.ExpectRollback()
-
-	repo := NewPGXLinkRepository(mock)
-	if err := repo.DeleteLifecycle(t.Context(), uuid.New()); !errors.Is(err, prelockErr) {
-		t.Fatalf("DeleteLifecycle() error = %v, want prelock error", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet mock expectations: %v", err)
-	}
-}
-
-func TestDeleteLifecycleTerminalizesAttemptsBeforeSoftDelete(t *testing.T) {
+func TestDeleteLifecycleTerminalizesTranslationsBeforeSoftDelete(t *testing.T) {
 	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -42,11 +18,8 @@ func TestDeleteLifecycleTerminalizesAttemptsBeforeSoftDelete(t *testing.T) {
 	defer mock.Close()
 	linkID := uuid.New()
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(lockLibraryFeedRevisionsSQL)).WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery(regexp.QuoteMeta(lockLinkForDeleteSQL)).WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"id"}).AddRow(linkID))
-	mock.ExpectExec(regexp.QuoteMeta(terminalizeDeletedParseAttemptsSQL)).WithArgs(linkID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 	mock.ExpectExec(regexp.QuoteMeta(terminalizeDeletedTranslationAttemptsSQL)).WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(deleteLinkSQL)).WithArgs(linkID).
@@ -62,7 +35,7 @@ func TestDeleteLifecycleTerminalizesAttemptsBeforeSoftDelete(t *testing.T) {
 	}
 }
 
-func TestDeleteLifecycleRollsBackWhenAttemptTerminalizationFails(t *testing.T) {
+func TestDeleteLifecycleRollsBackWhenTranslationTerminalizationFails(t *testing.T) {
 	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -70,12 +43,11 @@ func TestDeleteLifecycleRollsBackWhenAttemptTerminalizationFails(t *testing.T) {
 	}
 	defer mock.Close()
 	linkID := uuid.New()
-	wantErr := errors.New("parse attempt write failed")
+	wantErr := errors.New("translation attempt write failed")
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(lockLibraryFeedRevisionsSQL)).WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery(regexp.QuoteMeta(lockLinkForDeleteSQL)).WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"id"}).AddRow(linkID))
-	mock.ExpectExec(regexp.QuoteMeta(terminalizeDeletedParseAttemptsSQL)).WithArgs(linkID).
+	mock.ExpectExec(regexp.QuoteMeta(terminalizeDeletedTranslationAttemptsSQL)).WithArgs(linkID).
 		WillReturnError(wantErr)
 	mock.ExpectRollback()
 

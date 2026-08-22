@@ -1,11 +1,10 @@
 package service
 
 import (
-	"net/http"
 	"strings"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
+	"webtag/internal/problem"
 )
 
 func handleURLSource(acc *ingestAccumulator, src dto.IngestSource, record *ingestSourceRecord) error {
@@ -22,7 +21,7 @@ func handleURLSource(acc *ingestAccumulator, src dto.IngestSource, record *inges
 func handleTextSource(acc *ingestAccumulator, src dto.IngestSource, record *ingestSourceRecord) error {
 	text := strings.TrimSpace(src.Text)
 	if text == "" {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestTextRequired, "text source requires non-empty text")
+		return problem.NewWithCode(problem.Invalid, problem.CodeIngestTextRequired, "text source requires non-empty text")
 	}
 	record.Text = text
 	acc.textParts = append(acc.textParts, text)
@@ -70,7 +69,7 @@ func handleBrowserCaptureSource(acc *ingestAccumulator, src dto.IngestSource, re
 
 	hasMeaningfulField := pageURL != "" || title != "" || text != "" || html != "" || len(record.Metadata) > 0
 	if !hasMeaningfulField {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestBrowserCaptureEmpty, "browser_capture source requires at least one meaningful field")
+		return problem.NewWithCode(problem.Invalid, problem.CodeIngestBrowserCaptureEmpty, "browser_capture source requires at least one meaningful field")
 	}
 
 	if acc.firstTitle == "" && title != "" {

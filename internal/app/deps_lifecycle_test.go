@@ -2,131 +2,146 @@ package app
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"reflect"
 	"testing"
+	"time"
 )
 
-type lifecycleQueueStub struct {
-	starts int
-	stops  int
+type resourceBackground struct {
+	name     string
+	events   *[]string
+	startErr error
+	stopErr  error
 }
 
-func (s *lifecycleQueueStub) Start(context.Context) error {
-	s.starts++
-	return nil
+func (b *resourceBackground) Start(context.Context) error {
+	*b.events = append(*b.events, "start "+b.name)
+	return b.startErr
 }
 
-func (s *lifecycleQueueStub) Stop(context.Context) error {
-	s.stops++
-	return nil
+func (b *resourceBackground) Stop(context.Context) error {
+	*b.events = append(*b.events, "stop "+b.name)
+	return b.stopErr
 }
 
-type lifecyclePollerStub struct {
-	starts int
-	stops  int
-}
-
-func (s *lifecyclePollerStub) Start(context.Context) error {
-	s.starts++
-	return nil
-}
-
-func (s *lifecyclePollerStub) Stop(context.Context) error {
-	s.stops++
-	return nil
-}
-
-func TestRuntimeStartStartsQueueAndBackgroundRepair(t *testing.T) {
+func TestRuntimeResourcesStartAndStopBackgroundsInReverseOrder(t *testing.T) {
 	t.Parallel()
 
-	queue := &lifecycleQueueStub{}
-	poller := &lifecyclePollerStub{}
-	reconciler := &lifecyclePollerStub{}
-	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
-		backgrounds: []namedRuntimeBackground{
-			{name: "queue", background: queue},
-			{name: "poller", background: poller},
-			{name: "reconciler", background: reconciler},
-		},
-	})
+	var events []string
+	resources := newRuntimeResources([]namedRuntimeBackground{
+		{name: "queue", background: &resourceBackground{name: "queue", events: &events}},
+		{name: "scheduler", background: &resourceBackground{name: "scheduler", events: &events}},
+	}, nil)
 
-	if err := lifecycle.Start(context.Background()); err != nil {
+	if err := resources.Start(t.Context()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	if queue.starts != 1 || poller.starts != 1 || reconciler.starts != 1 {
-		t.Fatalf("queue/poller/reconciler starts = %d/%d/%d, want 1/1/1", queue.starts, poller.starts, reconciler.starts)
-	}
-	if err := lifecycle.Close(context.Background()); err != nil {
+	if err := resources.Close(t.Context()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if queue.stops != 1 || poller.stops != 1 || reconciler.stops != 1 {
-		t.Fatalf("queue/poller/reconciler stops = %d/%d/%d, want 1/1/1", queue.stops, poller.stops, reconciler.stops)
+	want := []string{"start queue", "start scheduler", "stop scheduler", "stop queue"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
 	}
 }
 
-type lifecycleOwnerContextKey struct{}
-
-type lifecycleOwnerContextMarker struct {
-	value int
-}
-
-type lifecycleOwnerContextPersistence struct {
-	marker *lifecycleOwnerContextMarker
-}
-
-func (p *lifecycleOwnerContextPersistence) AdmitOwner(ctx context.Context) (context.Context, func(), error) {
-	return context.WithValue(ctx, lifecycleOwnerContextKey{}, p.marker), func() {}, nil
-}
-
-func (*lifecycleOwnerContextPersistence) CloseAdmission()             {}
-func (*lifecycleOwnerContextPersistence) Drain(context.Context) error { return nil }
-func (*lifecycleOwnerContextPersistence) Close(context.Context) error { return nil }
-
-type lifecycleOwnerContextBackground struct {
-	name   string
-	marker *lifecycleOwnerContextMarker
-	starts int
-}
-
-func (b *lifecycleOwnerContextBackground) Start(ctx context.Context) error {
-	if got := ctx.Value(lifecycleOwnerContextKey{}); got != b.marker {
-		return fmt.Errorf("%s owner marker = %p, want %p", b.name, got, b.marker)
-	}
-	b.starts++
-	return nil
-}
-
-func (*lifecycleOwnerContextBackground) Stop(context.Context) error { return nil }
-
-func TestRuntimeLifecycleStartsEveryBackgroundWithAdmittedOwnerContext(t *testing.T) {
+func TestRuntimeResourcesNamesStartAndStopFailures(t *testing.T) {
 	t.Parallel()
 
-	marker := &lifecycleOwnerContextMarker{value: 7}
-	backgrounds := []*lifecycleOwnerContextBackground{
-		{name: "queue", marker: marker},
-		{name: "recorder", marker: marker},
-		{name: "cleaner", marker: marker},
+	startErr := errors.New("start failed")
+	stopErr := errors.New("stop failed")
+	var events []string
+	resources := newRuntimeResources([]namedRuntimeBackground{
+		{name: "queue", background: &resourceBackground{name: "queue", events: &events, stopErr: stopErr}},
+		{name: "scheduler", background: &resourceBackground{name: "scheduler", events: &events, startErr: startErr}},
+	}, nil)
+
+	if err := resources.Start(t.Context()); !errors.Is(err, startErr) {
+		t.Fatalf("Start() error = %v, want %v", err, startErr)
 	}
-	lifecycle := newRuntimeLifecycle(runtimeLifecycleOptions{
-		persistence: &lifecycleOwnerContextPersistence{marker: marker},
-		backgrounds: []namedRuntimeBackground{
-			{name: backgrounds[0].name, background: backgrounds[0]},
-			{name: backgrounds[1].name, background: backgrounds[1]},
-			{name: backgrounds[2].name, background: backgrounds[2]},
+	if err := resources.Close(t.Context()); !errors.Is(err, stopErr) {
+		t.Fatalf("Close() error = %v, want %v", err, stopErr)
+	}
+}
+
+type deadlineBlockingBackground struct {
+	name     string
+	events   *[]string
+	deadline *time.Time
+}
+
+func (b *deadlineBlockingBackground) Start(context.Context) error { return nil }
+
+func (b *deadlineBlockingBackground) Stop(ctx context.Context) error {
+	*b.events = append(*b.events, "stop "+b.name)
+	if deadline, ok := ctx.Deadline(); ok && b.deadline != nil {
+		*b.deadline = deadline
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type deadlinePersistenceCloser struct {
+	events   *[]string
+	deadline *time.Time
+	err      error
+}
+
+func (p *deadlinePersistenceCloser) Close(ctx context.Context) error {
+	*p.events = append(*p.events, "close persistence")
+	if deadline, ok := ctx.Deadline(); ok && p.deadline != nil {
+		*p.deadline = deadline
+	}
+	if p.err != nil {
+		return p.err
+	}
+	return ctx.Err()
+}
+
+func TestRuntimeResourcesUseOneDeadlineAcrossBackgroundsAndPersistence(t *testing.T) {
+	t.Parallel()
+
+	var (
+		events              []string
+		backgroundDeadline  time.Time
+		persistenceDeadline time.Time
+	)
+	resources := newRuntimeResources([]namedRuntimeBackground{
+		{
+			name: "queue",
+			background: &deadlineBlockingBackground{
+				name:     "queue",
+				events:   &events,
+				deadline: &backgroundDeadline,
+			},
 		},
+	}, &deadlinePersistenceCloser{
+		events:   &events,
+		deadline: &persistenceDeadline,
 	})
 
-	if err := lifecycle.Start(context.WithValue(
-		t.Context(),
-		lifecycleOwnerContextKey{},
-		&lifecycleOwnerContextMarker{value: 9},
-	)); err != nil {
-		t.Fatalf("Start() error = %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	err := resources.Close(ctx)
+	elapsed := time.Since(startedAt)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() error = %v, want context deadline exceeded", err)
 	}
-	t.Cleanup(func() { _ = lifecycle.Close(t.Context()) })
-	for _, background := range backgrounds {
-		if background.starts != 1 {
-			t.Fatalf("%s starts = %d, want 1 with admitted owner context", background.name, background.starts)
-		}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("Close() elapsed = %v, want bounded by caller deadline", elapsed)
+	}
+	if !reflect.DeepEqual(events, []string{"stop queue", "close persistence"}) {
+		t.Fatalf("events = %v, want stop queue then close persistence", events)
+	}
+	if backgroundDeadline.IsZero() || persistenceDeadline.IsZero() {
+		t.Fatalf("missing observed deadlines: background=%v persistence=%v",
+			backgroundDeadline, persistenceDeadline)
+	}
+	if !backgroundDeadline.Equal(persistenceDeadline) {
+		t.Fatalf("deadlines differ: background=%v persistence=%v",
+			backgroundDeadline, persistenceDeadline)
 	}
 }

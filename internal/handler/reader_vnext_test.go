@@ -20,8 +20,11 @@ import (
 )
 
 type readerHandlerStub struct {
-	ReaderService
-	job                  dto.ReaderInboxJobResponse
+	ReaderThoughtRoutes
+	ReaderNoteRoutes
+	ReaderInboxRoutes
+	ReaderTodoRoutes
+	ReaderLibraryRoutes
 	restoreInbox         func(context.Context, string) error
 	restoreInboxID       string
 	confirmBulk          func(context.Context, []string, map[string]int64) ([]model.ReaderInboxBulkResult, error)
@@ -34,7 +37,6 @@ type readerHandlerStub struct {
 	confirmAICalls       int
 	feedResponse         dto.ReaderFeedResponse
 	feedMode             string
-	feedSnapshotID       string
 	feedAfter            string
 	feedLimit            int
 	feedSources          []string
@@ -48,7 +50,7 @@ type readerHandlerStub struct {
 }
 
 type readerTodoPatchHandlerStub struct {
-	ReaderService
+	ReaderTodoRoutes
 	err   error
 	calls int
 }
@@ -62,7 +64,7 @@ func (s *readerTodoPatchHandlerStub) PatchTodo(context.Context, string, dto.Read
 // The explicit-null case can only produce its public 422 if the service keeps
 // the DTO's field-presence bit when it builds model.ReaderTodoPatch.
 type readerTodoPatchPresenceStore struct {
-	repository.ReaderVNextStore
+	service.ReaderTodoStore
 	commands []model.ReaderTodoPatch
 	err      error
 }
@@ -90,10 +92,6 @@ type readerThoughtConflictHandlerStub struct {
 
 func (s *readerThoughtConflictHandlerStub) ListThoughtConflicts(context.Context, string, int) (dto.ReaderThoughtConflictsResponse, error) {
 	return s.response, nil
-}
-
-func (s *readerHandlerStub) GetInboxJob(context.Context, string) (dto.ReaderInboxJobResponse, error) {
-	return s.job, nil
 }
 
 func (s *readerHandlerStub) RestoreInbox(ctx context.Context, id string) error {
@@ -130,9 +128,8 @@ func (s *readerHandlerStub) ConfirmAIProposals(ctx context.Context, partition st
 	return dto.ReaderInboxConfirmAIProposalsResponse{Atomic: true, Items: []dto.ReaderInboxBulkItemResponse{}}, nil
 }
 
-func (s *readerHandlerStub) FeedWithSources(_ context.Context, mode, snapshotID, after string, sources []string, limit int) (dto.ReaderFeedResponse, error) {
+func (s *readerHandlerStub) FeedWithSources(_ context.Context, mode, after string, sources []string, limit int) (dto.ReaderFeedResponse, error) {
 	s.feedMode = mode
-	s.feedSnapshotID = snapshotID
 	s.feedAfter = after
 	s.feedLimit = limit
 	s.feedSources = append([]string(nil), sources...)
@@ -142,7 +139,12 @@ func (s *readerHandlerStub) FeedWithSources(_ context.Context, mode, snapshotID,
 func (s *readerHandlerStub) FeedbackFeed(_ context.Context, itemKey, action string) (dto.ReaderFeedFeedbackResponse, error) {
 	s.feedbackItemKey = itemKey
 	s.feedbackAction = action
-	return dto.ReaderFeedFeedbackResponse{ItemKey: itemKey, Action: action, Saved: action == "save"}, s.feedbackErr
+	response := dto.ReaderFeedFeedbackResponse{ItemKey: itemKey, Action: action}
+	if action == "save" {
+		linkID := uuid.NewString()
+		response.LinkID = &linkID
+	}
+	return response, s.feedbackErr
 }
 
 func (s *readerHandlerStub) Activity(_ context.Context, kind, after string, limit int) (dto.ReaderActivityResponse, error) {
@@ -153,11 +155,9 @@ func (s *readerHandlerStub) Activity(_ context.Context, kind, after string, limi
 }
 
 type readerActivityHandlerStore struct {
-	repository.ReaderVNextStore
+	service.ReaderLibraryStore
 	items []model.ReaderActivity
 }
-
-func (s *readerActivityHandlerStore) RefreshActivity(context.Context) error { return nil }
 
 func (s *readerActivityHandlerStore) ListActivity(_ context.Context, query model.ReaderActivityQuery) (model.ReaderActivityPage, error) {
 	start := 0
@@ -179,7 +179,7 @@ func TestReaderActivityPassesKindCursorAndLimit(t *testing.T) {
 		Kind: "tag", Tags: []dto.ReaderTagActivityResponse{}, Domains: []dto.ReaderDomainActivityResponse{},
 	}}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/reader/activity?kind=tag&after=opaque-cursor&limit=37", nil))
@@ -198,9 +198,9 @@ func TestReaderActivityHandlerRejectsTamperedAndCrossBoundCursor(t *testing.T) {
 		{Kind: "tag", Key: "alpha", NormalizedKey: "alpha", LastAt: when},
 		{Kind: "tag", Key: "beta", NormalizedKey: "beta", LastAt: when},
 	}}
-	reader := service.NewReaderVNextService(store, nil, service.ReaderVNextServiceOptions{CursorSigningKey: "handler-activity-key"})
+	reader := service.NewReaderApplications(readerServiceTestStores(store), nil, service.ReaderApplicationOptions{CursorSigningKey: "handler-activity-key"})
 	router := gin.New()
-	RegisterReaderRoutes(router, reader)
+	RegisterReaderRoutes(router, readerTestRoutes(reader))
 
 	firstResponse := httptest.NewRecorder()
 	router.ServeHTTP(firstResponse, httptest.NewRequest(http.MethodGet, "/api/reader/activity?kind=tag&limit=1", nil))
@@ -254,7 +254,7 @@ func TestReaderTodoPatchHandlerPreservesErrorContract(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stub := &readerTodoPatchHandlerStub{err: httperr.NewWithCode(tt.status, tt.code, "stable TODO error")}
 			router := gin.New()
-			RegisterReaderRoutes(router, stub)
+			RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPatch, "/api/todos/00000000-0000-0000-0000-000000000001", bytes.NewBufferString(`{"done":true,"expected_host_revision":0}`))
@@ -327,7 +327,8 @@ func TestReaderTodoPatchHTTPPreservesExpectedHostRevisionPresence(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			store := &readerTodoPatchPresenceStore{err: tt.storeErr}
 			router := gin.New()
-			RegisterReaderRoutes(router, service.NewReaderVNextService(store, nil))
+			reader := service.NewReaderApplications(readerServiceTestStores(store), nil)
+			RegisterReaderRoutes(router, readerTestRoutes(reader))
 
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPatch, "/api/todos/"+todoID, bytes.NewBufferString(tt.body))
@@ -372,32 +373,6 @@ func TestReaderTodoPatchHTTPPreservesExpectedHostRevisionPresence(t *testing.T) 
 	}
 }
 
-func TestRegisterReaderRoutesExposesInboxJobStatusOnV1Alias(t *testing.T) {
-	router := gin.New()
-	RegisterReaderRoutes(router, &readerHandlerStub{job: dto.ReaderInboxJobResponse{
-		InboxID:   "inbox-1",
-		Status:    "running",
-		JobID:     "job-1",
-		Attempts:  1,
-		CreatedAt: time.Unix(1, 0).UTC(),
-		UpdatedAt: time.Unix(2, 0).UTC(),
-	}})
-
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/inbox/jobs/job-1", nil)
-	router.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("GET /api/v1/inbox/jobs/:job_id status = %d, want 200", response.Code)
-	}
-	var body dto.ReaderInboxJobResponse
-	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-		t.Fatalf("decode job response: %v", err)
-	}
-	if body.JobID != "job-1" || body.Status != "running" || body.Attempts != 1 {
-		t.Fatalf("job response = %#v", body)
-	}
-}
-
 func TestRegisterReaderRoutesExposesThoughtConflictRecovery(t *testing.T) {
 	reader := &readerThoughtConflictHandlerStub{
 		readerHandlerStub: &readerHandlerStub{},
@@ -409,13 +384,13 @@ func TestRegisterReaderRoutesExposesThoughtConflictRecovery(t *testing.T) {
 		},
 	}
 	router := gin.New()
-	RegisterReaderRoutes(router, reader)
+	RegisterReaderRoutes(router, readerTestRoutes(reader))
 
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/annotations/conflicts?limit=10", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/annotations/conflicts?limit=10", nil)
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
-		t.Fatalf("GET /api/v1/annotations/conflicts status = %d, want 200", response.Code)
+		t.Fatalf("GET /api/annotations/conflicts status = %d, want 200", response.Code)
 	}
 	var body dto.ReaderThoughtConflictsResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
@@ -430,10 +405,10 @@ func TestReaderInboxRestoreReturnsOKAndPassesID(t *testing.T) {
 	const inboxID = "00000000-0000-0000-0000-000000000001"
 	stub := &readerHandlerStub{}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/inbox/"+inboxID+"/restore", nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/inbox/"+inboxID+"/restore", nil)
 	router.ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
@@ -451,7 +426,7 @@ func TestReaderInboxRestoreMapsStateConflict(t *testing.T) {
 		},
 	}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/inbox/00000000-0000-0000-0000-000000000001/restore", nil)
@@ -481,7 +456,7 @@ func TestReaderConfirmAIProposalsUsesStaticCollectionRouteAndMapsResponse(t *tes
 		}, nil
 	}}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/inbox/confirm-ai-proposals", bytes.NewBufferString(`{"partition":"expired"}`))
@@ -503,10 +478,10 @@ func TestReaderConfirmAIProposalsUsesStaticCollectionRouteAndMapsResponse(t *tes
 func TestReaderConfirmAIProposalsRejectsInvalidPartitionBeforeService(t *testing.T) {
 	stub := &readerHandlerStub{}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/inbox/confirm-ai-proposals", bytes.NewBufferString(`{"partition":"other"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/inbox/confirm-ai-proposals", bytes.NewBufferString(`{"partition":"other"}`))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(response, request)
 
@@ -538,11 +513,11 @@ func TestReaderInboxBulkConfirmPreservesUniqueInputOrder(t *testing.T) {
 		},
 	}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	body := []byte(`{"inbox_ids":["` + first.String() + `","` + second.String() + `","` + first.String() + `"],"expected_revisions":{"` + first.String() + `":3,"` + second.String() + `":7}}`)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/inbox/bulk/confirm", bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/api/inbox/bulk/confirm", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(response, request)
 
@@ -571,7 +546,7 @@ func TestReaderInboxBulkDiscardMapsAtomicFailure(t *testing.T) {
 		},
 	}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	body := []byte(`{"inbox_ids":["00000000-0000-0000-0000-000000000001"]}`)
 	response := httptest.NewRecorder()
@@ -590,7 +565,7 @@ func TestReaderInboxBulkDiscardMapsAtomicFailure(t *testing.T) {
 func TestReaderInboxBulkRejectsEmptyEnvelopeBeforeService(t *testing.T) {
 	stub := &readerHandlerStub{}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/inbox/bulk/confirm", bytes.NewReader([]byte(`{"inbox_ids":[]}`)))
@@ -608,17 +583,17 @@ func TestReaderInboxBulkRejectsEmptyEnvelopeBeforeService(t *testing.T) {
 func TestReaderFeedPassesRepeatedSourceQueryValues(t *testing.T) {
 	stub := &readerHandlerStub{feedResponse: dto.ReaderFeedResponse{Mode: "recommended"}}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/reader-feed?mode=recommended&snapshot_id=snapshot-1&after=cursor-1&limit=17&source=reading&source=subscription", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/reader-feed?mode=recommended&after=cursor-1&limit=17&source=reading&source=subscription", nil)
 	router.ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("repeated source status = %d, want 200; body=%s", response.Code, response.Body.String())
 	}
-	if stub.feedMode != "recommended" || stub.feedSnapshotID != "snapshot-1" || stub.feedAfter != "cursor-1" || stub.feedLimit != 17 {
-		t.Fatalf("feed request fields = mode=%q snapshot=%q after=%q limit=%d", stub.feedMode, stub.feedSnapshotID, stub.feedAfter, stub.feedLimit)
+	if stub.feedMode != "recommended" || stub.feedAfter != "cursor-1" || stub.feedLimit != 17 {
+		t.Fatalf("feed request fields = mode=%q after=%q limit=%d", stub.feedMode, stub.feedAfter, stub.feedLimit)
 	}
 	if len(stub.feedSources) != 2 || stub.feedSources[0] != "reading" || stub.feedSources[1] != "subscription" {
 		t.Fatalf("source query values = %#v, want repeated source values", stub.feedSources)
@@ -628,10 +603,10 @@ func TestReaderFeedPassesRepeatedSourceQueryValues(t *testing.T) {
 func TestReaderFeedPassesCSVSourcesQueryValue(t *testing.T) {
 	stub := &readerHandlerStub{}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/reader-feed?sources=reading,subscription", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/reader-feed?sources=reading,subscription", nil)
 	router.ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
@@ -642,37 +617,27 @@ func TestReaderFeedPassesCSVSourcesQueryValue(t *testing.T) {
 	}
 }
 
-func TestReaderFeedPreservesUnionReasonAndSnapshotCursorEnvelope(t *testing.T) {
+func TestReaderFeedWritesLiveCursorEnvelope(t *testing.T) {
 	linkID := uuid.New()
 	linkIDText := linkID.String()
+	now := time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)
 	stub := &readerHandlerStub{feedResponse: dto.ReaderFeedResponse{
 		Items: []dto.ReaderFeedItemResponse{{
 			Key:         "link:" + linkID.String(),
 			Source:      "reading",
-			ItemType:    "reading",
 			ResourceKey: "link:" + linkID.String(),
-			ActionKey:   "link:" + linkID.String(),
-			DedupeKey:   "url:https://example.com/reading",
-			SectionID:   "reading",
-			Actions:     []string{"read", "open"},
+			Title:       "Reading",
+			Summary:     "Summary",
+			URL:         "https://example.com/reading",
 			LinkID:      &linkIDText,
 			Read:        true,
-			ReasonCode:  "reading_progress",
-			ReasonText:  "阅读进度 40%",
+			EventAt:     now,
 		}},
-		NextCursor:   "cursor-2",
-		SnapshotID:   "snapshot-1",
-		Mode:         "chronological",
-		Capabilities: []string{"snapshot", "cursor", "reason"},
-		Sections: []dto.ReaderFeedSectionResponse{{
-			ID: "reading", Source: "reading", Label: "收藏", Count: 1, Capabilities: []string{"read", "open"},
-		}},
-		Sources: []dto.ReaderFeedSourceResponse{{
-			ID: "reading", Label: "收藏", Enabled: true, Count: 1, Capabilities: []string{"read", "open"},
-		}},
+		NextCursor: "cursor-2",
+		Mode:       "chronological",
 	}}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/reader-feed?mode=chronological", nil))
@@ -683,15 +648,12 @@ func TestReaderFeedPreservesUnionReasonAndSnapshotCursorEnvelope(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode feed response: %v", err)
 	}
-	if body.SnapshotID != "snapshot-1" || body.NextCursor != "cursor-2" || body.Mode != "chronological" || len(body.Items) != 1 || len(body.Capabilities) != 3 || len(body.Sections) != 1 || len(body.Sources) != 1 {
+	if body.NextCursor != "cursor-2" || body.Mode != "chronological" || len(body.Items) != 1 {
 		t.Fatalf("feed envelope = %#v", body)
 	}
 	item := body.Items[0]
-	if item.Key != "link:"+linkID.String() || item.ItemType != "reading" || item.ResourceKey != "link:"+linkID.String() || item.ActionKey != "link:"+linkID.String() || item.DedupeKey != "url:https://example.com/reading" || item.SectionID != "reading" || len(item.Actions) != 2 || item.LinkID == nil || *item.LinkID != linkID.String() || !item.Read || item.ReasonCode != "reading_progress" || item.ReasonText == "" {
+	if item.Key != "link:"+linkID.String() || item.ResourceKey != "link:"+linkID.String() || item.LinkID == nil || *item.LinkID != linkID.String() || !item.Read || !item.EventAt.Equal(now) {
 		t.Fatalf("feed item wire = %#v", item)
-	}
-	if body.Sections[0].Source != "reading" || body.Sections[0].Capabilities[0] != "read" || !body.Sources[0].Enabled || body.Sources[0].Capabilities[1] != "open" {
-		t.Fatalf("section/source wire = sections=%#v sources=%#v", body.Sections, body.Sources)
 	}
 }
 
@@ -699,7 +661,7 @@ func TestReaderFeedFeedbackPassesActionIdentityAndAction(t *testing.T) {
 	feedItemID := uuid.New()
 	stub := &readerHandlerStub{}
 	router := gin.New()
-	RegisterReaderRoutes(router, stub)
+	RegisterReaderRoutes(router, readerTestRoutes(stub))
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/reader-feed/feedback?item_key=subscription:"+feedItemID.String(), bytes.NewReader([]byte(`{"action":"save"}`)))
@@ -713,34 +675,10 @@ func TestReaderFeedFeedbackPassesActionIdentityAndAction(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode feedback response: %v", err)
 	}
-	if body.ItemKey != "subscription:"+feedItemID.String() || body.Action != "save" || !body.Saved {
+	if body.ItemKey != "subscription:"+feedItemID.String() || body.Action != "save" || body.LinkID == nil {
 		t.Fatalf("feedback response = %#v", body)
 	}
 	if stub.feedbackItemKey != "subscription:"+feedItemID.String() || stub.feedbackAction != "save" {
 		t.Fatalf("feedback command = (%q, %q), want canonical subscription identity and save", stub.feedbackItemKey, stub.feedbackAction)
-	}
-}
-
-type legacyReaderFeedStub struct {
-	ReaderService
-	called bool
-}
-
-func (s *legacyReaderFeedStub) Feed(context.Context, string, string, string, int) (dto.ReaderFeedResponse, error) {
-	s.called = true
-	return dto.ReaderFeedResponse{Mode: "recommended"}, nil
-}
-
-func TestReaderFeedKeepsLegacyServiceFallback(t *testing.T) {
-	stub := &legacyReaderFeedStub{}
-	router := gin.New()
-	RegisterReaderRoutes(router, stub)
-
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/reader-feed?source=reading", nil)
-	router.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK || !stub.called {
-		t.Fatalf("legacy feed fallback = status %d called=%v, want 200 and Feed call", response.Code, stub.called)
 	}
 }

@@ -7,11 +7,10 @@ import (
 
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
-	"webtag/internal/middleware"
 )
 
 // submitLink 处理 POST /api/links：解码单条 URL 的提交请求，交给
-// 写服务异步入库后返回 202 + job_id。
+// 写服务异步入库后返回 202 和 Link 状态。
 func submitLink(service LinkWriteService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req dto.LinkCreateRequest
@@ -20,24 +19,6 @@ func submitLink(service LinkWriteService) gin.HandlerFunc {
 		}
 
 		resp, err := service.Submit(c.Request.Context(), req)
-		if err != nil {
-			writeError(c, err)
-			return
-		}
-		c.JSON(http.StatusAccepted, resp)
-	}
-}
-
-// batchLinks 处理 POST /api/links/batch：批量提交 URL，逐条调度解析
-// 并把每条结果聚合在响应中返回。
-func batchLinks(service LinkWriteService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req dto.BatchCreateRequest
-		if !bindJSONWithLimit(c, &req, defaultMaxJSONBodyBytes) {
-			return
-		}
-
-		resp, err := service.Batch(c.Request.Context(), req)
 		if err != nil {
 			writeError(c, err)
 			return
@@ -168,7 +149,7 @@ func listLinks(service LinkReadService) gin.HandlerFunc {
 			writeError(c, err)
 			return
 		}
-		middleware.CacheableJSON(c, http.StatusOK, resp)
+		c.JSON(http.StatusOK, resp)
 	}
 }
 
@@ -183,7 +164,7 @@ func getLink(readService LinkReadService) gin.HandlerFunc {
 			writeError(c, err)
 			return
 		}
-		middleware.CacheableJSON(c, http.StatusOK, resp)
+		c.JSON(http.StatusOK, resp)
 	}
 }
 

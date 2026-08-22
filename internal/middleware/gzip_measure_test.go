@@ -13,30 +13,27 @@ import (
 )
 
 // listItem 复刻 dto.LinkResponse 中列表投影实际会带的字段（含 summary /
-// description / classification_explanation 这三个长文本字段），用来产出
+// description 这两个长文本字段），用来产出
 // 形状真实的列表响应，而不是拿一段人造字符串糊弄压缩比。
 type listItem struct {
-	ID                        string    `json:"id"`
-	URL                       string    `json:"url"`
-	Title                     string    `json:"title"`
-	Summary                   string    `json:"summary"`
-	Description               string    `json:"description"`
-	Tags                      []string  `json:"tags"`
-	ContentType               string    `json:"content_type"`
-	LibraryKind               string    `json:"library_kind"`
-	ClassificationReason      string    `json:"classification_reason"`
-	ClassificationExplanation string    `json:"classification_explanation"`
-	ClassifierVersion         string    `json:"classifier_version"`
-	Status                    string    `json:"status"`
-	Domain                    string    `json:"domain"`
-	PathDepth                 int       `json:"path_depth"`
-	CreatedAt                 time.Time `json:"created_at"`
-	UpdatedAt                 time.Time `json:"updated_at"`
-	FetcherType               string    `json:"fetcher_type"`
-	IsLowConfidence           bool      `json:"is_low_confidence"`
-	HasContent                bool      `json:"has_content"`
-	ContentCJKChars           int       `json:"content_cjk_chars"`
-	ContentWords              int       `json:"content_words"`
+	ID              string    `json:"id"`
+	URL             string    `json:"url"`
+	Title           string    `json:"title"`
+	Summary         string    `json:"summary"`
+	Description     string    `json:"description"`
+	Tags            []string  `json:"tags"`
+	ContentType     string    `json:"content_type"`
+	LibraryKind     string    `json:"library_kind"`
+	Status          string    `json:"status"`
+	Domain          string    `json:"domain"`
+	PathDepth       int       `json:"path_depth"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	FetcherType     string    `json:"fetcher_type"`
+	IsLowConfidence bool      `json:"is_low_confidence"`
+	HasContent      bool      `json:"has_content"`
+	ContentCJKChars int       `json:"content_cjk_chars"`
+	ContentWords    int       `json:"content_words"`
 }
 
 // 30 条各不相同的条目素材。**逐条不同是这份 fixture 的关键**：上一版 30
@@ -120,26 +117,23 @@ func realisticListPayload(t *testing.T) []byte {
 	items := make([]listItem, 0, 30)
 	for i := 0; i < 30; i++ {
 		items = append(items, listItem{
-			ID:                        fmt.Sprintf("9f2c1b84-4e7a-4d33-9a10-3f6b2c5e%04d", i*137%10000),
-			URL:                       fmt.Sprintf("https://%s/engineering/blog/2026/%02d/%s", measureDomains[i%len(measureDomains)], i%12+1, strings.ToLower(strings.ReplaceAll(measureTitles[i][:12], " ", "-"))),
-			Title:                     measureTitles[i],
-			Summary:                   measureSummaries[i],
-			Description:               measureSummaries[(i+7)%len(measureSummaries)][:60],
-			Tags:                      []string{measureTitles[i][:6], "工程实践", measureDomains[i%len(measureDomains)]},
-			ContentType:               "article",
-			LibraryKind:               "reading",
-			ClassificationReason:      "domain_and_content_signals",
-			ClassificationExplanation: fmt.Sprintf("URL 路径包含 /blog/ 且正文呈现单篇长文特征（单一 h1、连续段落 %d 个、无导航列表），判定为 reading。", 12+i),
-			ClassifierVersion:         "v4.2.1",
-			Status:                    "done",
-			Domain:                    measureDomains[i%len(measureDomains)],
-			PathDepth:                 4 + i%3,
-			CreatedAt:                 stamp.Add(-time.Duration(i) * time.Hour),
-			UpdatedAt:                 stamp.Add(-time.Duration(i) * time.Minute),
-			FetcherType:               []string{"basic", "github", "arxiv", "jina"}[i%4],
-			HasContent:                i%3 != 0,
-			ContentCJKChars:           1200 + i*311,
-			ContentWords:              80 + i*47,
+			ID:              fmt.Sprintf("9f2c1b84-4e7a-4d33-9a10-3f6b2c5e%04d", i*137%10000),
+			URL:             fmt.Sprintf("https://%s/engineering/blog/2026/%02d/%s", measureDomains[i%len(measureDomains)], i%12+1, strings.ToLower(strings.ReplaceAll(measureTitles[i][:12], " ", "-"))),
+			Title:           measureTitles[i],
+			Summary:         measureSummaries[i],
+			Description:     measureSummaries[(i+7)%len(measureSummaries)][:60],
+			Tags:            []string{measureTitles[i][:6], "工程实践", measureDomains[i%len(measureDomains)]},
+			ContentType:     "article",
+			LibraryKind:     "reading",
+			Status:          "done",
+			Domain:          measureDomains[i%len(measureDomains)],
+			PathDepth:       4 + i%3,
+			CreatedAt:       stamp.Add(-time.Duration(i) * time.Hour),
+			UpdatedAt:       stamp.Add(-time.Duration(i) * time.Minute),
+			FetcherType:     []string{"basic", "github", "arxiv", "jina"}[i%4],
+			HasContent:      i%3 != 0,
+			ContentCJKChars: 1200 + i*311,
+			ContentWords:    80 + i*47,
 		})
 	}
 	body, err := json.Marshal(map[string]any{"items": items, "total": 1284, "page": 1, "limit": 30})

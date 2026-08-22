@@ -89,7 +89,7 @@ function wireVersionKey(value: unknown): ThoughtVersionKey | null {
     deviceId: value.device_id,
     opId: value.op_id,
   }
-  return isValidThoughtVersionKey(key, true) ? key : null
+  return isValidThoughtVersionKey(key) ? key : null
 }
 
 function wireTarget(value: unknown, hostID: string): AnnotationTarget | null {
@@ -107,10 +107,6 @@ function wireTarget(value: unknown, hostID: string): AnnotationTarget | null {
     case 'note':
       return typeof version.note_revision === 'number'
         ? canonicalAnnotationTarget({ kind: 'note', noteRevision: version.note_revision })
-        : null
-    case 'legacy-stale':
-      return typeof version.source_key === 'string'
-        ? canonicalAnnotationTarget({ kind: 'legacy-stale', sourceKey: version.source_key })
         : null
     default:
       return null
@@ -145,7 +141,7 @@ function wireOperation(
   if (
     !isSafeNonNegativeInteger(raw.sequence) || raw.sequence <= 0 ||
     !isValidThoughtIdentifier(raw.op_id) || !isValidThoughtIdentifier(raw.device_id) ||
-    !isSafeNonNegativeInteger(raw.logical_clock) || raw.logical_clock > MAX_THOUGHT_LOGICAL_CLOCK ||
+    !isSafeNonNegativeInteger(raw.logical_clock) || raw.logical_clock <= 0 || raw.logical_clock > MAX_THOUGHT_LOGICAL_CLOCK ||
     raw.annotation_id !== annotationID || !isValidThoughtIdentifier(annotationID) ||
     (raw.operation_kind !== 'add' && raw.operation_kind !== 'update' && raw.operation_kind !== 'delete') ||
     (raw.host_kind !== 'link' && raw.host_kind !== 'note' && raw.host_kind !== 'inbox') ||

@@ -17,14 +17,13 @@ import (
 // 逐项来源：
 //   - PUT / PATCH：/api/feed-items/{id}/state、/api/subscriptions/{id}、
 //     /api/links/{id}/content 是 PUT；/api/sites/{id}、
-//     /api/library-classification-rules/{id} 是 PATCH。此前两个方法都不在
+//     站点资料和 Reader 状态更新使用 PATCH。该方法必须在
 //     列表里，跨源改站点 / 标记已读的预检一律失败。
 //   - If-Match：站点管理的乐观锁（reader/src/lib/api/client.ts 有 7 处）。
-//   - If-None-Match：Reader 条件 GET 的缓存校验器。
 //   - X-WebTag-Session：会话鉴权的 CSRF 头。不放行它，跨源部署下会话模式
 //     连预检都过不去。
 //   - Idempotency-Key：写类请求的重放保护（middleware/idempotency.go）。
-const corsAllowHeaders = "Content-Type, Authorization, X-Request-ID, If-Match, If-None-Match, Idempotency-Key, " + session.HeaderName
+const corsAllowHeaders = "Content-Type, Authorization, X-Request-ID, If-Match, Idempotency-Key, " + session.HeaderName
 const corsAllowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 const corsExposeHeaders = representation.DataNamespaceHeader + ", ETag"
 

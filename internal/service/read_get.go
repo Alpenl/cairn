@@ -3,17 +3,15 @@ package service
 import (
 	"context"
 	"errors"
-	"net/http"
 	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
-	"webtag/internal/representation"
 )
 
 // Get 返回单条链接详情（含已保存原文正文），等价于 GetWithContent(true)。
@@ -21,7 +19,7 @@ func (s *LinkReadService) Get(ctx context.Context, linkID string) (dto.LinkRespo
 	return s.GetWithContent(ctx, linkID, true)
 }
 
-// GetWithContent 返回单条链接详情，按需附加 concept 显示名与已保存原文。
+// GetWithContent 返回单条链接详情，按需附加已保存原文。
 // includeContent=false 时只给 has_content 标记、不带正文本身——Reader 的原文
 // 是默认折叠的，展开时才走 GET /api/links/{id}/content 单独取，打开一篇文章
 // 不该顺带把整篇正文拖过网络。
@@ -31,7 +29,7 @@ func (s *LinkReadService) GetWithContent(ctx context.Context, linkID string, inc
 	if err != nil {
 		// 带 slug：客户端可以按 error_code=invalid_link_id 直接区分"链接不
 		// 存在"和"链接 ID 格式错误"，不必再解析 message。
-		return dto.LinkResponse{}, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return dto.LinkResponse{}, problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 
 	link, err := s.links.GetDetailByID(ctx, id)
@@ -39,14 +37,11 @@ func (s *LinkReadService) GetWithContent(ctx context.Context, linkID string, inc
 		return dto.LinkResponse{}, err
 	}
 	if link == nil {
-		return dto.LinkResponse{}, httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return dto.LinkResponse{}, problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 
 	resp := linkDetailToResponse(*link)
 	resp.ContentSource = stringPtr(string(canonicalContentSource(link.ContentSource)))
-	if names := s.fetchDisplayNamesByIDs(ctx, []uuid.UUID{link.ID}); len(names[link.ID]) > 0 {
-		resp.Tags = names[link.ID]
-	}
 	// has_content 与两项计数现在直接来自列（PF6），**不再为了这三个数字把
 	// 整篇正文读出来再扔掉**——那是详情端此前每次都在做的事。
 	//
@@ -67,12 +62,10 @@ func (s *LinkReadService) attachSavedContent(ctx context.Context, linkID uuid.UU
 		return
 	}
 	if s.contentReader == nil {
-		representation.MarkResponseNonCacheable(ctx)
 		return
 	}
 	content, err := s.contentReader.GetContent(ctx, linkID)
 	if err != nil || content == nil || content.Text == "" {
-		representation.MarkResponseNonCacheable(ctx)
 		return
 	}
 
@@ -90,12 +83,11 @@ func (s *LinkReadService) attachSavedContent(ctx context.Context, linkID uuid.UU
 	}
 }
 
-// Delete 删除一条链接并主动失效标签缓存。这里清缓存是必须的——否则
-// 已删除链接的标签会在 TTL 内继续出现在 /api/tags 聚合结果里。
+// Delete 删除一条链接及其关联的 durable work。
 func (s *LinkReadService) Delete(ctx context.Context, linkID string) error {
 	id, err := uuid.Parse(strings.TrimSpace(linkID))
 	if err != nil {
-		return httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 
 	link, err := s.links.GetLifecycleByID(ctx, id)
@@ -103,7 +95,7 @@ func (s *LinkReadService) Delete(ctx context.Context, linkID string) error {
 		return err
 	}
 	if link == nil {
-		return httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 
 	err = s.mutationLocker.WithURL(ctx, link.URL, func(lockCtx context.Context) error {
@@ -114,13 +106,9 @@ func (s *LinkReadService) Delete(ctx context.Context, linkID string) error {
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+			return problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 		}
 		return err
-	}
-
-	if s.tagInvalidator != nil {
-		s.tagInvalidator.Invalidate(ctx)
 	}
 
 	return nil

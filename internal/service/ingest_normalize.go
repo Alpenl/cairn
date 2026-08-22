@@ -1,13 +1,11 @@
 package service
 
 import (
-	"net/http"
 	"strings"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
-	"webtag/internal/service/urlmeta"
+	"webtag/internal/problem"
 )
 
 // This file owns the dto.IngestRequest → normalizedIngest pipeline:
@@ -31,7 +29,6 @@ type normalizedIngest struct {
 	sourceMetadata       map[string]any
 	requestedLibraryKind model.RequestedLibraryKind
 	destination          string
-	predictedLibraryKind *model.LibraryKind
 }
 
 type ingestSourceRecord struct {
@@ -48,18 +45,16 @@ func (n normalizedIngest) toLinkCapture() (LinkCapture, error) {
 	// Replaces a previous reflect-driven setStructFields helper. Direct
 	// assignments are simpler to read, faster, and surface field-name typos
 	// at compile time instead of at runtime.
-	intent := resolveRequestedLibraryIntent(requestedLibraryIntent{}, userRequestedLibraryIntent(n.requestedLibraryKind))
 	params := LinkCapture{
-		URL:                        n.storedURL,
-		Destination:                n.destination,
-		Status:                     model.LinkStatusPending,
-		SourceKind:                 n.sourceKind,
-		SourceKey:                  n.sourceKey,
-		InputImages:                n.inputImages,
-		SourceMetadata:             n.sourceMetadata,
-		RequestedLibraryKind:       intent.Kind,
-		RequestedLibraryKindSource: intent.Source,
-		PredictedLibraryKind:       n.predictedLibraryKind,
+		URL:                     n.storedURL,
+		Destination:             n.destination,
+		Status:                  model.LinkStatusPending,
+		SourceKind:              n.sourceKind,
+		SourceKey:               n.sourceKey,
+		InputImages:             n.inputImages,
+		SourceMetadata:          n.sourceMetadata,
+		RequestedLibraryKind:    n.requestedLibraryKind,
+		UserSelectedLibraryKind: n.requestedLibraryKind != model.RequestedLibraryKindAuto,
 	}
 	if description := strings.TrimSpace(n.description); description != "" {
 		copied := description
@@ -158,7 +153,7 @@ func normalizeIngestRequest(req dto.IngestRequest, defaultDestination string) (n
 	// Wave 9 MED 迁移：/api/ingest 入口的三种 422 都补上 slug，
 	// 帮上游"用户拿到错误后想自动重试还是抛错给人类"区分场景。
 	if len(req.Sources) == 0 {
-		return normalizedIngest{}, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestSourceRequired, "at least one source is required")
+		return normalizedIngest{}, problem.NewWithCode(problem.Invalid, problem.CodeIngestSourceRequired, "at least one source is required")
 	}
 	requestedKind, err := normalizeRequestedLibraryKind(req.RequestedLibraryKind)
 	if err != nil {
@@ -204,10 +199,8 @@ func normalizeIngestRequest(req dto.IngestRequest, defaultDestination string) (n
 		displayURL = acc.captureSubmittedURL
 	}
 	submittedDisplayURL := displayURL
-	classificationURL := identityURL
 	if displayURL == "" {
 		displayURL = syntheticIngestURL(sourceKey)
-		classificationURL = displayURL
 	}
 	if acc.captureURL != "" {
 		fingerprint, err := buildCaptureSourceFingerprint(acc.records)
@@ -223,19 +216,6 @@ func normalizeIngestRequest(req dto.IngestRequest, defaultDestination string) (n
 	if len(metadata) == 0 {
 		metadata = nil
 	}
-	decision := ClassifyLibrary(ClassificationInput{
-		RequestedKind:  requestedKind,
-		SourceKind:     sourceKind,
-		URL:            classificationURL,
-		URLMetadata:    urlmeta.ClassifyURL(classificationURL),
-		CaptureSignals: captureSignalsFromMetadata(metadata),
-	})
-	var predictedLibraryKind *model.LibraryKind
-	if requestedKind == model.RequestedLibraryKindAuto && decision.Kind != "" {
-		predicted := decision.Kind
-		predictedLibraryKind = &predicted
-	}
-
 	return normalizedIngest{
 		sourceKind:           sourceKind,
 		sourceKey:            sourceKey,
@@ -250,7 +230,6 @@ func normalizeIngestRequest(req dto.IngestRequest, defaultDestination string) (n
 		sourceMetadata:       metadata,
 		requestedLibraryKind: requestedKind,
 		destination:          destination,
-		predictedLibraryKind: predictedLibraryKind,
 	}, nil
 }
 
@@ -265,9 +244,9 @@ func normalizeIngestCaptureTarget(
 ) (string, model.RequestedLibraryKind, error) {
 	if strings.EqualFold(strings.TrimSpace(rawDestination), captureDestinationSite) {
 		if requestedKind != model.RequestedLibraryKindAuto && requestedKind != model.RequestedLibraryKindSite {
-			return "", "", httperr.NewWithCode(
-				http.StatusUnprocessableEntity,
-				httperr.CodeInvalidRequestedLibraryKind,
+			return "", "", problem.NewWithCode(
+				problem.Invalid,
+				problem.CodeInvalidRequestedLibraryKind,
 				"site destination requires requested_library_kind to be auto or site",
 			)
 		}
@@ -282,7 +261,7 @@ func accumulateIngestSources(sources []dto.IngestSource) (*ingestAccumulator, er
 	for _, src := range sources {
 		kind := strings.TrimSpace(strings.ToLower(src.Kind))
 		if kind == "" {
-			return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeIngestSourceKindRequired, "source kind is required")
+			return nil, problem.NewWithCode(problem.Invalid, problem.CodeIngestSourceKindRequired, "source kind is required")
 		}
 
 		record := ingestSourceRecord{Kind: kind}
@@ -297,7 +276,7 @@ func accumulateIngestSources(sources []dto.IngestSource) (*ingestAccumulator, er
 		case "browser_capture":
 			err = handleBrowserCaptureSource(acc, src, &record)
 		default:
-			return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeUnsupportedIngestSourceKind, "unsupported source kind")
+			return nil, problem.NewWithCode(problem.Invalid, problem.CodeUnsupportedIngestSourceKind, "unsupported source kind")
 		}
 		if err != nil {
 			return nil, err
@@ -306,39 +285,4 @@ func accumulateIngestSources(sources []dto.IngestSource) (*ingestAccumulator, er
 		acc.records = append(acc.records, record)
 	}
 	return acc, nil
-}
-
-// captureSignalsFromMetadata is deliberately an allow-list projection. Capture
-// metadata can include user-visible descriptions and other bounded values, but
-// classifier inputs must never gain a path to body text or arbitrary JSON.
-func captureSignalsFromMetadata(metadata map[string]any) CaptureSignals {
-	// Browser-capture metadata is persisted below its source namespace so it
-	// cannot collide with other source metadata. Keep accepting a direct map
-	// for this small mapper's focused unit tests, but production ingest only
-	// promotes the browser_capture namespace.
-	if browserCapture, ok := metadata["browser_capture"].(map[string]any); ok {
-		metadata = browserCapture
-	}
-	value := func(key string) string {
-		text, _ := metadata[key].(string)
-		return strings.TrimSpace(text)
-	}
-	flag := func(key string) bool { return strings.EqualFold(value(key), "true") }
-	var types []string
-	for _, raw := range strings.Split(value("jsonld_types"), ",") {
-		if item := strings.TrimSpace(raw); item != "" && len(item) <= 64 && len(types) < 20 {
-			types = append(types, item)
-		}
-	}
-	return CaptureSignals{
-		OGType:                value("og_type"),
-		JSONLDTypes:           types,
-		HasApplicationName:    flag("has_application_name"),
-		HasWebAppManifest:     flag("has_web_app_manifest"),
-		HasAuthorAndPublished: flag("has_author_and_published"),
-		ProseDominant:         flag("prose_dominant"),
-		InteractiveDominant:   flag("interactive_dominant"),
-		NavigationDominant:    flag("navigation_dominant"),
-		SiteDescription:       flag("has_site_description"),
-	}
 }

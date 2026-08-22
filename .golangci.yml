@@ -7,13 +7,14 @@ linters:
   #   - 第一波（v0）：errcheck/govet/ineffassign/staticcheck/unused
   #   - 第二波（M5 errsafe 漂移防御）：bodyclose/errorlint/gocyclo/gocritic/
   #     misspell/nilerr/gosec
-  # depguard（handler→repository 方向）需要先做架构梳理，留给后续 PR。
+  # depguard 只守住后端层级方向，避免业务/持久层重新依赖 HTTP 适配层。
   enable:
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
+    - depguard
     - bodyclose    # HTTP response body 未关闭，errsafe 漂移高风险点
     - errorlint    # %v→%w wrap 漂移；err == ErrXxx 应改 errors.Is
     - gocyclo      # 复杂度阈值 15，超出需 //nolint:gocyclo // reason
@@ -31,6 +32,46 @@ linters:
         - (io.Closer).Close
     gocyclo:
       min-complexity: 15
+    depguard:
+      rules:
+        backend-layer-boundary:
+          files:
+            - "internal/service/*.go"
+            - "internal/service/**/*.go"
+            - "**/internal/service/*.go"
+            - "**/internal/service/**/*.go"
+            - "internal/repository/*.go"
+            - "internal/repository/**/*.go"
+            - "**/internal/repository/*.go"
+            - "**/internal/repository/**/*.go"
+            - "internal/worker/*.go"
+            - "internal/worker/**/*.go"
+            - "**/internal/worker/*.go"
+            - "**/internal/worker/**/*.go"
+            - "internal/feed/*.go"
+            - "internal/feed/**/*.go"
+            - "**/internal/feed/*.go"
+            - "**/internal/feed/**/*.go"
+            - "internal/app/durablework/*.go"
+            - "internal/app/durablework/**/*.go"
+            - "**/internal/app/durablework/*.go"
+            - "**/internal/app/durablework/**/*.go"
+            - "!$test"
+          deny:
+            - pkg: "webtag/internal/handler"
+              desc: lower backend layers must not depend on HTTP handlers
+            - pkg: "webtag/internal/middleware"
+              desc: middleware belongs to HTTP assembly
+            - pkg: "webtag/internal/httperr"
+              desc: use internal/problem below handler; httperr is the HTTP adapter
+        reader-application-transport-boundary:
+          files:
+            - "internal/service/reader*.go"
+            - "**/internal/service/reader*.go"
+            - "!$test"
+          deny:
+            - pkg: "webtag/internal/dto"
+              desc: Reader applications expose transport-neutral commands and model values; handlers own HTTP DTO mapping
     gosec:
       # G104：unhandled errors 已经由 errcheck 负责，重复报噪音大
       # G404：math/rand 用于非加密场景（jitter、采样），项目内已有判断
@@ -42,22 +83,9 @@ linters:
       # 测试文件：允许忽略 errcheck、宽松复杂度、宽松 gosec
       - path: _test\.go
         linters: [errcheck, gocyclo, gosec, bodyclose]
-      # cmd/eval：评测脚本，作用域有限且未进 codecov；保持轻量门禁
-      - path: cmd/eval/
-        linters: [errcheck, gocyclo, gosec, bodyclose, errorlint, gocritic]
       # test/dbintegration：独立 sub-module 中的测试基础设施，同上
       - path: test/dbintegration/
         linters: [errcheck, gocyclo, gosec, bodyclose, errorlint, gocritic]
-      # internal/eval：评测 harness，作用域有限。其它 linter 放宽是合理的
-      # （评测脚本对 errcheck / gosec / bodyclose 的常态噪音敏感度低），但
-      # staticcheck 不再整组豁免——只单独豁免 ST1008（runner.go 的 timed*
-      # 函数返回 (T, error, int64) 是评测计时签名约定，耗时放最后），其它
-      # staticcheck 检查（unused 字段、可疑判等、SA1xxx 系列）必须照常生效。
-      - path: internal/eval/
-        linters: [errcheck, gocyclo, gosec, bodyclose, errorlint, gocritic]
-      - path: internal/eval/
-        linters: [staticcheck]
-        text: "ST1008"
 formatters:
   # 暂不启用 gofumpt / goimports：本仓存量代码风格混合 gofmt（标准）和
   # 部分手写格式，一次性 gofumpt-walk 会引入大量与本 PR 无关的 reformat

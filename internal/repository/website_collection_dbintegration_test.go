@@ -54,13 +54,13 @@ func TestWebsiteRecentListUsesInclusiveInstantCutoffAndStableOrder(t *testing.T)
 		{early, "early", cutoff.Add(-time.Millisecond)},
 	} {
 		_, err := tx.Exec(ctx, `INSERT INTO sites
-  (id, site_key, name, name_source, intro, intro_source, first_collected_at, last_collected_at)
-VALUES ($1,$2,$3,'user','','user',$4,$4)`, item.id, "manual-recent:"+item.id.String(), item.name, item.at)
+	  (id, site_key, name, intro, first_collected_at, last_collected_at)
+	VALUES ($1,$2,$3,'',$4,$4)`, item.id, "manual-recent:"+item.id.String(), item.name, item.at)
 		if err != nil {
 			t.Fatalf("seed %s: %v", item.name, err)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO site_tags (site_id, tag, normalized_tag, source)
-VALUES ($1,$2,$2,'user')`, item.id, testTag); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO site_tags (site_id, tag, normalized_tag)
+	VALUES ($1,$2,$2)`, item.id, testTag); err != nil {
 			t.Fatalf("tag %s: %v", item.name, err)
 		}
 	}
@@ -255,8 +255,8 @@ func assertAggregateCounts(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 func insertConcurrentSite(ctx context.Context, pool *pgxpool.Pool, key string, candidateID uuid.UUID) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := pool.QueryRow(ctx, `INSERT INTO sites
-  (id, site_key, name, name_source, intro, intro_source)
-VALUES ($1,$2,$3,'auto','','auto')
+	  (id, site_key, name, intro)
+	VALUES ($1,$2,$3,'')
 ON CONFLICT (site_key) DO UPDATE SET updated_at=now()
 RETURNING id`, candidateID, key, "Concurrent Example").Scan(&id)
 	if err != nil {

@@ -28,10 +28,6 @@ import {
   THOUGHT_MATERIALIZED_STORE,
   THOUGHT_OUTBOX_NAMESPACE_INDEX,
   THOUGHT_OUTBOX_STORE,
-  THOUGHT_REPAIR_ACK_STORE,
-  THOUGHT_REPAIR_QUARANTINE_STORE,
-  THOUGHT_REPAIR_READY_STORE,
-  THOUGHT_REPAIR_SOURCE_STORE,
   THOUGHT_SYNC_STATE_STORE,
   runUserDataTransaction,
   type UserDataTransactionResult,
@@ -42,7 +38,6 @@ import {
   stableThoughtDeviceID,
 } from './thought-clock'
 import type {
-  CompleteThoughtOutboxRecord,
   ThoughtConflictRecord,
   ThoughtHistoryOutboxRecord,
   ThoughtMaterializedRecord,
@@ -52,25 +47,15 @@ import type {
   ThoughtVersionKey,
 } from './thought-types'
 import {
-  isThoughtRepairAck,
-  repairReadyChecksum,
-  type ThoughtRepairReadyRecord,
-} from './thought-repair'
-import {
   THOUGHT_CONTRACT_VERSION,
   THOUGHT_CONFLICT_KIND,
   canonicalThoughtTarget,
-  hasCompleteThoughtWireBaseline,
-  hydrateThoughtHistoryOutboxWinnerKey,
-  isQuarantinedThoughtHistoryOutboxRecord,
   isThoughtOutboxDispatchable,
   isValidThoughtConflictRecord,
   isValidThoughtHistoryOutboxRecord,
   isValidThoughtMaterializedRecord,
   isValidThoughtOutboxRecord,
   isValidThoughtVersionKey,
-  quarantineLegacyThoughtOutboxRecord,
-  quarantineThoughtHistoryOutboxMissingWinnerKey,
   thoughtTargetKey,
 } from './thought-types'
 import { syncThoughtSupersessions } from './thought-supersession'
@@ -83,7 +68,6 @@ const BASE_RETRY_MS = 1000
 const MAX_RETRY_MS = 5 * 60 * 1000
 export const THOUGHT_SYNC_POLL_MS = 30_000
 const THOUGHT_SYNC_CHANNEL_NAME = 'webtag-reader-thought-sync-v1'
-const REPAIR_BROADCAST_SUPPRESSION_MS = 1_000
 const HISTORY_SUPERSEDED_ERROR = '历史想法操作已被较新的服务端版本覆盖。冻结候选已保留，请刷新后重试。'
 
 // Deduplicate calls for the same lease, while ensuring a newly installed
@@ -226,7 +210,6 @@ async function readSyncDurableFingerprint(
           state.cursor,
           state.deviceId,
           state.tabToken,
-          state.clockContractVersion ?? null,
           state.logicalClockFloor ?? null,
           state.updatedAt,
           state.lastAckSequence ?? null,
@@ -352,79 +335,11 @@ function isOutboxRecord(value: unknown): value is ThoughtOutboxRecord {
   return isValidThoughtOutboxRecord(value)
 }
 
-function isRepairRecord(value: ThoughtOutboxRecord): value is ThoughtRepairReadyRecord {
-  return (value as ThoughtOutboxRecord & { repair?: unknown }).repair === true
-}
-
-function sourceLegacyOpIDs(rows: readonly unknown[], namespace: string): ReadonlySet<string> {
-  const ids = new Set<string>()
-  for (const row of rows) {
-    if (!isRecord(row) || row.namespace !== namespace || typeof row.legacyOpId !== 'string') continue
-    ids.add(row.legacyOpId)
-  }
-  return ids
-}
-
-function liveOutboxRows(
-  rows: readonly unknown[],
-  sources: readonly unknown[],
-  namespace: string,
-): readonly ThoughtOutboxRecord[] | null {
-  const legacyIDs = sourceLegacyOpIDs(sources, namespace)
-  const live = rows.filter((raw) => {
-    const opId = isRecord(raw) ? raw.opId : undefined
-    return typeof opId !== 'string' || !legacyIDs.has(opId)
-  })
-  const valid = live.filter((row): row is ThoughtOutboxRecord =>
-    isOutboxRecord(row) && row.namespace === namespace)
-  return valid.length === live.length ? valid : null
-}
-
-const repairBroadcastSuppression = new Map<string, { fingerprint: string; until: number }>()
-
-function repairQuarantineDetail(namespace: string, rows: readonly unknown[]) {
-  const reasons = new Map<string, number>()
-  for (const row of rows) {
-    if (!isRecord(row) || row.namespace !== namespace || typeof row.reason !== 'string') continue
-    reasons.set(row.reason, (reasons.get(row.reason) ?? 0) + 1)
-  }
-  return {
-    namespace,
-    reasons: [...reasons.entries()].sort(([left], [right]) => left.localeCompare(right))
-      .map(([reason, count]) => ({ reason, count })),
-  }
-}
-
-function announceRepairQuarantine(namespace: string, rows: readonly unknown[]): void {
-  const detail = repairQuarantineDetail(namespace, rows)
-  if (detail.reasons.length === 0 || typeof window === 'undefined') return
-  window.dispatchEvent(new CustomEvent('webtag:thought-repair-quarantine', { detail }))
-  const fingerprint = JSON.stringify(detail)
-  const suppressed = repairBroadcastSuppression.get(namespace)
-  if (suppressed && suppressed.until >= Date.now() && suppressed.fingerprint === fingerprint) return
-  repairBroadcastSuppression.delete(namespace)
-  try {
-    const Channel = globalThis.BroadcastChannel
-    if (!Channel) return
-    const channel = new Channel(THOUGHT_SYNC_CHANNEL_NAME)
-    channel.postMessage({ kind: 'thought-repair-quarantine', ...detail } satisfies ThoughtRepairQuarantineHint)
-    channel.close()
-    repairBroadcastSuppression.set(namespace, {
-      fingerprint,
-      until: Date.now() + REPAIR_BROADCAST_SUPPRESSION_MS,
-    })
-  } catch {
-    // Cross-tab observability is best-effort; quarantine remains durable.
-  }
-}
-
 function isSyncState(value: unknown, namespace: string): value is ThoughtSyncStateRecord {
   return isRecord(value) && value.namespace === namespace &&
     typeof value.cursor === 'string' && typeof value.deviceId === 'string' &&
     value.deviceId.length > 0 && typeof value.tabToken === 'string' &&
     value.tabToken.length > 0 && isSafeNonNegativeInteger(value.updatedAt) &&
-    (value.clockContractVersion === undefined ||
-      value.clockContractVersion === THOUGHT_CONTRACT_VERSION) &&
     (value.logicalClockFloor === undefined ||
       (isSafeNonNegativeInteger(value.logicalClockFloor) &&
         value.logicalClockFloor <= Number.MAX_SAFE_INTEGER)) &&
@@ -448,36 +363,16 @@ function activeHistoryOutboxRows(
 ): ThoughtHistoryOutboxRecord[] | null {
   const active = values.filter((record): record is ThoughtHistoryOutboxRecord =>
     isValidThoughtHistoryOutboxRecord(record, namespace))
-  const quarantined = values.filter((record) =>
-    isQuarantinedThoughtHistoryOutboxRecord(record, namespace))
-  return active.length + quarantined.length === values.length ? active : null
+  return active.length === values.length ? active : null
 }
 
-function normalizeHistoryOutboxRows(
-  transaction: IDBTransaction,
+function activeOutboxRows(
   values: readonly unknown[],
   namespace: string,
-  materialized: readonly ThoughtMaterializedRecord[],
-): ThoughtHistoryOutboxRecord[] | null {
-  const materializedByID = new Map(materialized.map((record) => [record.annotationId, record]))
-  const store = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
-  const active: ThoughtHistoryOutboxRecord[] = []
-  for (const value of values) {
-    const raw = isRecord(value) ? value : null
-    const winnerKey = typeof raw?.annotationId === 'string'
-      ? materializedByID.get(raw.annotationId)?.winnerKey
-      : undefined
-    const hydrated = hydrateThoughtHistoryOutboxWinnerKey(value, namespace, winnerKey)
-    if (hydrated) {
-      if (hydrated !== value) store.put(hydrated)
-      active.push(hydrated)
-      continue
-    }
-    const quarantined = quarantineThoughtHistoryOutboxMissingWinnerKey(value, namespace)
-    if (!quarantined) return null
-    if (quarantined !== value) store.put(quarantined)
-  }
-  return active
+): ThoughtOutboxRecord[] | null {
+  const active = values.filter((record): record is ThoughtOutboxRecord =>
+    isValidThoughtOutboxRecord(record, namespace))
+  return active.length === values.length ? active : null
 }
 
 async function prepareState(lease: IdentityLease): Promise<UserDataTransactionResult<PreparedState>> {
@@ -488,11 +383,7 @@ async function prepareState(lease: IdentityLease): Promise<UserDataTransactionRe
     [
       THOUGHT_OUTBOX_STORE,
       THOUGHT_HISTORY_OUTBOX_STORE,
-      THOUGHT_REPAIR_READY_STORE,
-      THOUGHT_REPAIR_SOURCE_STORE,
-      THOUGHT_REPAIR_QUARANTINE_STORE,
       THOUGHT_SYNC_STATE_STORE,
-      THOUGHT_MATERIALIZED_STORE,
     ],
     'readwrite',
     (transaction, identity, setResult) => {
@@ -503,25 +394,11 @@ async function prepareState(lease: IdentityLease): Promise<UserDataTransactionRe
       const historyOutboxRequest = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
         .index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
         .getAll(namespace) as IDBRequest<unknown[]>
-      const repairedRequest = transaction.objectStore(THOUGHT_REPAIR_READY_STORE)
-        .getAll() as IDBRequest<unknown[]>
-      const sourceRequest = transaction.objectStore(THOUGHT_REPAIR_SOURCE_STORE)
-        .getAll() as IDBRequest<unknown[]>
-      const quarantineRequest = transaction.objectStore(THOUGHT_REPAIR_QUARANTINE_STORE)
-        .getAll() as IDBRequest<unknown[]>
-      const materializedRequest = transaction.objectStore(THOUGHT_MATERIALIZED_STORE)
-        .index(THOUGHT_MATERIALIZED_NAMESPACE_INDEX)
-        .getAll(namespace) as IDBRequest<unknown[]>
       let stateDone = false
       let outboxDone = false
       let historyOutboxDone = false
-      let materializedDone = false
-      let repairedDone = false
-      let sourceDone = false
-      let quarantineDone = false
       const finish = () => {
-        if (!stateDone || !outboxDone || !historyOutboxDone || !repairedDone ||
-          !sourceDone || !quarantineDone || !materializedDone) return
+        if (!stateDone || !outboxDone || !historyOutboxDone) return
         if (!lease.isCurrent(identity)) {
           transaction.abort()
           return
@@ -530,50 +407,27 @@ async function prepareState(lease: IdentityLease): Promise<UserDataTransactionRe
           const rawState = stateRequest.result
           const deviceID = stableThoughtDeviceID(lease, rawState)
           const prior = isSyncState(rawState, namespace) ? rawState : undefined
-          const repaired = repairedRequest.result.filter(isOutboxRecord).filter((record) =>
-            record.namespace === namespace)
-          // Source mappings cover every v5 row, including acknowledged rows
-          // whose v6 ready copy has already been removed. This prevents an
-          // immutable legacy tail from returning after a reload/rebuild.
-          const liveOutbox = liveOutboxRows(outboxRequest.result, sourceRequest.result, namespace)
-          if (!liveOutbox) {
-            transaction.abort()
-            return
-          }
-          const allRaw = [...liveOutbox, ...repaired]
-          const outbox = allRaw.filter(isOutboxRecord).sort((left, right) =>
+          const outbox = outboxRequest.result.filter((record): record is ThoughtOutboxRecord =>
+            isValidThoughtOutboxRecord(record, namespace)).sort((left, right) =>
             left.sequence - right.sequence)
-          const materialized = materializedRequest.result.filter((record): record is ThoughtMaterializedRecord =>
-            isValidThoughtMaterializedRecord(record, namespace))
-          const historyOutbox = normalizeHistoryOutboxRows(
-            transaction,
-            historyOutboxRequest.result,
-            namespace,
-            materialized,
-          )
-          if (outbox.length !== allRaw.length ||
-            materialized.length !== materializedRequest.result.length || historyOutbox === null) {
+          const historyOutbox = activeHistoryOutboxRows(historyOutboxRequest.result, namespace)
+          if (outbox.length !== outboxRequest.result.length || historyOutbox === null) {
             transaction.abort()
             return
           }
-          let floor = prior?.deviceId === deviceID &&
-            prior.clockContractVersion === THOUGHT_CONTRACT_VERSION
+          let floor = prior?.deviceId === deviceID
             ? prior.logicalClockFloor ?? 0
             : 0
           floor = maximumThoughtClock([
             floor,
-            ...materialized.map((record) => record.winnerKey.logicalClock),
-            ...outbox
-              .filter(hasCompleteThoughtWireBaseline)
-              .map((record) => record.logicalClock),
+            ...outbox.map((record) => record.logicalClock),
             ...historyOutbox.map((record) => record.logicalClock),
             ...historyOutbox.map((record) => record.snapshot.winnerKey.logicalClock),
           ])
           const normalizedOutbox: ThoughtOutboxRecord[] = []
           const outboxStore = transaction.objectStore(THOUGHT_OUTBOX_STORE)
           for (const record of outbox) {
-            const quarantined = quarantineLegacyThoughtOutboxRecord(record)
-            const failureSafe = normalizedOutboxFailureMarkers(quarantined)
+            const failureSafe = normalizedOutboxFailureMarkers(record)
             if (failureSafe !== record) outboxStore.put(failureSafe)
             normalizedOutbox.push(failureSafe)
           }
@@ -583,7 +437,6 @@ async function prepareState(lease: IdentityLease): Promise<UserDataTransactionRe
             cursor: prior?.cursor ?? '',
             deviceId: deviceID,
             tabToken: prior?.tabToken || TAB_TOKEN,
-            clockContractVersion: THOUGHT_CONTRACT_VERSION,
             logicalClockFloor: floor,
             updatedAt: prior?.updatedAt ?? Date.now(),
             // Historical versions persisted transport messages. Retain only a
@@ -599,7 +452,6 @@ async function prepareState(lease: IdentityLease): Promise<UserDataTransactionRe
               : { lastErrorCode: storedFailureCode(prior.lastErrorCode) ?? 'sync-failed' }),
           }
           transaction.objectStore(THOUGHT_SYNC_STATE_STORE).put(state)
-          announceRepairQuarantine(namespace, quarantineRequest.result)
           setResult({ state, outbox: normalizedOutbox, historyOutbox })
         } catch {
           transaction.abort()
@@ -608,19 +460,24 @@ async function prepareState(lease: IdentityLease): Promise<UserDataTransactionRe
       stateRequest.onerror = () => transaction.abort()
       outboxRequest.onerror = () => transaction.abort()
       historyOutboxRequest.onerror = () => transaction.abort()
-      repairedRequest.onerror = () => transaction.abort()
-      sourceRequest.onerror = () => transaction.abort()
-      quarantineRequest.onerror = () => transaction.abort()
-      materializedRequest.onerror = () => transaction.abort()
       stateRequest.onsuccess = () => { stateDone = true; finish() }
       outboxRequest.onsuccess = () => { outboxDone = true; finish() }
       historyOutboxRequest.onsuccess = () => { historyOutboxDone = true; finish() }
-      repairedRequest.onsuccess = () => { repairedDone = true; finish() }
-      sourceRequest.onsuccess = () => { sourceDone = true; finish() }
-      quarantineRequest.onsuccess = () => { quarantineDone = true; finish() }
-      materializedRequest.onsuccess = () => { materializedDone = true; finish() }
     },
   )
+}
+
+function wireTargetVersion(target: ThoughtTarget): Record<string, unknown> {
+  switch (target.kind) {
+    case 'saved-content':
+      return { content_revision: target.contentRevision }
+    case 'summary':
+      return { source_hash: target.sourceHash }
+    case 'note':
+      return { note_revision: target.noteRevision }
+    case 'inbox':
+      return { metadata_revision: target.metadataRevision }
+  }
 }
 
 function wireTarget(record: ThoughtOutboxRecord): Record<string, unknown> {
@@ -628,15 +485,7 @@ function wireTarget(record: ThoughtOutboxRecord): Record<string, unknown> {
   const target: Record<string, unknown> = {
     kind: record.target.kind,
     host_id: record.hostId,
-    version: record.target.kind === 'saved-content'
-      ? { content_revision: record.target.contentRevision }
-      : record.target.kind === 'summary'
-        ? { source_hash: record.target.sourceHash }
-        : record.target.kind === 'note'
-          ? { note_revision: record.target.noteRevision }
-          : record.target.kind === 'inbox'
-            ? { metadata_revision: record.target.metadataRevision }
-            : { source_key: record.target.sourceKey },
+    version: wireTargetVersion(record.target),
   }
   if (annotation) {
     target.block_key = annotation.blockKey || (record.target.kind === 'note' ? 'note' : 'content')
@@ -667,7 +516,7 @@ function wirePayload(record: ThoughtOutboxRecord): Record<string, unknown> {
   return payload
 }
 
-function toWireOperation(record: CompleteThoughtOutboxRecord): ReaderThoughtOpRequest {
+function toWireOperation(record: ThoughtOutboxRecord): ReaderThoughtOpRequest {
   return {
     contract_version: THOUGHT_CONTRACT_VERSION,
     op_id: record.opId,
@@ -698,15 +547,7 @@ function wireHistoryTarget(record: ThoughtHistoryOutboxRecord): Record<string, u
   return {
     kind: record.target.kind,
     host_id: record.hostId,
-    version: record.target.kind === 'saved-content'
-      ? { content_revision: record.target.contentRevision }
-      : record.target.kind === 'summary'
-        ? { source_hash: record.target.sourceHash }
-        : record.target.kind === 'note'
-          ? { note_revision: record.target.noteRevision }
-          : record.target.kind === 'inbox'
-            ? { metadata_revision: record.target.metadataRevision }
-            : { source_key: record.target.sourceKey },
+    version: wireTargetVersion(record.target),
   }
 }
 
@@ -808,7 +649,7 @@ function failureCode(error: ApiError): string {
 }
 
 type SyncOutboxRecord = ThoughtOutboxRecord | ThoughtHistoryOutboxRecord
-type DispatchableSyncOutboxRecord = CompleteThoughtOutboxRecord | ThoughtHistoryOutboxRecord
+type DispatchableSyncOutboxRecord = ThoughtOutboxRecord | ThoughtHistoryOutboxRecord
 type SyncOutboxStore = typeof THOUGHT_OUTBOX_STORE | typeof THOUGHT_HISTORY_OUTBOX_STORE
 
 function blockedFailureCode(records: readonly SyncOutboxRecord[]): string | undefined {
@@ -874,8 +715,6 @@ async function markPushFailure(
     [
       THOUGHT_OUTBOX_STORE,
       THOUGHT_HISTORY_OUTBOX_STORE,
-      THOUGHT_REPAIR_READY_STORE,
-      THOUGHT_REPAIR_SOURCE_STORE,
       THOUGHT_SYNC_STATE_STORE,
     ],
     'readwrite',
@@ -884,15 +723,13 @@ async function markPushFailure(
       const now = Date.now()
       const outbox = transaction.objectStore(THOUGHT_OUTBOX_STORE)
       const historyOutbox = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
-      const repaired = transaction.objectStore(THOUGHT_REPAIR_READY_STORE)
       const stateStore = transaction.objectStore(THOUGHT_SYNC_STATE_STORE)
       const permanent = isPermanentPushFailure(error)
       const code = failureCode(error)
       for (const record of records) {
         const attemptCount = record.attemptCount + 1
         if (outboxStoreName === THOUGHT_OUTBOX_STORE) {
-          const standardRecord = record as CompleteThoughtOutboxRecord
-          const destination = isRepairRecord(standardRecord) ? repaired : outbox
+          const standardRecord = record as ThoughtOutboxRecord
           if (isRecoveryCASConflict(standardRecord, error)) {
             const withoutRetry = { ...standardRecord }
             delete withoutRetry.nextAttemptAt
@@ -909,7 +746,7 @@ async function markPushFailure(
           if (permanent) {
             const withoutRetry = { ...standardRecord }
             delete withoutRetry.nextAttemptAt
-            destination.put({
+            outbox.put({
               ...withoutRetry,
               attemptCount,
               status: 'blocked',
@@ -922,7 +759,7 @@ async function markPushFailure(
           const withoutBlock = { ...standardRecord }
           delete withoutBlock.blockedReason
           delete withoutBlock.recoveryConflict
-          destination.put({
+          outbox.put({
             ...withoutBlock,
             attemptCount,
             status: 'pending',
@@ -961,34 +798,23 @@ async function markPushFailure(
         .getAll(lease.context.physicalNamespace) as IDBRequest<unknown[]>
       const historyRequest = historyOutbox.index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
         .getAll(lease.context.physicalNamespace) as IDBRequest<unknown[]>
-      const repairRequest = repaired.getAll() as IDBRequest<unknown[]>
-      const sourceRequest = transaction.objectStore(THOUGHT_REPAIR_SOURCE_STORE)
-        .getAll() as IDBRequest<unknown[]>
       let stateDone = false
       let standardDone = false
       let historyDone = false
-      let repairDone = false
-      let sourceDone = false
       const finish = () => {
-        if (!stateDone || !standardDone || !historyDone || !repairDone || !sourceDone) return
+        if (!stateDone || !standardDone || !historyDone) return
         const state = stateRequest.result
-        const standard = liveOutboxRows(
-          standardRequest.result,
-          sourceRequest.result,
-          lease.context.physicalNamespace,
-        )
-        const rawRepair = repairRequest.result.filter((record) =>
-          isRecord(record) && record.namespace === lease.context.physicalNamespace)
-        const remainingRepair = rawRepair.filter(isOutboxRecord)
+        const standard = standardRequest.result.filter((record): record is ThoughtOutboxRecord =>
+          isValidThoughtOutboxRecord(record, lease.context.physicalNamespace))
         const history = activeHistoryOutboxRows(
           historyRequest.result,
           lease.context.physicalNamespace,
         )
-        if (!state || !standard || remainingRepair.length !== rawRepair.length || history === null) {
+        if (!state || standard.length !== standardRequest.result.length || history === null) {
           transaction.abort()
           return
         }
-        const retryAt = stateRetryAt([...standard, ...remainingRepair, ...history], state)
+        const retryAt = stateRetryAt([...standard, ...history], state)
         stateStore.put({
           ...state,
           ...(retryAt === undefined ? { retryAt: undefined } : { retryAt }),
@@ -1004,10 +830,6 @@ async function markPushFailure(
       standardRequest.onerror = () => transaction.abort()
       historyRequest.onsuccess = () => { historyDone = true; finish() }
       historyRequest.onerror = () => transaction.abort()
-      repairRequest.onsuccess = () => { repairDone = true; finish() }
-      repairRequest.onerror = () => transaction.abort()
-      sourceRequest.onsuccess = () => { sourceDone = true; finish() }
-      sourceRequest.onerror = () => transaction.abort()
     },
   )
 }
@@ -1019,7 +841,7 @@ function versionKeyFromWire(value: unknown): ThoughtVersionKey | null {
     deviceId: value.device_id,
     opId: value.op_id,
   }
-  return isValidThoughtVersionKey(key, true) ? key : null
+  return isValidThoughtVersionKey(key) ? key : null
 }
 
 async function acknowledge(
@@ -1054,9 +876,6 @@ async function acknowledge(
     [
       THOUGHT_OUTBOX_STORE,
       THOUGHT_HISTORY_OUTBOX_STORE,
-      THOUGHT_REPAIR_READY_STORE,
-      THOUGHT_REPAIR_ACK_STORE,
-      THOUGHT_REPAIR_SOURCE_STORE,
       THOUGHT_SYNC_STATE_STORE,
     ],
     'readwrite',
@@ -1064,8 +883,6 @@ async function acknowledge(
       if (!lease.isCurrent(identity)) { transaction.abort(); return }
       const outbox = transaction.objectStore(THOUGHT_OUTBOX_STORE)
       const historyOutbox = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
-      const repaired = transaction.objectStore(THOUGHT_REPAIR_READY_STORE)
-      const acknowledgements = transaction.objectStore(THOUGHT_REPAIR_ACK_STORE)
       let lastAck = 0
       const observedClocks: number[] = []
       const removedOpIds: string[] = []
@@ -1096,27 +913,9 @@ async function acknowledge(
           } satisfies ThoughtHistoryOutboxRecord)
           continue
         }
-        const standardRecord = record as CompleteThoughtOutboxRecord
-        if (isRepairRecord(standardRecord)) {
-          // Repair rows are derived copies of immutable v4/v5 sources. Remove
-          // only the v6 dispatch copy after an authoritative acknowledgement.
-          const receipt = {
-            key: [standardRecord.namespace, standardRecord.opId] as [string, string],
-            namespace: standardRecord.namespace,
-            opId: standardRecord.opId,
-            readyChecksum: repairReadyChecksum(standardRecord),
-          }
-          if (!isThoughtRepairAck(receipt, standardRecord)) {
-            transaction.abort()
-            return
-          }
-          acknowledgements.put(receipt)
-          repaired.delete([standardRecord.key[0], standardRecord.key[1]])
-          removedOpIds.push(standardRecord.opId)
-        } else {
-          outbox.delete([standardRecord.key[0], standardRecord.key[1]])
-          removedOpIds.push(standardRecord.opId)
-        }
+        const standardRecord = record as ThoughtOutboxRecord
+        outbox.delete([standardRecord.key[0], standardRecord.key[1]])
+        removedOpIds.push(standardRecord.opId)
       }
       const stateStore = transaction.objectStore(THOUGHT_SYNC_STATE_STORE)
       const stateRequest = stateStore.get(lease.context.physicalNamespace) as IDBRequest<ThoughtSyncStateRecord | undefined>
@@ -1124,35 +923,23 @@ async function acknowledge(
         .getAll(lease.context.physicalNamespace) as IDBRequest<unknown[]>
       const historyRequest = historyOutbox.index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
         .getAll(lease.context.physicalNamespace) as IDBRequest<unknown[]>
-      const remainingRepairRequest = repaired.getAll() as IDBRequest<unknown[]>
-      const sourceRequest = transaction.objectStore(THOUGHT_REPAIR_SOURCE_STORE)
-        .getAll() as IDBRequest<unknown[]>
       let stateDone = false
       let remainingDone = false
       let historyDone = false
-      let remainingRepairDone = false
-      let sourceDone = false
       const finish = () => {
-        if (!stateDone || !remainingDone || !historyDone || !remainingRepairDone || !sourceDone) return
+        if (!stateDone || !remainingDone || !historyDone) return
         const state = stateRequest.result
-        const remainingOutbox = liveOutboxRows(
-          remainingRequest.result,
-          sourceRequest.result,
-          lease.context.physicalNamespace,
-        )
-        const rawRepair = remainingRepairRequest.result.filter((record) =>
-          isRecord(record) && record.namespace === lease.context.physicalNamespace)
-        const remainingRepair = rawRepair.filter(isOutboxRecord)
+        const remainingOutbox = remainingRequest.result.filter((record): record is ThoughtOutboxRecord =>
+          isValidThoughtOutboxRecord(record, lease.context.physicalNamespace))
         const history = activeHistoryOutboxRows(
           historyRequest.result,
           lease.context.physicalNamespace,
         )
-        if (!state || !remainingOutbox || remainingRepair.length !== rawRepair.length ||
-          history === null) {
+        if (!state || remainingOutbox.length !== remainingRequest.result.length || history === null) {
           transaction.abort()
           return
         }
-        const remaining = [...remainingOutbox, ...remainingRepair, ...history]
+        const remaining = [...remainingOutbox, ...history]
         const retryAt = earliestRetryTime(earliestRetryAt(remaining), state.pullRetryAt)
         const blockedCode = blockedFailureCode(remaining)
         try {
@@ -1162,7 +949,6 @@ async function acknowledge(
           ])
           stateStore.put({
             ...state,
-            clockContractVersion: THOUGHT_CONTRACT_VERSION,
             logicalClockFloor,
             lastAckSequence: Math.max(state.lastAckSequence ?? 0, lastAck),
             ...(retryAt === undefined
@@ -1196,16 +982,6 @@ async function acknowledge(
         finish()
       }
       historyRequest.onerror = () => transaction.abort()
-      remainingRepairRequest.onsuccess = () => {
-        remainingRepairDone = true
-        finish()
-      }
-      remainingRepairRequest.onerror = () => transaction.abort()
-      sourceRequest.onsuccess = () => {
-        sourceDone = true
-        finish()
-      }
-      sourceRequest.onerror = () => transaction.abort()
     },
   )
 }
@@ -1265,7 +1041,7 @@ function versionString(kind: string, value: unknown): Record<string, unknown> {
   if (kind === 'summary') return { sourceHash: tail }
   if (kind === 'note') return { noteRevision: positiveInteger(tail) }
   if (kind === 'inbox') return { metadataRevision: positiveInteger(tail) }
-  return { sourceKey: tail }
+  return {}
 }
 
 function decodeTarget(
@@ -1336,12 +1112,6 @@ function decodeTarget(
           ? null
           : canonicalThoughtTarget({ kind, metadataRevision: revision })
       }
-      if (kind === 'legacy-stale') {
-        const sourceKey = value(['sourceKey', 'source_key'])
-        return typeof sourceKey === 'string' && sourceKey.length > 0
-          ? canonicalAnnotationTarget({ kind, sourceKey })
-          : null
-      }
     }
   }
 
@@ -1362,12 +1132,6 @@ function decodeTarget(
       kind: 'note',
       noteRevision: annotation.sourceNoteRevision,
     })
-  }
-  if (isRecord(raw)) {
-    const sourceKey = firstDefined(raw, ['sourceKey', 'source_key'])
-    if (typeof sourceKey === 'string' && sourceKey.length > 0) {
-      return canonicalAnnotationTarget({ kind: 'legacy-stale', sourceKey })
-    }
   }
   return null
 }
@@ -1637,7 +1401,6 @@ async function writeRemotePage(
           stateStore.put({
             ...stateWithoutPullInProgress,
             cursor,
-            clockContractVersion: THOUGHT_CONTRACT_VERSION,
             logicalClockFloor,
             lastServerSequence,
             ...(pullInProgress ? { pullInProgress: true } : {}),
@@ -1673,7 +1436,7 @@ async function markPullFailure(
   return runUserDataTransaction(
     lease,
     'record thought pull failure',
-    [THOUGHT_OUTBOX_STORE, THOUGHT_HISTORY_OUTBOX_STORE, THOUGHT_REPAIR_SOURCE_STORE, THOUGHT_SYNC_STATE_STORE],
+    [THOUGHT_OUTBOX_STORE, THOUGHT_HISTORY_OUTBOX_STORE, THOUGHT_SYNC_STATE_STORE],
     'readwrite',
     (transaction, identity, setResult) => {
       if (!lease.isCurrent(identity)) { transaction.abort(); return }
@@ -1686,16 +1449,13 @@ async function markPullFailure(
       const historyRequest = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
         .index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
         .getAll(namespace) as IDBRequest<unknown[]>
-      const sourceRequest = transaction.objectStore(THOUGHT_REPAIR_SOURCE_STORE)
-        .getAll() as IDBRequest<unknown[]>
       let stateDone = false
       let outboxDone = false
       let historyDone = false
-      let sourceDone = false
       const finish = () => {
-        if (!stateDone || !outboxDone || !historyDone || !sourceDone) return
+        if (!stateDone || !outboxDone || !historyDone) return
         const state = stateRequest.result
-        const outbox = liveOutboxRows(outboxRequest.result, sourceRequest.result, namespace)
+        const outbox = activeOutboxRows(outboxRequest.result, namespace)
         const history = activeHistoryOutboxRows(historyRequest.result, namespace)
         if (!state || !isSyncState(state, namespace) || !outbox || history === null) {
           transaction.abort()
@@ -1724,11 +1484,9 @@ async function markPullFailure(
       stateRequest.onerror = () => transaction.abort()
       outboxRequest.onerror = () => transaction.abort()
       historyRequest.onerror = () => transaction.abort()
-      sourceRequest.onerror = () => transaction.abort()
       stateRequest.onsuccess = () => { stateDone = true; finish() }
       outboxRequest.onsuccess = () => { outboxDone = true; finish() }
       historyRequest.onsuccess = () => { historyDone = true; finish() }
-      sourceRequest.onsuccess = () => { sourceDone = true; finish() }
     },
   )
 }
@@ -1737,7 +1495,7 @@ async function resetCursor(lease: IdentityLease): Promise<UserDataTransactionRes
   return runUserDataTransaction(
     lease,
     'reset thought cursor',
-    [THOUGHT_OUTBOX_STORE, THOUGHT_HISTORY_OUTBOX_STORE, THOUGHT_REPAIR_SOURCE_STORE, THOUGHT_SYNC_STATE_STORE],
+    [THOUGHT_OUTBOX_STORE, THOUGHT_HISTORY_OUTBOX_STORE, THOUGHT_SYNC_STATE_STORE],
     'readwrite',
     (transaction, identity, setResult) => {
       if (!lease.isCurrent(identity)) { transaction.abort(); return }
@@ -1749,20 +1507,13 @@ async function resetCursor(lease: IdentityLease): Promise<UserDataTransactionRes
       const historyRequest = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
         .index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
         .getAll(lease.context.physicalNamespace) as IDBRequest<unknown[]>
-      const sourceRequest = transaction.objectStore(THOUGHT_REPAIR_SOURCE_STORE)
-        .getAll() as IDBRequest<unknown[]>
       let stateDone = false
       let outboxDone = false
       let historyDone = false
-      let sourceDone = false
       const finish = () => {
-        if (!stateDone || !outboxDone || !historyDone || !sourceDone) return
+        if (!stateDone || !outboxDone || !historyDone) return
         const state = request.result
-        const outbox = liveOutboxRows(
-          outboxRequest.result,
-          sourceRequest.result,
-          lease.context.physicalNamespace,
-        )
+        const outbox = activeOutboxRows(outboxRequest.result, lease.context.physicalNamespace)
         const history = activeHistoryOutboxRows(
           historyRequest.result,
           lease.context.physicalNamespace,
@@ -1796,8 +1547,6 @@ async function resetCursor(lease: IdentityLease): Promise<UserDataTransactionRes
       outboxRequest.onerror = () => transaction.abort()
       historyRequest.onsuccess = () => { historyDone = true; finish() }
       historyRequest.onerror = () => transaction.abort()
-      sourceRequest.onsuccess = () => { sourceDone = true; finish() }
-      sourceRequest.onerror = () => transaction.abort()
     },
   )
 }
@@ -1809,7 +1558,7 @@ async function markPullComplete(
   return runUserDataTransaction(
     lease,
     'complete thought replay',
-    [THOUGHT_OUTBOX_STORE, THOUGHT_HISTORY_OUTBOX_STORE, THOUGHT_REPAIR_SOURCE_STORE, THOUGHT_SYNC_STATE_STORE],
+    [THOUGHT_OUTBOX_STORE, THOUGHT_HISTORY_OUTBOX_STORE, THOUGHT_SYNC_STATE_STORE],
     'readwrite',
     (transaction, identity, setResult) => {
       if (!lease.isCurrent(identity)) { transaction.abort(); return }
@@ -1821,20 +1570,13 @@ async function markPullComplete(
       const historyRequest = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
         .index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
         .getAll(lease.context.physicalNamespace) as IDBRequest<unknown[]>
-      const sourceRequest = transaction.objectStore(THOUGHT_REPAIR_SOURCE_STORE)
-        .getAll() as IDBRequest<unknown[]>
       let stateDone = false
       let outboxDone = false
       let historyDone = false
-      let sourceDone = false
       const finish = () => {
-        if (!stateDone || !outboxDone || !historyDone || !sourceDone) return
+        if (!stateDone || !outboxDone || !historyDone) return
         const state = request.result
-        const outbox = liveOutboxRows(
-          outboxRequest.result,
-          sourceRequest.result,
-          lease.context.physicalNamespace,
-        )
+        const outbox = activeOutboxRows(outboxRequest.result, lease.context.physicalNamespace)
         const history = activeHistoryOutboxRows(
           historyRequest.result,
           lease.context.physicalNamespace,
@@ -1882,8 +1624,6 @@ async function markPullComplete(
       outboxRequest.onerror = () => transaction.abort()
       historyRequest.onsuccess = () => { historyDone = true; finish() }
       historyRequest.onerror = () => transaction.abort()
-      sourceRequest.onsuccess = () => { sourceDone = true; finish() }
-      sourceRequest.onerror = () => transaction.abort()
     },
   )
 }
@@ -2096,7 +1836,7 @@ function mergePushDueResults(left: PushDueResult, right: PushDueResult): PushDue
 
 async function recordPushFailure(
   lease: IdentityLease,
-  records: readonly CompleteThoughtOutboxRecord[],
+  records: readonly ThoughtOutboxRecord[],
   error: ApiError,
 ): Promise<PushDueResult> {
   const marked = await markPushFailure(lease, THOUGHT_OUTBOX_STORE, records, error)
@@ -2115,13 +1855,13 @@ async function recordPushFailure(
 
 /**
  * A request-level permanent 4xx has no per-operation rejection payload. Split
- * it until the poison record is singular, then quarantine only that record.
+ * it until the poison record is singular, then block only that record.
  * Valid siblings still receive their normal acknowledgement in the same round.
  */
 async function pushDueOperations(
   lease: IdentityLease,
   client: IdentityBoundReaderClient,
-  records: readonly CompleteThoughtOutboxRecord[],
+  records: readonly ThoughtOutboxRecord[],
   label: string,
 ): Promise<PushDueResult> {
   if (records.length === 0) return { pushed: 0, completedIDs: [], halt: false }
@@ -2567,24 +2307,6 @@ interface ThoughtSyncInvalidation {
   readonly invalidation: 'outbox' | 'sync'
 }
 
-interface ThoughtRepairQuarantineHint {
-  readonly kind: 'thought-repair-quarantine'
-  readonly namespace: string
-  readonly reasons: readonly { readonly reason: string; readonly count: number }[]
-}
-
-function parseThoughtRepairQuarantineHint(value: unknown): ThoughtRepairQuarantineHint | null {
-  if (!isRecord(value) || value.kind !== 'thought-repair-quarantine' ||
-    !isNonEmptyString(value.namespace) || !Array.isArray(value.reasons) || value.reasons.length === 0) return null
-  const reasons: Array<{ reason: string; count: number }> = []
-  for (const item of value.reasons) {
-    if (!isRecord(item) || !isNonEmptyString(item.reason) ||
-      !Number.isSafeInteger(item.count) || (item.count as number) <= 0) return null
-    reasons.push({ reason: item.reason, count: item.count as number })
-  }
-  return { kind: 'thought-repair-quarantine', namespace: value.namespace, reasons }
-}
-
 function parseThoughtSyncInvalidation(value: unknown): ThoughtSyncInvalidation | null {
   if (!isRecord(value)) return null
   if (
@@ -2660,8 +2382,6 @@ class NamespaceThoughtSyncController implements ThoughtSyncController {
   private timer: number | null = null
   private channel: BroadcastChannel | null = null
   private unsubscribeReaderEvents: (() => void)[] = []
-  private repairFingerprint = ''
-  private repairFingerprintUntil = 0
   private disposed = false
   private readonly leaseSignal: AbortSignal
   private readonly onLeaseRevoked = (): void => { this.dispose() }
@@ -2865,8 +2585,6 @@ class NamespaceThoughtSyncController implements ThoughtSyncController {
       this.channel.close()
       this.channel = null
     }
-    this.repairFingerprint = ''
-    this.repairFingerprintUntil = 0
     this.wakeAfterCurrentRun = false
   }
 
@@ -2905,17 +2623,6 @@ class NamespaceThoughtSyncController implements ThoughtSyncController {
   }
 
   private readonly onBroadcast = (event: MessageEvent<unknown>): void => {
-    const repair = parseThoughtRepairQuarantineHint(event.data)
-    if (repair) {
-      if (repair.namespace !== this.lease.context.physicalNamespace ||
-        !this.current('receive thought repair quarantine')) return
-      const fingerprint = JSON.stringify(repair)
-      if (this.repairFingerprint === fingerprint && this.repairFingerprintUntil >= Date.now()) return
-      this.repairFingerprint = fingerprint
-      this.repairFingerprintUntil = Date.now() + REPAIR_BROADCAST_SUPPRESSION_MS
-      this.wake()
-      return
-    }
     const hint = parseThoughtSyncInvalidation(event.data)
     if (
       !hint ||
@@ -3281,7 +2988,7 @@ export async function selectThoughtReadModel(
     lease,
     'select local-first thoughts',
     [THOUGHT_MATERIALIZED_STORE, THOUGHT_OUTBOX_STORE, ANNOTATION_MATERIALIZED_STORE],
-    'readwrite',
+    'readonly',
     (transaction, identity, setResult) => {
       if (!lease.isCurrent(identity)) { transaction.abort(); return }
       const serverRequest = transaction.objectStore(THOUGHT_MATERIALIZED_STORE)
@@ -3311,6 +3018,7 @@ export async function selectThoughtReadModel(
         const operations = outboxRequest.result
           .filter((raw): raw is ThoughtOutboxRecord => isValidThoughtOutboxRecord(raw, namespace))
           .sort((left, right) => left.sequence - right.sequence)
+        if (operations.length !== outboxRequest.result.length) { transaction.abort(); return }
         const annotationProjections = new Map<string, LocalAnnotationProjection>()
         for (const raw of annotationRequest.result) {
           const projection = localAnnotationProjection(raw, namespace)
@@ -3321,10 +3029,7 @@ export async function selectThoughtReadModel(
             projection.annotationId,
           ), projection)
         }
-        const outboxStore = transaction.objectStore(THOUGHT_OUTBOX_STORE)
-        for (const record of operations) {
-          const operation = quarantineLegacyThoughtOutboxRecord(record)
-          if (operation !== record) outboxStore.put(operation)
+        for (const operation of operations) {
           // pending is retryable by construction; blocked is intentionally
           // visible as its last durable local projection.
           const current = merged.get(operation.annotationId)

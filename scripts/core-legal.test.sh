@@ -26,10 +26,6 @@ for material in \
 	test -s "$TMP/core/$material" || fail "missing generated material $material"
 done
 
-if [ -e "$TMP/core/full" ]; then
-	fail 'generated legal tree still contains a full/ yt-dlp directory'
-fi
-
 grep -Fq 'codeberg.org/readeck/go-readability/v2 v2.1.2' "$TMP/core/common/GO_WEBTAG_THIRD_PARTY.txt" ||
 	fail 'webtag closure omits readability'
 if grep -Fq 'codeberg.org/readeck/go-readability/v2' "$TMP/core/common/GO_MIGRATE_THIRD_PARTY.txt"; then

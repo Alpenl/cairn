@@ -8,7 +8,6 @@ import (
 
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
-	"webtag/internal/middleware"
 )
 
 type SiteReadService interface {
@@ -31,7 +30,7 @@ func listSites(service SiteReadService) gin.HandlerFunc {
 			writeError(c, err)
 			return
 		}
-		middleware.CacheableJSON(c, http.StatusOK, out)
+		c.JSON(http.StatusOK, out)
 	}
 }
 func getSite(service SiteReadService) gin.HandlerFunc {

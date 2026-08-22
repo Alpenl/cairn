@@ -29,28 +29,3 @@ func TestSearchSitesReportsEntryMatchedOnlyByPurpose(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-func TestScanSiteSearchRowsIncludesPurposeForSemanticKeywordAnnotation(t *testing.T) {
-	// Semantic candidates can be returned even without a textual hit. When a
-	// query does match an entry purpose, the returned site must identify that
-	// entry rather than producing an unexplained site-only result.
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mock.Close()
-	siteID, entryID := uuid.New(), uuid.New()
-	mock.ExpectQuery("SELECT 1").WillReturnRows(mock.NewRows([]string{"id", "name", "entry_id", "entry_name", "purpose", "normalized_url"}).AddRow(siteID.String(), "Example", entryID.String(), "SDK", "Build integrations", "https://example.com/sdk"))
-	rows, err := mock.Query(context.Background(), "SELECT 1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	items, err := scanSiteSearchRows(rows, 10, "integrations")
-	if err != nil || len(items) != 1 || len(items[0].MatchedEntries) != 1 || items[0].MatchedEntries[0].ID != entryID {
-		t.Fatalf("scanSiteSearchRows() = %#v, %v", items, err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}

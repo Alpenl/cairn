@@ -128,12 +128,10 @@ func TestIdempotencyReplayCannotBypassPublicAPIAuthentication(t *testing.T) {
 	t.Parallel()
 
 	cache := newStartedRouterIdempotencyCache(t)
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:                  "prod",
-		ExtensionAPIToken:       "extension-secret",
-		ConditionalGetRevisions: sessionSecurityVersions{},
-		IdempotencyEnabled:      true,
-		IdempotencyCache:        cache,
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
+		ExtensionAPIToken:    "extension-secret",
+		InstallationIdentity: sessionSecurityVersions{},
+		IdempotencyCache:     cache,
 	})
 
 	newRequest := func(authenticated bool) *http.Request {
@@ -163,7 +161,7 @@ func TestIdempotencyReplayCannotBypassPublicAPIAuthentication(t *testing.T) {
 }
 
 type routerTodoIdempotencyProbe struct {
-	handler.ReaderService
+	handler.ReaderTodoRoutes
 	createCalls int
 	patchCalls  int
 	deleteCalls int
@@ -198,13 +196,11 @@ func TestTodoWritesReplayThroughProductionIdempotencyChain(t *testing.T) {
 
 	probe := &routerTodoIdempotencyProbe{}
 	deps := smokeDeps()
-	deps.Reader = probe
-	router := NewRouterWithDependencies(deps, nil, nil, nil, nil, RouterOptions{
-		AppEnv:                  "prod",
-		ExtensionAPIToken:       "extension-secret",
-		ConditionalGetRevisions: sessionSecurityVersions{},
-		IdempotencyEnabled:      true,
-		IdempotencyCache:        newStartedRouterIdempotencyCache(t),
+	deps.Reader = handler.ReaderRoutes{Todos: probe}
+	router := NewRouterWithDependencies(deps, nil, nil, RouterOptions{
+		ExtensionAPIToken:    "extension-secret",
+		InstallationIdentity: sessionSecurityVersions{},
+		IdempotencyCache:     newStartedRouterIdempotencyCache(t),
 	})
 
 	tests := []struct {

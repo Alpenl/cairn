@@ -185,15 +185,6 @@ func TestCoreCandidateExecutesBothArchiveArchitecturesAndChecksLegalBytes(t *tes
 			t.Errorf("final image verification omits %s", material)
 		}
 	}
-	for _, absent := range []string{
-		"test ! -e /usr/local/bin/yt-dlp",
-		"test ! -e /usr/share/licenses/cairn/YT_DLP_LICENSE.txt",
-		"test ! -e /usr/share/licenses/cairn/YT_DLP_SOURCE.txt",
-	} {
-		if !strings.Contains(run, absent) {
-			t.Errorf("final image verification does not forbid %s", absent)
-		}
-	}
 	if !strings.Contains(run, "sha256sum") {
 		t.Error("final image verification checks legal presence but not bytes")
 	}

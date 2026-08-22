@@ -63,14 +63,6 @@ func deriveLinkErrorCategoryFields(status model.LinkStatus, errorMsg *string) st
 	return omitNoneCategory(errsafe.ClassifyPersisted(derefOrEmpty(errorMsg)))
 }
 
-// deriveJobErrorCategory 是 deriveLinkErrorCategory 的任务行版本，逻辑一致。
-func deriveJobErrorCategory(job model.ParseJob) string {
-	if job.Status == model.JobStatusDone {
-		return ""
-	}
-	return omitNoneCategory(errsafe.ClassifyPersisted(derefOrEmpty(job.ErrorMsg)))
-}
-
 // derefOrEmpty returns *s, or "" when s is nil. Local helper so the
 // diagnostics call sites can stay one-liners against the new
 // ClassifyPersisted entry point without duplicating the nil-check at

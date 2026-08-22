@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-	"webtag/internal/alloc"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -63,7 +62,6 @@ func (r *PGXFeedRepository) ClaimDue(ctx context.Context, limit int, lease time.
 	// `limit < 1 → 1` 会把「什么都别做」静默变成「认领并租约锁住 1 条订阅」
 	// ——ClaimDue 是 UPDATE ... RETURNING，那是真写操作。
 	//
-	// 注意 make 的 panic 风险已由下面的 alloc.Hint 消除（Hint(负数)==0），
 	// 这里挡的是 Postgres 侧：负 LIMIT 会直接报错。
 	if limit < 0 {
 		limit = 0
@@ -88,7 +86,7 @@ func (r *PGXFeedRepository) ClaimDue(ctx context.Context, limit int, lease time.
 	if err != nil {
 		return nil, fmt.Errorf("claim due feed subscriptions: %w", err)
 	}
-	claimed := make([]model.FeedSubscription, 0, alloc.Hint(limit))
+	claimed := make([]model.FeedSubscription, 0)
 	for rows.Next() {
 		var subscription model.FeedSubscription
 		if err := rows.Scan(&subscription.ID, &subscription.URL, &subscription.SiteURL, &subscription.Title,
@@ -121,9 +119,6 @@ func (r *PGXFeedRepository) ClaimDue(ctx context.Context, limit int, lease time.
 func (r *PGXFeedRepository) CompleteRefresh(ctx context.Context, success FeedRefreshSuccess) (int, error) {
 	inserted := 0
 	err := database.WithTx(ctx, r.tx, func(tx pgx.Tx) error {
-		if err := prelockRepresentationWriteGateShared(ctx, tx); err != nil {
-			return err
-		}
 		var txErr error
 		inserted, txErr = completeFeedRefreshTx(ctx, tx, success)
 		return txErr
@@ -218,10 +213,8 @@ func feedRefreshUpserts(feedItems, selected []model.FeedItem, known map[string]s
 // protected while unread/starred/later is trimmed on the next success after
 // the user clears that state.
 func trimOrdinaryFeedItems(ctx context.Context, tx pgx.Tx, subscriptionID uuid.UUID) error {
-	// reader_feed_saves 的外键是 ON DELETE CASCADE，所以裁掉一条仍被保存的 item
-	// 会连同 save 一起消失，把 Link 变成"feed_managed 却无 save"的伪孤儿。保存路径
-	// 已经回填 feed_items.link_id，这里再显式排除有 save 的行作为纵深防御：即便将来
-	// 某条写入路径漏了回填，保留策略也不会吃掉用户保存的内容。
+	// Reader saves are the retention fact. feed_items.link_id belongs only to
+	// the separate Analyze workflow and is not written as a save side effect.
 	_, err := tx.Exec(ctx, `DELETE FROM feed_items fi
 		WHERE fi.subscription_id = $1
 			AND fi.read_at IS NOT NULL AND NOT fi.starred

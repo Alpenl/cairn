@@ -13,57 +13,12 @@ import (
 	"webtag/internal/summarypolicy"
 )
 
-// TestBuildRetrieveSelectPromptInjectsCandidates verifies the v3 prompt
-// embeds the candidate list verbatim, keeps the JSON contract, and carries
-// the "at most one new tag" + good/bad-tag guidance.
-func TestBuildRetrieveSelectPromptInjectsCandidates(t *testing.T) {
-	t.Parallel()
-
-	candidates := []string{"RAG", "检索增强生成", "WeKnora"}
-	got := buildRetrieveSelectPrompt(candidates, "article")
-
-	for _, c := range candidates {
-		if !strings.Contains(got, c) {
-			t.Errorf("retrieve-select prompt missing candidate %q\nprompt:\n%s", c, got)
-		}
-	}
-	if !strings.Contains(got, `"title"`) || !strings.Contains(got, `"summary"`) || !strings.Contains(got, `"tags"`) {
-		t.Errorf("retrieve-select prompt dropped the JSON output contract:\n%s", got)
-	}
-	if !strings.Contains(got, "（优先从中原样选择）：") {
-		t.Errorf("retrieve-select prompt missing the injected candidate block:\n%s", got)
-	}
-	if !strings.Contains(got, "至多") || !strings.Contains(got, "1 个") {
-		t.Errorf("retrieve-select prompt missing the at-most-one-new-tag rule:\n%s", got)
-	}
-	// content_type hint for "article" must still be appended.
-	if !strings.Contains(got, contentTypeHints["article"]) {
-		t.Errorf("retrieve-select prompt missing article content-type hint:\n%s", got)
-	}
-}
-
-// TestBuildRetrieveSelectPromptEmptyCandidatesNoBlock guards the
-// degenerate call: an empty candidate slice must not emit an empty 候选标签
-// block (the pipeline never calls it that way, but the function stays safe).
-func TestBuildRetrieveSelectPromptEmptyCandidatesNoBlock(t *testing.T) {
-	t.Parallel()
-
-	got := buildRetrieveSelectPrompt(nil, "")
-	// The base prompt text mentions 候选标签 in its instructions, so we key
-	// on the injected-block marker (the "（优先从中原样选择）" suffix the
-	// candidate list is prefixed with) rather than the bare word.
-	if strings.Contains(got, "（优先从中原样选择）：") {
-		t.Errorf("empty candidates should not emit a candidate block:\n%s", got)
-	}
-}
-
 func TestSummaryPromptsDiscourageTemplateHeadings(t *testing.T) {
 	t.Parallel()
 
 	prompts := map[string]string{
-		"default":         buildSystemPrompt(nil, "article"),
-		"retrieve-select": buildRetrieveSelectPrompt([]string{"Go"}, "article"),
-		"url-direct":      buildURLDirectPrompt(nil, "article"),
+		"default":    buildSystemPrompt(nil, "article"),
+		"url-direct": buildURLDirectPrompt("article"),
 	}
 	for name, prompt := range prompts {
 		name, prompt := name, prompt
@@ -85,16 +40,13 @@ func TestSummaryPromptsDiscourageTemplateHeadings(t *testing.T) {
 // guard onto every built-in prompt path. Fetchers only reject hard failures,
 // so a Cloudflare challenge / login wall that returns a 200 with body text
 // reaches the model as ordinary content; without this rule it invents tags
-// for the interstitial, and those tags land in the shared concept vocabulary.
+// for the interstitial, and those tags then pollute the shared library.
 func TestAnalysisPromptsGuardAgainstInterstitialPages(t *testing.T) {
 	t.Parallel()
 
 	// URL-direct is deliberately absent: it has its own accessible=false
 	// contract for these pages, covered by the test below.
-	prompts := map[string]string{
-		"default":         buildSystemPrompt(nil, "article"),
-		"retrieve-select": buildRetrieveSelectPrompt([]string{"Go"}, "article"),
-	}
+	prompts := map[string]string{"default": buildSystemPrompt(nil, "article")}
 	for name, prompt := range prompts {
 		name, prompt := name, prompt
 		t.Run(name, func(t *testing.T) {
@@ -124,7 +76,7 @@ func TestAnalysisPromptsGuardAgainstInterstitialPages(t *testing.T) {
 func TestURLDirectPromptKeepsAccessibleContractOverGuard(t *testing.T) {
 	t.Parallel()
 
-	got := buildURLDirectPrompt(nil, "article")
+	got := buildURLDirectPrompt("article")
 	if !strings.Contains(got, `{"accessible": false}`) {
 		t.Fatalf("url-direct prompt lost the accessible=false fallback contract:\n%s", got)
 	}
@@ -176,9 +128,8 @@ func TestAnalysisPromptsRequestShortGeneratedTitle(t *testing.T) {
 	t.Parallel()
 
 	prompts := map[string]string{
-		"default":         buildSystemPrompt(nil, "article"),
-		"retrieve-select": buildRetrieveSelectPrompt([]string{"Go"}, "article"),
-		"url-direct":      buildURLDirectPrompt(nil, "article"),
+		"default":    buildSystemPrompt(nil, "article"),
+		"url-direct": buildURLDirectPrompt("article"),
 	}
 	for name, prompt := range prompts {
 		name, prompt := name, prompt
@@ -197,9 +148,8 @@ func TestAnalysisPromptsPreserveFactualQualifiersInTitle(t *testing.T) {
 	t.Parallel()
 
 	prompts := map[string]string{
-		"default":         buildSystemPrompt(nil, "article"),
-		"retrieve-select": buildRetrieveSelectPrompt([]string{"Go"}, "article"),
-		"url-direct":      buildURLDirectPrompt(nil, "article"),
+		"default":    buildSystemPrompt(nil, "article"),
+		"url-direct": buildURLDirectPrompt("article"),
 	}
 	for name, prompt := range prompts {
 		name, prompt := name, prompt
@@ -218,9 +168,8 @@ func TestAnalysisPromptsRequireCentralReusableTags(t *testing.T) {
 	t.Parallel()
 
 	prompts := map[string]string{
-		"default":         buildSystemPrompt(nil, "article"),
-		"retrieve-select": buildRetrieveSelectPrompt([]string{"Go"}, "article"),
-		"url-direct":      buildURLDirectPrompt(nil, "article"),
+		"default":    buildSystemPrompt(nil, "article"),
+		"url-direct": buildURLDirectPrompt("article"),
 	}
 	for name, prompt := range prompts {
 		name, prompt := name, prompt
@@ -251,7 +200,7 @@ func TestAnalysisPromptsPreferNaturalChineseTechnicalTerms(t *testing.T) {
 
 	for name, prompt := range map[string]string{
 		"default":    buildSystemPrompt(nil, "article"),
-		"url-direct": buildURLDirectPrompt(nil, "article"),
+		"url-direct": buildURLDirectPrompt("article"),
 	} {
 		name, prompt := name, prompt
 		t.Run(name, func(t *testing.T) {
@@ -269,9 +218,8 @@ func TestAnalysisPromptsDoNotConflateExamplesWithAuthorship(t *testing.T) {
 	t.Parallel()
 
 	for name, prompt := range map[string]string{
-		"default":         buildSystemPrompt(nil, "article"),
-		"retrieve-select": buildRetrieveSelectPrompt([]string{"API"}, "article"),
-		"url-direct":      buildURLDirectPrompt(nil, "article"),
+		"default":    buildSystemPrompt(nil, "article"),
+		"url-direct": buildURLDirectPrompt("article"),
 	} {
 		name, prompt := name, prompt
 		t.Run(name, func(t *testing.T) {
@@ -389,11 +337,7 @@ func captureSystemPrompt(t *testing.T, req AnalyzeRequest) string {
 	return systemContent
 }
 
-// TestAnalyzeSelectsRetrievePromptWhenCandidatesPresent verifies Analyze's
-// prompt-selection precedence by inspecting the system message actually
-// sent over the wire: candidates → retrieve-select; override still wins
-// over candidates; no candidates → free-generation.
-func TestAnalyzeSelectsRetrievePromptWhenCandidatesPresent(t *testing.T) {
+func TestAnalyzeSelectsExplicitPromptOverride(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -403,21 +347,15 @@ func TestAnalyzeSelectsRetrievePromptWhenCandidatesPresent(t *testing.T) {
 		notSubstr  string
 	}{
 		{
-			name:       "candidates use retrieve-select prompt",
-			req:        AnalyzeRequest{ExistingTags: []string{"Go", "AI"}, Candidates: []string{"RAG", "WeKnora"}},
-			wantSubstr: "候选标签",
-		},
-		{
-			name:       "override beats candidates",
-			req:        AnalyzeRequest{Candidates: []string{"RAG"}, SystemPromptOverride: "CUSTOM_EVAL_PROMPT"},
+			name:       "override replaces default",
+			req:        AnalyzeRequest{SystemPromptOverride: "CUSTOM_EVAL_PROMPT"},
 			wantSubstr: "CUSTOM_EVAL_PROMPT",
-			notSubstr:  "候选标签",
+			notSubstr:  "已有标签库",
 		},
 		{
-			name:       "no candidates keeps free-generation",
+			name:       "default includes existing tags",
 			req:        AnalyzeRequest{ExistingTags: []string{"Go", "AI"}},
 			wantSubstr: "已有标签库",
-			notSubstr:  "候选标签",
 		},
 	}
 

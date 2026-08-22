@@ -56,7 +56,7 @@ func newGzipRouter(body string) *gin.Engine {
 	router.GET("/health", func(c *gin.Context) {
 		c.String(http.StatusOK, body)
 	})
-	router.GET("/metrics", func(c *gin.Context) {
+	router.GET("/ready", func(c *gin.Context) {
 		c.String(http.StatusOK, body)
 	})
 	return router
@@ -119,13 +119,13 @@ func TestGzipSkipsResponsesBelowMinLength(t *testing.T) {
 	}
 }
 
-// TestGzipSkipsExcludedPaths 锁定 /health 与 /metrics 不被压缩——它们是
-// 被高频轮询的端点，压缩只有开销没有收益。
+// TestGzipSkipsExcludedPaths 锁定探针端点不被压缩：它们的短响应压缩
+// 只有开销没有收益。
 func TestGzipSkipsExcludedPaths(t *testing.T) {
 	t.Parallel()
 	router := newGzipRouter(largeBody())
 
-	for _, path := range []string{"/health", "/metrics"} {
+	for _, path := range []string{"/health", "/ready"} {
 		rec := doGzipGet(router, path, "gzip")
 		if got := rec.Header().Get("Content-Encoding"); got != "" {
 			t.Errorf("%s Content-Encoding = %q, want empty", path, got)
@@ -273,12 +273,12 @@ func TestGzipDoesNotDoubleCompress(t *testing.T) {
 	payload := []byte("already encoded payload that is quite long " + largeBody())
 	router := gin.New()
 	router.Use(Gzip(DefaultGzipMinLength))
-	router.GET("/api/export", func(c *gin.Context) {
+	router.GET("/api/export/v2", func(c *gin.Context) {
 		c.Header("Content-Encoding", "br")
 		c.Data(http.StatusOK, "application/json", payload)
 	})
 
-	rec := doGzipGet(router, "/api/export", "gzip")
+	rec := doGzipGet(router, "/api/export/v2", "gzip")
 	if got := rec.Header().Get("Content-Encoding"); got != "br" {
 		t.Fatalf("Content-Encoding = %q, want br preserved", got)
 	}
@@ -309,7 +309,7 @@ func TestGzipDropsStaleContentLength(t *testing.T) {
 	}
 }
 
-// TestGzipStreamsIncrementallyOnFlush 锁定流式端点（/api/export 系列按
+// TestGzipStreamsIncrementallyOnFlush 锁定流式端点（/api/export/v2 按
 // 游标批次直写 c.Writer）在压缩层下仍然是流式的：handler 每写一批并
 // Flush，字节就该到客户端，而不是攒到请求结束才一次性吐出。
 //
@@ -324,7 +324,7 @@ func TestGzipStreamsIncrementallyOnFlush(t *testing.T) {
 
 	router := gin.New()
 	router.Use(Gzip(DefaultGzipMinLength))
-	router.GET("/api/export", func(c *gin.Context) {
+	router.GET("/api/export/v2", func(c *gin.Context) {
 		for i := 0; i < 3; i++ {
 			_, _ = c.Writer.WriteString(batch)
 			c.Writer.Flush()
@@ -332,7 +332,7 @@ func TestGzipStreamsIncrementallyOnFlush(t *testing.T) {
 		}
 	})
 
-	rec := doGzipGet(router, "/api/export", "gzip")
+	rec := doGzipGet(router, "/api/export/v2", "gzip")
 
 	// 每次 Flush 之后累计出网字节都应严格增长——说明数据是分批出去的。
 	for i := 1; i < len(observed); i++ {
@@ -494,7 +494,7 @@ func TestGzipSetsContentTypeBeforeCompressing(t *testing.T) {
 // TestGzipStreamsExportWithoutExplicitFlush 覆盖**真实**的流式导出形态。
 //
 // 与 TestGzipStreamsIncrementallyOnFlush 的区别很重要：那条测试的假 handler
-// 每批都显式调 c.Writer.Flush()，而真正的 /api/export 系列从不调 Flush
+// 每批都显式调 c.Writer.Flush()，而真正的 /api/export/v2 从不调 Flush
 // （internal/handler/export.go 只是把 c.Writer 交给 service.Export，
 // 全仓 grep "Flush()" 在该文件零命中）。所以那条测的是一条生产里不存在的
 // 路径。这里按真实形态验证：只写不 Flush，压缩层也不能把整个导出攒在内存里。
@@ -508,7 +508,7 @@ func TestGzipStreamsExportWithoutExplicitFlush(t *testing.T) {
 
 	router := gin.New()
 	router.Use(Gzip(DefaultGzipMinLength))
-	router.GET("/api/export", func(c *gin.Context) {
+	router.GET("/api/export/v2", func(c *gin.Context) {
 		writer, ok := c.Writer.(*gzipWriter)
 		if !ok {
 			t.Errorf("c.Writer 不是 gzipWriter，压缩层没挂上")
@@ -522,7 +522,7 @@ func TestGzipStreamsExportWithoutExplicitFlush(t *testing.T) {
 		}
 	})
 
-	rec := doGzipGet(router, "/api/export", "gzip")
+	rec := doGzipGet(router, "/api/export/v2", "gzip")
 
 	// 核心断言：缓冲区峰值不超过阈值。整体缓冲的实现会攒到 batches*len(batch)。
 	if peakBuffered > DefaultGzipMinLength {

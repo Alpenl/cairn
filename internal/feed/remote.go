@@ -13,8 +13,8 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/security"
 	"webtag/internal/urlidentity"
 )
@@ -132,11 +132,11 @@ func (r *Remote) Discover(ctx context.Context, rawURL string) ([]model.FeedCandi
 	if parsed, parseErr := r.parser.Parse(remote.Body, remote.FinalURL); parseErr == nil {
 		return []model.FeedCandidate{directFeedCandidate(parsed, remote.FinalURL)}, nil
 	} else if errors.Is(parseErr, ErrFeedItemLimitExceeded) {
-		return nil, httperr.NewWithCode(http.StatusRequestEntityTooLarge, "feed_item_limit", ErrFeedItemLimitExceeded.Error())
+		return nil, problem.NewWithCode(problem.TooLarge, "feed_item_limit", ErrFeedItemLimitExceeded.Error())
 	}
 
 	if !looksLikeHTML(remote) {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "feed_not_found", "URL is neither a valid feed nor an HTML page with feed discovery links")
+		return nil, problem.NewWithCode(problem.Invalid, "feed_not_found", "URL is neither a valid feed nor an HTML page with feed discovery links")
 	}
 	return discoverHTMLFeeds(remote)
 }
@@ -158,7 +158,7 @@ func looksLikeHTML(remote RemoteResult) bool {
 func discoverHTMLFeeds(remote RemoteResult) ([]model.FeedCandidate, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(remote.Body)))
 	if err != nil {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "feed_discovery_failed", "unable to parse page for feed discovery")
+		return nil, problem.NewWithCode(problem.Invalid, "feed_discovery_failed", "unable to parse page for feed discovery")
 	}
 	base, _ := url.Parse(remote.FinalURL)
 	seen := make(map[string]struct{})
@@ -176,7 +176,7 @@ func discoverHTMLFeeds(remote RemoteResult) ([]model.FeedCandidate, error) {
 		return len(feeds) < maxDiscoveredFeeds
 	})
 	if len(feeds) == 0 {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "feed_not_found", "no RSS or Atom feeds were discovered")
+		return nil, problem.NewWithCode(problem.Invalid, "feed_not_found", "no RSS or Atom feeds were discovered")
 	}
 	return feeds, nil
 }
@@ -247,32 +247,32 @@ func isFeedMediaType(value string) bool {
 func ValidateURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "feed_url_required", "feed URL is required")
+		return "", problem.NewWithCode(problem.Invalid, "feed_url_required", "feed URL is required")
 	}
 	if len(raw) > 2048 {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "feed_url_too_long", "feed URL exceeds length limit")
+		return "", problem.NewWithCode(problem.Invalid, "feed_url_too_long", "feed URL exceeds length limit")
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Host == "" || parsed.Opaque != "" || strings.ContainsAny(raw, "\r\n\t") {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_url", "invalid feed URL")
+		return "", problem.NewWithCode(problem.Invalid, "invalid_feed_url", "invalid feed URL")
 	}
 	if parsed.User != nil {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "feed_credentials_unsupported", "authenticated feed URLs are not supported")
+		return "", problem.NewWithCode(problem.Invalid, "feed_credentials_unsupported", "authenticated feed URLs are not supported")
 	}
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "unsupported_feed_url_scheme", "feed URL must use HTTP or HTTPS")
+		return "", problem.NewWithCode(problem.Invalid, "unsupported_feed_url_scheme", "feed URL must use HTTP or HTTPS")
 	}
 	normalized, err := urlidentity.Normalize(raw)
 	if err != nil {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_url", "invalid feed URL")
+		return "", problem.NewWithCode(problem.Invalid, "invalid_feed_url", "invalid feed URL")
 	}
 	// The request uses normalized, so the SSRF check must inspect that same
 	// target. In particular, normalization folds www.localhost to localhost;
 	// checking the pre-normalized host would allow a loopback request through.
 	normalizedURL, err := url.Parse(normalized)
 	if err != nil || security.IsUnsafeHost(normalizedURL.Hostname()) {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "unsafe_feed_url_target", "unsafe feed URL target")
+		return "", problem.NewWithCode(problem.Invalid, "unsafe_feed_url_target", "unsafe feed URL target")
 	}
 	return normalized, nil
 }
@@ -286,7 +286,7 @@ func readBounded(reader io.Reader, limit int64) ([]byte, error) {
 		return nil, fmt.Errorf("read feed response: %w", err)
 	}
 	if int64(len(body)) > limit {
-		return nil, httperr.NewWithCode(http.StatusRequestEntityTooLarge, "feed_response_too_large", "feed response exceeds size limit")
+		return nil, problem.NewWithCode(problem.TooLarge, "feed_response_too_large", "feed response exceeds size limit")
 	}
 	return body, nil
 }

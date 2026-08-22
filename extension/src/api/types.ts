@@ -15,7 +15,6 @@ import type {
   ErrorResponse as WireErrorResponse,
   IngestRequest as WireIngestRequest,
   IngestSource as WireIngestSource,
-  JobResponse,
   LinkContentResponse as WireLinkContentResponse,
   LinkResponse,
   PaginatedLinksResponse as WirePaginatedLinksResponse,
@@ -29,14 +28,6 @@ import type {
 // ── 枚举类型 ────────────────────────────────────────────────
 
 /** 链接内容形态。 */
-
-/**
- * 链接处理状态。对应 openapi LinkResponse.status 枚举。
- * `skeleton` 仅为兼容历史数据保留；新的树层级不再依赖后端占位祖先行。
- */
-
-/** 解析任务状态。对应 openapi JobResponse.status / SubmitResponse.status 枚举。 */
-export type JobStatus = WireSubmitResponse['status']
 
 /**
  * 采集来源类型。对应 internal/dto/request.go 的 IngestSource.Kind oneof。
@@ -109,18 +100,12 @@ export type PaginatedLinksResponse = WirePaginatedLinksResponse
 
 /**
  * 提交结果。对应 internal/dto/response.go 的 SubmitResponse。
- * `job_id` 在命中已 done 链接时缺席（后端 omitempty），故为可选。
+ * Library/Site 返回 link_id；Inbox 返回 inbox_id。
  */
 export type SubmitResponse = WireSubmitResponse
 
 /** POST /api/links/{link_id}/content 保存后的原文快照。 */
 export type LinkContentResponse = WireLinkContentResponse
-
-/**
- * 解析任务视图。对应 internal/dto/response.go 的 JobResponse。
- * status=done 时 `link` 内嵌完整 Link 快照，其余状态下可能为 null。
- */
-export type Job = JobResponse
 
 /**
  * Minimal subscription shape consumed by the extension popup. The backend's

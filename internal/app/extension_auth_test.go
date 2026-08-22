@@ -8,10 +8,8 @@ import (
 	"webtag/internal/representation"
 )
 
-// extensionTestPaths 列出 handler.RegisterRoutes 暴露、由 Task 1B 的
-// opt-in 鉴权守门的代表性公开 API 路径。覆盖 spec 明确点名的
-// /api/tree、/api/links、/api/tags、/api/ingest、/api/jobs/{id}，外加
-// /api/v1/* 别名各取一例，确保别名前缀同样受门。
+// extensionTestPaths lists representative API routes protected by the
+// installation credential or browser session.
 var extensionTestPaths = []struct {
 	method string
 	path   string
@@ -20,20 +18,14 @@ var extensionTestPaths = []struct {
 	{http.MethodGet, "/api/links"},
 	{http.MethodGet, "/api/tags"},
 	{http.MethodPost, "/api/ingest"},
-	{http.MethodGet, "/api/jobs/some-job-id"},
-	{http.MethodGet, "/api/export"},
-	{http.MethodGet, "/api/v1/tree"},
-	{http.MethodGet, "/api/v1/links"},
-	{http.MethodGet, "/api/v1/export"},
 }
 
-// TestExtensionAPIRejectsMissingToken 验证 opt-in 鉴权开启后
-// （ExtensionAPIToken 非空）公开 API 在缺少 Authorization 头时一律 401。
+// TestExtensionAPIRejectsMissingToken verifies that API routes reject a
+// request that has neither an installation token nor a browser session.
 func TestExtensionAPIRejectsMissingToken(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:                  "prod",
-		ExtensionAPIToken:       "ext-token",
-		ConditionalGetRevisions: sessionSecurityVersions{},
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
+		ExtensionAPIToken:    "ext-token",
+		InstallationIdentity: sessionSecurityVersions{},
 	})
 
 	for _, tc := range extensionTestPaths {
@@ -50,8 +42,7 @@ func TestExtensionAPIRejectsMissingToken(t *testing.T) {
 
 // TestExtensionAPIRejectsWrongToken 锁定常量时间比较：错误 token 也 401。
 func TestExtensionAPIRejectsWrongToken(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:            "prod",
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
 		ExtensionAPIToken: "ext-token",
 	})
 
@@ -73,10 +64,9 @@ func TestExtensionAPIRejectsWrongToken(t *testing.T) {
 // smoke* stub handler 对个别零值依赖可能返回业务 4xx；鉴权成功的共同证据是
 // 不出现 5xx 且响应带权威 namespace marker。
 func TestExtensionAPIAcceptsValidToken(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:                  "prod",
-		ExtensionAPIToken:       "ext-token",
-		ConditionalGetRevisions: sessionSecurityVersions{},
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
+		ExtensionAPIToken:    "ext-token",
+		InstallationIdentity: sessionSecurityVersions{},
 	})
 
 	for _, tc := range extensionTestPaths {
@@ -96,13 +86,9 @@ func TestExtensionAPIAcceptsValidToken(t *testing.T) {
 	}
 }
 
-// TestPublicAPIOpenRequiresExplicitFlag locks the installation-safe default:
-// an empty token does not silently expose the library. Anonymous access is
-// enabled only through PUBLIC_API_OPEN=true.
-func TestPublicAPIOpenRequiresExplicitFlag(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:                  "prod",
-		ConditionalGetRevisions: sessionSecurityVersions{},
+func TestPublicAPIWithEmptyTokenRemainsClosed(t *testing.T) {
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
+		InstallationIdentity: sessionSecurityVersions{},
 	})
 
 	for _, tc := range extensionTestPaths {
@@ -112,28 +98,6 @@ func TestPublicAPIOpenRequiresExplicitFlag(t *testing.T) {
 			router.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d with empty token and closed default, want 401; body=%q", rec.Code, rec.Body.String())
-			}
-		})
-	}
-}
-
-func TestPublicAPIExplicitOpenAccess(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:                  "prod",
-		AllowOpenAccess:         true,
-		ConditionalGetRevisions: sessionSecurityVersions{},
-	})
-
-	for _, tc := range extensionTestPaths {
-		tc := tc
-		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
-			if rec.Code == http.StatusUnauthorized || rec.Code >= http.StatusInternalServerError {
-				t.Fatalf("status = %d in explicitly open mode, want handler response; body=%q", rec.Code, rec.Body.String())
-			}
-			if marker := rec.Header().Get(representation.DataNamespaceHeader); marker == "" {
-				t.Fatal("open installation response omitted data namespace marker")
 			}
 		})
 	}

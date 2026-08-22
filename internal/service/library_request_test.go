@@ -6,6 +6,7 @@ import (
 
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 )
 
 func TestNormalizeRequestedLibraryKind(t *testing.T) {
@@ -25,21 +26,8 @@ func TestNormalizeRequestedLibraryKind(t *testing.T) {
 	}
 
 	_, err := normalizeRequestedLibraryKind("archive")
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPErrorCode() != httperr.CodeInvalidRequestedLibraryKind {
+	var statusErr *problem.Error
+	if !errors.As(err, &statusErr) || statusErr.Code() != httperr.CodeInvalidRequestedLibraryKind {
 		t.Fatalf("invalid requested kind error = %v, want %s", err, httperr.CodeInvalidRequestedLibraryKind)
-	}
-}
-
-func TestRequireSiteLibraryWriteRejectsOnlyExplicitSite(t *testing.T) {
-	for _, requested := range []model.RequestedLibraryKind{model.RequestedLibraryKindAuto, model.RequestedLibraryKindReading} {
-		if err := requireSiteLibraryWrite(requested, true); err != nil {
-			t.Fatalf("%q should remain allowed: %v", requested, err)
-		}
-	}
-	err := requireSiteLibraryWrite(model.RequestedLibraryKindSite, true)
-	var statusErr *httperr.Error
-	if !errors.As(err, &statusErr) || statusErr.HTTPStatus() != 503 || statusErr.HTTPErrorCode() != "site_library_write_disabled" {
-		t.Fatalf("site gate error = %v", err)
 	}
 }

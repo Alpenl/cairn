@@ -86,64 +86,6 @@ func TestPostLinksRejectsMalformedURLViaValidator(t *testing.T) {
 	}
 }
 
-// TestPostBatchRejectsEmptyItemsViaValidator pins that an empty Items array
-// is now caught by the validator (min=1) rather than by service.Batch's
-// httperr return. Both produce 422; the validator path is cheaper because
-// no service call happens.
-func TestPostBatchRejectsEmptyItemsViaValidator(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	svc := &fakeLinkService{}
-	deps := linkFakeDeps(svc)
-
-	router := gin.New()
-	RegisterRoutes(router, withStubDeps(deps))
-
-	body := []byte(`{"items":[]}`)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/links/batch", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
-	}
-	env := decodeErrorEnvelope(t, rec.Body.Bytes())
-	if env.Error.ErrorCode != middleware.ErrCodeInvalidRequestBody {
-		t.Fatalf("error_code = %q, want %q", env.Error.ErrorCode, middleware.ErrCodeInvalidRequestBody)
-	}
-}
-
-// TestPostBatchRejectsOversizedItemsViaValidator exercises the max=100
-// rule on BatchCreateRequest.Items. The validator is meant to short-circuit
-// before service.Batch makes any DB calls.
-func TestPostBatchRejectsOversizedItemsViaValidator(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	svc := &fakeLinkService{}
-	deps := linkFakeDeps(svc)
-
-	router := gin.New()
-	RegisterRoutes(router, withStubDeps(deps))
-
-	// 101 items: validator should reject before service.Batch fires.
-	items := make([]string, 0, 101)
-	for i := 0; i < 101; i++ {
-		items = append(items, `{"url":"https://example.com/a"}`)
-	}
-	body := []byte(`{"items":[` + strings.Join(items, ",") + `]}`)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/links/batch", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
-	}
-	// Service.Batch must not have been hit — validator is the early gate.
-	if svc.ingestRequest != nil {
-		t.Fatal("validator should reject before service is called")
-	}
-}
-
 // TestPostIngestRejectsUnknownKindViaValidator pins the oneof tag on
 // IngestSource.Kind: a Kind outside the {url,text,image,browser_capture}
 // allow-list is rejected at the binding layer.

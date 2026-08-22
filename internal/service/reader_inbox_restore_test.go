@@ -12,7 +12,7 @@ import (
 )
 
 type readerInboxRestoreStoreStub struct {
-	repository.ReaderVNextStore
+	ReaderInboxStore
 	restoreErr   error
 	restoredID   uuid.UUID
 	restoreCalls int
@@ -27,12 +27,12 @@ func (s *readerInboxRestoreStoreStub) RestoreInbox(_ context.Context, id uuid.UU
 func TestRestoreInboxUsesDedicatedRepositoryCommandForRetries(t *testing.T) {
 	inboxID := uuid.New()
 	store := &readerInboxRestoreStoreStub{}
-	service := NewReaderVNextService(store, nil)
+	service := newReaderTestFeatureSet(readerTestStores(store), nil)
 
-	if err := service.RestoreInbox(context.Background(), inboxID.String()); err != nil {
+	if err := service.RestoreInbox(context.Background(), inboxID); err != nil {
 		t.Fatalf("first RestoreInbox() error = %v", err)
 	}
-	if err := service.RestoreInbox(context.Background(), inboxID.String()); err != nil {
+	if err := service.RestoreInbox(context.Background(), inboxID); err != nil {
 		t.Fatalf("retry RestoreInbox() error = %v", err)
 	}
 	if store.restoreCalls != 2 || store.restoredID != inboxID {
@@ -40,27 +40,23 @@ func TestRestoreInboxUsesDedicatedRepositoryCommandForRetries(t *testing.T) {
 	}
 }
 
-func TestRestoreInboxMapsMissingAndInvalidIdentityErrors(t *testing.T) {
+func TestRestoreInboxMapsMissingError(t *testing.T) {
 	tests := []struct {
 		name       string
-		rawID      string
+		id         uuid.UUID
 		restoreErr error
 		status     int
 		code       string
 	}{
-		{name: "invalid id", rawID: "not-a-uuid", status: http.StatusUnprocessableEntity, code: "invalid_inbox_id"},
-		{name: "missing item", rawID: uuid.NewString(), restoreErr: repository.ErrNotFound, status: http.StatusNotFound, code: "reader_not_found"},
+		{name: "missing item", id: uuid.New(), restoreErr: repository.ErrNotFound, status: http.StatusNotFound, code: "reader_not_found"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &readerInboxRestoreStoreStub{restoreErr: tc.restoreErr}
-			service := NewReaderVNextService(store, nil)
+			service := newReaderTestFeatureSet(readerTestStores(store), nil)
 
-			err := service.RestoreInbox(context.Background(), tc.rawID)
+			err := service.RestoreInbox(context.Background(), tc.id)
 			assertReaderHTTPError(t, err, tc.status, tc.code)
-			if tc.rawID == "not-a-uuid" && store.restoreCalls != 0 {
-				t.Fatalf("RestoreInbox() calls = %d, want 0 for invalid identity", store.restoreCalls)
-			}
 		})
 	}
 }

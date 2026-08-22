@@ -37,8 +37,7 @@ var readerArchiveSectionSQL = map[string]string{
 		ORDER BY created_at ASC,id ASC`,
 	"feed_saves": `
 		SELECT jsonb_build_object(
-			'feed_item_id',feed_item_id,'link_id',link_id,
-			'created_link',created_link,'created_at',created_at
+			'feed_item_id',feed_item_id,'link_id',link_id,'created_at',created_at
 		)
 		FROM reader_feed_saves
 		ORDER BY created_at ASC,feed_item_id ASC`,
@@ -119,22 +118,12 @@ var readerArchiveSectionSQL = map[string]string{
 		SELECT jsonb_build_object(
 			'id',id,'url',url,'source_kind',source_kind,'title',title,'body',body,
 			'summary',summary,'suggested_tags',suggested_tags,'tags',tags,
-			'status',status,'metadata_revision',metadata_revision,'job_id',job_id,
-			'expires_at',expires_at,'expired_at',expired_at,'deleted_at',deleted_at,
+				'status',status,'metadata_revision',metadata_revision,
+				'expires_at',expires_at,'deleted_at',deleted_at,
 			'created_at',created_at,'updated_at',updated_at
 		)
 		FROM reader_inbox
 		ORDER BY updated_at DESC,id DESC`,
-	"categories": `
-		SELECT jsonb_build_object('id',id,'name',name,'created_at',created_at)
-		FROM reader_categories
-		ORDER BY created_at ASC,id ASC`,
-	"categorizables": `
-		SELECT jsonb_build_object(
-			'category_id',category_id,'host_kind',host_kind,'host_id',host_id
-		)
-		FROM reader_categorizables
-		ORDER BY category_id ASC,host_kind ASC,host_id ASC`,
 	"todos": `
 		SELECT jsonb_build_object(
 			'id',id,'text',text,'due_at',due_at,'done',done,
@@ -152,34 +141,12 @@ var readerArchiveSectionSQL = map[string]string{
 		)
 		FROM reader_engagement
 		ORDER BY updated_at DESC,link_id ASC`,
-	"feed_feedback": `
+	"feed_hides": `
 		SELECT jsonb_build_object(
-			'item_key',item_key,'action',action,'created_at',created_at
+			'item_key',item_key,'created_at',created_at
 		)
-		FROM reader_feed_feedback
+		FROM reader_feed_hides
 		ORDER BY created_at DESC,item_key ASC`,
-	"feed_snapshots": `
-		SELECT jsonb_build_object(
-			'id',id,'mode',mode,'items',items,'created_at',created_at
-		)
-		FROM reader_feed_snapshots
-		ORDER BY created_at DESC,id DESC`,
-	"tag_activity": `
-		SELECT jsonb_build_object('tag',tag,'last_at',last_at,'last_link_id',last_link_id)
-		FROM reader_tag_activity
-		ORDER BY last_at DESC,tag ASC`,
-	"domain_activity": `
-		SELECT jsonb_build_object('domain',domain,'last_at',last_at,'last_link_id',last_link_id)
-		FROM reader_domain_activity
-		ORDER BY last_at DESC,domain ASC`,
-	"content_history": `
-		SELECT jsonb_build_object(
-			'id',id,'link_id',link_id,'revision',revision,'content',content,
-			'content_document',content_document,'content_format',content_format,
-			'content_source',content_source,'created_at',created_at
-		)
-		FROM reader_content_history
-		ORDER BY link_id ASC,revision ASC`,
 }
 
 func validateReaderArchiveThoughtSnapshot(thoughtID string, snapshot []byte) error {
@@ -253,5 +220,3 @@ func (r *PGXReaderVNextRepository) StreamReaderArchiveSection(
 	}
 	return nil
 }
-
-var _ ReaderArchiveReader = (*PGXReaderVNextRepository)(nil)

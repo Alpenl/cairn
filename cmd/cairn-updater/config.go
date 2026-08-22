@@ -96,11 +96,9 @@ type Config struct {
 //
 // It is fail-closed on the two values that decide whether the helper is safe to
 // run at all: an empty DEPLOY_AUTH_TOKEN and an empty DATABASE_URL both refuse
-// to start. There is deliberately no development exemption for the token. The
-// application's ADMIN_AUTH_TOKEN has one, and that exemption is precisely why
-// it cannot be promoted to deployment authority: an empty-token dev default
-// that ever reaches a host with a public listener is a root-owned remote
-// install primitive.
+// to start. There is deliberately no development exemption for the token: an
+// empty-token default that ever reaches a host with a public listener is a
+// root-owned remote install primitive.
 func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 	get := func(name, fallback string) string {
 		if raw, ok := lookup(name); ok {

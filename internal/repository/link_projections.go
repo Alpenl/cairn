@@ -15,10 +15,10 @@ import (
 // projection contract tests make a column addition visible at the same review
 // point as the consumer field that justifies it.
 const (
-	linkDetailColumns       = "id, url, title, summary, tags, fetcher_type, is_low_confidence, low_confidence_reason, status, error_msg, description, domain, content_type, library_kind, library_kind_source, library_kind_locked, predicted_library_kind, classification_confidence, classification_reason, classification_explanation, classifier_version, content_revision, metadata_revision, content_source, has_content, content_cjk_chars, content_words, path_depth, parent_path, parent_id, created_at, updated_at"
-	linkParseInputColumns   = "id, url, source_kind, source_key, input_title, input_text, input_html, input_images, source_metadata, description, status, requested_library_kind, requested_library_kind_source, library_kind, library_kind_locked, content_revision, updated_at"
-	linkLifecycleColumns    = "id, url, status, library_kind, library_kind_source, library_kind_locked, classification_reason, content_revision, has_content, deleted_at"
-	linkSubmitLookupColumns = "id, url, source_key, status, requested_library_kind, requested_library_kind_source, library_kind"
+	linkDetailColumns       = "id, url, title, summary, tags, fetcher_type, is_low_confidence, low_confidence_reason, status, error_msg, description, domain, content_type, library_kind, content_revision, metadata_revision, content_source, has_content, content_cjk_chars, content_words, path_depth, parent_path, parent_id, created_at, updated_at"
+	linkParseInputColumns   = "id, url, source_kind, source_key, input_title, input_text, input_html, input_images, source_metadata, description, status, library_kind, library_kind_locked, content_revision, metadata_revision, parse_generation, updated_at"
+	linkLifecycleColumns    = "id, url, status, library_kind, library_kind_locked, content_revision, has_content, deleted_at"
+	linkSubmitLookupColumns = "id, url, source_key, status, library_kind, library_kind_locked, COALESCE(last_recollected_at, first_collected_at) AS parse_requested_at"
 )
 
 // canonicalLinkMatch renders the "this row is the canonical record for the
@@ -69,25 +69,19 @@ var (
 )
 
 type linkDetailScanBuffers struct {
-	title                     pgtype.Text
-	summary                   pgtype.Text
-	fetcherType               pgtype.Text
-	lowConfidenceReason       pgtype.Text
-	errorMsg                  pgtype.Text
-	description               pgtype.Text
-	domain                    pgtype.Text
-	contentType               pgtype.Text
-	libraryKind               pgtype.Text
-	libraryKindSource         pgtype.Text
-	predictedLibraryKind      pgtype.Text
-	classificationConfidence  pgtype.Float4
-	classificationReason      pgtype.Text
-	classificationExplanation pgtype.Text
-	classifierVersion         pgtype.Text
-	contentSource             pgtype.Text
-	pathDepth                 sqldb.NullInt64
-	parentPath                pgtype.Text
-	parentID                  pgtype.UUID
+	title               pgtype.Text
+	summary             pgtype.Text
+	fetcherType         pgtype.Text
+	lowConfidenceReason pgtype.Text
+	errorMsg            pgtype.Text
+	description         pgtype.Text
+	domain              pgtype.Text
+	contentType         pgtype.Text
+	libraryKind         pgtype.Text
+	contentSource       pgtype.Text
+	pathDepth           sqldb.NullInt64
+	parentPath          pgtype.Text
+	parentID            pgtype.UUID
 }
 
 func scanLinkDetail(row rowScanner) (LinkDetailProjection, error) {
@@ -108,13 +102,6 @@ func scanLinkDetail(row rowScanner) (LinkDetailProjection, error) {
 		&buf.domain,
 		&buf.contentType,
 		&buf.libraryKind,
-		&buf.libraryKindSource,
-		&projection.LibraryKindLocked,
-		&buf.predictedLibraryKind,
-		&buf.classificationConfidence,
-		&buf.classificationReason,
-		&buf.classificationExplanation,
-		&buf.classifierVersion,
 		&projection.ContentRevision,
 		&projection.MetadataRevision,
 		&buf.contentSource,
@@ -139,12 +126,6 @@ func scanLinkDetail(row rowScanner) (LinkDetailProjection, error) {
 	projection.Domain = textPointer(buf.domain)
 	projection.ContentType = textPointer(buf.contentType)
 	projection.LibraryKind = libraryKindPointer(buf.libraryKind)
-	projection.LibraryKindSource = libraryKindSourcePointer(buf.libraryKindSource)
-	projection.PredictedLibraryKind = libraryKindPointer(buf.predictedLibraryKind)
-	projection.ClassificationConfidence = float32Pointer(buf.classificationConfidence)
-	projection.ClassificationReason = textPointer(buf.classificationReason)
-	projection.ClassificationExplanation = textPointer(buf.classificationExplanation)
-	projection.ClassifierVersion = textPointer(buf.classifierVersion)
 	projection.ContentSource = contentSourceFromString(buf.contentSource.String)
 	projection.PathDepth = intPointer(buf.pathDepth)
 	projection.ParentPath = textPointer(buf.parentPath)
@@ -153,17 +134,15 @@ func scanLinkDetail(row rowScanner) (LinkDetailProjection, error) {
 }
 
 type linkParseInputScanBuffers struct {
-	sourceKind          pgtype.Text
-	sourceKey           pgtype.Text
-	inputTitle          pgtype.Text
-	inputText           pgtype.Text
-	inputHTML           pgtype.Text
-	inputImages         []byte
-	sourceMetadata      []byte
-	description         pgtype.Text
-	requestedKind       pgtype.Text
-	requestedKindSource pgtype.Text
-	libraryKind         pgtype.Text
+	sourceKind     pgtype.Text
+	sourceKey      pgtype.Text
+	inputTitle     pgtype.Text
+	inputText      pgtype.Text
+	inputHTML      pgtype.Text
+	inputImages    []byte
+	sourceMetadata []byte
+	description    pgtype.Text
+	libraryKind    pgtype.Text
 }
 
 func scanLinkParseInput(row rowScanner) (LinkParseInput, error) {
@@ -181,11 +160,11 @@ func scanLinkParseInput(row rowScanner) (LinkParseInput, error) {
 		&buf.sourceMetadata,
 		&buf.description,
 		&projection.Status,
-		&buf.requestedKind,
-		&buf.requestedKindSource,
 		&buf.libraryKind,
 		&projection.LibraryKindLocked,
 		&projection.ContentRevision,
+		&projection.MetadataRevision,
+		&projection.ParseGeneration,
 		&projection.UpdatedAt,
 	); err != nil {
 		return projection, err
@@ -197,7 +176,6 @@ func scanLinkParseInput(row rowScanner) (LinkParseInput, error) {
 	projection.InputText = textPointer(buf.inputText)
 	projection.InputHTML = textPointer(buf.inputHTML)
 	projection.Description = textPointer(buf.description)
-	projection.RequestedLibraryKind, projection.RequestedLibraryKindSource = requestedLibraryIntentFromText(buf.requestedKind, buf.requestedKindSource)
 	projection.LibraryKind = libraryKindPointer(buf.libraryKind)
 
 	images, err := unmarshalStringSlice(buf.inputImages)
@@ -214,10 +192,8 @@ func scanLinkParseInput(row rowScanner) (LinkParseInput, error) {
 }
 
 type linkLifecycleScanBuffers struct {
-	libraryKind          pgtype.Text
-	libraryKindSource    pgtype.Text
-	classificationReason pgtype.Text
-	deletedAt            pgtype.Timestamptz
+	libraryKind pgtype.Text
+	deletedAt   pgtype.Timestamptz
 }
 
 func scanLinkLifecycle(row rowScanner) (LinkLifecycleProjection, error) {
@@ -228,9 +204,7 @@ func scanLinkLifecycle(row rowScanner) (LinkLifecycleProjection, error) {
 		&projection.URL,
 		&projection.Status,
 		&buf.libraryKind,
-		&buf.libraryKindSource,
 		&projection.LibraryKindLocked,
-		&buf.classificationReason,
 		&projection.ContentRevision,
 		&projection.HasContent,
 		&buf.deletedAt,
@@ -238,8 +212,6 @@ func scanLinkLifecycle(row rowScanner) (LinkLifecycleProjection, error) {
 		return projection, err
 	}
 	projection.LibraryKind = libraryKindPointer(buf.libraryKind)
-	projection.LibraryKindSource = libraryKindSourcePointer(buf.libraryKindSource)
-	projection.ClassificationReason = textPointer(buf.classificationReason)
 	if buf.deletedAt.Valid {
 		value := buf.deletedAt.Time
 		projection.DeletedAt = &value
@@ -255,9 +227,9 @@ func scanLinkSubmitLookup(row rowScanner) (LinkSubmitLookup, error) {
 		&projection.URL,
 		&sourceKey,
 		&projection.Status,
-		&projection.RequestedLibraryKind,
-		&projection.RequestedLibraryKindSource,
 		&libraryKind,
+		&projection.LibraryKindLocked,
+		&projection.ParseRequestedAt,
 	); err != nil {
 		return projection, err
 	}

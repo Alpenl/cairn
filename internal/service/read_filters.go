@@ -1,12 +1,11 @@
 package service
 
 import (
-	"net/http"
 	"strings"
 	"time"
 
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 )
 
 func validateCreatedRange(rawFrom, rawBefore string) (*time.Time, *time.Time, error) {
@@ -16,19 +15,19 @@ func validateCreatedRange(rawFrom, rawBefore string) (*time.Time, *time.Time, er
 		return nil, nil, nil
 	}
 	if fromValue == "" || beforeValue == "" {
-		return nil, nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCreatedRange, "created_from and created_before must be provided together")
+		return nil, nil, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCreatedRange, "created_from and created_before must be provided together")
 	}
 
 	from, err := time.Parse(time.RFC3339, fromValue)
 	if err != nil {
-		return nil, nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCreatedRange, "created_from and created_before must be RFC3339 timestamps")
+		return nil, nil, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCreatedRange, "created_from and created_before must be RFC3339 timestamps")
 	}
 	before, err := time.Parse(time.RFC3339, beforeValue)
 	if err != nil {
-		return nil, nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCreatedRange, "created_from and created_before must be RFC3339 timestamps")
+		return nil, nil, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCreatedRange, "created_from and created_before must be RFC3339 timestamps")
 	}
 	if !from.Before(before) {
-		return nil, nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeInvalidCreatedRange, "created_from must be earlier than created_before")
+		return nil, nil, problem.NewWithCode(problem.Invalid, problem.CodeInvalidCreatedRange, "created_from must be earlier than created_before")
 	}
 	return &from, &before, nil
 }
@@ -58,11 +57,11 @@ func splitTags(raw string) []string {
 func splitAndValidateTags(raw string) ([]string, error) {
 	tags := splitTags(raw)
 	if len(tags) > maxListTagFilters {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeTagFiltersExceedLimit, "too many tag filters")
+		return nil, problem.NewWithCode(problem.Invalid, problem.CodeTagFiltersExceedLimit, "too many tag filters")
 	}
 	for _, tag := range tags {
 		if len(tag) > maxListTagFilterLen {
-			return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeTagFilterTooLong, "tag filter too long")
+			return nil, problem.NewWithCode(problem.Invalid, problem.CodeTagFilterTooLong, "tag filter too long")
 		}
 	}
 	return tags, nil
@@ -75,7 +74,7 @@ func validateContentTypeFilter(value string) error {
 		return nil
 	}
 	if _, ok := allowedContentTypes[value]; !ok {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeUnsupportedContentTypeFilter, "unsupported content_type filter")
+		return problem.NewWithCode(problem.Invalid, problem.CodeUnsupportedContentTypeFilter, "unsupported content_type filter")
 	}
 	return nil
 }
@@ -86,7 +85,7 @@ func validateLibraryKindFilter(value string) (*model.LibraryKind, error) {
 	}
 	kind := model.LibraryKind(value)
 	if kind != model.LibraryKindReading && kind != model.LibraryKindSite {
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeLibraryKindNotFinal, "unsupported library_kind filter")
+		return nil, problem.NewWithCode(problem.Invalid, problem.CodeLibraryKindNotFinal, "unsupported library_kind filter")
 	}
 	return &kind, nil
 }
@@ -97,7 +96,7 @@ func validateDomainFilter(value string) error {
 		return nil
 	}
 	if len(value) > maxListDomainLen {
-		return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeDomainFilterTooLong, "domain filter too long")
+		return problem.NewWithCode(problem.Invalid, problem.CodeDomainFilterTooLong, "domain filter too long")
 	}
 	return nil
 }
@@ -119,7 +118,7 @@ func splitAndValidateStatuses(raw string) ([]string, error) {
 
 	parts := strings.Split(raw, ",")
 	if len(parts) > maxListStatusFilters {
-		return nil, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeUnsupportedStatusFilter, "too many status filters")
+		return nil, problem.NewWithCode(problem.Malformed, problem.CodeUnsupportedStatusFilter, "too many status filters")
 	}
 
 	seen := make(map[string]struct{}, len(parts))
@@ -130,7 +129,7 @@ func splitAndValidateStatuses(raw string) ([]string, error) {
 			continue
 		}
 		if _, ok := allowedListStatuses[status]; !ok {
-			return nil, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeUnsupportedStatusFilter, "unsupported status filter: "+status+" (allowed: pending, processing, failed, done)")
+			return nil, problem.NewWithCode(problem.Malformed, problem.CodeUnsupportedStatusFilter, "unsupported status filter: "+status+" (allowed: pending, processing, failed, done)")
 		}
 		if _, dup := seen[status]; dup {
 			continue
@@ -161,6 +160,6 @@ func validateLowConfidenceFilter(value string) (*bool, error) {
 		v := false
 		return &v, nil
 	default:
-		return nil, httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeUnsupportedLowConfidenceFilter, "low_confidence must be true or false")
+		return nil, problem.NewWithCode(problem.Invalid, problem.CodeUnsupportedLowConfidenceFilter, "low_confidence must be true or false")
 	}
 }

@@ -74,7 +74,6 @@ const ARCHIVE_TOP_LEVEL_SECTIONS = [
   'site_entries',
   'site_tags',
   'site_identities',
-  'classification_rules',
 ]
 
 const ARCHIVE_READER_BASE_SECTIONS = [
@@ -83,15 +82,9 @@ const ARCHIVE_READER_BASE_SECTIONS = [
   'feed_items',
   'feed_saves',
   'inbox',
-  'categories',
-  'categorizables',
   'todos',
   'engagement',
-  'feed_feedback',
-  'feed_snapshots',
-  'tag_activity',
-  'domain_activity',
-  'content_history',
+  'feed_hides',
 ]
 
 const ARCHIVE_READER_THOUGHT_SECTIONS = [
@@ -141,7 +134,6 @@ async function validArchiveV2Bytes(
     site_entries: [],
     site_tags: [],
     site_identities: [],
-    classification_rules: [],
     reader,
   }
   const counts: Record<string, number> = {}
@@ -299,10 +291,9 @@ describe('ReaderClient capability negotiation', () => {
     mockFetch(() => jsonResponse({
       library_kinds: true,
       site_library: true,
-      site_auto_classification: true,
       site_management: true,
       site_advanced_management: true,
-      archive_versions: [1, 2],
+      archive_versions: [2],
       reader_vnext: true,
       reader: {
         annotations: true,
@@ -313,7 +304,7 @@ describe('ReaderClient capability negotiation', () => {
         home: true,
         feed: true,
         ai: false,
-        semantic: true,
+        related_tags: true,
         activity: true,
         history: true,
         trash: true,
@@ -922,15 +913,6 @@ describe('ReaderClient authenticated response ownership', () => {
       expectedKind: null,
     },
     {
-      name: '304',
-      response: (marker?: string) =>
-        new Response(null, {
-          status: 304,
-          headers: marker ? { [DATA_NAMESPACE_HEADER]: marker } : undefined,
-        }),
-      expectedKind: 'not-modified',
-    },
-    {
       name: 'authenticated error',
       response: (marker?: string) =>
         jsonResponse(
@@ -1163,7 +1145,6 @@ describe('ReaderClient link submission', () => {
   it('posts a LinkCreateRequest to /api/links', async () => {
     const response = {
       link_id: '11111111-1111-1111-1111-111111111111',
-      job_id: '22222222-2222-2222-2222-222222222222',
       status: 'pending',
     }
     const fn = mockFetch(() => jsonResponse(response))
@@ -1185,26 +1166,6 @@ describe('ReaderClient link submission', () => {
         }),
       }),
     )
-  })
-})
-
-describe('ReaderClient classification rules API', () => {
-  const rule = {
-    id: '11111111-1111-1111-1111-111111111111', host: 'example.com', target_kind: 'site', enabled: true,
-    revision: 3, created_at: '2026-07-21T00:00:00Z', updated_at: '2026-07-21T00:00:00Z',
-  }
-
-  it('lists rules and preserves nullable shared scope fields', async () => {
-    const fn = mockFetch(() => jsonResponse([rule]))
-    const result = await authenticatedClient().getClassificationRules()
-    expect(result).toEqual({ ok: true, data: [rule] })
-    expect(fn).toHaveBeenCalledWith(`${BASE}/api/library-classification-rules`, expect.objectContaining({ method: 'GET' }))
-  })
-
-  it('sends revision guarded updates including explicit null clearing', async () => {
-    const fn = mockFetch(() => jsonResponse({ ...rule, host: 'example.net', revision: 4 }))
-    await expect(authenticatedClient().updateClassificationRule(rule.id, 3, { host: 'example.net', identity_adapter: null, path_prefix: null })).resolves.toMatchObject({ ok: true })
-    expect(fn).toHaveBeenCalledWith(`${BASE}/api/library-classification-rules/${rule.id}`, expect.objectContaining({ method: 'PATCH', headers: expect.objectContaining({ 'If-Match': '"3"' }), body: JSON.stringify({ host: 'example.net', identity_adapter: null, path_prefix: null }) }))
   })
 })
 
@@ -1708,7 +1669,7 @@ describe('ReaderClient.getContent', () => {
 describe('ReaderClient.refreshLink 成功', () => {
   it('202 返回后端 SubmitResponse，而不是把提交结果伪装成 LinkResponse', async () => {
     mockFetch(() =>
-      jsonResponse({ link_id: 'id1', job_id: 'job-1', status: 'pending' }, { status: 202 }),
+      jsonResponse({ link_id: 'id1', status: 'pending' }, { status: 202 }),
     )
     const client = authenticatedClient()
 
@@ -1716,7 +1677,7 @@ describe('ReaderClient.refreshLink 成功', () => {
 
     expect(r).toEqual({
       ok: true,
-      data: { link_id: 'id1', job_id: 'job-1', status: 'pending' },
+      data: { link_id: 'id1', status: 'pending' },
     })
   })
 })

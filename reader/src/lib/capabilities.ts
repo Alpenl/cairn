@@ -10,7 +10,7 @@ export interface ReaderCapabilityPolicy {
   readonly home: boolean
   readonly feed: boolean
   readonly ai: boolean
-  readonly semantic: boolean
+  readonly relatedTags: boolean
   readonly activity: boolean
   readonly history: boolean
   readonly trash: boolean
@@ -18,33 +18,17 @@ export interface ReaderCapabilityPolicy {
   readonly siteRead: boolean
   readonly siteWrite: boolean
   readonly siteAdvanced: boolean
-  readonly siteAutoClassification: boolean
   readonly archiveDownload: boolean
 }
 
 export type ReaderCapabilityFeature = keyof ReaderCapabilityPolicy
-
-const READER_FEATURES = [
-  'annotations',
-  'notes',
-  'inbox',
-  'todos',
-  'engagement',
-  'home',
-  'feed',
-  'ai',
-  'semantic',
-  'activity',
-  'history',
-  'trash',
-] as const
 
 export function deriveReaderCapabilityPolicy(
   capabilities: CapabilitiesResponse | null | undefined,
 ): ReaderCapabilityPolicy {
   const readerVNext = capabilities?.reader_vnext === true
   const reader = capabilities?.reader
-  const enabled = (feature: (typeof READER_FEATURES)[number]) =>
+  const enabled = (feature: keyof NonNullable<CapabilitiesResponse['reader']>) =>
     readerVNext && reader?.[feature] === true
   const libraryKinds = capabilities?.library_kinds === true
   const siteRead = libraryKinds && capabilities?.site_library === true
@@ -59,7 +43,7 @@ export function deriveReaderCapabilityPolicy(
     home: enabled('home'),
     feed: enabled('feed'),
     ai: enabled('ai'),
-    semantic: enabled('semantic'),
+    relatedTags: enabled('related_tags'),
     activity: enabled('activity'),
     history: enabled('history'),
     trash: enabled('trash'),
@@ -68,8 +52,6 @@ export function deriveReaderCapabilityPolicy(
     siteWrite,
     siteAdvanced:
       siteWrite && capabilities?.site_advanced_management === true,
-    siteAutoClassification:
-      libraryKinds && capabilities?.site_auto_classification === true,
     archiveDownload:
       Array.isArray(capabilities?.archive_versions) &&
       capabilities.archive_versions.includes(2),
@@ -77,12 +59,22 @@ export function deriveReaderCapabilityPolicy(
 }
 
 const POLICY_KEYS = [
-  ...READER_FEATURES,
+  'annotations',
+  'notes',
+  'inbox',
+  'todos',
+  'engagement',
+  'home',
+  'feed',
+  'ai',
+  'relatedTags',
+  'activity',
+  'history',
+  'trash',
   'libraryKinds',
   'siteRead',
   'siteWrite',
   'siteAdvanced',
-  'siteAutoClassification',
   'archiveDownload',
 ] as const satisfies readonly ReaderCapabilityFeature[]
 
@@ -134,7 +126,6 @@ export function readerRouteIsAvailable(
   if (route.kind === 'surface') {
     return route.id === 'home' ? policy.home : policy.feed
   }
-  if (route.kind === 'internal') return policy.siteAdvanced
   if (route.kind === 'tool') {
     if (route.id === 'todo') return policy.todos
     if (route.id === 'history') return policy.history

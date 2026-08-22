@@ -83,41 +83,16 @@ jobs:
 
           # pull_request：checkout 出来的 HEAD 是 base 与 head 的合并结果，
           # 因此直接和 base.sha 两点比较即可得到本 PR 的净改动。
-          CHANGED="$(git diff --name-only "$BASE_SHA" HEAD)"
           echo "本次改动文件："
-          printf '%s\n' "$CHANGED" | sed 's/^/  /'
+          git diff --name-only "$BASE_SHA" HEAD | sed 's/^/  /'
 
-          touched() { printf '%s\n' "$CHANGED" | grep -qE "$1"; }
-
-          decide() {
-            local surface="$1" pattern="$2"
-            if touched "$pattern"; then emit "$surface" true; else emit "$surface" false; fi
-          }
-
-          # ci.yml 和 labeler.yml 是调度层，决定其他面跑不跑，改它们必须全部重验
-          # ——否则改坏门禁的那个 PR 恰好是唯一不受门禁检查的 PR。
-          #
-          # 但只对这两个文件全跑。早先的版本对 .github/workflows/ 下任何改动都全跑，
-          # 结果是任何一面红了就再也修不了 CI：改 lint.yml 也要等 iOS 模拟器通过。
-          # 其余 workflow 只强制它自己负责的那一面，见下面各 decide 里的 workflow 路径。
-          if touched '^\.github/workflows/(ci|labeler)\.yml$'; then
-            echo "调度层 workflow 有改动，全部执行"
-            for surface in go lint reader extension android ios database; do
-              emit "$surface" true
-            done
-            exit 0
-          fi
-
-          decide go        '^(cmd|internal|test)/|^go\.(mod|sum)$|^vendor/|^Makefile$|^Dockerfile$|^\.env\.example$|^scripts/(version(\.test)?|container_smoke|db_migrate_smoke|db-dump-schema)\.sh$|^\.github/workflows/go-verify\.yml$'
-          decide lint      '^(cmd|internal|test)/|^go\.(mod|sum)$|^vendor/|^Makefile$|^\.golangci|^\.github/workflows/'
-          decide reader    '^(reader|packages)/|^internal/app/assets/openapi\.json$|^pnpm-|^package\.json$|^\.github/workflows/reader-ci\.yml$'
-          decide extension '^(extension|packages)/|^internal/app/assets/openapi\.json$|^pnpm-|^package\.json$|^\.github/workflows/extension-ci\.yml$'
-          decide android   '^mobile/(android|shared)/|^scripts/mobile-|^\.github/workflows/mobile-android\.yml$'
-          decide ios       '^mobile/(ios|shared)/|^scripts/mobile-|^\.github/workflows/mobile-ios\.yml$'
-          # 真实 PG 上的集成测试。手写 SQL 必须跑在真实数据库上，mock 掉等于零覆盖，
-          # 所以只要碰到后端代码、迁移或 dbintegration 用例就必须跑，不能只留给定时任务
-          # ——定时任务是在合并之后才发现问题。
-          decide database  '^internal/|^test/dbintegration/|\.sql$|^go\.(mod|sum)$|^scripts/(db-dump-schema|db_migrate_smoke)\.sh$|^\.github/workflows/dbintegration\.yml$'
+          # NUL 分隔避免特殊文件名歧义。分类器必须读完整个输入，因此即使改动文件达到
+          # 数千个，也不会像 grep -q 那样提前关管道并在 pipefail 下把命中误判为 false。
+          surface_output="$(mktemp)"
+          trap 'rm -f "$surface_output"' EXIT
+          git diff --name-only -z "$BASE_SHA" HEAD | node scripts/ci-path-filter.mjs >"$surface_output"
+          cat "$surface_output"
+          cat "$surface_output" >> "$GITHUB_OUTPUT"
 
   commitlint:
     name: lint-pr-commits

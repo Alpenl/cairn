@@ -164,15 +164,11 @@ function makeInboxItem(index: number): Record<string, unknown> {
     note: scaleText(INBOX_NOTE, `inbox-note-${index}`),
     summary: `Summary ${scaleText(200, `inbox-summary-${index}`)}`,
     suggested_tags: [`tag-${index % 200}`, 'suggested'],
-    proposal_signals: { confidence: 0.5, reason: scaleText(64, `inbox-signal-${index}`) },
     proposal_status: 'completed',
     tags: [`tag-${(index * 3) % 200}`],
-    category_ids: [],
     status: 'pending',
     metadata_revision: 1,
-    job_id: null,
     expires_at: NOW,
-    expired_at: null,
     expired: false,
     created_at: NOW,
     updated_at: NOW,
@@ -184,7 +180,7 @@ function makeFeedItem(index: number): Record<string, unknown> {
   return {
     key: `link:${linkID}`,
     source: 'reading',
-    actions: ['read', 'read_later', 'save', 'unsave', 'hide', 'not_interested', 'open', 'open_workspace'],
+    resource_key: `link:${linkID}`,
     title: `Feed item ${index}`,
     summary: `Summary ${scaleText(200, `feed-summary-${index}`)}`,
     url: `https://feed-${index % 50}.example/entry/${index}`,
@@ -194,23 +190,7 @@ function makeFeedItem(index: number): Record<string, unknown> {
     read: index % 3 === 0,
     read_later: index % 37 === 0,
     saved: false,
-    score: 20,
-    score_contributions: {
-      pending_confirmation: 0,
-      saved_library: 0,
-      subscription_recent: 0,
-      unread: 20,
-      read_later: 0,
-      chronological_fallback: 0,
-    },
-    enabled_score_signals: ['unread'],
-    reason_code: 'unread',
-    reason_params: { read: false },
-    reason_contribution: 20,
-    reason_text: 'baseline fixture item',
-    published_at: NOW,
     event_at: NOW,
-    created_at: NOW,
   }
 }
 
@@ -292,7 +272,6 @@ export class ReaderScaleBackend {
       await fulfill(route, 200, {
         library_kinds: true,
         site_library: true,
-        site_auto_classification: false,
         site_management: false,
         site_advanced_management: false,
         archive_versions: [],
@@ -306,7 +285,7 @@ export class ReaderScaleBackend {
           home: true,
           feed: true,
           ai: false,
-          semantic: false,
+          related_tags: false,
           activity: true,
           history: true,
           trash: true,
@@ -374,7 +353,6 @@ export class ReaderScaleBackend {
       const mode = url.searchParams.get('mode') === 'chronological' ? 'chronological' : 'recommended'
       await fulfill(route, 200, {
         items: this.feed,
-        snapshot_id: 'reader-scale-snapshot-1',
         mode,
       })
       return
@@ -394,10 +372,6 @@ export class ReaderScaleBackend {
     // recorded transfer totals.
     if (path === '/api/notes' && request.method() === 'GET') {
       await fulfill(route, 200, { items: [], count: this.counts.note_count ?? 0 })
-      return
-    }
-    if (path === '/api/categories') {
-      await fulfill(route, 200, { items: [] })
       return
     }
     if (path === '/api/links') {

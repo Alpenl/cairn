@@ -1,11 +1,5 @@
-// Package observability 提供 WebTag 的可观测性基础设施，统一封装三类能力：
-//   - logger：基于 log/slog 的 JSON 结构化日志，附带按请求维度染色与
-//     context 注入/读取的工具函数（NewLogger / WithRequestID / FromContext / ContextWithLogger）；
-//   - metrics：Prometheus 指标注册表与解析、HTTP、DB、Queue、Fetcher、pgxpool
-//     等子系统的预定义指标（NewMetrics / Metrics.Handler / RegisterPgxpoolGauges）；
-//   - tracing：OpenTelemetry tracer 的初始化与全局获取（InitTracer / Tracer）。
-//
-// 业务包应当通过本包获取 logger 与 metrics，避免散落多份配置。
+// Package observability provides structured logging and request-scoped logger
+// helpers shared by the application.
 package observability
 
 import (

@@ -15,7 +15,7 @@ import (
 // TestReaderFeedSavePostgresAssociationLifecycle exercises the persistent
 // association rather than a Feed snapshot. It deliberately covers the cases
 // that cannot be made trustworthy with mocks: canonical identity races,
-// creator ownership, and the link lifecycle trigger that tombstones thoughts.
+// Feed ownership, and the link lifecycle trigger that tombstones thoughts.
 func TestReaderFeedSavePostgresAssociationLifecycle(t *testing.T) {
 	pool := StartPostgres(t)
 	repo := repository.NewPGXReaderVNextRepository(pool)
@@ -54,13 +54,13 @@ func TestReaderFeedSavePostgresAssociationLifecycle(t *testing.T) {
 	}
 	var creatorLink uuid.UUID
 	for result := range results {
-		if !result.Saved || result.Association == nil || !result.Association.CreatedLink {
-			t.Fatalf("concurrent save result = %#v, want created association", result)
+		if result.LinkID == nil {
+			t.Fatalf("concurrent save result = %#v, want saved Link", result)
 		}
 		if creatorLink == uuid.Nil {
-			creatorLink = result.Association.LinkID
-		} else if result.Association.LinkID != creatorLink {
-			t.Fatalf("concurrent link = %s, want %s", result.Association.LinkID, creatorLink)
+			creatorLink = *result.LinkID
+		} else if *result.LinkID != creatorLink {
+			t.Fatalf("concurrent link = %s, want %s", *result.LinkID, creatorLink)
 		}
 	}
 	if creatorLink == uuid.Nil {
@@ -70,33 +70,39 @@ func TestReaderFeedSavePostgresAssociationLifecycle(t *testing.T) {
 		t.Fatal("repeated save did not converge to one association and one live link")
 	}
 
-	// A second feed item reuses the same link but is never made its creator.
+	// A second feed item reuses the same canonical Link.
 	reused, err := repo.FeedbackFeed(ctx, "subscription:"+reuserItem.String(), "save")
-	if err != nil || reused.Association == nil {
+	if err != nil || reused.LinkID == nil {
 		t.Fatalf("save reuser = %#v, %v", reused, err)
 	}
-	if reused.Association.LinkID != creatorLink || reused.Association.CreatedLink {
-		t.Fatalf("reused association = %#v, want link %s with created_link=false", reused.Association, creatorLink)
+	if *reused.LinkID != creatorLink {
+		t.Fatalf("reused save = %#v, want link %s", reused, creatorLink)
 	}
 	if countReaderFeedSaves(t, pool, uuid.Nil, creatorLink) != 2 {
 		t.Fatal("expected two active associations for the canonical link")
 	}
+	var analyzedItems int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM feed_items WHERE id=ANY($1::uuid[]) AND link_id IS NOT NULL`, []uuid.UUID{creatorItem, reuserItem}).Scan(&analyzedItems); err != nil {
+		t.Fatalf("read Analyze associations: %v", err)
+	}
+	if analyzedItems != 0 {
+		t.Fatalf("Reader save wrote %d feed_items.link_id values; Analyze must own that column", analyzedItems)
+	}
 
-	// Removing the non-creator association cannot trash the shared link. Saving
-	// it again is idempotent reuse, after which the creator's final unsave is
-	// the only operation that transitions the link to trash.
-	if result, err := repo.FeedbackFeed(ctx, "subscription:"+reuserItem.String(), "unsave"); err != nil || result.Association == nil || result.Saved {
+	// Removing one association cannot trash the shared link. The last unsave is
+	// the only operation that transitions a Feed-managed Link to trash.
+	if result, err := repo.FeedbackFeed(ctx, "subscription:"+reuserItem.String(), "unsave"); err != nil || result.LinkID != nil {
 		t.Fatalf("unsave reuser = %#v, %v", result, err)
 	}
 	assertReaderFeedLinkLive(t, pool, creatorLink, true)
-	if result, err := repo.FeedbackFeed(ctx, "subscription:"+reuserItem.String(), "save"); err != nil || result.Association == nil || result.Association.CreatedLink {
+	if result, err := repo.FeedbackFeed(ctx, "subscription:"+reuserItem.String(), "save"); err != nil || result.LinkID == nil || *result.LinkID != creatorLink {
 		t.Fatalf("repeat reuser save = %#v, %v", result, err)
 	}
-	if result, err := repo.FeedbackFeed(ctx, "subscription:"+reuserItem.String(), "unsave"); err != nil || result.Association == nil {
-		t.Fatalf("final reuser unsave = %#v, %v", result, err)
+	if _, err := repo.FeedbackFeed(ctx, "subscription:"+reuserItem.String(), "unsave"); err != nil {
+		t.Fatalf("final reuser unsave: %v", err)
 	}
-	if result, err := repo.FeedbackFeed(ctx, "subscription:"+creatorItem.String(), "unsave"); err != nil || result.Association == nil || !result.Association.CreatedLink {
-		t.Fatalf("creator final unsave = %#v, %v", result, err)
+	if _, err := repo.FeedbackFeed(ctx, "subscription:"+creatorItem.String(), "unsave"); err != nil {
+		t.Fatalf("creator final unsave: %v", err)
 	}
 	assertReaderFeedLinkLive(t, pool, creatorLink, false)
 
@@ -105,10 +111,10 @@ func TestReaderFeedSavePostgresAssociationLifecycle(t *testing.T) {
 	// Link and re-anchors the thought without losing progress or note body.
 	lifecycleItem := seedReaderFeedSaveItem(t, pool, "https://feed-save.example.test/lifecycle", "lifecycle")
 	created, err := repo.FeedbackFeed(ctx, "subscription:"+lifecycleItem.String(), "save")
-	if err != nil || created.Association == nil || !created.Association.CreatedLink {
+	if err != nil || created.LinkID == nil {
 		t.Fatalf("save lifecycle item = %#v, %v", created, err)
 	}
-	lifecycleLink := created.Association.LinkID
+	lifecycleLink := *created.LinkID
 	if _, err := pool.Exec(t.Context(), `UPDATE links SET content=$2,content_document=$2,updated_at=NOW() WHERE id=$1`, lifecycleLink, "preserve this thought"); err != nil {
 		t.Fatalf("seed lifecycle link content: %v", err)
 	}
@@ -137,7 +143,7 @@ func TestReaderFeedSavePostgresAssociationLifecycle(t *testing.T) {
 	assertReaderFeedLinkLive(t, pool, lifecycleLink, false)
 	assertReaderThoughtLifecycle(t, repo, ctx, thoughtID, false, "tombstone")
 	restored, err := repo.FeedbackFeed(ctx, "subscription:"+lifecycleItem.String(), "save")
-	if err != nil || restored.Association == nil || restored.Association.LinkID != lifecycleLink || restored.Association.CreatedLink {
+	if err != nil || restored.LinkID == nil || *restored.LinkID != lifecycleLink {
 		t.Fatalf("re-save feed-created link = %#v, %v", restored, err)
 	}
 	assertReaderFeedLinkLive(t, pool, lifecycleLink, true)
@@ -180,10 +186,10 @@ func TestReaderFeedSavePostgresUnsaveOrderAndConcurrencyConverge(t *testing.T) {
 		creator := seedReaderFeedSaveItem(t, pool, rawURL, "creator-first-a")
 		follower := seedReaderFeedSaveItem(t, pool, rawURL, "creator-first-b")
 		first, err := repo.FeedbackFeed(ctx, "subscription:"+creator.String(), "save")
-		if err != nil || first.Association == nil || !first.Association.CreatedLink {
+		if err != nil || first.LinkID == nil {
 			t.Fatalf("save creator = %#v, %v", first, err)
 		}
-		linkID := first.Association.LinkID
+		linkID := *first.LinkID
 		if _, err := repo.FeedbackFeed(ctx, "subscription:"+follower.String(), "save"); err != nil {
 			t.Fatalf("save follower: %v", err)
 		}
@@ -207,13 +213,13 @@ func TestReaderFeedSavePostgresUnsaveOrderAndConcurrencyConverge(t *testing.T) {
 		var linkID uuid.UUID
 		for _, itemID := range items {
 			result, err := repo.FeedbackFeed(ctx, "subscription:"+itemID.String(), "save")
-			if err != nil || result.Association == nil {
+			if err != nil || result.LinkID == nil {
 				t.Fatalf("save concurrent fixture = %#v, %v", result, err)
 			}
 			if linkID == uuid.Nil {
-				linkID = result.Association.LinkID
-			} else if result.Association.LinkID != linkID {
-				t.Fatalf("association link = %s, want %s", result.Association.LinkID, linkID)
+				linkID = *result.LinkID
+			} else if *result.LinkID != linkID {
+				t.Fatalf("association link = %s, want %s", *result.LinkID, linkID)
 			}
 		}
 		start := make(chan struct{})
@@ -251,7 +257,7 @@ func TestReaderFeedSavePostgresIndependentLinkSurvivesLastUnsave(t *testing.T) {
 	independent := seedReaderVNextSavedLink(t, pool, rawURL, "Independent", "body", "summary")
 	itemID := seedReaderFeedSaveItem(t, pool, rawURL, "independent-feed")
 	saved, err := repo.FeedbackFeed(ctx, "subscription:"+itemID.String(), "save")
-	if err != nil || saved.Association == nil || saved.Association.LinkID != independent || saved.Association.CreatedLink {
+	if err != nil || saved.LinkID == nil || *saved.LinkID != independent {
 		t.Fatalf("save independent link = %#v, %v", saved, err)
 	}
 	if _, err := repo.FeedbackFeed(ctx, "subscription:"+itemID.String(), "unsave"); err != nil {
@@ -266,10 +272,10 @@ func TestReaderFeedSavePostgresResaveRestoreRollsBackWithAssociation(t *testing.
 	ctx := t.Context()
 	itemID := seedReaderFeedSaveItem(t, pool, "https://feed-save.example.test/restore-rollback", "restore-rollback")
 	created, err := repo.FeedbackFeed(ctx, "subscription:"+itemID.String(), "save")
-	if err != nil || created.Association == nil {
+	if err != nil || created.LinkID == nil {
 		t.Fatalf("seed Feed save = %#v, %v", created, err)
 	}
-	linkID := created.Association.LinkID
+	linkID := *created.LinkID
 	if _, err := repo.FeedbackFeed(ctx, "subscription:"+itemID.String(), "unsave"); err != nil {
 		t.Fatalf("seed Feed trash: %v", err)
 	}

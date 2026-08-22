@@ -24,7 +24,6 @@ export interface TitlebarProps {
   archiveDownloading: boolean
   onDownloadArchive: () => void
   canUseAI: boolean
-  semanticSearchEnabled: boolean
   canDownloadArchive: boolean
 }
 
@@ -63,7 +62,6 @@ export function Titlebar({
   archiveDownloading,
   onDownloadArchive,
   canUseAI,
-  semanticSearchEnabled,
   canDownloadArchive,
 }: TitlebarProps) {
   return (
@@ -110,7 +108,7 @@ export function Titlebar({
       <span className="tb-grow" />
       <div className="search-pill" onClick={onOpenCmdk}>
         <Icon name="search" size={15} />
-        <span className="ph">{semanticSearchEnabled ? '搜索链接 · 语义搜索' : '搜索链接'}</span>
+        <span className="ph">搜索链接</span>
         <span className="kbd">⌘K</span>
       </div>
       <span className="tb-grow" />

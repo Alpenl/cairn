@@ -18,7 +18,7 @@ func TestJinaFetcherRejectsEmptyContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.BaseURL = server.URL
 
 	_, err := fetcher.Fetch(context.Background(), "https://example.com/post")
@@ -39,7 +39,7 @@ func TestJinaFetcherDoesNotDiscloseCredentialedOrSignedURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.BaseURL = server.URL
 	sensitive := "https://alice:password@example.com/post?signature=query-secret#fragment-secret"
 	_, err := fetcher.Fetch(context.Background(), sensitive)
@@ -72,7 +72,7 @@ func TestJinaFetcherRejectsSoftFailureErrorPage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.BaseURL = server.URL
 
 	_, err := fetcher.Fetch(context.Background(), "https://blog.csdn.net/x/article/details/123")
@@ -103,7 +103,7 @@ func TestJinaFetcherRejectsOversizedResponses(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.BaseURL = server.URL
 	fetcher.MaxBytes = 16
 
@@ -131,7 +131,7 @@ func TestJinaFetcherRetriesTransientHTTPFailures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.BaseURL = server.URL
 
 	got, err := fetcher.Fetch(context.Background(), "https://example.com/post")
@@ -155,7 +155,7 @@ func TestJinaFetcherRejectsBinaryContentTypes(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.BaseURL = server.URL
 
 	_, err := fetcher.Fetch(context.Background(), "https://example.com/post")
@@ -176,7 +176,7 @@ func TestJinaFetcherAllowsTextMarkdownResponses(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.BaseURL = server.URL
 
 	got, err := fetcher.Fetch(context.Background(), "https://example.com/post")
@@ -199,7 +199,7 @@ func TestJinaFetcherRequestsCommentRemoval(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}))
+	fetcher := NewJinaFetcher(NewHTTPClientWithOptions(HTTPClientOptions{Client: server.Client(), allowUnsafeTargets: true}))
 	fetcher.BaseURL = server.URL
 
 	if _, err := fetcher.Fetch(context.Background(), "https://example.com/post"); err != nil {

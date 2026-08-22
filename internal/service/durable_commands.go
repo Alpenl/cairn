@@ -12,32 +12,30 @@ import (
 // batch commands. Persistence-specific defaults and encodings are owned by the
 // durable adapter and repository implementation.
 type LinkCapture struct {
-	URL                        string
-	Destination                string
-	SourceKind                 string
-	SourceKey                  string
-	InputTitle                 *string
-	InputText                  *string
-	InputHTML                  *string
-	InputImages                []string
-	SourceMetadata             map[string]any
-	Description                *string
-	Status                     model.LinkStatus
-	Domain                     *string
-	ContentType                *string
-	PathDepth                  *int
-	ParentPath                 *string
-	ParentID                   *uuid.UUID
-	RequestedLibraryKind       model.RequestedLibraryKind
-	RequestedLibraryKindSource model.RequestedLibraryKindSource
-	PredictedLibraryKind       *model.LibraryKind
+	URL                     string
+	Destination             string
+	SourceKind              string
+	SourceKey               string
+	InputTitle              *string
+	InputText               *string
+	InputHTML               *string
+	InputImages             []string
+	SourceMetadata          map[string]any
+	Description             *string
+	Status                  model.LinkStatus
+	Domain                  *string
+	ContentType             *string
+	PathDepth               *int
+	ParentPath              *string
+	ParentID                *uuid.UUID
+	RequestedLibraryKind    model.RequestedLibraryKind
+	UserSelectedLibraryKind bool
 }
 
-// InboxCaptureWriter is the narrow persistence seam used by capture
-// destinations. It intentionally does not expose the full Reader store to the
-// link submission service.
+// InboxCaptureWriter is the narrow lookup seam used by capture destinations.
+// Creation goes through InboxProposalCommands so the Inbox row and River work
+// cannot commit independently.
 type InboxCaptureWriter interface {
-	CreateInbox(context.Context, model.ReaderInbox) (*model.ReaderInbox, error)
 	GetInboxByURL(context.Context, string) (*model.ReaderInbox, error)
 }
 
@@ -58,20 +56,6 @@ type EnsureInboxProposalCommand struct {
 
 type InboxProposalResult struct {
 	Inbox *model.ReaderInbox
-	Job   *model.ReaderInboxJob
-}
-
-// InboxProposalOrphanRepairResult reports the rows selected by one bounded
-// repair transaction and the subset that committed with a matching River job.
-type InboxProposalOrphanRepairResult struct {
-	Claimed  int
-	Repaired int
-}
-
-// InboxProposalOrphanRepairer is the worker-facing boundary for recovering
-// proposal attempts whose business rows survived without active River work.
-type InboxProposalOrphanRepairer interface {
-	RepairInboxProposalOrphans(context.Context, int) (InboxProposalOrphanRepairResult, error)
 }
 
 // InboxProposalCommands is the service-facing atomic write boundary. Its
@@ -79,6 +63,34 @@ type InboxProposalOrphanRepairer interface {
 type InboxProposalCommands interface {
 	CreateInboxProposal(context.Context, CreateInboxProposalCommand) (InboxProposalResult, error)
 	EnsureInboxProposal(context.Context, EnsureInboxProposalCommand) (InboxProposalResult, error)
+}
+
+// ReaderInboxConfirmCommands owns one Inbox confirmation that may restore a
+// canonical Link and therefore must coordinate PostgreSQL state with River in
+// one transaction.
+type ReaderInboxConfirmCommands interface {
+	ConfirmInbox(context.Context, uuid.UUID, *int64) (uuid.UUID, error)
+}
+
+type ReaderInboxBulkConfirmCommands interface {
+	BulkConfirmInbox(context.Context, []model.ReaderInboxBulkConfirmation) ([]model.ReaderInboxBulkResult, error)
+}
+
+type ReaderInboxAIConfirmCommands interface {
+	ConfirmAIProposals(context.Context, model.ReaderInboxPartition) (model.ReaderInboxAIProposalConfirmation, error)
+}
+
+// ReaderFeedFeedbackCommands owns feed feedback that may create, restore, or
+// trash a Feed-managed Link.
+type ReaderFeedFeedbackCommands interface {
+	FeedbackFeed(context.Context, string, string) (model.ReaderFeedFeedback, error)
+}
+
+// ReaderHostRestoreCommands owns polymorphic host restoration. Link restores
+// can schedule durable parse work; Note and Inbox restores use the same
+// application command without exposing transaction details.
+type ReaderHostRestoreCommands interface {
+	RestoreHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error)
 }
 
 type SubmitLinkCommand struct {
@@ -90,27 +102,19 @@ type RequeueLinkCommand struct {
 	Capture *LinkCapture
 }
 
-type UpdateLinkIntentCommand struct {
-	LinkID uuid.UUID
-	Kind   model.RequestedLibraryKind
-	Source model.RequestedLibraryKindSource
+type SetLinkLibraryKindCommand struct {
+	LinkID   uuid.UUID
+	Kind     model.LibraryKind
+	Override bool
 }
 
-type UpdateLinkIntentResult struct {
+type SetLinkLibraryKindResult struct {
 	Status model.LinkStatus
-	Job    *model.ParseJob
-}
-
-type SubmitLinksBatchCommand struct {
-	Captures []LinkCapture
 }
 
 type LinkSubmissionResult struct {
 	Link     *model.Link
-	Job      *model.ParseJob
-	Inserted bool
-	Restored bool
-	Error    error
+	Enqueued bool
 }
 
 // LinkSubmissionCommands is the consumer-owned seam for product state and
@@ -118,8 +122,7 @@ type LinkSubmissionResult struct {
 type LinkSubmissionCommands interface {
 	SubmitLink(context.Context, SubmitLinkCommand) (LinkSubmissionResult, error)
 	RequeueLink(context.Context, RequeueLinkCommand) (LinkSubmissionResult, error)
-	UpdateLinkIntent(context.Context, UpdateLinkIntentCommand) (UpdateLinkIntentResult, error)
-	SubmitLinksBatch(context.Context, SubmitLinksBatchCommand) ([]LinkSubmissionResult, error)
+	SetLinkLibraryKind(context.Context, SetLinkLibraryKindCommand) (SetLinkLibraryKindResult, error)
 }
 
 type ConvertLinkCommand struct {
@@ -139,7 +142,6 @@ type ConvertLinkResult struct {
 	SiteID          *uuid.UUID
 	SiteRevision    *int64
 	EntryID         *uuid.UUID
-	ParseJobID      *uuid.UUID
 }
 
 type LinkConversionCommands interface {

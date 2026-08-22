@@ -44,12 +44,12 @@ export const MSG_CAPTURE_STATUS_UPDATE = 'webtag:capture-status-update'
  * 的本地抓取窗口）与 `still-processing`（轮询预算耗尽但任务仍在后端解析）
  * ——共七态。
  *
- * 与后端 JobStatus 的映射关系（见 capture-poll.ts mapJobStatus）：
+ * 与后端 Link.status 的映射关系（见 capture-poll.ts mapLinkStatus）：
  *   - 后端 pending             → submitted（已提交）
  *   - 后端 processing          → parsing（解析中）
  *   - 后端 done                → done（完成）
  *   - 后端 failed              → failed（失败）
- *   - 命中已 done 链接、无 job_id → done（完成）
+ *   - 命中已 done 链接 → done（完成）
  *
  * still-processing 与 failed 的区分（本次 UX 加固的核心）：
  *   扩展轮询预算（POLL_INTERVAL_MS × MAX_POLL_ATTEMPTS）耗尽时，若后端任务
@@ -84,7 +84,6 @@ export interface CaptureSnapshot {
   owner?: CaptureOwner
   requestedKind?: RequestedLibraryKind
   libraryKind?: FinalLibraryKind
-  predictedLibraryKind?: FinalLibraryKind
   /**
    * 失败原因文案 —— **仅** 后端任务失败时填充，存放后端返回的真实
    * error_msg / error_category（动态文案，非 i18n key）。popup 原样渲染。

@@ -11,6 +11,7 @@ import (
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/repository/repotest"
 )
@@ -39,46 +40,15 @@ func (s *searchFakeLinkStore) GetDetailByURL(_ context.Context, url string) (*re
 	return detailForTest(s.byURL[url]), nil
 }
 
-// stubQueryEmbedder is a scripted RetrievalEmbedder for the q= vectorization
-// path. enabled / err / vec are set per test to exercise the on / off /
-// failure branches.
-type stubQueryEmbedder struct {
-	enabled bool
-	vec     []float32
-	err     error
-	calls   int
-}
-
-func (e *stubQueryEmbedder) Embed(_ context.Context, inputs []string) ([][]float32, error) {
-	e.calls++
-	if e.err != nil {
-		return nil, e.err
-	}
-	out := make([][]float32, len(inputs))
-	for i := range inputs {
-		out[i] = e.vec
-	}
-	return out, nil
-}
-func (e *stubQueryEmbedder) Model() string { return "test-model" }
-func (e *stubQueryEmbedder) Enabled() bool { return e.enabled }
-
 func doneLink(id uuid.UUID) model.Link {
 	return model.Link{ID: id, URL: "https://example.com/" + id.String(), Status: model.LinkStatusDone}
 }
 
-// TestSearchVectorizesAndSetsHybridFilter: with an enabled embedder a non-blank
-// q vectorizes the query and the filter carries Query + QueryEmbedding +
-// EmbeddingModel (semantic leg on). Response Total == len(items), no pagination
-// fields.
-func TestSearchVectorizesAndSetsHybridFilter(t *testing.T) {
+func TestSearchSetsKeywordFilter(t *testing.T) {
 	t.Parallel()
 	id := uuid.New()
 	store := &searchFakeLinkStore{listResult: []model.Link{doneLink(id)}, listTotal: 1}
-	svc := NewLinkReadService(LinkReadServiceOptions{
-		Links:         store,
-		QueryEmbedder: &stubQueryEmbedder{enabled: true, vec: []float32{0.1, 0.2}},
-	})
+	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	resp, err := svc.List(context.Background(), dto.ListLinksRequest{Query: "vector database", Page: 3, After: "ignored"})
 	if err != nil {
@@ -87,52 +57,11 @@ func TestSearchVectorizesAndSetsHybridFilter(t *testing.T) {
 	if store.lastFilter == nil || store.lastFilter.Query == nil || *store.lastFilter.Query != "vector database" {
 		t.Fatalf("filter.Query not set to trimmed query: %+v", store.lastFilter)
 	}
-	if len(store.lastFilter.QueryEmbedding) == 0 || store.lastFilter.EmbeddingModel != "test-model" {
-		t.Fatalf("semantic leg not armed: emb=%v model=%q", store.lastFilter.QueryEmbedding, store.lastFilter.EmbeddingModel)
+	if store.lastFilter.Limit != searchResponseLimit {
+		t.Fatalf("filter.Limit = %d, want %d", store.lastFilter.Limit, searchResponseLimit)
 	}
 	if resp.Total != 1 || len(resp.Items) != 1 || resp.NextCursor != nil || resp.Page != 0 {
 		t.Fatalf("unexpected response shape: total=%d items=%d page=%d cursor=%v", resp.Total, len(resp.Items), resp.Page, resp.NextCursor)
-	}
-}
-
-// TestSearchDegradesWhenEmbedderDisabled: a disabled embedder leaves the
-// semantic leg off (QueryEmbedding nil) but still enters hybrid mode (Query
-// set) — the repo runs pure ILIKE.
-func TestSearchDegradesWhenEmbedderDisabled(t *testing.T) {
-	t.Parallel()
-	store := &searchFakeLinkStore{}
-	svc := NewLinkReadService(LinkReadServiceOptions{
-		Links:         store,
-		QueryEmbedder: &stubQueryEmbedder{enabled: false},
-	})
-
-	if _, err := svc.List(context.Background(), dto.ListLinksRequest{Query: "rust"}); err != nil {
-		t.Fatalf("List q=: %v", err)
-	}
-	if store.lastFilter == nil || store.lastFilter.Query == nil {
-		t.Fatal("hybrid mode not entered")
-	}
-	if len(store.lastFilter.QueryEmbedding) != 0 || store.lastFilter.EmbeddingModel != "" {
-		t.Fatalf("semantic leg should be off when embedder disabled: %+v", store.lastFilter)
-	}
-}
-
-// TestSearchDegradesOnVectorizationError: an embedding error degrades to ILIKE
-// (QueryEmbedding nil) without surfacing an error to the caller.
-func TestSearchDegradesOnVectorizationError(t *testing.T) {
-	t.Parallel()
-	store := &searchFakeLinkStore{}
-	emb := &stubQueryEmbedder{enabled: true, err: errors.New("upstream down")}
-	svc := NewLinkReadService(LinkReadServiceOptions{Links: store, QueryEmbedder: emb})
-
-	if _, err := svc.List(context.Background(), dto.ListLinksRequest{Query: "rust"}); err != nil {
-		t.Fatalf("List q= must not surface embedding error: %v", err)
-	}
-	if emb.calls != 1 {
-		t.Fatalf("embedder calls = %d, want 1", emb.calls)
-	}
-	if len(store.lastFilter.QueryEmbedding) != 0 {
-		t.Fatal("vectorization error must leave semantic leg off")
 	}
 }
 
@@ -141,10 +70,7 @@ func TestSearchDegradesOnVectorizationError(t *testing.T) {
 func TestBlankQueryFallsThroughToList(t *testing.T) {
 	t.Parallel()
 	store := &searchFakeLinkStore{}
-	svc := NewLinkReadService(LinkReadServiceOptions{
-		Links:         store,
-		QueryEmbedder: &stubQueryEmbedder{enabled: true, vec: []float32{1}},
-	})
+	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	if _, err := svc.List(context.Background(), dto.ListLinksRequest{Query: "   ", Page: 2, Limit: 20}); err != nil {
 		t.Fatalf("List blank q=: %v", err)
@@ -169,8 +95,8 @@ func TestOverlongQueryReturns422(t *testing.T) {
 		long[i] = 'a'
 	}
 	_, err := svc.List(context.Background(), dto.ListLinksRequest{Query: string(long)})
-	var he *httperr.Error
-	if !errors.As(err, &he) || he.HTTPStatus() != http.StatusUnprocessableEntity || he.HTTPErrorCode() != httperr.CodeQueryTooLong {
+	var he *problem.Error
+	if !errors.As(err, &he) || problemHTTPStatus(he) != http.StatusUnprocessableEntity || he.Code() != httperr.CodeQueryTooLong {
 		t.Fatalf("want 422 query_too_long, got %v", err)
 	}
 	if store.lastFilter != nil {
@@ -185,10 +111,7 @@ func TestURLTakesPrecedenceOverQuery(t *testing.T) {
 	id := uuid.New()
 	link := doneLink(id)
 	store := &searchFakeLinkStore{byURL: map[string]*model.Link{"https://github.com/astral-sh/uv": &link}}
-	svc := NewLinkReadService(LinkReadServiceOptions{
-		Links:         store,
-		QueryEmbedder: &stubQueryEmbedder{enabled: true, vec: []float32{1}},
-	})
+	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	resp, err := svc.List(context.Background(), dto.ListLinksRequest{URL: "https://github.com/astral-sh/uv", Query: "should be ignored"})
 	if err != nil {
@@ -229,8 +152,8 @@ func TestURLInvalidReturns422(t *testing.T) {
 	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	_, err := svc.List(context.Background(), dto.ListLinksRequest{URL: "not-a-url"})
-	var he *httperr.Error
-	if !errors.As(err, &he) || he.HTTPStatus() != http.StatusUnprocessableEntity {
+	var he *problem.Error
+	if !errors.As(err, &he) || problemHTTPStatus(he) != http.StatusUnprocessableEntity {
 		t.Fatalf("want 422 for invalid url, got %v", err)
 	}
 }
@@ -243,8 +166,8 @@ func TestSearchFilterRejectsBadContentType(t *testing.T) {
 	svc := NewLinkReadService(LinkReadServiceOptions{Links: store})
 
 	_, err := svc.List(context.Background(), dto.ListLinksRequest{Query: "rust", ContentType: "bogus"})
-	var he *httperr.Error
-	if !errors.As(err, &he) || he.HTTPStatus() != http.StatusUnprocessableEntity {
+	var he *problem.Error
+	if !errors.As(err, &he) || problemHTTPStatus(he) != http.StatusUnprocessableEntity {
 		t.Fatalf("want 422 for bad content_type in q= mode, got %v", err)
 	}
 	if store.lastFilter != nil {

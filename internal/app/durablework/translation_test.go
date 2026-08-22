@@ -11,36 +11,39 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"webtag/internal/contentdoc"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
-	"webtag/internal/observability"
 	"webtag/internal/repository"
 )
 
 type translationQueueStub struct {
-	jobID   int64
-	err     error
-	stage   model.TranslationJobsRolloutStage
-	command *model.TranslationScheduleCommand
+	jobID int64
+	err   error
+	seed  *model.TranslationAttemptSeed
 }
 
-func (q *translationQueueStub) EnqueueTranslationTx(_ context.Context, _ pgx.Tx, command model.TranslationScheduleCommand) (int64, error) {
-	copy := command
-	q.command = &copy
+func requireTranslationHTTPProblem(t *testing.T, err error) (httperr.StatusCarrier, httperr.ErrorCoder) {
+	t.Helper()
+	carrier, ok := httperr.As(err)
+	if !ok {
+		t.Fatalf("error = %v, want public HTTP problem", err)
+	}
+	coder, ok := carrier.(httperr.ErrorCoder)
+	if !ok {
+		t.Fatalf("error = %v, want coded HTTP problem", err)
+	}
+	return carrier, coder
+}
+
+func (q *translationQueueStub) EnqueueTranslationTx(_ context.Context, _ pgx.Tx, seed model.TranslationAttemptSeed) (int64, error) {
+	copy := seed
+	q.seed = &copy
 	if q.err != nil {
 		return 0, q.err
 	}
 	return q.jobID, nil
-}
-
-func (q *translationQueueStub) TranslationJobsRollout() model.TranslationJobsRolloutStage {
-	if q.stage == "" {
-		return model.TranslationJobsRolloutStrictV2
-	}
-	return q.stage
 }
 
 func expectLockedPlainSource(mock pgxmock.PgxPoolIface, linkID uuid.UUID, revision int64, content, summary string) {
@@ -88,18 +91,16 @@ func durableTranslationRow(
 	id, linkID uuid.UUID,
 	revision *int64,
 	generation int64,
-	jobID *int64,
 ) *pgxmock.Rows {
 	now := time.Now().UTC()
 	return pgxmock.NewRows([]string{
 		"id", "link_id", "scope", "block_key", "start_offset", "end_offset",
 		"source_text", "translated_text", "source_format", "target_language", "source_hash",
-		"source_content_revision", "status", "model", "error_msg", "attempt_generation",
-		"current_river_job_id", "created_at", "updated_at",
+		"source_content_revision", "status", "model", "error_msg", "attempt_generation", "created_at", "updated_at",
 	}).AddRow(
 		id, linkID, "selection", "content", 0, 5, "hello", nil, "plain", "zh-CN",
 		"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
-		revision, "pending", nil, nil, generation, jobID, now, now,
+		revision, "pending", nil, nil, generation, now, now,
 	)
 }
 
@@ -107,18 +108,16 @@ func durableSummaryTranslationRow(
 	id, linkID uuid.UUID,
 	sourceHash string,
 	generation int64,
-	jobID *int64,
 ) *pgxmock.Rows {
 	now := time.Now().UTC()
 	return pgxmock.NewRows([]string{
 		"id", "link_id", "scope", "block_key", "start_offset", "end_offset",
 		"source_text", "translated_text", "source_format", "target_language", "source_hash",
-		"source_content_revision", "status", "model", "error_msg", "attempt_generation",
-		"current_river_job_id", "created_at", "updated_at",
+		"source_content_revision", "status", "model", "error_msg", "attempt_generation", "created_at", "updated_at",
 	}).AddRow(
 		id, linkID, "selection", "summary", 0, 5, "hello", nil, "plain", "zh-CN",
 		sourceHash,
-		nil, "pending", nil, nil, generation, jobID, now, now,
+		nil, "pending", nil, nil, generation, now, now,
 	)
 }
 
@@ -138,31 +137,23 @@ func TestTranslationSchedulerRejectsStaleRevisionBeforeAnyProductOrJobWrite(t *t
 	mock.ExpectRollback()
 
 	queue := &translationQueueStub{jobID: 41}
-	metrics := observability.NewMetrics()
 	scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
-		Transactions:         mock,
-		Products:             repository.NewPGXTranslationRepository(mock),
-		Queue:                queue,
-		StrictSourceIdentity: true,
-		Metrics:              metrics,
+		Transactions: mock,
+		Products:     repository.NewPGXTranslationRepository(mock),
+		Queue:        queue,
 	})
 	_, err = scheduler.Schedule(context.Background(), linkID, model.TranslationRequest{
 		Scope: model.TranslationScopeSelection, BlockKey: "content",
 		StartOffset: 0, EndOffset: 5, SourceText: "hello",
 		ExpectedContentRevision: &expected,
 	}, time.Hour)
-	var status httperr.StatusCarrier
-	var code httperr.ErrorCoder
-	if !errors.As(err, &status) || status.HTTPStatus() != 409 ||
-		!errors.As(err, &code) || code.HTTPErrorCode() != httperr.CodeContentRevisionConflict {
+	status, code := requireTranslationHTTPProblem(t, err)
+	if status.HTTPStatus() != 409 || code.HTTPErrorCode() != httperr.CodeContentRevisionConflict {
 		t.Fatalf("Schedule() error = %v, want 409/%s", err, httperr.CodeContentRevisionConflict)
 	}
-	if queue.command != nil {
-		t.Fatalf("stale request enqueued command %+v", *queue.command)
+	if queue.seed != nil {
+		t.Fatalf("stale request enqueued seed %+v", *queue.seed)
 	}
-	assertTranslationSourceOutcome(t, metrics, "content_revision_conflict", 1)
-	assertTranslationSourceOutcome(t, metrics, "verified_schedule", 0)
-	assertTranslationSourceOutcome(t, metrics, "legacy_unverified_write", 0)
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -244,10 +235,9 @@ func TestTranslationSchedulerPrioritizesStaleSavedRevisionAndReturnsCanonicalBlo
 
 			queue := &translationQueueStub{jobID: 41}
 			scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
-				Transactions:         mock,
-				Products:             repository.NewPGXTranslationRepository(mock),
-				Queue:                queue,
-				StrictSourceIdentity: true,
+				Transactions: mock,
+				Products:     repository.NewPGXTranslationRepository(mock),
+				Queue:        queue,
 			})
 			item, err := scheduler.Schedule(
 				context.Background(),
@@ -258,14 +248,12 @@ func TestTranslationSchedulerPrioritizesStaleSavedRevisionAndReturnsCanonicalBlo
 			if item != nil {
 				t.Fatalf("Schedule() item = %+v, want nil", item)
 			}
-			var status httperr.StatusCarrier
-			var coder httperr.ErrorCoder
-			if !errors.As(err, &status) || status.HTTPStatus() != http.StatusConflict ||
-				!errors.As(err, &coder) || coder.HTTPErrorCode() != httperr.CodeContentRevisionConflict {
+			status, coder := requireTranslationHTTPProblem(t, err)
+			if status.HTTPStatus() != http.StatusConflict || coder.HTTPErrorCode() != httperr.CodeContentRevisionConflict {
 				t.Fatalf("Schedule() error = %v, want 409/%s", err, httperr.CodeContentRevisionConflict)
 			}
-			var identityProvider httperr.CurrentIdentityProvider
-			if !errors.As(err, &identityProvider) {
+			identityProvider, ok := status.(httperr.CurrentIdentityProvider)
+			if !ok {
 				t.Fatalf("Schedule() error = %v, want current identity", err)
 			}
 			identity, ok := identityProvider.HTTPCurrentIdentity()
@@ -274,8 +262,8 @@ func TestTranslationSchedulerPrioritizesStaleSavedRevisionAndReturnsCanonicalBlo
 				t.Fatalf("current identity = %+v/%v, want revision %d/block %s",
 					identity, ok, tc.source.ContentRevision, tc.wantBlockKey)
 			}
-			if queue.command != nil {
-				t.Fatalf("stale request enqueued command %+v", *queue.command)
+			if queue.seed != nil {
+				t.Fatalf("stale request enqueued seed %+v", *queue.seed)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("unmet expectations: %v", err)
@@ -300,95 +288,23 @@ func TestTranslationSchedulerCountsCanonicalSourceBlockConflict(t *testing.T) {
 	mock.ExpectRollback()
 
 	queue := &translationQueueStub{jobID: 41}
-	metrics := observability.NewMetrics()
 	scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
-		Transactions:         mock,
-		Products:             repository.NewPGXTranslationRepository(mock),
-		Queue:                queue,
-		StrictSourceIdentity: true,
-		Metrics:              metrics,
+		Transactions: mock,
+		Products:     repository.NewPGXTranslationRepository(mock),
+		Queue:        queue,
 	})
 	_, err = scheduler.Schedule(context.Background(), linkID, model.TranslationRequest{
 		Scope: model.TranslationScopeSelection, BlockKey: "content",
 		StartOffset: 0, EndOffset: 5, SourceText: "HELLO",
 		ExpectedContentRevision: &revision,
 	}, time.Hour)
-	var code httperr.ErrorCoder
-	if !errors.As(err, &code) || code.HTTPErrorCode() != httperr.CodeSourceBlockConflict {
+	_, code := requireTranslationHTTPProblem(t, err)
+	if code.HTTPErrorCode() != httperr.CodeSourceBlockConflict {
 		t.Fatalf("Schedule() error = %v, want %s", err, httperr.CodeSourceBlockConflict)
 	}
-	if queue.command != nil {
-		t.Fatalf("mismatched source enqueued command %+v", *queue.command)
+	if queue.seed != nil {
+		t.Fatalf("mismatched source enqueued seed %+v", *queue.seed)
 	}
-	assertTranslationSourceOutcome(t, metrics, "source_block_conflict", 1)
-	assertTranslationSourceOutcome(t, metrics, "content_revision_conflict", 0)
-	assertTranslationSourceOutcome(t, metrics, "verified_schedule", 0)
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
-func TestTranslationSchedulerCountsSchemaTransitionConflict(t *testing.T) {
-	t.Parallel()
-
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock.NewPool() error = %v", err)
-	}
-	defer mock.Close()
-
-	linkID, legacyTranslationID := uuid.New(), uuid.New()
-	revision, legacyRevision := int64(8), int64(7)
-	mock.ExpectBegin()
-	expectLockedPlainSource(mock, linkID, revision, "hello world", "summary")
-	for attempt := 0; attempt < 2; attempt++ {
-		mock.ExpectQuery(regexp.QuoteMeta("source_content_revision = $6 AND target_language = $7 FOR UPDATE")).
-			WithArgs(linkID, model.TranslationScopeSelection, "content", 0, 5, revision, model.TranslationTargetChinese).
-			WillReturnError(pgx.ErrNoRows)
-		if attempt == 0 {
-			mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO link_translations")).
-				WithArgs(
-					linkID, model.TranslationScopeSelection, "content", 0, 5,
-					"hello", model.TranslationFormatPlain, model.TranslationTargetChinese,
-					"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", &revision,
-				).
-				WillReturnError(pgx.ErrNoRows)
-		}
-	}
-	mock.ExpectQuery(regexp.QuoteMeta("ORDER BY source_content_revision NULLS FIRST, id")).
-		WithArgs(
-			linkID, model.TranslationScopeSelection, "content", 0, 5,
-			"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
-			model.TranslationTargetChinese,
-		).
-		WillReturnRows(durableTranslationRow(legacyTranslationID, linkID, &legacyRevision, 1, nil))
-	mock.ExpectRollback()
-
-	queue := &translationQueueStub{jobID: 41}
-	metrics := observability.NewMetrics()
-	scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
-		Transactions:         mock,
-		Products:             repository.NewPGXTranslationRepository(mock),
-		Queue:                queue,
-		StrictSourceIdentity: true,
-		Metrics:              metrics,
-	})
-	_, err = scheduler.Schedule(context.Background(), linkID, model.TranslationRequest{
-		Scope: model.TranslationScopeSelection, BlockKey: "content",
-		StartOffset: 0, EndOffset: 5, SourceText: "hello",
-		ExpectedContentRevision: &revision,
-	}, time.Hour)
-	var code httperr.ErrorCoder
-	if !errors.As(err, &code) || code.HTTPErrorCode() != httperr.CodeTranslationSchemaTransition {
-		t.Fatalf("Schedule() error = %v, want %s", err, httperr.CodeTranslationSchemaTransition)
-	}
-	if queue.command != nil {
-		t.Fatalf("schema transition conflict enqueued command %+v", *queue.command)
-	}
-	assertTranslationSourceOutcome(t, metrics, httperr.CodeTranslationSchemaTransition, 1)
-	assertTranslationSourceOutcome(t, metrics, "content_revision_conflict", 0)
-	assertTranslationSourceOutcome(t, metrics, "source_block_conflict", 0)
-	assertTranslationSourceOutcome(t, metrics, "verified_schedule", 0)
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -409,25 +325,19 @@ func TestTranslationSchedulerDoesNotMisclassifyUnrelatedValidationFailure(t *tes
 	expectLockedPlainSource(mock, linkID, revision, "hello world", "summary")
 	mock.ExpectRollback()
 
-	metrics := observability.NewMetrics()
 	scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
-		Transactions:         mock,
-		Products:             repository.NewPGXTranslationRepository(mock),
-		Queue:                &translationQueueStub{jobID: 41},
-		StrictSourceIdentity: true,
-		Metrics:              metrics,
+		Transactions: mock,
+		Products:     repository.NewPGXTranslationRepository(mock),
+		Queue:        &translationQueueStub{jobID: 41},
 	})
 	_, err = scheduler.Schedule(context.Background(), linkID, model.TranslationRequest{
 		Scope: model.TranslationScopeSelection, BlockKey: "content",
 		StartOffset: 0, EndOffset: 1, SourceText: "h",
 		ExpectedContentRevision: &revision,
 	}, time.Hour)
-	var code httperr.ErrorCoder
-	if !errors.As(err, &code) || code.HTTPErrorCode() != httperr.CodeTranslationInvalidRequest {
+	_, code := requireTranslationHTTPProblem(t, err)
+	if code.HTTPErrorCode() != httperr.CodeTranslationInvalidRequest {
 		t.Fatalf("Schedule() error = %v, want %s", err, httperr.CodeTranslationInvalidRequest)
-	}
-	for _, outcome := range translationSourceMetricOutcomes() {
-		assertTranslationSourceOutcome(t, metrics, outcome, 0)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -449,17 +359,14 @@ func TestTranslationSchedulerDoesNotCountReusableProductAsNewSchedule(t *testing
 	expectLockedPlainSource(mock, linkID, revision, "hello world", "summary")
 	mock.ExpectQuery(regexp.QuoteMeta("source_content_revision = $6 AND target_language = $7 FOR UPDATE")).
 		WithArgs(linkID, model.TranslationScopeSelection, "content", 0, 5, revision, model.TranslationTargetChinese).
-		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1, ptr(int64(41))))
+		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1))
 	mock.ExpectCommit()
 
 	queue := &translationQueueStub{jobID: 42}
-	metrics := observability.NewMetrics()
 	scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
-		Transactions:         mock,
-		Products:             repository.NewPGXTranslationRepository(mock),
-		Queue:                queue,
-		StrictSourceIdentity: true,
-		Metrics:              metrics,
+		Transactions: mock,
+		Products:     repository.NewPGXTranslationRepository(mock),
+		Queue:        queue,
 	})
 	got, err := scheduler.Schedule(context.Background(), linkID, model.TranslationRequest{
 		Scope: model.TranslationScopeSelection, BlockKey: "content",
@@ -469,11 +376,8 @@ func TestTranslationSchedulerDoesNotCountReusableProductAsNewSchedule(t *testing
 	if err != nil || got == nil || got.ID != translationID {
 		t.Fatalf("Schedule() = %+v, %v, want reusable product", got, err)
 	}
-	if queue.command != nil {
-		t.Fatalf("reusable product enqueued command %+v", *queue.command)
-	}
-	for _, outcome := range translationSourceMetricOutcomes() {
-		assertTranslationSourceOutcome(t, metrics, outcome, 0)
+	if queue.seed != nil {
+		t.Fatalf("reusable product enqueued seed %+v", *queue.seed)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -503,20 +407,14 @@ func TestTranslationSchedulerCommitsProductAndRiverJobAsOneOperation(t *testing.
 			"hello", model.TranslationFormatPlain, model.TranslationTargetChinese,
 			"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", &revision,
 		).
-		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1, nil))
-	mock.ExpectQuery(regexp.QuoteMeta("UPDATE link_translations")).
-		WithArgs(jobID, translationID, int64(1)).
-		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1, ptr(jobID)))
+		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1))
 	mock.ExpectCommit()
 
 	queue := &translationQueueStub{jobID: jobID}
-	metrics := observability.NewMetrics()
 	scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
-		Transactions:         mock,
-		Products:             repository.NewPGXTranslationRepository(mock),
-		Queue:                queue,
-		StrictSourceIdentity: true,
-		Metrics:              metrics,
+		Transactions: mock,
+		Products:     repository.NewPGXTranslationRepository(mock),
+		Queue:        queue,
 	})
 	ctx := context.Background()
 	got, err := scheduler.Schedule(ctx, linkID, model.TranslationRequest{
@@ -524,72 +422,15 @@ func TestTranslationSchedulerCommitsProductAndRiverJobAsOneOperation(t *testing.
 		StartOffset: 0, EndOffset: 5, SourceText: "hello",
 		ExpectedContentRevision: &revision,
 	}, time.Hour)
-	if err != nil || got == nil || got.CurrentRiverJobID == nil || *got.CurrentRiverJobID != jobID {
+	if err != nil || got == nil || got.ID != translationID || got.AttemptGeneration != 1 {
 		t.Fatalf("Schedule() = %+v, %v", got, err)
 	}
-	if queue.command == nil || queue.command.Seed.TranslationID != translationID ||
-		queue.command.Seed.AttemptGeneration != 1 ||
-		queue.command.Seed.SourceHash != "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" ||
-		queue.command.Seed.SourceContentRevision == nil ||
-		*queue.command.Seed.SourceContentRevision != revision || queue.command.Previous != nil {
-		t.Fatalf("queue command = %+v", queue.command)
+	if queue.seed == nil || queue.seed.TranslationID != translationID ||
+		queue.seed.AttemptGeneration != 1 ||
+		queue.seed.SourceHash != "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" ||
+		queue.seed.SourceContentRevision == nil || *queue.seed.SourceContentRevision != revision {
+		t.Fatalf("queue seed = %+v", queue.seed)
 	}
-	assertTranslationSourceOutcome(t, metrics, "verified_schedule", 1)
-	assertTranslationSourceOutcome(t, metrics, "legacy_unverified_write", 0)
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
-func TestTranslationSchedulerCountsCommittedLegacyUnverifiedWrite(t *testing.T) {
-	t.Parallel()
-
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock.NewPool() error = %v", err)
-	}
-	defer mock.Close()
-
-	linkID, translationID := uuid.New(), uuid.New()
-	const jobID int64 = 42
-	mock.ExpectBegin()
-	expectLockedPlainSource(mock, linkID, 8, "hello world", "summary")
-	mock.ExpectQuery(regexp.QuoteMeta("source_hash = $6")).
-		WithArgs(
-			linkID, model.TranslationScopeSelection, "content", 0, 5,
-			"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
-			model.TranslationTargetChinese,
-		).
-		WillReturnError(pgx.ErrNoRows)
-	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO link_translations")).
-		WithArgs(
-			linkID, model.TranslationScopeSelection, "content", 0, 5,
-			"hello", model.TranslationFormatPlain, model.TranslationTargetChinese,
-			"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", (*int64)(nil),
-		).
-		WillReturnRows(durableTranslationRow(translationID, linkID, nil, 1, nil))
-	mock.ExpectQuery(regexp.QuoteMeta("UPDATE link_translations")).
-		WithArgs(jobID, translationID, int64(1)).
-		WillReturnRows(durableTranslationRow(translationID, linkID, nil, 1, ptr(jobID)))
-	mock.ExpectCommit()
-
-	metrics := observability.NewMetrics()
-	scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
-		Transactions: mock,
-		Products:     repository.NewPGXTranslationRepository(mock),
-		Queue:        &translationQueueStub{jobID: jobID},
-		Metrics:      metrics,
-	})
-	ctx := context.Background()
-	got, err := scheduler.Schedule(ctx, linkID, model.TranslationRequest{
-		Scope: model.TranslationScopeSelection, BlockKey: "content",
-		StartOffset: 0, EndOffset: 5, SourceText: "hello",
-	}, time.Hour)
-	if err != nil || got == nil || got.SourceContentRevision != nil {
-		t.Fatalf("Schedule() = %+v, %v, want committed legacy-unverified row", got, err)
-	}
-	assertTranslationSourceOutcome(t, metrics, "legacy_unverified_write", 1)
-	assertTranslationSourceOutcome(t, metrics, "verified_schedule", 0)
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -622,19 +463,13 @@ func TestTranslationSchedulerCountsVerifiedSummaryHashSchedule(t *testing.T) {
 			"hello", model.TranslationFormatPlain, model.TranslationTargetChinese,
 			summaryIdentity, (*int64)(nil),
 		).
-		WillReturnRows(durableSummaryTranslationRow(translationID, linkID, summaryIdentity, 1, nil))
-	mock.ExpectQuery(regexp.QuoteMeta("UPDATE link_translations")).
-		WithArgs(jobID, translationID, int64(1)).
-		WillReturnRows(durableSummaryTranslationRow(translationID, linkID, summaryIdentity, 1, ptr(jobID)))
+		WillReturnRows(durableSummaryTranslationRow(translationID, linkID, summaryIdentity, 1))
 	mock.ExpectCommit()
 
-	metrics := observability.NewMetrics()
 	scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
-		Transactions:         mock,
-		Products:             repository.NewPGXTranslationRepository(mock),
-		Queue:                &translationQueueStub{jobID: jobID},
-		StrictSourceIdentity: true,
-		Metrics:              metrics,
+		Transactions: mock,
+		Products:     repository.NewPGXTranslationRepository(mock),
+		Queue:        &translationQueueStub{jobID: jobID},
 	})
 	ctx := context.Background()
 	got, err := scheduler.Schedule(ctx, linkID, model.TranslationRequest{
@@ -645,8 +480,6 @@ func TestTranslationSchedulerCountsVerifiedSummaryHashSchedule(t *testing.T) {
 	if err != nil || got == nil || got.SourceHash != summaryIdentity || got.SourceContentRevision != nil {
 		t.Fatalf("Schedule() = %+v, %v, want verified domain-separated summary product", got, err)
 	}
-	assertTranslationSourceOutcome(t, metrics, "verified_schedule", 1)
-	assertTranslationSourceOutcome(t, metrics, "legacy_unverified_write", 0)
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -674,17 +507,14 @@ func TestTranslationSchedulerRollsBackProductWhenRiverInsertFails(t *testing.T) 
 			"hello", model.TranslationFormatPlain, model.TranslationTargetChinese,
 			"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", &revision,
 		).
-		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1, nil))
+		WillReturnRows(durableTranslationRow(translationID, linkID, &revision, 1))
 	mock.ExpectRollback()
 
 	queueErr := errors.New("river insert failed")
-	metrics := observability.NewMetrics()
 	scheduler := NewTranslationScheduler(TranslationSchedulerOptions{
-		Transactions:         mock,
-		Products:             repository.NewPGXTranslationRepository(mock),
-		Queue:                &translationQueueStub{err: queueErr},
-		StrictSourceIdentity: true,
-		Metrics:              metrics,
+		Transactions: mock,
+		Products:     repository.NewPGXTranslationRepository(mock),
+		Queue:        &translationQueueStub{err: queueErr},
 	})
 	ctx := context.Background()
 	_, err = scheduler.Schedule(ctx, linkID, model.TranslationRequest{
@@ -694,9 +524,6 @@ func TestTranslationSchedulerRollsBackProductWhenRiverInsertFails(t *testing.T) 
 	}, time.Hour)
 	if !errors.Is(err, queueErr) {
 		t.Fatalf("Schedule() error = %v, want queue error", err)
-	}
-	for _, outcome := range translationSourceMetricOutcomes() {
-		assertTranslationSourceOutcome(t, metrics, outcome, 0)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -739,7 +566,6 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 		name       string
 		source     repository.TranslationSourceSnapshot
 		req        model.TranslationRequest
-		strict     bool
 		wantCode   string
 		assertions func(*testing.T, repository.UpsertTranslationParams)
 	}{
@@ -750,7 +576,6 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 				Scope: model.TranslationScopeSelection, BlockKey: "content",
 				StartOffset: 1, EndOffset: 4, SourceText: "😀中", ExpectedContentRevision: &revision,
 			},
-			strict: true,
 			assertions: func(t *testing.T, got repository.UpsertTranslationParams) {
 				t.Helper()
 				if got.SourceContentRevision == nil || *got.SourceContentRevision != revision ||
@@ -766,7 +591,6 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 				Scope: model.TranslationScopeSelection, BlockKey: "content",
 				StartOffset: 1, EndOffset: 3, SourceText: "😀", ExpectedContentRevision: &revision,
 			},
-			strict: true,
 			assertions: func(t *testing.T, got repository.UpsertTranslationParams) {
 				t.Helper()
 				if got.SourceHash != hashTranslationSource("😀") {
@@ -781,7 +605,6 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 				Scope: model.TranslationScopeSelection, BlockKey: "content",
 				StartOffset: 1, EndOffset: 3, SourceText: nextLineText, ExpectedContentRevision: &revision,
 			},
-			strict: true,
 			assertions: func(t *testing.T, got repository.UpsertTranslationParams) {
 				t.Helper()
 				if got.SourceHash != hashTranslationSource(nextLineText) {
@@ -796,7 +619,6 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 				Scope: model.TranslationScopeSelection, BlockKey: "content",
 				StartOffset: 1, EndOffset: 3, SourceText: byteOrderMarkText, ExpectedContentRevision: &revision,
 			},
-			strict:   true,
 			wantCode: httperr.CodeTranslationInvalidRequest,
 		},
 		{
@@ -806,24 +628,9 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 				Scope: model.TranslationScopeSelection, BlockKey: "summary",
 				StartOffset: 0, EndOffset: 2, SourceText: "Hi", ExpectedSourceHash: &summaryHash,
 			},
-			strict: true,
 			assertions: func(t *testing.T, got repository.UpsertTranslationParams) {
 				t.Helper()
 				if got.SourceContentRevision != nil || got.SourceHash != summaryIdentity {
-					t.Fatalf("params = %+v", got)
-				}
-			},
-		},
-		{
-			name:   "compat summary keeps historical selection-text hash",
-			source: base,
-			req: model.TranslationRequest{
-				Scope: model.TranslationScopeSelection, BlockKey: "summary",
-				StartOffset: 0, EndOffset: 2, SourceText: "Hi",
-			},
-			assertions: func(t *testing.T, got repository.UpsertTranslationParams) {
-				t.Helper()
-				if got.SourceContentRevision != nil || got.SourceHash != hashTranslationSource("Hi") {
 					t.Fatalf("params = %+v", got)
 				}
 			},
@@ -834,7 +641,6 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 			req: model.TranslationRequest{
 				Scope: model.TranslationScopeFull, ExpectedContentRevision: &revision,
 			},
-			strict: true,
 			assertions: func(t *testing.T, got repository.UpsertTranslationParams) {
 				t.Helper()
 				if got.BlockKey != "content-document" || got.SourceText != document ||
@@ -845,27 +651,12 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 			},
 		},
 		{
-			name:   "compat saved request remains legacy unverified",
-			source: base,
-			req: model.TranslationRequest{
-				Scope: model.TranslationScopeSelection, BlockKey: "content",
-				StartOffset: 1, EndOffset: 4, SourceText: "😀中",
-			},
-			assertions: func(t *testing.T, got repository.UpsertTranslationParams) {
-				t.Helper()
-				if got.SourceContentRevision != nil {
-					t.Fatalf("legacy params unexpectedly verified: %+v", got)
-				}
-			},
-		},
-		{
 			name:   "strict saved request requires revision",
 			source: base,
 			req: model.TranslationRequest{
 				Scope: model.TranslationScopeSelection, BlockKey: "content",
 				StartOffset: 1, EndOffset: 4, SourceText: "😀中",
 			},
-			strict:   true,
 			wantCode: httperr.CodeTranslationInvalidRequest,
 		},
 		{
@@ -874,7 +665,6 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 			req: model.TranslationRequest{
 				Scope: model.TranslationScopeFull, ExpectedContentRevision: ptr(int64(7)),
 			},
-			strict:   true,
 			wantCode: httperr.CodeContentRevisionConflict,
 		},
 		{
@@ -884,7 +674,6 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 				Scope: model.TranslationScopeSelection, BlockKey: "summary",
 				StartOffset: 0, EndOffset: 2, SourceText: "Hi", ExpectedSourceHash: ptr("stale"),
 			},
-			strict:   true,
 			wantCode: httperr.CodeSourceBlockConflict,
 		},
 		{
@@ -894,17 +683,15 @@ func TestAuthoritativeTranslationParamsSourceIdentityMatrix(t *testing.T) {
 				Scope: model.TranslationScopeSelection, BlockKey: "dr",
 				StartOffset: 0, EndOffset: 2, SourceText: "DR", ExpectedSourceHash: &summaryHash,
 			},
-			strict:   true,
 			wantCode: httperr.CodeTranslationInvalidRequest,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := authoritativeTranslationParams(&tc.source, linkID, tc.req, tc.strict)
+			got, err := authoritativeTranslationParams(&tc.source, linkID, tc.req)
 			if tc.wantCode != "" {
-				var status httperr.StatusCarrier
-				var code httperr.ErrorCoder
-				if !errors.As(err, &status) || !errors.As(err, &code) || code.HTTPErrorCode() != tc.wantCode {
+				status, code := requireTranslationHTTPProblem(t, err)
+				if code.HTTPErrorCode() != tc.wantCode {
 					t.Fatalf("error = %v, want code %s", err, tc.wantCode)
 				}
 				if tc.wantCode == httperr.CodeTranslationInvalidRequest && status.HTTPStatus() != http.StatusUnprocessableEntity {
@@ -966,13 +753,13 @@ func TestAuthoritativeTranslationConflictsReturnCompleteCurrentIdentity(t *testi
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := authoritativeTranslationParams(&source, linkID, tc.request, true)
-			var coder httperr.ErrorCoder
-			if !errors.As(err, &coder) || coder.HTTPErrorCode() != tc.wantCode {
+			_, err := authoritativeTranslationParams(&source, linkID, tc.request)
+			status, coder := requireTranslationHTTPProblem(t, err)
+			if coder.HTTPErrorCode() != tc.wantCode {
 				t.Fatalf("error = %v, want %s", err, tc.wantCode)
 			}
-			var provider httperr.CurrentIdentityProvider
-			if !errors.As(err, &provider) {
+			provider, ok := status.(httperr.CurrentIdentityProvider)
+			if !ok {
 				t.Fatalf("error = %v, want current identity", err)
 			}
 			identity, ok := provider.HTTPCurrentIdentity()
@@ -984,7 +771,7 @@ func TestAuthoritativeTranslationConflictsReturnCompleteCurrentIdentity(t *testi
 	}
 }
 
-func TestTranslationSchedulingDecisionMatrix(t *testing.T) {
+func TestReusableTranslationDecisionMatrix(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
@@ -1010,37 +797,6 @@ func TestTranslationSchedulingDecisionMatrix(t *testing.T) {
 			}
 		})
 	}
-
-	if rolloutAllowsSchedule(model.TranslationJobsRolloutDrainV1.JobPolicy(), nil) {
-		t.Fatal("drain rollout admitted initial schedule")
-	}
-	if rolloutAllowsSchedule(model.TranslationJobsRolloutCompatV1.JobPolicy(), &model.LinkTranslation{}) {
-		t.Fatal("compat rollout admitted existing-row reschedule")
-	}
-	if !rolloutAllowsSchedule(model.TranslationJobsRolloutCompatV1.JobPolicy(), nil) {
-		t.Fatal("compat rollout rejected initial schedule")
-	}
-	if !rolloutAllowsSchedule(model.TranslationJobsRolloutStrictV2.JobPolicy(), &model.LinkTranslation{}) {
-		t.Fatal("strict rollout rejected existing-row reschedule")
-	}
 }
 
 func ptr[T any](value T) *T { return &value }
-
-func assertTranslationSourceOutcome(t *testing.T, metrics *observability.Metrics, outcome string, want float64) {
-	t.Helper()
-	got := testutil.ToFloat64(metrics.TranslationSourceOutcomesTotal.WithLabelValues(outcome))
-	if got != want {
-		t.Fatalf("translation source outcome %q = %v, want %v", outcome, got, want)
-	}
-}
-
-func translationSourceMetricOutcomes() []string {
-	return []string{
-		"legacy_unverified_write",
-		"verified_schedule",
-		"content_revision_conflict",
-		"source_block_conflict",
-		httperr.CodeTranslationSchemaTransition,
-	}
-}

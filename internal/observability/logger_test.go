@@ -226,8 +226,8 @@ func TestWithRequestID(t *testing.T) {
 //   - FromContext(ctx 里没装) 返回 nil
 //   - 注入后取出的就是同一个 *slog.Logger 指针
 //
-// 这条路径上承载的是 request-scoped logger（含 trace_id），整条链断会让
-// handler 写日志时拿不到 request_id 字段，trace 关联失效。
+// 这条路径承载 request-scoped logger；整条链断会让 handler 写日志时
+// 拿不到 request_id 字段。
 func TestContextWithLoggerAndFromContext(t *testing.T) {
 	t.Parallel()
 

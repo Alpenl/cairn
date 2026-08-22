@@ -29,20 +29,15 @@ type HTTPClient struct {
 
 // HTTPClientOptions 用于配置 HTTPClient：允许注入自定义 *http.Client、解析器、重试策略和 transport 包装器。
 type HTTPClientOptions struct {
-	Client             *http.Client
-	RetryAttempts      int
-	RetryDelay         time.Duration
-	AllowUnsafeTargets bool
-	LookupIP           hostLookup
-	// WrapTransport, when non-nil, is called after the base transport is
-	// constructed and replaces it with the returned RoundTripper. This is
-	// the intended hook for instrumentation layers (e.g. metrics) that
-	// must sit outside the SSRF-safe dialer without duplicating its logic.
-	WrapTransport func(http.RoundTripper) http.RoundTripper
+	Client        *http.Client
+	RetryAttempts int
+	RetryDelay    time.Duration
+	LookupIP      hostLookup
 	// Package-private deterministic seams used by safedial tests. Production
 	// callers cannot set them and always use net.Dialer plus the default budget.
 	dialContext           dialContextFunc
 	perAttemptDialTimeout time.Duration
+	allowUnsafeTargets    bool
 }
 
 // ErrUnsafeRedirect identifies redirects rejected before the next network
@@ -55,10 +50,17 @@ func NewHTTPClient(client *http.Client) *HTTPClient {
 	return NewHTTPClientWithOptions(HTTPClientOptions{Client: client})
 }
 
+func ensureHTTPClient(client *HTTPClient) *HTTPClient {
+	if client != nil {
+		return client
+	}
+	return NewHTTPClient(nil)
+}
+
 // NewHardenedHTTPClient returns a stock *http.Client that funnels every
 // request through the SSRF pre-flight + safe-dial transport. It is the
-// single convenience entry point for service-layer callers (analyzer,
-// embedding) that want plain http.Client semantics without managing
+// single convenience entry point for service-layer callers such as the
+// analyzer that want plain http.Client semantics without managing
 // the *HTTPClient retry surface. Centralising the construction here
 // means future SSRF-transport tweaks land in one place.
 func NewHardenedHTTPClient() *http.Client {
@@ -92,7 +94,7 @@ func NewHTTPClientWithOptions(opts HTTPClientOptions) *HTTPClient {
 	httpClient := &HTTPClient{
 		retryAttempts:         retryAttempts,
 		retryDelay:            retryDelay,
-		allowUnsafeTargets:    opts.AllowUnsafeTargets,
+		allowUnsafeTargets:    opts.allowUnsafeTargets,
 		lookupIP:              lookupIP,
 		perAttemptDialTimeout: opts.perAttemptDialTimeout,
 	}
@@ -132,15 +134,6 @@ func NewHTTPClientWithOptions(opts HTTPClientOptions) *HTTPClient {
 			// arxiv) under their own ctx timeout are unaffected.
 			Timeout: 60 * time.Second,
 		}
-	}
-
-	// If the caller provided a WrapTransport hook, apply it now so the
-	// instrumentation layer sits outside the safe dialer but inside the
-	// retry / SSRF-validation logic.  Only applied on the owned-transport
-	// path (client == nil above) because a caller-supplied *http.Client
-	// already has its transport managed externally.
-	if opts.WrapTransport != nil && opts.Client == nil && client.Transport != nil {
-		client.Transport = opts.WrapTransport(client.Transport)
 	}
 
 	httpClient.client = client

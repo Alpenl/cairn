@@ -17,6 +17,10 @@ func readerThoughtTodoSourceColumns() []string {
 	return []string{"body", "last_sequence", "host_kind", "host_id", "link_id"}
 }
 
+func readerExistingTodoProjectionColumns() []string {
+	return []string{"id", "origin_kind", "origin_host_id", "origin_ref", "deleted_at"}
+}
+
 func TestReplaceHostTodoProjectionsInsertsWhatTheHostEmits(t *testing.T) {
 	t.Parallel()
 
@@ -163,8 +167,7 @@ func TestReplaceHostTodoProjectionsReadsOnlyPublishedNoteContent(t *testing.T) {
 }
 
 // TestReaderChecklistTodosCarriesSourcePointer keeps the projection payload
-// identical to the one the reconcile pass writes, so a Home read and a write
-// path cannot flip a TODO's "jump to source" link back and forth.
+// stable across host writes, so a TODO's "jump to source" link cannot drift.
 func TestReaderChecklistTodosCarriesSourcePointer(t *testing.T) {
 	t.Parallel()
 

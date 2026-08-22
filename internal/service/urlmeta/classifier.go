@@ -249,13 +249,3 @@ func splitRawURL(rawURL string) (rawURLParts, bool) {
 		Path:   path,
 	}, true
 }
-
-// HasArticleParentSegment 报告某个父路径里是否含「文章类」路径段
-// （blog / posts / articles …）。
-//
-// 导出的是谓词而不是那张 map：library 分类器只需要这个判断，把 map 本身放出去
-// 等于让调用方也能改它——一个包级 map 被外部写一次，所有 URL 的判定都会跟着变，
-// 而且改的人不会知道自己动了什么。
-func HasArticleParentSegment(parent string) bool {
-	return hasArticleParent(strings.Split(strings.ToLower(parent), "/"))
-}

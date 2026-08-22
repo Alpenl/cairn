@@ -47,7 +47,7 @@ func normalizeReaderActivityKind(raw string) (string, error) {
 	}
 }
 
-func (s *ReaderVNextService) encodeReaderActivityCursor(ctx context.Context, queryKind string, item model.ReaderActivity) string {
+func (s *ReaderLibraryApplication) encodeReaderActivityCursor(ctx context.Context, queryKind string, item model.ReaderActivity) string {
 	payload, err := json.Marshal(readerActivityCursorPayload{
 		Version:        readerActivityCursorVersion,
 		QueryKind:      queryKind,
@@ -63,7 +63,7 @@ func (s *ReaderVNextService) encodeReaderActivityCursor(ctx context.Context, que
 	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signature)
 }
 
-func (s *ReaderVNextService) decodeReaderActivityCursor(ctx context.Context, queryKind, token string) (*model.ReaderActivityCursor, error) {
+func (s *ReaderLibraryApplication) decodeReaderActivityCursor(ctx context.Context, queryKind, token string) (*model.ReaderActivityCursor, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, nil
 	}

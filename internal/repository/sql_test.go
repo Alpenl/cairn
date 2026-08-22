@@ -15,8 +15,6 @@ func TestWriteQueriesSetUpdatedAtExplicitly(t *testing.T) {
 		"insertLinkSQL":         insertLinkSQL,
 		"updateLinkStateSQL":    updateLinkStateSQL,
 		"updateLinkAnalysisSQL": updateLinkAnalysisSQL,
-		"insertJobSQL":          insertJobSQL,
-		"updateJobStateSQL":     updateJobStateSQL,
 	} {
 		if !strings.Contains(query, "updated_at = NOW()") && !strings.Contains(query, "NOW(), NOW()") {
 			t.Fatalf("%s = %q, want explicit updated_at handling", name, query)
@@ -31,28 +29,16 @@ func TestReadQueriesStayOnExistingSchema(t *testing.T) {
 	// assembled inline by buildListDoneSQL alongside the status predicate,
 	// and its schema-drift coverage moved to TestBuildListDoneSQLStaysOnSchema
 	// (which now asserts on both the list and count query strings).
-	for name, query := range map[string]string{
-		"getLatestJobByLinkSQL": latestJobByLinkSQL,
-		"listTagCountsSQL":      listTagCountsSQL,
-	} {
-		if strings.Contains(query, "parse_jobs.stage") {
-			t.Fatalf("%s unexpectedly references non-schema field: %q", name, query)
-		}
-
-		if !strings.Contains(query, "links") && !strings.Contains(query, "parse_jobs") {
-			t.Fatalf("%s = %q, want existing links/parse_jobs tables only", name, query)
-		}
+	if !strings.Contains(listTagCountsSQL, "links") {
+		t.Fatalf("listTagCountsSQL = %q, want links table reference", listTagCountsSQL)
 	}
 }
 
 // TestBuildListDoneSQLStaysOnSchema replaces the schema-drift coverage
 // the static `listDoneLinksSQL` constant used to provide before Wave
 // 12.2 H4-C moved that query into the dynamically-built buildListDoneSQL
-// helper. The helper assembles the page query by concatenating
-// linkListColumnsWithTotal + filter clauses + LIMIT/OFFSET — a typo
-// that introduced e.g. `parse_jobs.stage` would now slip past the static
-// constant audit, so this test exercises the build helper directly with
-// every filter knob set.
+// helper. This test exercises the build helper directly with every filter
+// knob set so column and table drift cannot hide behind string assembly.
 func TestBuildListDoneSQLStaysOnSchema(t *testing.T) {
 	t.Parallel()
 
@@ -70,29 +56,9 @@ func TestBuildListDoneSQLStaysOnSchema(t *testing.T) {
 		"buildListDoneSQL.list":  listSQL,
 		"buildListDoneSQL.count": countSQL,
 	} {
-		if strings.Contains(query, "parse_jobs.stage") {
-			t.Fatalf("%s references non-schema field: %q", name, query)
-		}
 		if !strings.Contains(query, "links") {
 			t.Fatalf("%s = %q, want links table reference", name, query)
 		}
-	}
-}
-
-func TestParseEmbeddingWriteIsBoundToLatestDoneAttempt(t *testing.T) {
-	t.Parallel()
-	for _, predicate := range []string{
-		"l.status = 'done'",
-		"p.id = $2",
-		"p.status = 'done'",
-		"ORDER BY latest.created_at DESC, latest.id DESC",
-	} {
-		if !strings.Contains(updateLinkEmbeddingForParseSQL, predicate) {
-			t.Fatalf("parse embedding SQL missing %q: %s", predicate, updateLinkEmbeddingForParseSQL)
-		}
-	}
-	if strings.Contains(updateLinkEmbeddingForParseSQL, "tenant_id") {
-		t.Fatalf("parse embedding SQL retains tenant predicate: %s", updateLinkEmbeddingForParseSQL)
 	}
 }
 
@@ -254,31 +220,6 @@ func TestBuildListDoneSQLCreatedRangeIsHalfOpenAndComposable(t *testing.T) {
 	}
 	if len(cursorArgs) != 8 || cursorArgs[3] != from || cursorArgs[4] != before || cursorArgs[5] != cursorTime || cursorArgs[6] != cursorID || cursorArgs[7] != 30 {
 		t.Fatalf("cursor args = %#v, want range/cursor/limit positional order", cursorArgs)
-	}
-}
-
-// TestInsertJobSQLPrunesParseJobHistory pins the L-4 retention contract:
-// every job INSERT must also evaluate a row_number window over the link's
-// parse_jobs and DELETE rows ranked beyond parseJobsPerLinkRetention. A
-// regression that drops the pruning CTE (or returns to a plain INSERT)
-// would let parse_jobs grow unbounded for any link refreshed daily.
-func TestInsertJobSQLPrunesParseJobHistory(t *testing.T) {
-	t.Parallel()
-
-	if !strings.Contains(insertJobSQL, "WITH inserted AS") {
-		t.Fatalf("insertJobSQL missing inserted CTE: %q", insertJobSQL)
-	}
-	if !strings.Contains(insertJobSQL, "ROW_NUMBER() OVER") {
-		t.Fatalf("insertJobSQL missing ROW_NUMBER ranking: %q", insertJobSQL)
-	}
-	if !strings.Contains(insertJobSQL, "DELETE FROM parse_jobs") {
-		t.Fatalf("insertJobSQL missing prune DELETE: %q", insertJobSQL)
-	}
-	if !strings.Contains(insertJobSQL, "rn >= $2") {
-		t.Fatalf("insertJobSQL must prune rows past the retention cap arg: %q", insertJobSQL)
-	}
-	if parseJobsPerLinkRetention < 5 {
-		t.Fatalf("parseJobsPerLinkRetention = %d, want a meaningful debug history (>=5)", parseJobsPerLinkRetention)
 	}
 }
 

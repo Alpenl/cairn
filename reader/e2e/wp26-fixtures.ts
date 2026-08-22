@@ -23,15 +23,11 @@ interface Wp26Inbox {
   note: string
   summary: string
   suggested_tags: string[]
-  proposal_signals: Record<string, unknown>
-  proposal_status: 'pending' | 'running' | 'completed' | 'failed'
+  proposal_status: 'idle' | 'pending' | 'running' | 'completed' | 'failed'
   tags: string[]
-  category_ids: string[]
-  status: 'pending' | 'confirmed' | 'discarded'
+  status: 'pending' | 'confirmed'
   metadata_revision: number
-  job_id: string | null
   expires_at: string | null
-  expired_at: string | null
   expired: boolean
   created_at: string
   updated_at: string
@@ -117,7 +113,7 @@ interface Wp26Todo {
 interface Wp26FeedItem {
   key: string
   source: string
-  actions: string[]
+  resource_key: string
   title: string
   summary: string
   url: string
@@ -127,33 +123,7 @@ interface Wp26FeedItem {
   read: boolean
   read_later: boolean
   saved: boolean
-  score: number
-  score_contributions: {
-    pending_confirmation: number
-    saved_library: number
-    subscription_recent: number
-    unread: number
-    read_later: number
-    chronological_fallback: number
-  }
-  enabled_score_signals: string[]
-  reason_code: string
-  reason_params: Record<string, unknown>
-  reason_contribution: number
-  reason_text: string
-  published_at: string | null
   event_at: string
-  created_at: string
-}
-
-interface Wp26History {
-  id: number
-  revision: number
-  content: string | null
-  content_document: string | null
-  content_format: string
-  content_source: string
-  created_at: string
 }
 
 function clone<T>(value: T): T {
@@ -196,15 +166,11 @@ function makeInbox(overrides: Partial<Wp26Inbox> = {}): Wp26Inbox {
     note: '',
     summary: 'Captured summary',
     suggested_tags: ['capture'],
-    proposal_signals: {},
     proposal_status: 'completed',
     tags: ['capture'],
-    category_ids: [],
     status: 'pending',
     metadata_revision: 1,
-    job_id: null,
     expires_at: '2026-09-09T08:00:00Z',
-    expired_at: null,
     expired: false,
     created_at: NOW,
     updated_at: NOW,
@@ -264,12 +230,10 @@ function makeThought(overrides: Partial<Wp26Thought> = {}): Wp26Thought {
     source: 'user',
     deleted: false,
     last_sequence: 1,
-    // This seeded record predates the v1 client clock. The production API
-    // preserves its zero key explicitly rather than omitting it.
     winner_key: {
-      logical_clock: 0,
-      device_id: 'legacy-wp26-device',
-      op_id: 'legacy-wp26-thought-capture-1',
+      logical_clock: 1,
+      device_id: 'wp26-device',
+      op_id: 'wp26-thought-capture-1',
     },
     created_at: NOW,
     updated_at: NOW,
@@ -317,7 +281,7 @@ function makeFeedItem(overrides: Partial<Wp26FeedItem> = {}): Wp26FeedItem {
   return {
     key: 'link:link-capture-1',
     source: 'reading',
-    actions: ['read', 'read_later', 'save', 'unsave', 'hide', 'not_interested', 'open', 'open_workspace'],
+    resource_key: 'link:link-capture-1',
     title: 'Captured article',
     summary: 'Captured summary',
     url: 'https://capture.example.test/article',
@@ -327,48 +291,9 @@ function makeFeedItem(overrides: Partial<Wp26FeedItem> = {}): Wp26FeedItem {
     read: false,
     read_later: false,
     saved: false,
-    score: 20,
-    score_contributions: {
-      pending_confirmation: 0,
-      saved_library: 0,
-      subscription_recent: 0,
-      unread: 20,
-      read_later: 0,
-      chronological_fallback: 0,
-    },
-    enabled_score_signals: ['unread'],
-    reason_code: 'unread',
-    reason_params: { read: false },
-    reason_contribution: 20,
-    reason_text: '来自最近捕获的内容',
-    published_at: null,
     event_at: NOW,
-    created_at: NOW,
     ...overrides,
   }
-}
-
-function makeHistory(): Wp26History[] {
-  return [
-    {
-      id: 1,
-      revision: 1,
-      content: 'The original body before the edit.',
-      content_document: null,
-      content_format: 'plain',
-      content_source: 'fetched',
-      created_at: NOW,
-    },
-    {
-      id: 2,
-      revision: 2,
-      content: 'The edited body that is currently visible.',
-      content_document: null,
-      content_format: 'plain',
-      content_source: 'user',
-      created_at: NOW,
-    },
-  ]
 }
 
 export class Wp26BackendFixture {
@@ -379,13 +304,13 @@ export class Wp26BackendFixture {
   readonly notes = new Map<string, Wp26Note>()
   readonly todos = new Map<string, Wp26Todo>()
   readonly feed = new Map<string, Wp26FeedItem>([['link:link-capture-1', makeFeedItem()]])
-  readonly histories = new Map<string, Wp26History[]>([['link-capture-1', makeHistory()]])
   readonly engagement = new Map<string, { read: boolean; read_later: boolean; progress: number }>([
     ['link-capture-1', { read: false, read_later: false, progress: 0 }],
   ])
   private thoughtSequence = 0
   private nextNoteID = 2
   private nextTodoID = 2
+  private inboxDeleted = false
   private readonly aiEnabled: boolean
 
   constructor(options: Wp26BackendOptions = {}) {
@@ -421,10 +346,9 @@ export class Wp26BackendFixture {
       await fulfill(route, 200, {
         library_kinds: true,
         site_library: true,
-        site_auto_classification: true,
         site_management: true,
         site_advanced_management: true,
-        archive_versions: [1, 2],
+        archive_versions: [2],
         reader_vnext: true,
         reader: {
           annotations: true,
@@ -435,7 +359,7 @@ export class Wp26BackendFixture {
           home: true,
           feed: true,
           ai: this.aiEnabled,
-          semantic: true,
+          related_tags: true,
           activity: true,
           history: true,
           trash: true,
@@ -446,6 +370,7 @@ export class Wp26BackendFixture {
     if (url.pathname === '/api/ingest' && request.method() === 'POST') {
       const source = this.sourceFromIngest(body)
       Object.assign(this.inbox, source)
+      this.inboxDeleted = false
       await fulfill(route, 202, {
         inbox_id: this.inbox.id,
         destination: 'inbox',
@@ -455,8 +380,8 @@ export class Wp26BackendFixture {
     }
     if (url.pathname === '/api/inbox' && request.method() === 'GET') {
       const partition = url.searchParams.get('partition') === 'expired' ? 'expired' : 'active'
-      const active = this.inbox.status === 'pending' && !this.inbox.expired
-      const expired = this.inbox.status === 'pending' && this.inbox.expired
+      const active = !this.inboxDeleted && this.inbox.status === 'pending' && !this.inbox.expired
+      const expired = !this.inboxDeleted && this.inbox.status === 'pending' && this.inbox.expired
       await fulfill(route, 200, {
         items: partition === 'expired'
           ? (expired ? [clone(this.inbox)] : [])
@@ -479,14 +404,15 @@ export class Wp26BackendFixture {
         status: 'pending',
         updated_at: NOW,
       })
+      this.inboxDeleted = false
       await fulfill(route, 201, clone(this.inbox))
       return
     }
 
     const inboxID = matchID(url.pathname, '/api/inbox/')
-    if (inboxID && inboxID !== 'bulk' && inboxID !== 'jobs') {
+    if (inboxID && inboxID !== 'bulk') {
       if (request.method() === 'GET') {
-        await fulfill(route, inboxID === this.inbox.id ? 200 : 404, clone(this.inbox))
+        await fulfill(route, inboxID === this.inbox.id && !this.inboxDeleted ? 200 : 404, clone(this.inbox))
         return
       }
       if (request.method() === 'POST' && url.pathname.endsWith('/confirm')) {
@@ -496,14 +422,14 @@ export class Wp26BackendFixture {
         return
       }
       if (request.method() === 'POST' && url.pathname.endsWith('/discard')) {
-        this.inbox.status = 'discarded'
+        this.inboxDeleted = true
         await fulfill(route, 204, null)
         return
       }
       if (request.method() === 'POST' && url.pathname.endsWith('/restore')) {
         this.inbox.status = 'pending'
         this.inbox.expired = false
-        this.inbox.expired_at = null
+        this.inbox.expires_at = '2026-09-09T08:00:00Z'
         await fulfill(route, 204, null)
         return
       }
@@ -529,13 +455,6 @@ export class Wp26BackendFixture {
       return
     }
 
-    // The pending surface loads its category chips beside the inbox list, so
-    // the fixture answers with an empty catalogue instead of failing the load.
-    if (url.pathname === '/api/categories' && request.method() === 'GET') {
-      await fulfill(route, 200, { items: [] })
-      return
-    }
-
     const linkID = matchID(url.pathname, '/api/links/')
     if (linkID) {
       const link = this.links.get(linkID)
@@ -548,27 +467,6 @@ export class Wp26BackendFixture {
           content_source: 'fetched',
           content_revision: link.content_revision,
         } : { error: { message: 'link not found' } })
-        return
-      }
-      if (url.pathname.endsWith('/content-history') && request.method() === 'GET') {
-        await fulfill(route, link ? 200 : 404, { items: clone(this.histories.get(linkID) ?? []) })
-        return
-      }
-      if (url.pathname.includes('/content-history/') && url.pathname.endsWith('/restore') && request.method() === 'POST') {
-        if (!link) {
-          await fulfill(route, 404, { error: { message: 'link not found' } })
-          return
-        }
-        const historyID = Number(url.pathname.split('/').at(-2))
-        const history = (this.histories.get(linkID) ?? []).find((item) => item.id === historyID)
-        if (!history) {
-          await fulfill(route, 404, { error: { message: 'history not found' } })
-          return
-        }
-        link.content = history.content_document ?? history.content ?? ''
-        link.content_revision += 1
-        link.updated_at = NOW
-        await fulfill(route, 200, { link_id: link.id, content_revision: link.content_revision })
         return
       }
       if (request.method() === 'GET') {
@@ -598,8 +496,16 @@ export class Wp26BackendFixture {
         const operationKind = stringValue(op.operation_kind)
         const payload = isRecord(op.payload) ? op.payload : {}
         const target = op.target ?? {}
+        const logicalClock = typeof op.logical_clock === 'number' &&
+          Number.isSafeInteger(op.logical_clock) && op.logical_clock > 0
+          ? op.logical_clock
+          : null
+        if (op.contract_version !== 1 || logicalClock === null) {
+          await fulfill(route, 422, { error: { message: 'invalid Thought v1 operation' } })
+          return
+        }
         const submittedKey = {
-          logical_clock: typeof op.logical_clock === 'number' ? op.logical_clock : 0,
+          logical_clock: logicalClock,
           device_id: stringValue(op.device_id),
           op_id: stringValue(op.op_id),
         }
@@ -644,18 +550,6 @@ export class Wp26BackendFixture {
       return
     }
     const thoughtID = matchID(url.pathname, '/api/annotations/')
-    if (thoughtID && url.pathname.endsWith('/reattach') && request.method() === 'POST') {
-      const thought = this.thoughts.get(thoughtID)
-      if (thought) {
-        const input = isRecord(body) ? body : {}
-        thought.host_kind = stringValue(input.target_host_kind) || thought.host_kind
-        thought.host_id = stringValue(input.target_host_id) || thought.host_id
-        thought.link_id = thought.host_kind === 'link' ? thought.host_id : null
-        thought.last_sequence = ++this.thoughtSequence
-      }
-      await fulfill(route, thought ? 200 : 404, thought ? clone(thought) : { error: { message: 'thought not found' } })
-      return
-    }
     if (thoughtID && request.method() === 'GET') {
       const thought = this.thoughts.get(thoughtID)
       await fulfill(route, thought ? 200 : 404, thought ? clone(thought) : { error: { message: 'thought not found' } })
@@ -821,7 +715,7 @@ export class Wp26BackendFixture {
         const state = item.link_id ? this.engagement.get(item.link_id) : undefined
         return { ...item, read: state?.read ?? item.read, read_later: state?.read_later ?? item.read_later }
       })
-      await fulfill(route, 200, { items, snapshot_id: 'wp26-snapshot-1', mode })
+      await fulfill(route, 200, { items, mode })
       return
     }
     if (url.pathname === '/api/reader-feed/feedback' && request.method() === 'POST') {
@@ -833,10 +727,11 @@ export class Wp26BackendFixture {
         return
       }
       item.saved = action === 'save'
+      item.link_id = action === 'save' ? item.link_id ?? `saved-${item.feed_item_id ?? 'feed-item'}` : null
       await fulfill(route, 200, {
         item_key: item.key,
         action,
-        saved: item.saved,
+        ...(item.link_id ? { link_id: item.link_id } : {}),
       })
       return
     }
@@ -864,9 +759,9 @@ export class Wp26BackendFixture {
       today: '2026-08-10',
       summary: '继续整理捕获内容',
       counts: {
-        pending: this.inbox.status === 'pending' ? 1 : 0,
-        inbox: this.inbox.status === 'pending' && !this.inbox.expired ? 1 : 0,
-        inbox_expired: this.inbox.status === 'pending' && this.inbox.expired ? 1 : 0,
+        pending: !this.inboxDeleted && this.inbox.status === 'pending' ? 1 : 0,
+        inbox: !this.inboxDeleted && this.inbox.status === 'pending' && !this.inbox.expired ? 1 : 0,
+        inbox_expired: !this.inboxDeleted && this.inbox.status === 'pending' && this.inbox.expired ? 1 : 0,
         reading: this.links.size,
         sites: 0,
         subs: 0,

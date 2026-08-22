@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -15,9 +14,9 @@ import (
 	"webtag/internal/dto"
 	"webtag/internal/errsafe"
 	feedremote "webtag/internal/feed"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
 	"webtag/internal/observability"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -112,7 +111,11 @@ func NewFeedService(options FeedServiceOptions) *FeedService {
 	if now == nil {
 		now = time.Now
 	}
-	return &FeedService{store: options.Store, remote: options.Remote, analyzer: options.Analyzer, locker: options.Locker, logger: options.Logger, now: now}
+	locker := options.Locker
+	if locker == nil {
+		locker = noopURLLocker{}
+	}
+	return &FeedService{store: options.Store, remote: options.Remote, analyzer: options.Analyzer, locker: locker, logger: options.Logger, now: now}
 }
 
 func (s *FeedService) ListSubscriptions(ctx context.Context, rawURL string) (model.FeedSubscriptionsResponse, error) {
@@ -175,7 +178,7 @@ func (s *FeedService) UpdateSubscription(ctx context.Context, rawID string, comm
 	if command.Title != nil {
 		title := strings.TrimSpace(*command.Title)
 		if title == "" || utf8.RuneCountInString(title) > maxFeedTitleRunes {
-			return model.FeedSubscription{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_subscription_title", "subscription title must be between 1 and 1024 characters")
+			return model.FeedSubscription{}, problem.NewWithCode(problem.Invalid, "invalid_subscription_title", "subscription title must be between 1 and 1024 characters")
 		}
 		command.Title = &title
 	}
@@ -231,7 +234,7 @@ func (s *FeedService) GetItem(ctx context.Context, rawID string) (model.FeedItem
 		return model.FeedItem{}, err
 	}
 	if !found {
-		return model.FeedItem{}, httperr.NewWithCode(http.StatusNotFound, "feed_item_not_found", "feed item not found")
+		return model.FeedItem{}, problem.NewWithCode(problem.NotFound, "feed_item_not_found", "feed item not found")
 	}
 	return item, nil
 }
@@ -242,7 +245,7 @@ func (s *FeedService) UpdateItemState(ctx context.Context, rawID string, command
 		return model.FeedItem{}, err
 	}
 	if command.Read == nil && command.Starred == nil && command.ReadLater == nil {
-		return model.FeedItem{}, httperr.NewWithCode(http.StatusUnprocessableEntity, "feed_item_state_required", "at least one feed item state field is required")
+		return model.FeedItem{}, problem.NewWithCode(problem.Invalid, "feed_item_state_required", "at least one feed item state field is required")
 	}
 	item, err := s.store.UpdateItemState(ctx, id, repository.FeedItemStatePatch{
 		Read: command.Read, Starred: command.Starred, ReadLater: command.ReadLater,
@@ -289,11 +292,11 @@ func (s *FeedService) feedItemForAnalysis(ctx context.Context, id uuid.UUID) (mo
 		return model.FeedItem{}, "", err
 	}
 	if !found {
-		return model.FeedItem{}, "", httperr.NewWithCode(http.StatusNotFound, "feed_item_not_found", "feed item not found")
+		return model.FeedItem{}, "", problem.NewWithCode(problem.NotFound, "feed_item_not_found", "feed item not found")
 	}
 	itemURL, err := feedremote.ValidateURL(item.URL)
 	if err != nil {
-		return model.FeedItem{}, "", httperr.NewWithCode(http.StatusConflict, "feed_item_url_unavailable", "feed item has no analyzable public URL")
+		return model.FeedItem{}, "", problem.NewWithCode(problem.Conflict, "feed_item_url_unavailable", "feed item has no analyzable public URL")
 	}
 	return item, itemURL, nil
 }
@@ -304,7 +307,7 @@ func (s *FeedService) subscriptionForAnalysis(ctx context.Context, id uuid.UUID)
 		return model.FeedSubscription{}, err
 	}
 	if !found {
-		return model.FeedSubscription{}, httperr.NewWithCode(http.StatusNotFound, "subscription_not_found", "subscription not found")
+		return model.FeedSubscription{}, problem.NewWithCode(problem.NotFound, "subscription_not_found", "subscription not found")
 	}
 	return subscription, nil
 }
@@ -340,7 +343,7 @@ func (s *FeedService) associateAnalyzedFeedItem(ctx context.Context, itemID uuid
 		return model.FeedItem{}, err
 	}
 	if !found {
-		return model.FeedItem{}, httperr.NewWithCode(http.StatusNotFound, "feed_item_not_found", "feed item not found")
+		return model.FeedItem{}, problem.NewWithCode(problem.NotFound, "feed_item_not_found", "feed item not found")
 	}
 	return updated, nil
 }
@@ -404,8 +407,8 @@ func safeFeedRefreshError(err error) string {
 	if errors.Is(err, feedremote.ErrUnsupportedFeedDocument) || errors.Is(err, feedremote.ErrMalformedFeedDocument) {
 		return "feed content is not valid RSS, Atom, or RDF"
 	}
-	if carrier, ok := httperr.As(err); ok {
-		return carrier.HTTPMessage()
+	if carrier, ok := problem.As(err); ok {
+		return carrier.Message()
 	}
 	category := errsafe.ClassifyError(err)
 	if errors.Is(err, context.DeadlineExceeded) || category == "timeout" {
@@ -428,11 +431,11 @@ func normalizeFeedItemFilter(filter FeedItemFilter) (FeedItemFilter, error) {
 	switch filter.View {
 	case "all", "unread", "starred", "later":
 	default:
-		return filter, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_view", "feed view must be all, unread, starred, or later")
+		return filter, problem.NewWithCode(problem.Invalid, "invalid_feed_view", "feed view must be all, unread, starred, or later")
 	}
 	filter.Query = strings.TrimSpace(filter.Query)
 	if utf8.RuneCountInString(filter.Query) > maxFeedSearchRunes {
-		return filter, httperr.NewWithCode(http.StatusUnprocessableEntity, "feed_query_too_long", "feed search query exceeds length limit")
+		return filter, problem.NewWithCode(problem.Invalid, "feed_query_too_long", "feed search query exceeds length limit")
 	}
 	if filter.Page < 1 {
 		filter.Page = 1
@@ -504,7 +507,7 @@ func (s *FeedService) DeleteFolder(ctx context.Context, rawID string) error {
 func validateFeedFolderName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || utf8.RuneCountInString(name) > maxFeedFolderRunes {
-		return "", httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_feed_folder_name", "folder name must be between 1 and 128 characters")
+		return "", problem.NewWithCode(problem.Invalid, "invalid_feed_folder_name", "folder name must be between 1 and 128 characters")
 	}
 	return name, nil
 }
@@ -512,21 +515,21 @@ func validateFeedFolderName(name string) (string, error) {
 func parseFeedUUID(raw, code, message string) (uuid.UUID, error) {
 	id, err := uuid.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return uuid.Nil, httperr.NewWithCode(http.StatusBadRequest, code, message)
+		return uuid.Nil, problem.NewWithCode(problem.Malformed, code, message)
 	}
 	return id, nil
 }
 
 func mapFeedRepositoryError(err error, notFoundMessage string) error {
 	if errors.Is(err, repository.ErrNotFound) {
-		return httperr.NewWithCode(http.StatusNotFound, "feed_not_found", notFoundMessage)
+		return problem.NewWithCode(problem.NotFound, "feed_not_found", notFoundMessage)
 	}
 	return err
 }
 
 func mapFeedFolderError(err error) error {
 	if errors.Is(err, repository.ErrFeedFolderNameConflict) {
-		return httperr.NewWithCode(http.StatusConflict, "feed_folder_name_conflict", "a folder with this name already exists")
+		return problem.NewWithCode(problem.Conflict, "feed_folder_name_conflict", "a folder with this name already exists")
 	}
 	return err
 }
@@ -539,15 +542,9 @@ func pointerValue(value *string) string {
 }
 
 func (s *FeedService) withMutation(ctx context.Context, key string, fn func(context.Context) error) error {
-	if s.locker == nil {
-		return fn(ctx)
-	}
 	return s.locker.WithURL(ctx, key, fn)
 }
 
 func (s *FeedService) withMutations(ctx context.Context, keys []string, fn func(context.Context) error) error {
-	if s.locker == nil {
-		return fn(ctx)
-	}
 	return s.locker.WithURLs(ctx, keys, fn)
 }

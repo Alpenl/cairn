@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -19,58 +18,38 @@ import (
 
 	"webtag/internal/contentdoc"
 	"webtag/internal/database"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
-	"webtag/internal/observability"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
-const (
-	maxSelectionTranslationUTF16Units = 16_384
-
-	translationSourceOutcomeLegacyUnverifiedWrite    = "legacy_unverified_write"
-	translationSourceOutcomeVerifiedSchedule         = "verified_schedule"
-	translationSourceOutcomeContentRevisionConflict  = httperr.CodeContentRevisionConflict
-	translationSourceOutcomeSourceBlockConflict      = httperr.CodeSourceBlockConflict
-	translationSourceOutcomeSchemaTransitionConflict = httperr.CodeTranslationSchemaTransition
-)
+const maxSelectionTranslationUTF16Units = 16_384
 
 // TranslationQueue is the infrastructure-only River port. pgx stays here and
 // never appears on the linktranslation service-facing scheduler interface.
 type TranslationQueue interface {
-	EnqueueTranslationTx(context.Context, pgx.Tx, model.TranslationScheduleCommand) (int64, error)
-	TranslationJobsRollout() model.TranslationJobsRolloutStage
+	EnqueueTranslationTx(context.Context, pgx.Tx, model.TranslationAttemptSeed) (int64, error)
 }
 
 type TranslationSchedulerOptions struct {
 	Transactions database.TxBeginner
 	Products     *repository.PGXTranslationRepository
 	Queue        TranslationQueue
-	Metrics      *observability.Metrics
-
-	// StrictSourceIdentity rejects saved-content requests without an expected
-	// revision and summary requests without an expected block hash. False is
-	// the explicitly bounded compatibility window for legacy clients.
-	StrictSourceIdentity bool
 }
 
 type TranslationScheduler struct {
-	transactions         database.TxBeginner
-	products             *repository.PGXTranslationRepository
-	queue                TranslationQueue
-	metrics              *observability.Metrics
-	strictSourceIdentity bool
-	now                  func() time.Time
+	transactions database.TxBeginner
+	products     *repository.PGXTranslationRepository
+	queue        TranslationQueue
+	now          func() time.Time
 }
 
 func NewTranslationScheduler(opts TranslationSchedulerOptions) *TranslationScheduler {
 	return &TranslationScheduler{
-		transactions:         opts.Transactions,
-		products:             opts.Products,
-		queue:                opts.Queue,
-		metrics:              opts.Metrics,
-		strictSourceIdentity: opts.StrictSourceIdentity,
-		now:                  func() time.Time { return time.Now().UTC() },
+		transactions: opts.Transactions,
+		products:     opts.Products,
+		queue:        opts.Queue,
+		now:          func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -91,7 +70,6 @@ func (s *TranslationScheduler) Schedule(
 	var (
 		result    *model.LinkTranslation
 		scheduled bool
-		verified  bool
 	)
 	err := database.WithTx(ctx, s.transactions, func(tx pgx.Tx) error {
 		source, err := s.products.LockTranslationSourceTx(ctx, tx, linkID)
@@ -99,15 +77,12 @@ func (s *TranslationScheduler) Schedule(
 			return err
 		}
 		if source == nil {
-			return httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+			return problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 		}
-		params, err := authoritativeTranslationParams(source, linkID, req, s.strictSourceIdentity)
+		params, err := authoritativeTranslationParams(source, linkID, req)
 		if err != nil {
 			return err
 		}
-		verified = params.SourceContentRevision != nil || req.ExpectedSourceHash != nil
-		params.StallAfter = stallAfter
-
 		existing, err := s.products.FindTranslationIdentityTx(ctx, tx, params)
 		if err != nil {
 			return err
@@ -117,12 +92,6 @@ func (s *TranslationScheduler) Schedule(
 			return nil
 		}
 
-		policy := s.queue.TranslationJobsRollout().JobPolicy()
-		if !rolloutAllowsSchedule(policy, existing) {
-			return translationSchedulingUnavailableError()
-		}
-
-		var previous *model.TranslationAttempt
 		if existing == nil {
 			result, scheduled, err = s.products.InsertPendingTranslationTx(ctx, tx, params)
 			if err != nil {
@@ -134,27 +103,16 @@ func (s *TranslationScheduler) Schedule(
 					return err
 				}
 				if result == nil {
-					collision, collisionErr := s.products.FindLegacyTranslationCollisionTx(ctx, tx, params)
-					if collisionErr != nil {
-						return collisionErr
-					}
-					if collision != nil {
-						return translationSchemaTransitionError(source, params.BlockKey)
-					}
 					return errors.New("schedule translation: conflict row disappeared")
 				}
 				if reusableTranslation(result, params.Force, s.now(), stallAfter) {
 					return nil
-				}
-				if !rolloutAllowsSchedule(policy, result) {
-					return translationSchedulingUnavailableError()
 				}
 				existing = result
 			}
 		}
 
 		if !scheduled {
-			previous = supersededTranslationAttempt(existing)
 			result, err = s.products.AdvancePendingTranslationTx(ctx, tx, existing.ID)
 			if err != nil {
 				return err
@@ -168,56 +126,22 @@ func (s *TranslationScheduler) Schedule(
 			SourceHash:            result.SourceHash,
 			SourceContentRevision: result.SourceContentRevision,
 		}
-		riverJobID, err := s.queue.EnqueueTranslationTx(ctx, tx, model.TranslationScheduleCommand{
-			Seed:     seed,
-			Previous: previous,
-		})
+		riverJobID, err := s.queue.EnqueueTranslationTx(ctx, tx, seed)
 		if err != nil {
 			return err
 		}
 		if riverJobID <= 0 {
 			return fmt.Errorf("schedule translation: invalid River job ID %d", riverJobID)
 		}
-		result, err = s.products.BindCurrentTranslationAttemptTx(ctx, tx, seed, riverJobID)
-		return err
+		return nil
 	})
 	if err != nil {
-		s.recordTranslationSourceConflict(err)
 		return nil, fmt.Errorf("schedule translation: %w", err)
 	}
 	if result == nil {
 		return nil, errors.New("schedule translation: transaction returned nil product")
 	}
-	if scheduled {
-		outcome := translationSourceOutcomeLegacyUnverifiedWrite
-		if verified {
-			outcome = translationSourceOutcomeVerifiedSchedule
-		}
-		s.recordTranslationSourceOutcome(outcome)
-	}
 	return result, nil
-}
-
-func (s *TranslationScheduler) recordTranslationSourceOutcome(outcome string) {
-	if s == nil || s.metrics == nil || s.metrics.TranslationSourceOutcomesTotal == nil {
-		return
-	}
-	s.metrics.TranslationSourceOutcomesTotal.WithLabelValues(outcome).Inc()
-}
-
-func (s *TranslationScheduler) recordTranslationSourceConflict(err error) {
-	var coder httperr.ErrorCoder
-	if !errors.As(err, &coder) {
-		return
-	}
-	switch coder.HTTPErrorCode() {
-	case httperr.CodeContentRevisionConflict:
-		s.recordTranslationSourceOutcome(translationSourceOutcomeContentRevisionConflict)
-	case httperr.CodeSourceBlockConflict:
-		s.recordTranslationSourceOutcome(translationSourceOutcomeSourceBlockConflict)
-	case httperr.CodeTranslationSchemaTransition:
-		s.recordTranslationSourceOutcome(translationSourceOutcomeSchemaTransitionConflict)
-	}
 }
 
 //nolint:gocyclo // Scope and block branches are the closed source-identity protocol matrix; splitting them would scatter validation and stable conflict mapping.
@@ -225,32 +149,30 @@ func authoritativeTranslationParams(
 	source *repository.TranslationSourceSnapshot,
 	linkID uuid.UUID,
 	req model.TranslationRequest,
-	strict bool,
 ) (repository.UpsertTranslationParams, error) {
 	if err := rejectStaleSavedRevision(source, req); err != nil {
 		return repository.UpsertTranslationParams{}, err
 	}
 	if source.LibraryKind != nil && *source.LibraryKind == model.LibraryKindSite {
-		return repository.UpsertTranslationParams{}, httperr.NewWithCode(
-			http.StatusConflict,
-			httperr.CodeSiteOriginalContentForbidden,
+		return repository.UpsertTranslationParams{}, problem.NewWithCode(
+			problem.Conflict,
+			problem.CodeSiteOriginalContentForbidden,
 			"website entries cannot be translated",
 		)
 	}
 	if source.Status != model.LinkStatusDone {
-		return repository.UpsertTranslationParams{}, httperr.NewWithCode(
-			http.StatusConflict,
-			httperr.CodeLinkNotReady,
+		return repository.UpsertTranslationParams{}, problem.NewWithCode(
+			problem.Conflict,
+			problem.CodeLinkNotReady,
 			"link not parsed yet",
 		)
 	}
 
 	params := repository.UpsertTranslationParams{
-		LinkID:                  linkID,
-		Scope:                   req.Scope,
-		TargetLanguage:          model.TranslationTargetChinese,
-		Force:                   req.Force,
-		AllowExistingReschedule: true,
+		LinkID:         linkID,
+		Scope:          req.Scope,
+		TargetLanguage: model.TranslationTargetChinese,
+		Force:          req.Force,
 	}
 	switch req.Scope {
 	case model.TranslationScopeFull:
@@ -259,13 +181,13 @@ func authoritativeTranslationParams(
 		}
 		text, format, blockKey, ok := fullSavedTranslationSource(source)
 		if !ok {
-			return repository.UpsertTranslationParams{}, httperr.NewWithCode(
-				http.StatusConflict,
-				httperr.CodeTranslationContentUnavailable,
+			return repository.UpsertTranslationParams{}, problem.NewWithCode(
+				problem.Conflict,
+				problem.CodeTranslationContentUnavailable,
 				"save original before translating the full article",
 			)
 		}
-		revision, err := verifiedSavedRevision(source, req.ExpectedContentRevision, strict)
+		revision, err := verifiedSavedRevision(source, req.ExpectedContentRevision)
 		if err != nil {
 			return repository.UpsertTranslationParams{}, err
 		}
@@ -292,7 +214,7 @@ func authoritativeTranslationParams(
 			if req.ExpectedSourceHash != nil {
 				return repository.UpsertTranslationParams{}, invalidTranslationRequest("saved content uses expected_content_revision")
 			}
-			revision, err := verifiedSavedRevision(source, req.ExpectedContentRevision, strict)
+			revision, err := verifiedSavedRevision(source, req.ExpectedContentRevision)
 			if err != nil {
 				return repository.UpsertTranslationParams{}, err
 			}
@@ -321,10 +243,7 @@ func authoritativeTranslationParams(
 			currentHash := hashTranslationSource(projection)
 			switch {
 			case req.ExpectedSourceHash == nil:
-				if strict {
-					return repository.UpsertTranslationParams{}, invalidTranslationRequest("expected_source_hash is required for summary")
-				}
-				params.SourceHash = hashTranslationSource(req.SourceText)
+				return repository.UpsertTranslationParams{}, invalidTranslationRequest("expected_source_hash is required for summary")
 			case !strings.EqualFold(strings.TrimSpace(*req.ExpectedSourceHash), currentHash):
 				return repository.UpsertTranslationParams{}, sourceBlockConflictError(source, req.BlockKey, &currentHash)
 			default:
@@ -346,21 +265,17 @@ func authoritativeTranslationParams(
 func verifiedSavedRevision(
 	source *repository.TranslationSourceSnapshot,
 	expected *int64,
-	strict bool,
 ) (*int64, error) {
 	if expected == nil {
-		if strict {
-			return nil, invalidTranslationRequest("expected_content_revision is required for saved content")
-		}
-		return nil, nil
+		return nil, invalidTranslationRequest("expected_content_revision is required for saved content")
 	}
 	if *expected != source.ContentRevision {
 		revision := source.ContentRevision
-		return nil, httperr.NewWithCodeAndCurrentIdentity(
-			http.StatusConflict,
-			httperr.CodeContentRevisionConflict,
+		return nil, problem.NewWithCodeAndCurrentIdentity(
+			problem.Conflict,
+			problem.CodeContentRevisionConflict,
 			"saved content changed; refresh and confirm the translation again",
-			httperr.ConflictIdentity{ContentRevision: &revision, BlockKey: canonicalSavedBlockKey(source)},
+			problem.ConflictIdentity{ContentRevision: &revision, BlockKey: canonicalSavedBlockKey(source)},
 		)
 	}
 	revision := source.ContentRevision
@@ -379,7 +294,7 @@ func rejectStaleSavedRevision(
 			(req.BlockKey != "content" && req.BlockKey != "content-document")) {
 		return nil
 	}
-	_, err := verifiedSavedRevision(source, req.ExpectedContentRevision, false)
+	_, err := verifiedSavedRevision(source, req.ExpectedContentRevision)
 	return err
 }
 
@@ -453,27 +368,8 @@ func reusableTranslation(item *model.LinkTranslation, force bool, now time.Time,
 	return item.Status == model.TranslationStatusDone && !force
 }
 
-func rolloutAllowsSchedule(policy model.TranslationJobsPolicy, existing *model.LinkTranslation) bool {
-	return policy.ScheduleProtocol != model.TranslationJobSchedulePaused &&
-		(existing == nil || policy.AllowExistingReschedule)
-}
-
-func supersededTranslationAttempt(item *model.LinkTranslation) *model.TranslationAttempt {
-	if item == nil || item.CurrentRiverJobID == nil || *item.CurrentRiverJobID <= 0 ||
-		(item.Status != model.TranslationStatusPending && item.Status != model.TranslationStatusProcessing) {
-		return nil
-	}
-	return &model.TranslationAttempt{
-		TranslationID:         item.ID,
-		AttemptGeneration:     item.AttemptGeneration,
-		RiverJobID:            *item.CurrentRiverJobID,
-		SourceHash:            item.SourceHash,
-		SourceContentRevision: item.SourceContentRevision,
-	}
-}
-
 func invalidTranslationRequest(message string) error {
-	return httperr.NewWithCode(http.StatusUnprocessableEntity, httperr.CodeTranslationInvalidRequest, message)
+	return problem.NewWithCode(problem.Invalid, problem.CodeTranslationInvalidRequest, message)
 }
 
 func sourceBlockConflictError(
@@ -481,7 +377,7 @@ func sourceBlockConflictError(
 	blockKey string,
 	currentHash *string,
 ) error {
-	identity := httperr.ConflictIdentity{BlockKey: blockKey}
+	identity := problem.ConflictIdentity{BlockKey: blockKey}
 	if blockKey == "content" || blockKey == "content-document" {
 		revision := source.ContentRevision
 		identity.ContentRevision = &revision
@@ -489,29 +385,11 @@ func sourceBlockConflictError(
 	} else {
 		identity.SourceHash = currentHash
 	}
-	return httperr.NewWithCodeAndCurrentIdentity(
-		http.StatusConflict,
-		httperr.CodeSourceBlockConflict,
+	return problem.NewWithCodeAndCurrentIdentity(
+		problem.Conflict,
+		problem.CodeSourceBlockConflict,
 		"translation source block changed; refresh and confirm the selection again",
 		identity,
-	)
-}
-
-func translationSchemaTransitionError(source *repository.TranslationSourceSnapshot, blockKey string) error {
-	revision := source.ContentRevision
-	return httperr.NewWithCodeAndCurrentIdentity(
-		http.StatusConflict,
-		httperr.CodeTranslationSchemaTransition,
-		"translation schema transition is in progress; retry after the contract migration",
-		httperr.ConflictIdentity{ContentRevision: &revision, BlockKey: blockKey},
-	)
-}
-
-func translationSchedulingUnavailableError() error {
-	return httperr.NewWithCode(
-		http.StatusServiceUnavailable,
-		httperr.CodeTranslationSchedulingUnavailable,
-		"translation scheduling is temporarily unavailable during job protocol rollout",
 	)
 }
 

@@ -3,14 +3,11 @@ package worker
 import (
 	"context"
 	"errors"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-
-	"webtag/internal/observability"
 )
 
 type sitePayloadCleanupStoreStub struct {
@@ -35,33 +32,6 @@ func (s *ownerBlockingSitePayloadStore) ListExpired(ctx context.Context, _ int) 
 
 func (*ownerBlockingSitePayloadStore) PurgeExpired(context.Context, uuid.UUID) (bool, error) {
 	panic("PurgeExpired must not run when discovery is blocked")
-}
-
-func TestSitePayloadCleanerRecordsOnlyAggregatePurgeResults(t *testing.T) {
-	metrics := observability.NewMetrics()
-	good, stale := uuid.New(), uuid.New()
-	store := &sitePayloadCleanupStoreStub{candidates: []sitePayloadCandidate{{linkID: good}, {linkID: stale}}, purged: map[uuid.UUID]bool{good: true, stale: false}}
-	cleaner := newSitePayloadCleanerWithMetrics(store, 0, 0, nil, metrics)
-	if _, err := cleaner.RunOnce(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	store.candidates = []sitePayloadCandidate{{linkID: uuid.New()}}
-	store.err = errors.New("write failed")
-	if _, err := cleaner.RunOnce(context.Background()); !errors.Is(err, store.err) {
-		t.Fatalf("RunOnce error = %v", err)
-	}
-	recorder := httptest.NewRecorder()
-	metrics.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
-	body := recorder.Body.String()
-	for _, want := range []string{
-		`webtag_site_payload_purge_total{result="success",trigger="deadline"} 1`,
-		`webtag_site_payload_purge_total{result="skipped",trigger="deadline"} 1`,
-		`webtag_site_payload_purge_total{result="error",trigger="deadline"} 1`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("metrics output missing %q:\n%s", want, body)
-		}
-	}
 }
 
 func (s *sitePayloadCleanupStoreStub) ListExpired(context.Context, int) ([]sitePayloadCandidate, error) {

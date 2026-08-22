@@ -43,7 +43,7 @@ var scopedTagCountsSQL = map[string]string{
 	"all": fmt.Sprintf(`WITH reading AS (SELECT lower(tag) AS tag_key, min(tag) AS display, count(*) AS count FROM (SELECT unnest(tags) AS tag FROM links WHERE status='done' AND library_kind='reading' AND deleted_at IS NULL AND tags IS NOT NULL) AS expanded GROUP BY lower(tag)), sites AS (SELECT normalized_tag AS tag_key, min(normalized_tag) AS display, count(DISTINCT site_id) AS count FROM site_tags GROUP BY normalized_tag) SELECT COALESCE(reading.display, sites.display) AS tag, COALESCE(reading.count,0)+COALESCE(sites.count,0) AS count, COALESCE(reading.count,0) AS reading_count, COALESCE(sites.count,0) AS site_count FROM reading FULL OUTER JOIN sites USING (tag_key) ORDER BY count DESC, tag LIMIT %d`, tagListResponseCap),
 }
 
-// PGXTagRepository 是 TagStore 的 PG 实现，基于 links.tags（text[]）做 unnest 聚合。
+// PGXTagRepository 基于 links.tags（text[]）提供标签聚合查询。
 type PGXTagRepository struct {
 	db database.Querier
 }
@@ -109,5 +109,3 @@ func (r *PGXTagRepository) ListScopedCounts(ctx context.Context, scope string) (
 		return out, err
 	})
 }
-
-var _ ScopedTagStore = (*PGXTagRepository)(nil)

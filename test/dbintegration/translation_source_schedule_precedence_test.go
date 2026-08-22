@@ -13,8 +13,8 @@ import (
 )
 
 func TestTranslationSourceSchedulePrioritizesGenerationCASAfterSavedBodyTransitions(t *testing.T) {
-	harness := newRF5AScheduleHarness(t, true)
-	service := harness.service(true, harness.queue)
+	harness := newRF5AScheduleHarness(t)
+	service := harness.service(harness.queue)
 
 	for _, tc := range []struct {
 		name         string
@@ -44,13 +44,13 @@ func TestTranslationSourceSchedulePrioritizesGenerationCASAfterSavedBodyTransiti
 					t.Fatalf("GetByID(before capture requeue) = %+v, %v", link, err)
 				}
 				captureText := "replacement browser capture"
-				job, err := harness.links.RequeueExisting(fixture.ctx, fixture.linkID, &repository.CreateLinkParams{
+				attempt, err := requeueLinkForTest(fixture.ctx, harness.pool, harness.links, fixture.linkID, &repository.CreateLinkParams{
 					URL: link.URL, SourceKind: "browser_capture", SourceKey: link.URL,
 					InputText: &captureText, Status: model.LinkStatusPending,
 					RequestedLibraryKind: model.RequestedLibraryKindReading,
 				})
-				if err != nil || job == nil {
-					t.Fatalf("RequeueExistingTx(capture) = %+v, %v", job, err)
+				if err != nil || attempt.Generation <= link.ParseGeneration {
+					t.Fatalf("RequeueExistingTx(capture) = %+v, %v", attempt, err)
 				}
 				current, err := harness.links.GetByID(fixture.ctx, fixture.linkID)
 				if err != nil || current == nil || current.Status != model.LinkStatusPending {
@@ -76,11 +76,8 @@ func TestTranslationSourceSchedulePrioritizesGenerationCASAfterSavedBodyTransiti
 			},
 			transition: func(t *testing.T, fixture rf5aSourceFixture) int64 {
 				t.Helper()
-				if err := harness.links.UpdateLibraryClassification(fixture.ctx, repository.UpdateLibraryClassificationParams{
-					ID: fixture.linkID, Kind: model.LibraryKindReading,
-					Source: model.LibraryKindSourceUser,
-				}); err != nil {
-					t.Fatalf("UpdateLibraryClassification(reading): %v", err)
+				if _, err := harness.pool.Exec(fixture.ctx, `UPDATE links SET library_kind='reading', library_kind_locked=true WHERE id=$1`, fixture.linkID); err != nil {
+					t.Fatalf("seed reading selection: %v", err)
 				}
 				result, err := harness.links.ConvertLink(fixture.ctx, repository.ConvertLinkParams{
 					LinkID: fixture.linkID, TargetKind: model.LibraryKindSite,
@@ -108,17 +105,18 @@ func TestTranslationSourceSchedulePrioritizesGenerationCASAfterSavedBodyTransiti
 			transition: func(t *testing.T, fixture rf5aSourceFixture) int64 {
 				t.Helper()
 				document := "# Current document\n\nMarkdown body."
-				revision, stored, err := harness.links.ReplaceContentIfCurrent(
+				revision, stored, err := harness.links.ReplaceContentIfCurrentWithRevision(
 					fixture.ctx,
 					fixture.linkID,
 					fixture.updatedAt,
+					fixture.revision,
 					model.SavedContent{
 						Text: "Current document Markdown body.", Document: &document,
 						Format: model.ContentFormatMarkdown, Words: 4,
 					},
 				)
 				if err != nil || !stored || revision <= fixture.revision {
-					t.Fatalf("ReplaceContentIfCurrent(markdown) = revision %d, stored %v, error %v",
+					t.Fatalf("ReplaceContentIfCurrentWithRevision(markdown) = revision %d, stored %v, error %v",
 						revision, stored, err)
 				}
 				return revision
@@ -199,7 +197,7 @@ func TestTranslationSourceSchedulePrioritizesGenerationCASAfterSavedBodyTransiti
 }
 
 func TestTranslationSourceSchedulePrioritizesGenerationCASAfterSiteCompletion(t *testing.T) {
-	harness := newRF5AScheduleHarness(t, true)
+	harness := newRF5AScheduleHarness(t)
 	generationHarness := &savedGenerationHarness{
 		PGXLinkRepository: harness.links,
 		pool:              harness.pool,
@@ -220,7 +218,7 @@ func TestTranslationSourceSchedulePrioritizesGenerationCASAfterSiteCompletion(t 
 			close(release)
 		}
 	})
-	service := harness.service(true, harness.queue)
+	service := harness.service(harness.queue)
 	go func() {
 		content, err := harness.links.GetContent(t.Context(), fixture.linkID)
 		if err != nil || content == nil {
@@ -250,7 +248,6 @@ func TestTranslationSourceSchedulePrioritizesGenerationCASAfterSiteCompletion(t 
 	aggregate, err := harness.links.CompleteSiteParse(
 		t.Context(),
 		generationSiteParseParams(fixture, true),
-		fixture.jobID,
 	)
 	if err != nil || aggregate.SiteID == uuid.Nil || aggregate.EntryID == uuid.Nil {
 		t.Fatalf("CompleteSiteParse() = %+v, %v", aggregate, err)

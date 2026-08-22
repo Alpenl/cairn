@@ -14,7 +14,6 @@ import (
 
 	"webtag/internal/dto"
 	"webtag/internal/httperr"
-	"webtag/internal/middleware"
 	"webtag/internal/model"
 	"webtag/internal/service"
 )
@@ -88,17 +87,14 @@ type markReadRequest struct {
 	Query          string `json:"q"`
 }
 
-// RegisterFeedRoutes mounts canonical /api routes and the repository's
-// established /api/v1 aliases.
+// RegisterFeedRoutes mounts the canonical /api routes.
 func RegisterFeedRoutes(router gin.IRouter, feeds FeedService) {
 	if feeds == nil {
 		return
 	}
-	for _, prefix := range apiRoutePrefixes {
-		registerFeedSubscriptionRoutes(router, prefix, feeds)
-		registerFeedItemRoutes(router, prefix, feeds)
-		registerFeedFolderRoutes(router, prefix, feeds)
-	}
+	registerFeedSubscriptionRoutes(router, apiRoutePrefix, feeds)
+	registerFeedItemRoutes(router, apiRoutePrefix, feeds)
+	registerFeedFolderRoutes(router, apiRoutePrefix, feeds)
 }
 
 func registerFeedSubscriptionRoutes(router gin.IRouter, prefix string, feeds FeedSubscriptionRoutes) {
@@ -238,7 +234,7 @@ func listFeedItems(feeds FeedItemRoutes) gin.HandlerFunc {
 			writeError(c, err)
 			return
 		}
-		middleware.CacheableJSON(c, http.StatusOK, response)
+		c.JSON(http.StatusOK, response)
 	}
 }
 

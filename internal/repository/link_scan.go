@@ -19,38 +19,30 @@ type rowScanner interface {
 // the same scan-target slice and post-scan unpacking, eliminating ~80 lines of
 // near-duplicate field plumbing across the two helpers.
 type linkScanBuffers struct {
-	sourceKind                pgtype.Text
-	sourceKey                 pgtype.Text
-	inputTitle                pgtype.Text
-	inputText                 pgtype.Text
-	inputHTML                 pgtype.Text
-	inputImages               []byte
-	sourceMetadata            []byte
-	title                     pgtype.Text
-	summary                   pgtype.Text
-	fetcherType               pgtype.Text
-	lowConfidenceReason       pgtype.Text
-	errorMsg                  pgtype.Text
-	description               pgtype.Text
-	domain                    pgtype.Text
-	contentType               pgtype.Text
-	requestedKind             pgtype.Text
-	requestedKindSource       pgtype.Text
-	libraryKind               pgtype.Text
-	libraryKindSource         pgtype.Text
-	predictedKind             pgtype.Text
-	confidence                pgtype.Float4
-	classificationReason      pgtype.Text
-	classificationExplanation pgtype.Text
-	classifierVersion         pgtype.Text
-	contentSource             pgtype.Text
-	firstCollectedAt          pgtype.Timestamptz
-	lastRecollectedAt         pgtype.Timestamptz
-	payloadPurgeDueAt         pgtype.Timestamptz
-	payloadPurgedAt           pgtype.Timestamptz
-	pathDepth                 sqldb.NullInt64
-	parentPath                pgtype.Text
-	parentID                  pgtype.UUID
+	sourceKind          pgtype.Text
+	sourceKey           pgtype.Text
+	inputTitle          pgtype.Text
+	inputText           pgtype.Text
+	inputHTML           pgtype.Text
+	inputImages         []byte
+	sourceMetadata      []byte
+	title               pgtype.Text
+	summary             pgtype.Text
+	fetcherType         pgtype.Text
+	lowConfidenceReason pgtype.Text
+	errorMsg            pgtype.Text
+	description         pgtype.Text
+	domain              pgtype.Text
+	contentType         pgtype.Text
+	libraryKind         pgtype.Text
+	contentSource       pgtype.Text
+	firstCollectedAt    pgtype.Timestamptz
+	lastRecollectedAt   pgtype.Timestamptz
+	payloadPurgeDueAt   pgtype.Timestamptz
+	payloadPurgedAt     pgtype.Timestamptz
+	pathDepth           sqldb.NullInt64
+	parentPath          pgtype.Text
+	parentID            pgtype.UUID
 }
 
 // scanLinkFields returns the destination slice that maps 1:1 to
@@ -78,18 +70,11 @@ func scanLinkFields(link *model.Link, buf *linkScanBuffers) []any {
 		&buf.description,
 		&buf.domain,
 		&buf.contentType,
-		&buf.requestedKind,
-		&buf.requestedKindSource,
 		&buf.libraryKind,
-		&buf.libraryKindSource,
 		&link.LibraryKindLocked,
-		&buf.predictedKind,
-		&buf.confidence,
-		&buf.classificationReason,
-		&buf.classificationExplanation,
-		&buf.classifierVersion,
 		&link.ContentRevision,
 		&link.MetadataRevision,
+		&link.ParseGeneration,
 		&buf.contentSource,
 		&link.HasContent,
 		&link.ContentCJKChars,
@@ -123,9 +108,9 @@ func applyLinkScanBuffers(link *model.Link, buf *linkScanBuffers) error {
 	link.Description = textPointer(buf.description)
 	link.Domain = textPointer(buf.domain)
 	link.ContentType = textPointer(buf.contentType)
-	link.RequestedLibraryKind, link.RequestedLibraryKindSource = requestedLibraryIntentFromText(buf.requestedKind, buf.requestedKindSource)
+	link.LibraryKind = libraryKindPointer(buf.libraryKind)
 	link.ContentSource = contentSourceFromString(buf.contentSource.String)
-	applyLibraryScanFields(link, buf.libraryKind, buf.libraryKindSource, buf.predictedKind, buf.confidence, buf.classificationReason, buf.classificationExplanation, buf.classifierVersion, buf.firstCollectedAt, buf.lastRecollectedAt, buf.payloadPurgeDueAt, buf.payloadPurgedAt)
+	applyLinkTimeFields(link, buf.firstCollectedAt, buf.lastRecollectedAt, buf.payloadPurgeDueAt, buf.payloadPurgedAt)
 	link.PathDepth = intPointer(buf.pathDepth)
 	link.ParentPath = textPointer(buf.parentPath)
 	link.ParentID = uuidPointer(buf.parentID)
@@ -164,28 +149,22 @@ func scanLink(row rowScanner) (model.Link, error) {
 // sourceMetadata) stay zero-valued on the returned model.Link — none of the
 // list-path response mappers reference them.
 type linkListScanBuffers struct {
-	title                     pgtype.Text
-	summary                   pgtype.Text
-	fetcherType               pgtype.Text
-	lowConfidenceReason       pgtype.Text
-	errorMsg                  pgtype.Text
-	description               pgtype.Text
-	domain                    pgtype.Text
-	contentType               pgtype.Text
-	libraryKind               pgtype.Text
-	libraryKindSource         pgtype.Text
-	predictedKind             pgtype.Text
-	confidence                pgtype.Float4
-	classificationReason      pgtype.Text
-	classificationExplanation pgtype.Text
-	classifierVersion         pgtype.Text
-	firstCollectedAt          pgtype.Timestamptz
-	lastRecollectedAt         pgtype.Timestamptz
-	payloadPurgeDueAt         pgtype.Timestamptz
-	payloadPurgedAt           pgtype.Timestamptz
-	pathDepth                 sqldb.NullInt64
-	parentPath                pgtype.Text
-	parentID                  pgtype.UUID
+	title               pgtype.Text
+	summary             pgtype.Text
+	fetcherType         pgtype.Text
+	lowConfidenceReason pgtype.Text
+	errorMsg            pgtype.Text
+	description         pgtype.Text
+	domain              pgtype.Text
+	contentType         pgtype.Text
+	libraryKind         pgtype.Text
+	firstCollectedAt    pgtype.Timestamptz
+	lastRecollectedAt   pgtype.Timestamptz
+	payloadPurgeDueAt   pgtype.Timestamptz
+	payloadPurgedAt     pgtype.Timestamptz
+	pathDepth           sqldb.NullInt64
+	parentPath          pgtype.Text
+	parentID            pgtype.UUID
 }
 
 func scanLinkListFields(link *model.Link, buf *linkListScanBuffers) []any {
@@ -204,13 +183,6 @@ func scanLinkListFields(link *model.Link, buf *linkListScanBuffers) []any {
 		&buf.domain,
 		&buf.contentType,
 		&buf.libraryKind,
-		&buf.libraryKindSource,
-		&link.LibraryKindLocked,
-		&buf.predictedKind,
-		&buf.confidence,
-		&buf.classificationReason,
-		&buf.classificationExplanation,
-		&buf.classifierVersion,
 		&link.ContentRevision,
 		&link.MetadataRevision,
 		&link.HasContent,
@@ -237,20 +209,14 @@ func applyLinkListScanBuffers(link *model.Link, buf *linkListScanBuffers) {
 	link.Description = textPointer(buf.description)
 	link.Domain = textPointer(buf.domain)
 	link.ContentType = textPointer(buf.contentType)
-	applyLibraryScanFields(link, buf.libraryKind, buf.libraryKindSource, buf.predictedKind, buf.confidence, buf.classificationReason, buf.classificationExplanation, buf.classifierVersion, buf.firstCollectedAt, buf.lastRecollectedAt, buf.payloadPurgeDueAt, buf.payloadPurgedAt)
+	link.LibraryKind = libraryKindPointer(buf.libraryKind)
+	applyLinkTimeFields(link, buf.firstCollectedAt, buf.lastRecollectedAt, buf.payloadPurgeDueAt, buf.payloadPurgedAt)
 	link.PathDepth = intPointer(buf.pathDepth)
 	link.ParentPath = textPointer(buf.parentPath)
 	link.ParentID = uuidPointer(buf.parentID)
 }
 
-func applyLibraryScanFields(link *model.Link, kind, source, predicted pgtype.Text, confidence pgtype.Float4, reason, explanation, version pgtype.Text, firstCollectedAt, lastRecollectedAt, payloadPurgeDueAt, payloadPurgedAt pgtype.Timestamptz) {
-	link.LibraryKind = libraryKindPointer(kind)
-	link.LibraryKindSource = libraryKindSourcePointer(source)
-	link.PredictedLibraryKind = libraryKindPointer(predicted)
-	link.ClassificationConfidence = float32Pointer(confidence)
-	link.ClassificationReason = textPointer(reason)
-	link.ClassificationExplanation = textPointer(explanation)
-	link.ClassifierVersion = textPointer(version)
+func applyLinkTimeFields(link *model.Link, firstCollectedAt, lastRecollectedAt, payloadPurgeDueAt, payloadPurgedAt pgtype.Timestamptz) {
 	link.FirstCollectedAt = firstCollectedAt.Time
 	link.LastRecollectedAt = timePointer(lastRecollectedAt)
 	link.PayloadPurgeDueAt = timePointer(payloadPurgeDueAt)
@@ -265,10 +231,6 @@ func libraryKindPointer(value pgtype.Text) *model.LibraryKind {
 	return &kind
 }
 
-func requestedLibraryIntentFromText(kind, source pgtype.Text) (model.RequestedLibraryKind, model.RequestedLibraryKindSource) {
-	return normalizeRequestedLibraryIntent(model.RequestedLibraryKind(kind.String), model.RequestedLibraryKindSource(source.String))
-}
-
 func contentSourceFromString(value string) model.ContentSource {
 	switch model.ContentSource(value) {
 	case model.ContentSourceUser:
@@ -281,22 +243,6 @@ func contentSourceFromString(value string) model.ContentSource {
 		// scan boundary for zero-valued fixtures.
 		return model.ContentSourceFetched
 	}
-}
-
-func libraryKindSourcePointer(value pgtype.Text) *model.LibraryKindSource {
-	if !value.Valid {
-		return nil
-	}
-	source := model.LibraryKindSource(value.String)
-	return &source
-}
-
-func float32Pointer(value pgtype.Float4) *float32 {
-	if !value.Valid {
-		return nil
-	}
-	confidence := value.Float32
-	return &confidence
 }
 
 func timePointer(value pgtype.Timestamptz) *time.Time {

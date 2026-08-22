@@ -10,6 +10,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 
 	"webtag/internal/errsafe"
+	"webtag/internal/model"
 	"webtag/internal/repository"
 )
 
@@ -17,11 +18,6 @@ import (
 // 入库的 job args（JSON）路由到对应 worker；改这个值等于换一种 job 类型，
 // 历史 job 会变成「未知 kind」被 rescuer 丢弃，因此一旦上线不可轻易更名。
 const parseLinkJobKind = "parse_link"
-
-// ErrParseJobMissing is persisted with a stable parse_job_missing category
-// when RF6C proves that the exact current parse attempt has no River row and
-// no active replacement after the configured safety threshold.
-var ErrParseJobMissing = errsafe.ErrParseJobMissing
 
 // parseLinkMaxAttempts 是单条解析 job 的最大尝试次数。
 //
@@ -32,7 +28,7 @@ var ErrParseJobMissing = errsafe.ErrParseJobMissing
 // 3 给崩溃恢复留出重试余量。
 //
 // WHY 不需要担心确定性解析失败被重试：ParsePipeline.Run 失败时会自行把
-// links/parse_jobs 写成 failed 并返回 *PipelineRunError（errors.Is
+// links 写成 failed 并返回 *PipelineRunError（errors.Is
 // ErrAlreadyPersisted）。Work 把这种「已持久化的业务失败」视为 job 成功
 // （返回 nil），River 不再重试——与旧内存队列「一次性、失败即终态」语义
 // 一致。只有 Work 真正返回 error（未预期的基础设施抖动 / panic）才进入
@@ -40,10 +36,19 @@ var ErrParseJobMissing = errsafe.ErrParseJobMissing
 const parseLinkMaxAttempts = 3
 
 // ParseLinkArgs 是 River 解析任务的入参，序列化为 job 行的 args(JSONB)。
-// 解析所需的业务状态都在 links / parse_jobs 表里，worker 用两个 ID 现查现用。
+// 业务状态只在 links；代次和元数据修订是 River 行携带的不可变写入栅栏。
 type ParseLinkArgs struct {
-	LinkID     uuid.UUID `json:"link_id"`
-	ParseJobID uuid.UUID `json:"parse_job_id"`
+	LinkID                   uuid.UUID `json:"link_id"`
+	ParseGeneration          int64     `json:"parse_generation"`
+	ExpectedMetadataRevision int64     `json:"expected_metadata_revision"`
+}
+
+func (a ParseLinkArgs) Attempt() model.ParseAttempt {
+	return model.ParseAttempt{
+		LinkID:                   a.LinkID,
+		Generation:               a.ParseGeneration,
+		ExpectedMetadataRevision: a.ExpectedMetadataRevision,
+	}
 }
 
 // Kind 返回 River 路由用的 job 类型标识。
@@ -86,14 +91,13 @@ func (ParseLinkArgs) InsertOpts() river.InsertOpts {
 // *ParsePipeline（其 Run 方法签名匹配）。抽成接口让 worker 单测可注入
 // 轻量 fake，无需拉起整条解析管线。
 type ParseProcessor interface {
-	Run(context.Context, uuid.UUID, uuid.UUID) error
-	RecordDiscard(context.Context, uuid.UUID, uuid.UUID, error) error
+	Run(context.Context, model.ParseAttempt) error
+	RecordDiscard(context.Context, model.ParseAttempt, error) error
 }
 
-// ParseLinkWorker 是 River 解析任务的 worker。它是「执行引擎」，把 River
-// 调度过来的 job 转交给 ParsePipeline.Run；parse_jobs 表仍是对外状态的
-// source of truth（Run 内部维护 processing→done/failed），River job 只负责
-// 「何时、在哪个副本、以多大并发」执行。
+// ParseLinkWorker 是 River 解析任务的 worker。它把 River 调度过来的 job
+// 转交给 ParsePipeline.Run；Link 保存业务状态，River 保存执行、重试和终态
+// 历史，两者通过不可变 ParseAttempt 栅栏避免旧任务覆盖新结果。
 //
 // 嵌入 river.WorkerDefaults 拿到 Timeout/NextRetry 等默认实现，只覆盖 Work。
 type ParseLinkWorker struct {
@@ -118,17 +122,18 @@ func (w *ParseLinkWorker) Timeout(*river.Job[ParseLinkArgs]) time.Duration {
 //   - 非 nil → job 进入 River 的指数退避重试（直到 MaxAttempts），超出后
 //     discard。
 //
-// 关键映射：ParsePipeline.Run 失败时已经把 links/parse_jobs 写成 failed 并
+// 关键映射：ParsePipeline.Run 失败时已经把 Link 写成 failed 并
 // 返回 *PipelineRunError（errors.Is ErrAlreadyPersisted）。这类「业务上确定
 // 失败、且已持久化终态」的结果对 River 而言是「job 干完了」——返回 nil，避免
-// River 反复重跑一条注定失败的解析（既费 token 又刷脏 parse_jobs）。只有未
+// River 反复重跑一条注定失败的解析。只有未
 // 预期错误（Run 在写失败状态前自己就崩了，或基础设施抖动）才向 River 冒泡
 // 触发重试。
 func (w *ParseLinkWorker) Work(ctx context.Context, job *river.Job[ParseLinkArgs]) error {
-	if job.Args.ParseJobID == uuid.Nil {
-		return errors.New("parse_link job is missing parse_job_id")
+	attempt := job.Args.Attempt()
+	if attempt.LinkID == uuid.Nil || attempt.Generation <= 0 || attempt.ExpectedMetadataRevision <= 0 {
+		return errors.New("parse_link job has invalid attempt args")
 	}
-	err := w.processor.Run(ctx, job.Args.LinkID, job.Args.ParseJobID)
+	err := w.processor.Run(ctx, attempt)
 	if err == nil {
 		return nil
 	}
@@ -136,7 +141,7 @@ func (w *ParseLinkWorker) Work(ctx context.Context, job *river.Job[ParseLinkArgs
 	if errors.Is(err, errsafe.ErrAlreadyPersisted) {
 		return nil
 	}
-	if errors.Is(err, repository.ErrParseJobNotRunnable) {
+	if errors.Is(err, repository.ErrParseAttemptNotRunnable) {
 		return nil
 	}
 	// 未预期错误 → 冒泡给 River，进入重试 / rescue 路径。

@@ -33,14 +33,6 @@ func TestRepeatedStableAnchorsUseOccurrence(t *testing.T) {
 	}
 }
 
-func TestUpdateAcceptsLegacyFollowingLineAnchor(t *testing.T) {
-	updated := Update("# Plan\n\n- [ ] First\n- [x] Second\n", "task:307967ac", 1, true)
-	want := "# Plan\n\n- [x] First\n- [x] Second\n"
-	if updated.Status != Updated || updated.Source != want {
-		t.Fatalf("Update() = %+v, want legacy anchor to remain writable", updated)
-	}
-}
-
 func TestUpdateOnlyChangesCheckboxByte(t *testing.T) {
 	source := "- [ ] keep  \r\ntext\n"
 	block := List(source)[0]

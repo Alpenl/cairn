@@ -9,19 +9,22 @@ import (
 	"strings"
 	"testing"
 
-	"webtag/internal/dto"
-	"webtag/internal/httperr"
+	"github.com/google/uuid"
+
 	"webtag/internal/model"
+	"webtag/internal/problem"
 )
 
-func validThoughtWireInput(operationKind string) dto.ReaderThoughtOpRequest {
-	return dto.ReaderThoughtOpRequest{
-		OpID:          "op-1",
-		DeviceID:      "device-1",
-		OperationKind: operationKind,
-		AnnotationID:  "annotation-1",
-		HostKind:      "link",
-		HostID:        "link-1",
+func validThoughtCommand(operationKind string) ReaderThoughtOpCommand {
+	return ReaderThoughtOpCommand{
+		ContractVersion: model.ReaderThoughtContractVersion,
+		OpID:            "op-1",
+		DeviceID:        "device-1",
+		LogicalClock:    1,
+		OperationKind:   operationKind,
+		AnnotationID:    "annotation-1",
+		HostKind:        "link",
+		HostID:          "link-1",
 		Target: json.RawMessage(`{
             "kind": "saved-content",
             "host_id": "link-1",
@@ -31,7 +34,7 @@ func validThoughtWireInput(operationKind string) dto.ReaderThoughtOpRequest {
 	}
 }
 
-func TestValidateThoughtWireAcceptsSupportedTargets(t *testing.T) {
+func TestValidateThoughtCommandAcceptsSupportedTargets(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -54,45 +57,21 @@ func TestValidateThoughtWireAcceptsSupportedTargets(t *testing.T) {
 			name:   "inbox",
 			target: `{"kind":"inbox","host_id":"link-1","version":{"metadata_revision":5}}`,
 		},
-		{
-			name:   "legacy stale",
-			target: `{"kind":"legacy-stale","host_id":"link-1","version":{"source_key":"legacy-1"}}`,
-		},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			input := validThoughtWireInput("add")
+			input := validThoughtCommand("add")
 			input.Target = json.RawMessage(tc.target)
-			if err := validateThoughtWire(input); err != nil {
-				t.Fatalf("validateThoughtWire() error = %v", err)
+			if err := validateThoughtCommand(input); err != nil {
+				t.Fatalf("validateThoughtCommand() error = %v", err)
 			}
 		})
 	}
 }
 
-func TestThoughtResponseCarriesFrozenOriginalHostSnapshot(t *testing.T) {
-	t.Parallel()
-
-	response := thoughtResponse(model.ReaderThought{
-		ID:                   "thought-frozen",
-		HostKind:             "link",
-		HostID:               "link-frozen",
-		Target:               json.RawMessage(`{"kind":"saved-content","host_id":"link-frozen","version":{"content_revision":3}}`),
-		Quote:                json.RawMessage(`{"exact":"frozen quote"}`),
-		Body:                 "frozen body",
-		Source:               "user",
-		LifecycleStatus:      "tombstone",
-		OriginalHostSnapshot: json.RawMessage(`{"blocks":["frozen original"]}`),
-	})
-
-	if string(response.OriginalHostSnapshot) != `{"blocks":["frozen original"]}` {
-		t.Fatalf("original_host_snapshot = %s, want frozen snapshot", response.OriginalHostSnapshot)
-	}
-}
-
-func TestValidateThoughtWireRejectsInvalidTarget(t *testing.T) {
+func TestValidateThoughtCommandRejectsInvalidTarget(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -128,8 +107,8 @@ func TestValidateThoughtWireRejectsInvalidTarget(t *testing.T) {
 			target: `{"kind":"inbox","host_id":"link-1","version":{}}`,
 		},
 		{
-			name:   "legacy stale missing source key",
-			target: `{"kind":"legacy-stale","host_id":"link-1","version":{}}`,
+			name:   "retired legacy stale target",
+			target: `{"kind":"legacy-stale","host_id":"link-1","version":{"source_key":"legacy-1"}}`,
 		},
 		{
 			name:   "unknown kind",
@@ -140,69 +119,69 @@ func TestValidateThoughtWireRejectsInvalidTarget(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			input := validThoughtWireInput("add")
+			input := validThoughtCommand("add")
 			input.Target = json.RawMessage(tc.target)
-			if err := validateThoughtWire(input); err == nil {
-				t.Fatal("validateThoughtWire() error = nil, want validation error")
+			if err := validateThoughtCommand(input); err == nil {
+				t.Fatal("validateThoughtCommand() error = nil, want validation error")
 			}
 		})
 	}
 }
 
-func TestValidateThoughtWireDeleteMayOmitQuote(t *testing.T) {
+func TestValidateThoughtCommandDeleteMayOmitQuote(t *testing.T) {
 	t.Parallel()
 
-	input := validThoughtWireInput("delete")
+	input := validThoughtCommand("delete")
 	input.Payload = json.RawMessage(`{"body":""}`)
-	if err := validateThoughtWire(input); err != nil {
+	if err := validateThoughtCommand(input); err != nil {
 		t.Fatalf("delete without quote should be accepted: %v", err)
 	}
 
 	input.Payload = json.RawMessage(`{"quote":}`)
-	if err := validateThoughtWire(input); err == nil {
+	if err := validateThoughtCommand(input); err == nil {
 		t.Fatal("malformed delete quote should be rejected")
 	}
 }
 
-func TestValidateThoughtWireAcceptsArchiveThoughtBoundaries(t *testing.T) {
+func TestValidateThoughtCommandAcceptsArchiveThoughtBoundaries(t *testing.T) {
 	t.Parallel()
 
-	longAnnotation := validThoughtWireInput("add")
+	longAnnotation := validThoughtCommand("add")
 	longAnnotation.AnnotationID = strings.Repeat("a", 129)
-	if err := validateThoughtWire(longAnnotation); err != nil {
+	if err := validateThoughtCommand(longAnnotation); err != nil {
 		t.Fatalf("129-byte annotation_id should be accepted: %v", err)
 	}
 
-	deleteWithArchivedHost := validThoughtWireInput("delete")
+	deleteWithArchivedHost := validThoughtCommand("delete")
 	deleteWithArchivedHost.HostKind = "inbox"
 	deleteWithArchivedHost.HostID = "purged-inbox:legacy-42"
 	deleteWithArchivedHost.Target = json.RawMessage(`{
-        "kind": "legacy-stale",
+        "kind": "inbox",
         "host_id": "purged-inbox:legacy-42",
-        "version": {"source_key": "reader-v0"}
+        "version": {"metadata_revision": 1}
     }`)
 	deleteWithArchivedHost.Payload = json.RawMessage(`{}`)
-	if err := validateThoughtWire(deleteWithArchivedHost); err != nil {
+	if err := validateThoughtCommand(deleteWithArchivedHost); err != nil {
 		t.Fatalf("delete with non-UUID persisted host should be accepted: %v", err)
 	}
 }
 
-func TestValidateThoughtWireRequiresQuoteForAddAndUpdate(t *testing.T) {
+func TestValidateThoughtCommandRequiresQuoteForAddAndUpdate(t *testing.T) {
 	t.Parallel()
 
 	for _, operationKind := range []string{"add", "update"} {
-		input := validThoughtWireInput(operationKind)
+		input := validThoughtCommand(operationKind)
 		input.Payload = json.RawMessage(`{"body":"missing quote"}`)
-		if err := validateThoughtWire(input); err == nil {
+		if err := validateThoughtCommand(input); err == nil {
 			t.Fatalf("%s without quote should be rejected", operationKind)
 		}
 	}
 }
 
-func TestValidateThoughtWireAcceptsClientOwnedReattachCommand(t *testing.T) {
+func TestValidateThoughtCommandAcceptsClientOwnedReattachCommand(t *testing.T) {
 	t.Parallel()
 
-	input := validThoughtWireInput("update")
+	input := validThoughtCommand("update")
 	input.ContractVersion = model.ReaderThoughtContractVersion
 	input.LogicalClock = 17
 	input.Payload = json.RawMessage(`{
@@ -211,8 +190,8 @@ func TestValidateThoughtWireAcceptsClientOwnedReattachCommand(t *testing.T) {
             "expected_host_revision": 3
         }
     }`)
-	if err := validateThoughtWire(input); err != nil {
-		t.Fatalf("validateThoughtWire() error = %v", err)
+	if err := validateThoughtCommand(input); err != nil {
+		t.Fatalf("validateThoughtCommand() error = %v", err)
 	}
 	command, err := readerThoughtReattachOperation(input)
 	if err != nil {
@@ -223,34 +202,34 @@ func TestValidateThoughtWireAcceptsClientOwnedReattachCommand(t *testing.T) {
 	}
 }
 
-func TestValidateThoughtWireRejectsMalformedClientReattachCommand(t *testing.T) {
+func TestValidateThoughtCommandRejectsMalformedClientReattachCommand(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name   string
-		mutate func(*dto.ReaderThoughtOpRequest)
+		mutate func(*ReaderThoughtOpCommand)
 	}{
 		{
 			name: "contains client body",
-			mutate: func(input *dto.ReaderThoughtOpRequest) {
+			mutate: func(input *ReaderThoughtOpCommand) {
 				input.Payload = json.RawMessage(`{"body":"must not be sent","reattach":{"expected_last_sequence":11,"expected_host_revision":3}}`)
 			},
 		},
 		{
 			name: "wrong target kind",
-			mutate: func(input *dto.ReaderThoughtOpRequest) {
+			mutate: func(input *ReaderThoughtOpCommand) {
 				input.Target = json.RawMessage(`{"kind":"summary","host_id":"link-1","version":{"source_hash":"hash"}}`)
 			},
 		},
 		{
 			name: "target revision differs from expected revision",
-			mutate: func(input *dto.ReaderThoughtOpRequest) {
+			mutate: func(input *ReaderThoughtOpCommand) {
 				input.Target = json.RawMessage(`{"kind":"saved-content","host_id":"link-1","version":{"content_revision":4}}`)
 			},
 		},
 		{
 			name: "not an update",
-			mutate: func(input *dto.ReaderThoughtOpRequest) {
+			mutate: func(input *ReaderThoughtOpCommand) {
 				input.OperationKind = "add"
 			},
 		},
@@ -259,123 +238,120 @@ func TestValidateThoughtWireRejectsMalformedClientReattachCommand(t *testing.T) 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			input := validThoughtWireInput("update")
+			input := validThoughtCommand("update")
 			input.ContractVersion = model.ReaderThoughtContractVersion
 			input.LogicalClock = 17
 			input.Payload = json.RawMessage(`{"reattach":{"expected_last_sequence":11,"expected_host_revision":3}}`)
 			tc.mutate(&input)
-			if err := validateThoughtWire(input); err == nil {
-				t.Fatal("validateThoughtWire() error = nil, want malformed reattach rejection")
+			if err := validateThoughtCommand(input); err == nil {
+				t.Fatal("validateThoughtCommand() error = nil, want malformed reattach rejection")
 			}
 		})
 	}
 }
 
-func TestValidateThoughtWireRejectsInvalidOperationEnvelope(t *testing.T) {
+func TestValidateThoughtCommandRejectsInvalidOperationEnvelope(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name   string
-		mutate func(*dto.ReaderThoughtOpRequest)
+		mutate func(*ReaderThoughtOpCommand)
 	}{
-		{name: "missing op id", mutate: func(input *dto.ReaderThoughtOpRequest) { input.OpID = " " }},
-		{name: "missing device id", mutate: func(input *dto.ReaderThoughtOpRequest) { input.DeviceID = " " }},
-		{name: "negative logical clock", mutate: func(input *dto.ReaderThoughtOpRequest) { input.LogicalClock = -1 }},
-		{name: "unknown operation", mutate: func(input *dto.ReaderThoughtOpRequest) { input.OperationKind = "replace" }},
-		{name: "missing annotation id", mutate: func(input *dto.ReaderThoughtOpRequest) { input.AnnotationID = " " }},
-		{name: "missing host kind", mutate: func(input *dto.ReaderThoughtOpRequest) { input.HostKind = " " }},
-		{name: "missing host id", mutate: func(input *dto.ReaderThoughtOpRequest) { input.HostID = " " }},
+		{name: "missing op id", mutate: func(input *ReaderThoughtOpCommand) { input.OpID = " " }},
+		{name: "missing device id", mutate: func(input *ReaderThoughtOpCommand) { input.DeviceID = " " }},
+		{name: "negative logical clock", mutate: func(input *ReaderThoughtOpCommand) { input.LogicalClock = -1 }},
+		{name: "unknown operation", mutate: func(input *ReaderThoughtOpCommand) { input.OperationKind = "replace" }},
+		{name: "missing annotation id", mutate: func(input *ReaderThoughtOpCommand) { input.AnnotationID = " " }},
+		{name: "missing host kind", mutate: func(input *ReaderThoughtOpCommand) { input.HostKind = " " }},
+		{name: "missing host id", mutate: func(input *ReaderThoughtOpCommand) { input.HostID = " " }},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			input := validThoughtWireInput("add")
+			input := validThoughtCommand("add")
 			tc.mutate(&input)
-			if err := validateThoughtWire(input); err == nil {
-				t.Fatal("validateThoughtWire() error = nil, want envelope validation error")
+			if err := validateThoughtCommand(input); err == nil {
+				t.Fatal("validateThoughtCommand() error = nil, want envelope validation error")
 			}
 		})
 	}
 }
 
-func TestValidateThoughtWireEnforcesVersionedLamportClock(t *testing.T) {
+func TestValidateThoughtCommandEnforcesVersionedLamportClock(t *testing.T) {
 	t.Parallel()
 
 	for _, operationKind := range []string{"add", "update", "delete"} {
 		for _, logicalClock := range []int64{1, 41, model.ReaderThoughtMaxLogicalClock} {
-			input := validThoughtWireInput(operationKind)
+			input := validThoughtCommand(operationKind)
 			input.ContractVersion = model.ReaderThoughtContractVersion
 			input.LogicalClock = logicalClock
-			if err := validateThoughtWire(input); err != nil {
-				t.Fatalf("validateThoughtWire(%s, %d) error = %v", operationKind, logicalClock, err)
+			if err := validateThoughtCommand(input); err != nil {
+				t.Fatalf("validateThoughtCommand(%s, %d) error = %v", operationKind, logicalClock, err)
 			}
 		}
 	}
 
 	for _, logicalClock := range []int64{0, -1, model.ReaderThoughtMaxLogicalClock + 1} {
-		input := validThoughtWireInput("update")
+		input := validThoughtCommand("update")
 		input.ContractVersion = model.ReaderThoughtContractVersion
 		input.LogicalClock = logicalClock
-		if err := validateThoughtWire(input); err == nil {
+		if err := validateThoughtCommand(input); err == nil {
 			t.Fatalf("v1 logical_clock %d should be rejected", logicalClock)
 		}
 	}
 
-	legacy := validThoughtWireInput("update")
-	if err := validateThoughtWire(legacy); err != nil {
-		t.Fatalf("legacy clock zero should be accepted: %v", err)
-	}
-	legacy.LogicalClock = 1
-	if err := validateThoughtWire(legacy); err == nil {
-		t.Fatal("legacy nonzero logical_clock should be rejected")
+	missingVersion := validThoughtCommand("update")
+	missingVersion.ContractVersion = 0
+	if err := validateThoughtCommand(missingVersion); err == nil {
+		t.Fatal("missing contract_version should be rejected")
 	}
 
-	unsupported := validThoughtWireInput("update")
+	unsupported := validThoughtCommand("update")
 	unsupported.ContractVersion = model.ReaderThoughtContractVersion + 1
 	unsupported.LogicalClock = 1
-	if err := validateThoughtWire(unsupported); err == nil {
+	if err := validateThoughtCommand(unsupported); err == nil {
 		t.Fatal("unsupported contract_version should be rejected")
 	}
 }
 
-func TestValidateThoughtWireRequiresCompleteValidRecoveryMetadata(t *testing.T) {
+func TestValidateThoughtCommandRequiresCompleteValidRecoveryMetadata(t *testing.T) {
 	t.Parallel()
 
-	input := validThoughtWireInput("update")
+	input := validThoughtCommand("update")
 	input.ContractVersion = model.ReaderThoughtContractVersion
 	input.LogicalClock = 9
-	input.RecoveryOf = &dto.ReaderThoughtVersionKeyResponse{
+	input.RecoveryOf = &model.ReaderThoughtVersionKey{
 		LogicalClock: 4,
 		DeviceID:     "loser-device",
 		OpID:         "loser-op",
 	}
-	if err := validateThoughtWire(input); err == nil {
+	if err := validateThoughtCommand(input); err == nil {
 		t.Fatal("recovery without expected current winner should be rejected")
 	} else {
-		var status *httperr.Error
-		if !errors.As(err, &status) || status.HTTPStatus() != http.StatusUnprocessableEntity ||
-			status.HTTPErrorCode() != "invalid_thought_recovery" {
+		var status *problem.Error
+		if !errors.As(err, &status) || problemHTTPStatus(status) != http.StatusUnprocessableEntity ||
+			status.Code() != "invalid_thought_recovery" {
 			t.Fatalf("incomplete recovery error = %v, want 422 invalid_thought_recovery", err)
 		}
 	}
 
-	input.ExpectedCurrentWinnerKey = &dto.ReaderThoughtVersionKeyResponse{
+	input.ExpectedCurrentWinnerKey = &model.ReaderThoughtVersionKey{
 		LogicalClock: 8,
 		DeviceID:     "winner-device",
 		OpID:         "winner-op",
 	}
-	if err := validateThoughtWire(input); err != nil {
+	if err := validateThoughtCommand(input); err != nil {
 		t.Fatalf("complete recovery metadata should be accepted: %v", err)
 	}
 
 	input.ExpectedCurrentWinnerKey.OpID = " "
-	if err := validateThoughtWire(input); err == nil {
+	if err := validateThoughtCommand(input); err == nil {
 		t.Fatal("non-canonical recovery key should be rejected")
 	}
 }
 
-func TestValidateThoughtWireRejectsNonCanonicalIdentifiers(t *testing.T) {
+func TestValidateThoughtCommandRejectsNonCanonicalIdentifiers(t *testing.T) {
 	t.Parallel()
 
 	for _, opID := range []string{
@@ -385,11 +361,11 @@ func TestValidateThoughtWireRejectsNonCanonicalIdentifiers(t *testing.T) {
 		string([]byte{0xff}),
 		strings.Repeat("a", 129),
 	} {
-		input := validThoughtWireInput("add")
+		input := validThoughtCommand("add")
 		input.ContractVersion = model.ReaderThoughtContractVersion
 		input.LogicalClock = 1
 		input.OpID = opID
-		if err := validateThoughtWire(input); err == nil {
+		if err := validateThoughtCommand(input); err == nil {
 			t.Fatalf("non-canonical op_id %q should be rejected", opID)
 		}
 	}
@@ -398,18 +374,19 @@ func TestValidateThoughtWireRejectsNonCanonicalIdentifiers(t *testing.T) {
 func TestReaderServiceRejectsInvalidDesiredStateCommandsBeforeStore(t *testing.T) {
 	t.Parallel()
 
-	service := NewReaderVNextService(nil, nil)
-	if _, err := service.PushThoughtOps(context.Background(), dto.ReaderThoughtOpsRequest{}); err == nil {
+	service := newReaderTestFeatureSet(ReaderStores{}, nil)
+	if _, err := service.PushThoughtOps(context.Background(), ReaderThoughtOpsCommand{}); err == nil {
 		t.Fatal("PushThoughtOps() error = nil for empty batch")
 	}
-	if _, err := service.CreateTodo(context.Background(), dto.ReaderTodoCreateRequest{Text: "  "}); err == nil {
+	if _, err := service.CreateTodo(context.Background(), ReaderTodoCreateCommand{Text: "  "}); err == nil {
 		t.Fatal("CreateTodo() error = nil for blank text")
 	}
-	if _, err := service.PatchEngagement(context.Background(), "00000000-0000-0000-0000-000000000001", dto.ReaderEngagementRequest{}); err == nil {
+	linkID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	if _, err := service.PatchEngagement(context.Background(), model.ReaderEngagementPatch{LinkID: linkID}); err == nil {
 		t.Fatal("PatchEngagement() error = nil for empty desired state")
 	}
 	progress := float32(math.NaN())
-	if _, err := service.PatchEngagement(context.Background(), "00000000-0000-0000-0000-000000000001", dto.ReaderEngagementRequest{Progress: &progress}); err == nil {
+	if _, err := service.PatchEngagement(context.Background(), model.ReaderEngagementPatch{LinkID: linkID, Progress: &progress}); err == nil {
 		t.Fatal("PatchEngagement() error = nil for NaN progress")
 	}
 }

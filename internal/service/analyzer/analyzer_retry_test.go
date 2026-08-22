@@ -42,7 +42,7 @@ func TestOpenAIAnalyzerStillRetriesTransientHTTPFailuresWithNonJSONErrorBodies(t
 		BaseURL:              server.URL,
 		APIKey:               "secret-key",
 		Model:                "gpt-test",
-		HTTPClient:           fetcher.NewHTTPClientWithOptions(fetcher.HTTPClientOptions{Client: server.Client(), AllowUnsafeTargets: true}).Raw(),
+		HTTPClient:           server.Client(),
 		EmptyResponseRetries: 2,
 		MaxSummaryChars:      50,
 		MinTags:              1,

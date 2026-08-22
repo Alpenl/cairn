@@ -53,27 +53,23 @@ type rf5aFaultAfterRiverInsertQueue struct {
 func (q *rf5aFaultAfterRiverInsertQueue) EnqueueTranslationTx(
 	ctx context.Context,
 	tx pgx.Tx,
-	command model.TranslationScheduleCommand,
+	seed model.TranslationAttemptSeed,
 ) (int64, error) {
-	jobID, err := q.delegate.EnqueueTranslationTx(ctx, tx, command)
+	jobID, err := q.delegate.EnqueueTranslationTx(ctx, tx, seed)
 	if err != nil {
 		return 0, err
 	}
-	q.translationID = command.Seed.TranslationID
+	q.translationID = seed.TranslationID
 	q.riverJobID = jobID
 	return 0, q.err
 }
 
-func (q *rf5aFaultAfterRiverInsertQueue) TranslationJobsRollout() model.TranslationJobsRolloutStage {
-	return q.delegate.TranslationJobsRollout()
-}
-
 func TestTranslationSourceScheduleRejectsRevisionChangedAcrossClientBarrier(t *testing.T) {
-	harness := newRF5AScheduleHarness(t, true)
+	harness := newRF5AScheduleHarness(t)
 	fixture := harness.createSource(t, "stale-revision", model.SavedContent{
 		Text: "Alpha beta", Format: model.ContentFormatPlain, Words: 2,
 	}, "Stable summary")
-	service := harness.service(true, harness.queue)
+	service := harness.service(harness.queue)
 
 	observed := make(chan int64, 1)
 	release := make(chan struct{})
@@ -111,14 +107,15 @@ func TestTranslationSourceScheduleRejectsRevisionChangedAcrossClientBarrier(t *t
 	if observedRevision != fixture.revision {
 		t.Fatalf("observed content revision = %d, want fixture revision %d", observedRevision, fixture.revision)
 	}
-	currentRevision, stored, err := harness.links.ReplaceContentIfCurrent(
+	currentRevision, stored, err := harness.links.ReplaceContentIfCurrentWithRevision(
 		fixture.ctx,
 		fixture.linkID,
 		fixture.updatedAt,
+		observedRevision,
 		model.SavedContent{Text: "Alpha beta replaced", Format: model.ContentFormatPlain, Words: 3},
 	)
 	if err != nil || !stored || currentRevision != observedRevision+1 {
-		t.Fatalf("ReplaceContentIfCurrent() = revision %d, stored %v, error %v; want %d/true",
+		t.Fatalf("ReplaceContentIfCurrentWithRevision() = revision %d, stored %v, error %v; want %d/true",
 			currentRevision, stored, err, observedRevision+1)
 	}
 	close(release)
@@ -146,12 +143,12 @@ func TestTranslationSourceScheduleRejectsRevisionChangedAcrossClientBarrier(t *t
 }
 
 func TestTranslationSourceScheduleRejectsSummaryChangedWithoutSavedRevisionBump(t *testing.T) {
-	harness := newRF5AScheduleHarness(t, true)
+	harness := newRF5AScheduleHarness(t)
 	oldSummary := "**Alpha** beta"
 	fixture := harness.createSource(t, "stale-summary", model.SavedContent{
 		Text: "Saved body", Format: model.ContentFormatPlain, Words: 2,
 	}, oldSummary)
-	service := harness.service(true, harness.queue)
+	service := harness.service(harness.queue)
 	oldHash := rf5aRenderedHash(t, oldSummary)
 
 	newSummary := "**Gamma** delta"
@@ -184,8 +181,8 @@ func TestTranslationSourceScheduleRejectsSummaryChangedWithoutSavedRevisionBump(
 }
 
 func TestTranslationSourceScheduleRejectsCanonicalTextAndOffsetMismatches(t *testing.T) {
-	harness := newRF5AScheduleHarness(t, true)
-	service := harness.service(true, harness.queue)
+	harness := newRF5AScheduleHarness(t)
+	service := harness.service(harness.queue)
 
 	for _, tc := range []struct {
 		name        string
@@ -236,13 +233,13 @@ func TestTranslationSourceScheduleRejectsCanonicalTextAndOffsetMismatches(t *tes
 }
 
 func TestTranslationSourceScheduleRollsBackProductAttemptAndJobAfterRealRiverInsert(t *testing.T) {
-	harness := newRF5AScheduleHarness(t, true)
+	harness := newRF5AScheduleHarness(t)
 	fixture := harness.createSource(t, "river-rollback", model.SavedContent{
 		Text: "Alpha beta", Format: model.ContentFormatPlain, Words: 2,
 	}, "Alpha beta")
 	fault := errors.New("injected failure after real River InsertTx")
 	queue := &rf5aFaultAfterRiverInsertQueue{delegate: harness.queue, err: fault}
-	service := harness.service(true, queue)
+	service := harness.service(queue)
 
 	item, err := service.Create(fixture.ctx, fixture.linkID, model.TranslationRequest{
 		Scope: model.TranslationScopeSelection, BlockKey: "content",
@@ -269,11 +266,11 @@ func TestTranslationSourceScheduleRollsBackProductAttemptAndJobAfterRealRiverIns
 }
 
 func TestTranslationSourceScheduleContractKeepsSameHashAcrossSavedRevisionsDistinct(t *testing.T) {
-	harness := newRF5AScheduleHarness(t, true)
+	harness := newRF5AScheduleHarness(t)
 	fixture := harness.createSource(t, "contract-distinct-revisions", model.SavedContent{
 		Text: "Alpha beta", Format: model.ContentFormatPlain, Words: 2,
 	}, "Alpha beta")
-	service := harness.service(true, harness.queue)
+	service := harness.service(harness.queue)
 
 	first, err := service.Create(fixture.ctx, fixture.linkID, model.TranslationRequest{
 		Scope: model.TranslationScopeSelection, BlockKey: "content",
@@ -283,14 +280,15 @@ func TestTranslationSourceScheduleContractKeepsSameHashAcrossSavedRevisionsDisti
 	if err != nil || first == nil {
 		t.Fatalf("Create(revision %d) = %+v, %v", fixture.revision, first, err)
 	}
-	secondRevision, stored, err := harness.links.ReplaceContentIfCurrent(
+	secondRevision, stored, err := harness.links.ReplaceContentIfCurrentWithRevision(
 		fixture.ctx,
 		fixture.linkID,
 		fixture.updatedAt,
+		fixture.revision,
 		model.SavedContent{Text: "Alpha beta revised", Format: model.ContentFormatPlain, Words: 3},
 	)
 	if err != nil || !stored || secondRevision != fixture.revision+1 {
-		t.Fatalf("ReplaceContentIfCurrent() = revision %d/stored %v/error %v", secondRevision, stored, err)
+		t.Fatalf("ReplaceContentIfCurrentWithRevision() = revision %d/stored %v/error %v", secondRevision, stored, err)
 	}
 	second, err := service.Create(fixture.ctx, fixture.linkID, model.TranslationRequest{
 		Scope: model.TranslationScopeSelection, BlockKey: "content",
@@ -322,23 +320,23 @@ func TestTranslationSourceScheduleContractKeepsSameHashAcrossSavedRevisionsDisti
 }
 
 func TestTranslationSourceScheduleSuccessKeepsResponseProductAttemptAndRiverArgsIdentical(t *testing.T) {
-	harness := newRF5AScheduleHarness(t, true)
+	harness := newRF5AScheduleHarness(t)
 	fixture := harness.createSource(t, "identity-roundtrip", model.SavedContent{
 		Text: "Alpha beta", Format: model.ContentFormatPlain, Words: 2,
 	}, "Alpha beta")
-	service := harness.service(true, harness.queue)
+	service := harness.service(harness.queue)
 
 	response, err := service.Create(fixture.ctx, fixture.linkID, model.TranslationRequest{
 		Scope: model.TranslationScopeSelection, BlockKey: "content",
 		StartOffset: 0, EndOffset: 5, SourceText: "Alpha",
 		ExpectedContentRevision: &fixture.revision,
 	})
-	if err != nil || response == nil || response.CurrentRiverJobID == nil {
+	if err != nil || response == nil {
 		t.Fatalf("Create(identity roundtrip) = %+v, %v", response, err)
 	}
 	if response.LinkID != fixture.linkID ||
 		response.SourceContentRevision == nil || *response.SourceContentRevision != fixture.revision ||
-		response.AttemptGeneration != 1 || *response.CurrentRiverJobID <= 0 {
+		response.AttemptGeneration != 1 {
 		t.Fatalf("response identity = %+v, want link %s/revision %d/generation 1",
 			response, fixture.linkID, fixture.revision)
 	}
@@ -346,8 +344,7 @@ func TestTranslationSourceScheduleSuccessKeepsResponseProductAttemptAndRiverArgs
 	if err != nil || persisted == nil || persisted.ID != response.ID ||
 		persisted.SourceHash != response.SourceHash ||
 		persisted.SourceContentRevision == nil || *persisted.SourceContentRevision != *response.SourceContentRevision ||
-		persisted.AttemptGeneration != response.AttemptGeneration || persisted.CurrentRiverJobID == nil ||
-		*persisted.CurrentRiverJobID != *response.CurrentRiverJobID {
+		persisted.AttemptGeneration != response.AttemptGeneration {
 		t.Fatalf("persisted current attempt = %+v, %v; response=%+v", persisted, err, response)
 	}
 
@@ -356,13 +353,14 @@ func TestTranslationSourceScheduleSuccessKeepsResponseProductAttemptAndRiverArgs
 	if err := harness.pool.QueryRow(t.Context(), `SELECT id, kind,
 		args->>'translation_id', args->>'attempt_generation', args->>'source_hash',
 		args->>'source_content_revision', state::text
-		FROM river_job WHERE id=$1`, *response.CurrentRiverJobID).Scan(
+		FROM river_job
+		WHERE kind=$1 AND args->>'translation_id'=$2`, model.TranslationJobKind, response.ID.String()).Scan(
 		&riverID, &kind, &translationArg, &generationArg,
 		&sourceHashArg, &sourceRevisionArg, &state,
 	); err != nil {
 		t.Fatalf("read current River attempt: %v", err)
 	}
-	if riverID != *response.CurrentRiverJobID || kind != model.TranslationJobKindV2 ||
+	if riverID <= 0 || kind != model.TranslationJobKind ||
 		translationArg != response.ID.String() ||
 		generationArg != strconv.FormatInt(response.AttemptGeneration, 10) ||
 		sourceHashArg != response.SourceHash ||
@@ -372,180 +370,7 @@ func TestTranslationSourceScheduleSuccessKeepsResponseProductAttemptAndRiverArgs
 	}
 }
 
-func TestContentHistoryRestorePreservesTranslationHistoryAndAttemptIdentity(t *testing.T) {
-	harness := newRF5AScheduleHarness(t, true)
-	fixture := harness.createSource(t, "restore-translation-history", model.SavedContent{
-		Text: "Alpha beta", Format: model.ContentFormatPlain, Words: 2,
-	}, "Alpha beta")
-	service := harness.service(true, harness.queue)
-
-	createSaved := func(sourceText string, start, end int) *model.LinkTranslation {
-		t.Helper()
-		item, err := service.Create(fixture.ctx, fixture.linkID, model.TranslationRequest{
-			Scope: model.TranslationScopeSelection, BlockKey: "content",
-			StartOffset: start, EndOffset: end, SourceText: sourceText,
-			ExpectedContentRevision: &fixture.revision,
-		})
-		if err != nil || item == nil || item.CurrentRiverJobID == nil {
-			t.Fatalf("Create(saved %q) = %+v, %v", sourceText, item, err)
-		}
-		return item
-	}
-	oldAlpha := createSaved("Alpha", 0, 5)
-	oldBeta := createSaved("beta", 6, 10)
-	oldAlphaAttempt := model.TranslationAttempt{
-		TranslationID:     oldAlpha.ID,
-		AttemptGeneration: oldAlpha.AttemptGeneration, RiverJobID: *oldAlpha.CurrentRiverJobID,
-		SourceHash: oldAlpha.SourceHash, SourceContentRevision: oldAlpha.SourceContentRevision,
-	}
-	oldBetaAttempt := model.TranslationAttempt{
-		TranslationID:     oldBeta.ID,
-		AttemptGeneration: oldBeta.AttemptGeneration, RiverJobID: *oldBeta.CurrentRiverJobID,
-		SourceHash: oldBeta.SourceHash, SourceContentRevision: oldBeta.SourceContentRevision,
-	}
-	for _, attempt := range []model.TranslationAttempt{oldAlphaAttempt, oldBetaAttempt} {
-		item, err := harness.translations.MarkProcessing(fixture.ctx, attempt)
-		if err != nil || item == nil || item.Status != model.TranslationStatusProcessing {
-			t.Fatalf("MarkProcessing(%s) = %+v, %v", attempt.TranslationID, item, err)
-		}
-	}
-
-	summaryHash := rf5aRenderedHash(t, fixture.summary)
-	summary, err := service.Create(fixture.ctx, fixture.linkID, model.TranslationRequest{
-		Scope: model.TranslationScopeSelection, BlockKey: "summary",
-		StartOffset: 0, EndOffset: 5, SourceText: "Alpha", ExpectedSourceHash: &summaryHash,
-	})
-	if err != nil || summary == nil || summary.CurrentRiverJobID == nil {
-		t.Fatalf("Create(summary) = %+v, %v", summary, err)
-	}
-	summaryAttempt := model.TranslationAttempt{
-		TranslationID:     summary.ID,
-		AttemptGeneration: summary.AttemptGeneration, RiverJobID: *summary.CurrentRiverJobID,
-		SourceHash: summary.SourceHash, SourceContentRevision: summary.SourceContentRevision,
-	}
-	if item, err := harness.translations.MarkProcessing(fixture.ctx, summaryAttempt); err != nil || item == nil {
-		t.Fatalf("MarkProcessing(summary) = %+v, %v", item, err)
-	}
-	if applied, err := harness.translations.Complete(fixture.ctx, summaryAttempt, "摘要译文", "test-model"); err != nil || !applied {
-		t.Fatalf("Complete(summary) = %v, %v", applied, err)
-	}
-
-	legacyService := harness.service(false, harness.queue)
-	legacy, err := legacyService.Create(fixture.ctx, fixture.linkID, model.TranslationRequest{
-		Scope: model.TranslationScopeSelection, BlockKey: "content",
-		StartOffset: 6, EndOffset: 10, SourceText: "beta",
-	})
-	if err != nil || legacy == nil || legacy.SourceContentRevision != nil {
-		t.Fatalf("Create(legacy) = %+v, %v", legacy, err)
-	}
-	revisionBeforeRestore, stored, err := harness.links.ReplaceContentIfCurrent(
-		fixture.ctx, fixture.linkID, fixture.updatedAt,
-		model.SavedContent{Text: "Gamma delta", Format: model.ContentFormatPlain, Words: 2},
-	)
-	if err != nil || !stored || revisionBeforeRestore != fixture.revision+1 {
-		t.Fatalf("ReplaceContentIfCurrent() = revision %d, stored %v, error %v", revisionBeforeRestore, stored, err)
-	}
-	var historyID int64
-	if err := harness.pool.QueryRow(t.Context(), `SELECT id FROM reader_content_history
-		WHERE link_id=$1 AND revision=$2`, fixture.linkID, fixture.revision).Scan(&historyID); err != nil {
-		t.Fatalf("read original content history: %v", err)
-	}
-
-	reader := repository.NewPGXReaderVNextRepository(harness.pool)
-	type restoreResult struct {
-		revision int64
-		err      error
-	}
-	type terminalResult struct {
-		name    string
-		applied bool
-		err     error
-	}
-	start := make(chan struct{})
-	restored := make(chan restoreResult, 1)
-	terminals := make(chan terminalResult, 2)
-	go func() {
-		<-start
-		revision, restoreErr := reader.RestoreContentHistory(fixture.ctx, fixture.linkID, historyID, revisionBeforeRestore)
-		restored <- restoreResult{revision: revision, err: restoreErr}
-	}()
-	go func() {
-		<-start
-		applied, completeErr := harness.translations.Complete(fixture.ctx, oldAlphaAttempt, "旧代次完成", "test-model")
-		terminals <- terminalResult{name: "complete", applied: applied, err: completeErr}
-	}()
-	go func() {
-		<-start
-		applied, failErr := harness.translations.Fail(fixture.ctx, oldBetaAttempt, "旧代次失败")
-		terminals <- terminalResult{name: "fail", applied: applied, err: failErr}
-	}()
-	close(start)
-	restore := <-restored
-	if restore.err != nil || restore.revision != revisionBeforeRestore+1 {
-		t.Fatalf("RestoreContentHistory() = revision %d, error %v", restore.revision, restore.err)
-	}
-	for range 2 {
-		terminal := <-terminals
-		if terminal.err != nil || !terminal.applied {
-			t.Fatalf("%s(old attempt racing restore) = %v, %v", terminal.name, terminal.applied, terminal.err)
-		}
-	}
-	restoredRevision := restore.revision
-
-	fresh, err := service.Create(fixture.ctx, fixture.linkID, model.TranslationRequest{
-		Scope: model.TranslationScopeSelection, BlockKey: "content",
-		StartOffset: 0, EndOffset: 5, SourceText: "Alpha",
-		ExpectedContentRevision: &restoredRevision,
-	})
-	if err != nil || fresh == nil || fresh.ID == oldAlpha.ID || fresh.SourceContentRevision == nil ||
-		*fresh.SourceContentRevision != restoredRevision {
-		t.Fatalf("Create(restored revision) = %+v, %v", fresh, err)
-	}
-
-	list, err := service.List(fixture.ctx, fixture.linkID)
-	if err != nil || list.CurrentContentRevision != restoredRevision {
-		t.Fatalf("List() = %+v, %v", list, err)
-	}
-	items := make(map[uuid.UUID]model.LinkTranslation, len(list.Items))
-	for _, item := range list.Items {
-		items[item.ID] = item
-	}
-	assertItem := func(id uuid.UUID, status model.TranslationStatus, stale bool) model.LinkTranslation {
-		t.Helper()
-		item, ok := items[id]
-		if !ok || item.Status != status || item.Stale != stale {
-			t.Fatalf("translation %s = %+v, want status=%s stale=%v", id, item, status, stale)
-		}
-		return item
-	}
-	assertItem(oldAlpha.ID, model.TranslationStatusDone, true)
-	assertItem(oldBeta.ID, model.TranslationStatusFailed, true)
-	assertItem(fresh.ID, model.TranslationStatusPending, false)
-	assertItem(summary.ID, model.TranslationStatusDone, false)
-	legacyItem := assertItem(legacy.ID, model.TranslationStatusPending, false)
-	if legacyItem.SourceContentRevision != nil {
-		t.Fatalf("legacy source revision = %v, want nil", *legacyItem.SourceContentRevision)
-	}
-
-	freshBeforeConflict, err := harness.translations.GetByID(fixture.ctx, fresh.ID)
-	if err != nil || freshBeforeConflict == nil {
-		t.Fatalf("GetByID(fresh before conflict) = %+v, %v", freshBeforeConflict, err)
-	}
-	_, err = reader.RestoreContentHistory(fixture.ctx, fixture.linkID, historyID, revisionBeforeRestore)
-	if !errors.Is(err, repository.ErrRevisionConflict) {
-		t.Fatalf("stale RestoreContentHistory() error = %v, want ErrRevisionConflict", err)
-	}
-	freshAfterConflict, err := harness.translations.GetByID(fixture.ctx, fresh.ID)
-	if err != nil || freshAfterConflict == nil || freshAfterConflict.Status != freshBeforeConflict.Status ||
-		freshAfterConflict.AttemptGeneration != freshBeforeConflict.AttemptGeneration ||
-		freshAfterConflict.CurrentRiverJobID == nil || freshBeforeConflict.CurrentRiverJobID == nil ||
-		*freshAfterConflict.CurrentRiverJobID != *freshBeforeConflict.CurrentRiverJobID ||
-		freshAfterConflict.SourceContentRevision == nil || *freshAfterConflict.SourceContentRevision != restoredRevision {
-		t.Fatalf("fresh attempt changed after failed restore: before=%+v after=%+v error=%v", freshBeforeConflict, freshAfterConflict, err)
-	}
-}
-
-func newRF5AScheduleHarness(t *testing.T, _ bool) *rf5aScheduleHarness {
+func newRF5AScheduleHarness(t *testing.T) *rf5aScheduleHarness {
 	t.Helper()
 	pool := StartPostgres(t)
 
@@ -559,12 +384,11 @@ func newRF5AScheduleHarness(t *testing.T, _ bool) *rf5aScheduleHarness {
 	}
 }
 
-func (h *rf5aScheduleHarness) service(strict bool, queue durablework.TranslationQueue) *linktranslation.Service {
+func (h *rf5aScheduleHarness) service(queue durablework.TranslationQueue) *linktranslation.Service {
 	scheduler := durablework.NewTranslationScheduler(durablework.TranslationSchedulerOptions{
-		Transactions:         h.pool,
-		Products:             h.translations,
-		Queue:                queue,
-		StrictSourceIdentity: strict,
+		Transactions: h.pool,
+		Products:     h.translations,
+		Queue:        queue,
 	})
 	return linktranslation.NewService(linktranslation.ServiceOptions{
 		Translations:   h.translations,
@@ -609,14 +433,12 @@ func (h *rf5aScheduleHarness) createSource(
 
 func assertRF5AScheduleError(t *testing.T, err error, wantStatus int, wantCode string) httperr.ConflictIdentity {
 	t.Helper()
-	var status httperr.StatusCarrier
-	var code httperr.ErrorCoder
-	if !errors.As(err, &status) || status.HTTPStatus() != wantStatus ||
-		!errors.As(err, &code) || code.HTTPErrorCode() != wantCode {
+	status, ok := httperr.As(err)
+	code, coded := status.(httperr.ErrorCoder)
+	if !ok || !coded || status.HTTPStatus() != wantStatus || code.HTTPErrorCode() != wantCode {
 		t.Fatalf("schedule error = %v, want HTTP %d/%s", err, wantStatus, wantCode)
 	}
-	var identityProvider httperr.CurrentIdentityProvider
-	if errors.As(err, &identityProvider) {
+	if identityProvider, present := status.(httperr.CurrentIdentityProvider); present {
 		if identity, ok := identityProvider.HTTPCurrentIdentity(); ok {
 			return identity
 		}
@@ -634,7 +456,7 @@ func assertRF5ANoScheduledWork(t *testing.T, pool *pgxpool.Pool, linkID uuid.UUI
 	}
 	var jobs int
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM river_job
-		WHERE kind IN ($1, $2)`, model.TranslationJobKindLegacy, model.TranslationJobKindV2).Scan(&jobs); err != nil {
+		WHERE kind = $1`, model.TranslationJobKind).Scan(&jobs); err != nil {
 		t.Fatalf("count River translation jobs: %v", err)
 	}
 	if products != 0 || totalGeneration != 0 || jobs != 0 {
@@ -657,9 +479,9 @@ func assertRF5AScheduledWorkCounts(
 		t.Fatalf("count translation products for link %s: %v", linkID, err)
 	}
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM river_job
-		WHERE kind IN ($1, $2) AND args->>'translation_id' IN (
-			SELECT id::text FROM link_translations WHERE link_id=$3
-		)`, model.TranslationJobKindLegacy, model.TranslationJobKindV2, linkID).Scan(&jobs); err != nil {
+		WHERE kind = $1 AND args->>'translation_id' IN (
+			SELECT id::text FROM link_translations WHERE link_id=$2
+		)`, model.TranslationJobKind, linkID).Scan(&jobs); err != nil {
 		t.Fatalf("count River translation jobs for link %s: %v", linkID, err)
 	}
 	if products != wantProducts || jobs != wantJobs {

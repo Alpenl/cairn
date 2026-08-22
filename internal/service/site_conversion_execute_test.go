@@ -41,7 +41,7 @@ func TestConversionExecuteRequiresConfirmationAndCurrentRevision(t *testing.T) {
 	kind := model.LibraryKindReading
 	links := conversionLinksFake{link: &model.Link{ID: id, Status: model.LinkStatusDone, LibraryKind: &kind, ContentRevision: 4}}
 	writer := &conversionWriterFake{}
-	svc := NewConversionExecuteServiceWithOptions(ConversionExecuteServiceOptions{Links: links, Commands: writer})
+	svc := NewConversionExecuteService(links, writer)
 	_, err := svc.Execute(context.Background(), id.String(), dto.ConversionExecuteRequest{TargetKind: "site", ExpectedContentRevision: 4})
 	conversionExecuteErrorCode(t, err, http.StatusConflict, httperr.CodeDestructiveConfirmationRequired)
 	if writer.params.LinkID != uuid.Nil {
@@ -51,21 +51,6 @@ func TestConversionExecuteRequiresConfirmationAndCurrentRevision(t *testing.T) {
 	conversionExecuteErrorCode(t, err, http.StatusConflict, httperr.CodeRevisionConflict)
 }
 
-func TestConversionExecuteRejectsReadingToSiteWhenSiteWritesDisabled(t *testing.T) {
-	id := uuid.New()
-	kind := model.LibraryKindReading
-	writer := &conversionWriterFake{}
-	svc := NewConversionExecuteServiceWithOptions(ConversionExecuteServiceOptions{
-		Links: conversionLinksFake{link: &model.Link{ID: id, Status: model.LinkStatusDone, LibraryKind: &kind, ContentRevision: 4}}, Commands: writer,
-		DisableSiteLibraryWrite: true,
-	})
-	_, err := svc.Execute(context.Background(), id.String(), dto.ConversionExecuteRequest{TargetKind: "site", ExpectedContentRevision: 4, ConfirmDestructive: true})
-	conversionExecuteErrorCode(t, err, http.StatusServiceUnavailable, "site_library_write_disabled")
-	if writer.params.LinkID != uuid.Nil {
-		t.Fatal("writer called while site writes were disabled")
-	}
-}
-
 func TestConversionExecutePassesCASAndReturnsStructuredTarget(t *testing.T) {
 	id, siteID, entryID := uuid.New(), uuid.New(), uuid.New()
 	kind := model.LibraryKindReading
@@ -73,7 +58,7 @@ func TestConversionExecutePassesCASAndReturnsStructuredTarget(t *testing.T) {
 	target := siteID.String()
 	revision := int64(8)
 	writer := &conversionWriterFake{result: ConvertLinkResult{LinkID: id, Kind: model.LibraryKindSite, ContentRevision: 5, Status: model.LinkStatusDone, SiteID: &siteID, SiteRevision: &revision, EntryID: &entryID}}
-	svc := NewConversionExecuteServiceWithOptions(ConversionExecuteServiceOptions{Links: conversionLinksFake{link: &model.Link{ID: id, Status: model.LinkStatusDone, LibraryKind: &kind, ContentRevision: 4}}, Commands: writer})
+	svc := NewConversionExecuteService(conversionLinksFake{link: &model.Link{ID: id, Status: model.LinkStatusDone, LibraryKind: &kind, ContentRevision: 4}}, writer)
 	got, err := svc.Execute(context.Background(), id.String(), dto.ConversionExecuteRequest{TargetKind: "site", ExpectedContentRevision: 4, TargetSiteID: &target, ExpectedSiteRevision: &revision, ConfirmDestructive: true, PreservedUserNote: &note})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -89,7 +74,7 @@ func TestConversionExecutePassesCASAndReturnsStructuredTarget(t *testing.T) {
 func TestConversionExecuteSiteToReadingRequiresSourceSiteRevision(t *testing.T) {
 	id := uuid.New()
 	kind := model.LibraryKindSite
-	svc := NewConversionExecuteServiceWithOptions(ConversionExecuteServiceOptions{Links: conversionLinksFake{link: &model.Link{ID: id, Status: model.LinkStatusDone, LibraryKind: &kind, ContentRevision: 4}}, Commands: &conversionWriterFake{}})
+	svc := NewConversionExecuteService(conversionLinksFake{link: &model.Link{ID: id, Status: model.LinkStatusDone, LibraryKind: &kind, ContentRevision: 4}}, &conversionWriterFake{})
 	_, err := svc.Execute(context.Background(), id.String(), dto.ConversionExecuteRequest{TargetKind: "reading", ExpectedContentRevision: 4})
 	// The repository must know which site aggregate is being modified. Its
 	// revision is required before executing, even though no target_site_id is.

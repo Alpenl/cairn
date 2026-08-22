@@ -37,9 +37,8 @@ func TestConversionQueriesDoNotDependOnTenantIdentity(t *testing.T) {
 	}
 }
 
-func expectSiteToReadingConversion(mock pgxmock.PgxPoolIface, linkID, siteID, entryID, jobID uuid.UUID, revision int64) {
+func expectSiteToReadingConversion(mock pgxmock.PgxPoolIface, linkID, siteID, entryID uuid.UUID, revision int64) {
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockConvertibleLinkWithSummarySQL)).WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"url", "title", "summary", "status", "library_kind", "content_revision"}).
 			AddRow("https://example.com/docs", "Docs", "", string(model.LinkStatusDone), string(model.LibraryKindSite), revision))
@@ -55,12 +54,9 @@ func expectSiteToReadingConversion(mock pgxmock.PgxPoolIface, linkID, siteID, en
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(deleteManagedSiteSQL)).WithArgs(siteID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
-	mock.ExpectExec(regexp.QuoteMeta(convertSiteToReadingSQL)).WithArgs(linkID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
-	mock.ExpectQuery(regexp.QuoteMeta(insertJobSQL)).WithArgs(linkID, parseJobsPerLinkRetention).
-		WillReturnRows(mock.NewRows(jobColumns()).
-			AddRow(jobID, linkID, string(model.JobStatusPending), nil, now, now, int64(1)))
+	mock.ExpectQuery(regexp.QuoteMeta(convertSiteToReadingSQL)).WithArgs(linkID).
+		WillReturnRows(mock.NewRows([]string{"parse_generation", "metadata_revision"}).
+			AddRow(int64(7), int64(9)))
 }
 
 func expectNoThoughtSnapshotsForConversion(mock pgxmock.PgxPoolIface, linkID uuid.UUID) {
@@ -69,21 +65,21 @@ func expectNoThoughtSnapshotsForConversion(mock pgxmock.PgxPoolIface, linkID uui
 		WillReturnRows(mock.NewRows([]string{"id"}))
 }
 
-func TestConvertSiteToReadingCommitsLinkSiteAndJobTogether(t *testing.T) {
+func TestConvertSiteToReadingReturnsParseAttempt(t *testing.T) {
 	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatalf("pgxmock.NewPool() error = %v", err)
 	}
 	defer mock.Close()
-	linkID, siteID, entryID, jobID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	expectSiteToReadingConversion(mock, linkID, siteID, entryID, jobID, 4)
+	linkID, siteID, entryID := uuid.New(), uuid.New(), uuid.New()
+	expectSiteToReadingConversion(mock, linkID, siteID, entryID, 4)
 	mock.ExpectCommit()
 	result, err := NewPGXLinkRepository(mock).ConvertLink(context.Background(), ConvertLinkParams{LinkID: linkID, TargetKind: model.LibraryKindReading, ExpectedContentRevision: 4, ExpectedSiteRevision: int64Ptr(4)})
 	if err != nil {
 		t.Fatalf("ConvertLink() error = %v", err)
 	}
-	if result.Kind != model.LibraryKindReading || result.Status != model.LinkStatusPending || result.ParseJobID == nil || *result.ParseJobID != jobID || result.ContentRevision != 5 {
+	if result.Kind != model.LibraryKindReading || result.Status != model.LinkStatusPending || result.ParseAttempt == nil || result.ParseAttempt.LinkID != linkID || result.ParseAttempt.Generation != 7 || result.ParseAttempt.ExpectedMetadataRevision != 9 || result.ContentRevision != 5 {
 		t.Fatalf("ConvertLink() result = %#v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -100,7 +96,6 @@ func TestConvertReadingToSiteRollsBackWhenTagCopyFails(t *testing.T) {
 	defer mock.Close()
 	linkID, siteID, entryID := uuid.New(), uuid.New(), uuid.New()
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockConvertibleLinkWithSummarySQL)).WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"url", "title", "summary", "status", "library_kind", "content_revision"}).
 			AddRow("https://example.com/docs", "Docs", "Useful tool", string(model.LinkStatusDone), string(model.LibraryKindReading), int64(3)))
@@ -142,7 +137,6 @@ func TestConvertReadingToSiteUsesExistingSummaryAsNewSiteIntro(t *testing.T) {
 	defer mock.Close()
 	linkID, siteID, entryID := uuid.New(), uuid.New(), uuid.New()
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockConvertibleLinkWithSummarySQL)).WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"url", "title", "summary", "status", "library_kind", "content_revision"}).
 			AddRow("https://example.com/docs", "Docs", "Useful tool", string(model.LinkStatusDone), string(model.LibraryKindReading), int64(3)))

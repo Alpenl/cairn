@@ -58,17 +58,9 @@ const (
 	// Local and sandbox runs leave it unset so an unavailable Docker daemon
 	// keeps the opt-in suite skippable; the required Make target sets it.
 	dbIntegrationRequiredEnv = "WEBTAG_DBINTEGRATION_REQUIRED"
-	// postgresImage is pinned to pgvector/pgvector:pg16 — tag-pinned, not
-	// digest-pinned, so the image can still move underneath us. That is
-	// precisely why dbintegration.yml keeps a nightly cron: no diff in this
-	// repo can announce such a shift. The image is the stock
-	// postgres:16 image plus the pgvector extension pre-installed. The
-	// Phase 5 (v3.0) migration runs `CREATE EXTENSION vector` + builds an
-	// HNSW index, which the plain postgres:16-alpine image cannot satisfy
-	// (extension not bundled). pgvector/pgvector:pg16 is the upstream
-	// pgvector project's official image (Debian-based, PG 16). Bump this in
-	// lockstep with the migration and container smoke scripts when the
-	// production target moves.
+	// Keep the integration image aligned with production's PostgreSQL major
+	// while retaining pgvector so the immutable v0.1.17 baseline fixture can be
+	// restored before the current migration removes that extension.
 	postgresImage = "pgvector/pgvector:pg16"
 )
 
@@ -240,20 +232,15 @@ func (c *containerState) boot() error {
 // a half-cleared schema_migrations would attempt to re-create tables
 // that already exist and surface as confusing errors.
 //
-// CASCADE handles the parse_jobs -> links FK and the
-// concept_alias / link_concept / concept_merge_proposal → concept FKs
-// without the caller having to spell out a dependency order. RESTART
-// IDENTITY is harmless here (no sequences) and future-proofs against
-// added SERIAL columns. The concept tables are truncated too so the v3
-// vector-gate integration tests start from an empty concept词表 every
-// run (a leftover concept with a vector would poison the cold-start /
-// nearest-neighbour assertions).
+// CASCADE handles owned foreign keys without the caller having to spell out a
+// dependency order. RESTART IDENTITY is harmless here and future-proofs
+// against added sequence-backed columns.
 func truncateAllTables(ctx context.Context, pool *pgxpool.Pool) error {
 	// River's runtime tables remain under River's ownership except river_job:
 	// queued jobs are test data and would contaminate count and lifecycle
 	// assertions. Its migration ledger, queue registration, leader, and client
-	// tables stay intact. The four singleton tables are preserved and their
-	// mutable revisions are reset after business data is removed.
+	// tables stay intact. installation_state is preserved because it contains the
+	// installation identity used by every authenticated client.
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin truncate transaction: %w", err)
@@ -261,39 +248,24 @@ func truncateAllTables(ctx context.Context, pool *pgxpool.Pool) error {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, `TRUNCATE TABLE
-		concept,
-		concept_alias,
-		concept_merge_proposal,
 		feed_folders,
 		feed_items,
 		feed_subscriptions,
 		idempotency_keys,
-		library_classification_rules,
-		library_review_items,
-		link_concept,
 		link_translations,
 		link_url_identities,
 		links,
-		parse_jobs,
-		reader_categories,
-		reader_categorizables,
-		reader_content_history,
-		reader_domain_activity,
 		reader_engagement,
-		reader_feed_feedback,
+		reader_feed_hides,
 		reader_feed_saves,
-		reader_feed_snapshots,
 		reader_host_purge_receipts,
 		reader_inbox,
-		reader_inbox_jobs,
 		reader_note_history,
 		reader_notes,
-		reader_tag_activity,
 		reader_thought_ops,
 		reader_thought_supersession_events,
 		reader_thought_tombstones,
 		reader_thoughts,
-		reader_todo_projection_backfills,
 		reader_todos,
 		site_entries,
 		site_identities,
@@ -302,13 +274,6 @@ func truncateAllTables(ctx context.Context, pool *pgxpool.Pool) error {
 		river_job
 		RESTART IDENTITY CASCADE`); err != nil {
 		return fmt.Errorf("truncate tables: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE library_read_revision SET revision=0, updated_at=now() WHERE singleton;
-		UPDATE global_read_revision SET revision=0, updated_at=now() WHERE singleton;
-		UPDATE feed_read_revision SET revision=0, updated_at=now() WHERE singleton;
-	`); err != nil {
-		return fmt.Errorf("reset representation revisions: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit truncate transaction: %w", err)

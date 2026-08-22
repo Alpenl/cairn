@@ -10,50 +10,6 @@ import (
 	"github.com/pashagolub/pgxmock/v4"
 )
 
-func TestSiteEntryMutationsTakeSharedGateBeforeBusinessRows(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name string
-		call func(context.Context, *PGXSiteRepository) error
-	}{
-		{
-			name: "update entry",
-			call: func(ctx context.Context, repo *PGXSiteRepository) error {
-				_, err := repo.UpdateSiteEntry(ctx, UpdateSiteEntryParams{SiteID: uuid.New(), EntryID: uuid.New(), Revision: 1})
-				return err
-			},
-		},
-		{
-			name: "set primary entry",
-			call: func(ctx context.Context, repo *PGXSiteRepository) error {
-				_, err := repo.SetSitePrimaryEntry(ctx, SetSitePrimaryEntryParams{SiteID: uuid.New(), EntryID: uuid.New(), Revision: 1})
-				return err
-			},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			mock, err := pgxmock.NewPool()
-			if err != nil {
-				t.Fatalf("pgxmock.NewPool() error = %v", err)
-			}
-			defer mock.Close()
-			gateErr := errors.New("shared representation gate rejected")
-			mock.ExpectBegin()
-			mock.ExpectExec(regexp.QuoteMeta(lockRepresentationWriteGateSharedSQL)).WillReturnError(gateErr)
-			mock.ExpectRollback()
-
-			if err := tc.call(t.Context(), NewPGXSiteRepository(mock)); !errors.Is(err, gateErr) {
-				t.Fatalf("site mutation error = %v, want gate error", err)
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Fatalf("unmet expectations: %v", err)
-			}
-		})
-	}
-}
-
 func TestDeleteSiteEntryReplacesPrimaryBeforeDeletingItsLink(t *testing.T) {
 	t.Parallel()
 	mock, err := pgxmock.NewPool()
@@ -64,7 +20,6 @@ func TestDeleteSiteEntryReplacesPrimaryBeforeDeletingItsLink(t *testing.T) {
 	repo := NewPGXSiteRepository(mock)
 	siteID, entryID, fallbackID, linkID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	mock.ExpectBegin()
-	expectLibraryFeedRevisionPrelock(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteForManagementSQL)).WithArgs(siteID).
 		WillReturnRows(mock.NewRows([]string{"revision", "primary_entry_id"}).AddRow(int64(4), entryID.String()))
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteEntrySQL)).WithArgs(siteID, entryID).
@@ -98,7 +53,6 @@ func TestDeleteFinalSiteEntryDeletesLinkAndEmptySite(t *testing.T) {
 	repo := NewPGXSiteRepository(mock)
 	siteID, entryID, linkID := uuid.New(), uuid.New(), uuid.New()
 	mock.ExpectBegin()
-	expectLibraryFeedRevisionPrelock(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteForManagementSQL)).WithArgs(siteID).
 		WillReturnRows(mock.NewRows([]string{"revision", "primary_entry_id"}).AddRow(int64(7), entryID.String()))
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteEntrySQL)).WithArgs(siteID, entryID).
@@ -132,7 +86,6 @@ func TestDeleteSiteRequiresConfirmedCurrentEntryCount(t *testing.T) {
 	repo := NewPGXSiteRepository(mock)
 	siteID := uuid.New()
 	mock.ExpectBegin()
-	expectLibraryFeedRevisionPrelock(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteForManagementSQL)).WithArgs(siteID).
 		WillReturnRows(mock.NewRows([]string{"revision", "primary_entry_id"}).AddRow(int64(3), nil))
 	mock.ExpectQuery(regexp.QuoteMeta(countSiteEntriesSQL)).WithArgs(siteID).
@@ -158,7 +111,6 @@ func TestDeleteSiteDeletesAllEntryLinksBeforeAggregate(t *testing.T) {
 	repo := NewPGXSiteRepository(mock)
 	siteID := uuid.New()
 	mock.ExpectBegin()
-	expectLibraryFeedRevisionPrelock(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteForManagementSQL)).WithArgs(siteID).
 		WillReturnRows(mock.NewRows([]string{"revision", "primary_entry_id"}).AddRow(int64(3), nil))
 	mock.ExpectQuery(regexp.QuoteMeta(countSiteEntriesSQL)).WithArgs(siteID).
@@ -196,13 +148,12 @@ func TestUpdateSiteProfileAndTagsUsesOneRevisionGuardedTransaction(t *testing.T)
 		TagRemovals: []string{"legacy"},
 	}
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	mock.ExpectExec(regexp.QuoteMeta(updateSiteProfileSQL)).WithArgs(params.Name, params.Intro, params.HomepageURL, params.IconURL, params.UserNote, params.Pinned, siteID, int64(5)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectExec(regexp.QuoteMeta(deleteUserSiteTagsSQL)).WithArgs(siteID, params.TagRemovals).
+	mock.ExpectExec(regexp.QuoteMeta(deleteSiteTagsSQL)).WithArgs(siteID, params.TagRemovals).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	for _, tag := range params.TagAdds {
-		mock.ExpectExec(regexp.QuoteMeta(upsertUserSiteTagSQL)).WithArgs(siteID, tag.Tag, tag.NormalizedTag).
+		mock.ExpectExec(regexp.QuoteMeta(upsertSiteTagSQL)).WithArgs(siteID, tag.Tag, tag.NormalizedTag).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	}
 	mock.ExpectCommit()
@@ -230,7 +181,6 @@ func TestExecuteSiteMergeMovesUniqueEntriesAndDeletesDuplicatesAtomically(t *tes
 	movedEntry, movedLink := uuid.New(), uuid.New()
 
 	mock.ExpectBegin()
-	expectLibraryFeedRevisionPrelock(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteForManagementSQL)).WithArgs(targetID).
 		WillReturnRows(mock.NewRows([]string{"revision", "primary_entry_id"}).AddRow(int64(4), nil))
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteForManagementSQL)).WithArgs(sourceID).
@@ -247,7 +197,7 @@ func TestExecuteSiteMergeMovesUniqueEntriesAndDeletesDuplicatesAtomically(t *tes
 		WillReturnRows(mock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(regexp.QuoteMeta(mergeMoveEntrySQL)).WithArgs(targetID, movedEntry).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectExec(regexp.QuoteMeta(mergeUserTagsSQL)).WithArgs(targetID, sourceID).
+	mock.ExpectExec(regexp.QuoteMeta(mergeTagsSQL)).WithArgs(targetID, sourceID).
 		WillReturnResult(pgxmock.NewResult("INSERT", 2))
 	mock.ExpectExec(regexp.QuoteMeta(mergeIdentitiesSQL)).WithArgs(targetID, sourceID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -280,7 +230,6 @@ func TestExecuteSiteMergeRollsBackBeforeAnyEntryMutationOnRevisionMismatch(t *te
 	targetID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 	sourceID := uuid.MustParse("00000000-0000-0000-0000-000000000002")
 	mock.ExpectBegin()
-	expectLibraryFeedRevisionPrelock(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteForManagementSQL)).WithArgs(targetID).
 		WillReturnRows(mock.NewRows([]string{"revision", "primary_entry_id"}).AddRow(int64(4), nil))
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteForManagementSQL)).WithArgs(sourceID).
@@ -307,7 +256,6 @@ func TestExecuteSiteSplitMovesEntriesAndKeepsAllWritesInOneTransaction(t *testin
 	sourceID, entryID, newID := uuid.New(), uuid.New(), uuid.New()
 	identity := "v1:host:example.com"
 	mock.ExpectBegin()
-	expectRepresentationWriteGateShared(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockSiteForManagementSQL)).WithArgs(sourceID).
 		WillReturnRows(mock.NewRows([]string{"revision", "primary_entry_id"}).AddRow(int64(4), nil))
 	mock.ExpectQuery(regexp.QuoteMeta(splitCountEntriesSQL)).WithArgs(sourceID).
@@ -319,7 +267,7 @@ func TestExecuteSiteSplitMovesEntriesAndKeepsAllWritesInOneTransaction(t *testin
 	mock.ExpectExec(regexp.QuoteMeta(splitMoveEntriesSQL)).WithArgs(newID, sourceID, []uuid.UUID{entryID}).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(splitSetPrimarySQL)).WithArgs(entryID, newID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(splitUpdateSourceSQL)).WithArgs([]uuid.UUID{entryID}, sourceID, int64(4)).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectExec(regexp.QuoteMeta(splitCopyUserTagsSQL)).WithArgs(newID, sourceID).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec(regexp.QuoteMeta(splitCopyTagsSQL)).WithArgs(newID, sourceID).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec(regexp.QuoteMeta(splitMoveIdentitySQL)).WithArgs(newID, sourceID, identity).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 	result, err := repo.ExecuteSiteSplit(context.Background(), ExecuteSiteSplitParams{SourceID: sourceID, SourceRevision: 4, EntryIDs: []uuid.UUID{entryID}, Name: "Separated", PrimaryEntryID: entryID, IdentityKeyForNewSite: &identity})

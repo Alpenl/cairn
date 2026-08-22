@@ -20,10 +20,10 @@ func TestReadingSidebarAggregatesExcludeSiteLinksAndCountDomainlessRows(t *testi
 	siteID := mustCreateDoneLink(t, links, ctx, "https://shared.example/site", "shared-tag", "shared.example")
 	siteOnlyID := mustCreateDoneLink(t, links, ctx, "https://site-only.example/app", "site-only", "site-only.example")
 
-	if _, err := pool.Exec(t.Context(), `UPDATE links SET library_kind = 'reading', library_kind_source = 'user' WHERE id = ANY($1::uuid[])`, []uuid.UUID{readingID, domainlessID, deletedID}); err != nil {
+	if _, err := pool.Exec(t.Context(), `UPDATE links SET library_kind = 'reading', library_kind_locked = true WHERE id = ANY($1::uuid[])`, []uuid.UUID{readingID, domainlessID, deletedID}); err != nil {
 		t.Fatalf("mark reading fixtures: %v", err)
 	}
-	if _, err := pool.Exec(t.Context(), `UPDATE links SET library_kind = 'site', library_kind_source = 'user' WHERE id = ANY($1::uuid[])`, []uuid.UUID{siteID, siteOnlyID}); err != nil {
+	if _, err := pool.Exec(t.Context(), `UPDATE links SET library_kind = 'site', library_kind_locked = true WHERE id = ANY($1::uuid[])`, []uuid.UUID{siteID, siteOnlyID}); err != nil {
 		t.Fatalf("mark site fixtures: %v", err)
 	}
 	if _, err := pool.Exec(t.Context(), `UPDATE links SET domain = NULL WHERE id = $1`, domainlessID); err != nil {

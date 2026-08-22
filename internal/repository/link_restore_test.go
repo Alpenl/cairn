@@ -29,10 +29,9 @@ func TestRestoreHostLinkCommitsLinkAndThoughtLifecycleTogether(t *testing.T) {
 	linkID := uuid.New()
 	deletedAt := time.Date(2026, 8, 14, 8, 0, 0, 0, time.UTC)
 	mock.ExpectBegin()
-	expectLibraryFeedRevisionPrelock(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockLinkForRestoreSQL)).WithArgs(linkID).
-		WillReturnRows(mock.NewRows([]string{"status", "deleted_at", "body", "content_revision", "feed_managed"}).
-			AddRow(model.LinkStatusDone, deletedAt, "stable body", int64(7), true))
+		WillReturnRows(mock.NewRows([]string{"status", "deleted_at", "body", "content_revision"}).
+			AddRow(model.LinkStatusDone, deletedAt, "stable body", int64(7)))
 	mock.ExpectExec("UPDATE links SET deleted_at=NULL").WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	expectEmptyLinkThoughtRestore(mock, linkID)
@@ -60,10 +59,9 @@ func TestRestoreHostLinkRollsBackWhenThoughtRestoreFails(t *testing.T) {
 	linkID := uuid.New()
 	wantErr := errors.New("thought restore failed")
 	mock.ExpectBegin()
-	expectLibraryFeedRevisionPrelock(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(lockLinkForRestoreSQL)).WithArgs(linkID).
-		WillReturnRows(mock.NewRows([]string{"status", "deleted_at", "body", "content_revision", "feed_managed"}).
-			AddRow(model.LinkStatusDone, time.Now(), "stable body", int64(2), false))
+		WillReturnRows(mock.NewRows([]string{"status", "deleted_at", "body", "content_revision"}).
+			AddRow(model.LinkStatusDone, time.Now(), "stable body", int64(2)))
 	mock.ExpectExec("UPDATE links SET deleted_at=NULL").WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("(?s)SELECT .*FROM reader_thought_tombstones tt").

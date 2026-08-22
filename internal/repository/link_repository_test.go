@@ -49,7 +49,7 @@ func TestLinkRepositoryListDoneAppliesANDTagFilteringAndPagination(t *testing.T)
 					"user description",
 					"example.com",
 					"article",
-					"reading", "migration", false, nil, nil, nil, nil, nil, int64(1), int64(1),
+					"reading", int64(1), int64(1),
 					false, 0, 0, // PF6: has_content / content_cjk_chars / content_words
 					createdAt, nil, nil, nil,
 					2,
@@ -73,7 +73,7 @@ func TestLinkRepositoryListDoneAppliesANDTagFilteringAndPagination(t *testing.T)
 					nil,
 					"example.com",
 					"article",
-					"reading", "migration", false, nil, nil, nil, nil, nil, int64(1), int64(1),
+					"reading", int64(1), int64(1),
 					false, 0, 0, // PF6: has_content / content_cjk_chars / content_words
 					createdAt.Add(-time.Hour), nil, nil, nil,
 					3,
@@ -156,7 +156,7 @@ func TestLinkRepositoryListDoneStatusSetUsesANY(t *testing.T) {
 					nil,
 					"example.com",
 					nil,
-					nil, nil, false, nil, nil, nil, nil, nil, int64(1), int64(1),
+					nil, int64(1), int64(1),
 					false, 0, 0, // PF6: has_content / content_cjk_chars / content_words
 					createdAt, nil, nil, nil,
 					nil,
@@ -180,7 +180,7 @@ func TestLinkRepositoryListDoneStatusSetUsesANY(t *testing.T) {
 					nil,
 					"example.com",
 					nil,
-					nil, nil, false, nil, nil, nil, nil, nil, int64(1), int64(1),
+					nil, int64(1), int64(1),
 					false, 0, 0, // PF6: has_content / content_cjk_chars / content_words
 					createdAt.Add(-time.Hour), nil, nil, nil,
 					nil,
@@ -249,10 +249,7 @@ func TestLinkRepositoryCreatePersistsMultimodalFields(t *testing.T) {
 		"mime":     "application/pdf",
 		"language": "en",
 	}
-	var (
-		nilKind   *model.LibraryKind
-		nilSource *model.LibraryKindSource
-	)
+	var nilKind *model.LibraryKind
 
 	mock.ExpectQuery(regexp.QuoteMeta(insertLinkSQL)).
 		WithArgs(
@@ -268,12 +265,8 @@ func TestLinkRepositoryCreatePersistsMultimodalFields(t *testing.T) {
 			model.LinkStatusPending,
 			&domain,
 			&contentType,
-			model.RequestedLibraryKindAuto,
-			model.RequestedLibraryKindSourceAuto,
 			nilKind,
-			nilSource,
 			false,
-			nilKind,
 			&pathDepth,
 			&parentPath,
 			nil,
@@ -300,8 +293,7 @@ func TestLinkRepositoryCreatePersistsMultimodalFields(t *testing.T) {
 				description,
 				domain,
 				contentType,
-				"auto", "auto",
-				nil, nil, false, nil, nil, nil, nil, nil, int64(1), int64(1),
+				nil, false, int64(1), int64(1), int64(1),
 				string(model.ContentSourceFetched), false, 0, 0, // PF6: content_source / has_content / content_cjk_chars / content_words
 				createdAt, nil, nil, nil,
 				pathDepth,
@@ -404,8 +396,7 @@ func TestLinkRepositoryGetBySourceKeyReturnsMatchingLink(t *testing.T) {
 				nil,
 				"example.com",
 				"listing",
-				"auto", "auto",
-				"reading", "migration", false, nil, nil, nil, nil, nil, int64(1), int64(1),
+				"reading", false, int64(1), int64(1), int64(1),
 				string(model.ContentSourceFetched), false, 0, 0, // PF6: content_source / has_content / content_cjk_chars / content_words
 				createdAt, nil, nil, nil,
 				1,

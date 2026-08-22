@@ -12,7 +12,7 @@ import (
 	"webtag/internal/model"
 )
 
-const linkSelectColumns = "id, url, source_kind, source_key, input_title, input_text, input_html, input_images, source_metadata, title, summary, tags, fetcher_type, is_low_confidence, low_confidence_reason, status, error_msg, description, domain, content_type, requested_library_kind, requested_library_kind_source, library_kind, library_kind_source, library_kind_locked, predicted_library_kind, classification_confidence, classification_reason, classification_explanation, classifier_version, content_revision, metadata_revision, content_source, has_content, content_cjk_chars, content_words, first_collected_at, last_recollected_at, payload_purge_due_at, payload_purged_at, path_depth, parent_path, parent_id, created_at, updated_at"
+const linkSelectColumns = "id, url, source_kind, source_key, input_title, input_text, input_html, input_images, source_metadata, title, summary, tags, fetcher_type, is_low_confidence, low_confidence_reason, status, error_msg, description, domain, content_type, library_kind, library_kind_locked, content_revision, metadata_revision, parse_generation, content_source, has_content, content_cjk_chars, content_words, first_collected_at, last_recollected_at, payload_purge_due_at, payload_purged_at, path_depth, parent_path, parent_id, created_at, updated_at"
 
 // linkListColumns is the projection used by list/tree read endpoints. It
 // drops input_title/input_text/input_html/input_images/source_metadata
@@ -23,26 +23,25 @@ const linkSelectColumns = "id, url, source_kind, source_key, input_title, input_
 // the heavy columns ride along, so the list path uses this narrower
 // projection while point lookups (Get*) keep linkSelectColumns to feed
 // the parse pipeline that does need the inputs.
-const linkListColumns = "id, url, title, summary, tags, fetcher_type, is_low_confidence, low_confidence_reason, status, error_msg, description, domain, content_type, library_kind, library_kind_source, library_kind_locked, predicted_library_kind, classification_confidence, classification_reason, classification_explanation, classifier_version, content_revision, metadata_revision, has_content, content_cjk_chars, content_words, first_collected_at, last_recollected_at, payload_purge_due_at, payload_purged_at, path_depth, parent_path, parent_id, created_at, updated_at"
+const linkListColumns = "id, url, title, summary, tags, fetcher_type, is_low_confidence, low_confidence_reason, status, error_msg, description, domain, content_type, library_kind, content_revision, metadata_revision, has_content, content_cjk_chars, content_words, first_collected_at, last_recollected_at, payload_purge_due_at, payload_purged_at, path_depth, parent_path, parent_id, created_at, updated_at"
 
 // linkListColumnsWithTotal is the windowed-count variant of linkListColumns
 // for the paginated list endpoint.
 const linkListColumnsWithTotal = linkListColumns + ", COUNT(*) OVER() AS total_count"
 
 const (
-	insertLinkSQL         = "INSERT INTO links (url, source_kind, source_key, input_title, input_text, input_html, input_images, source_metadata, description, status, domain, content_type, requested_library_kind, requested_library_kind_source, library_kind, library_kind_source, library_kind_locked, predicted_library_kind, path_depth, parent_path, parent_id, content_source, first_collected_at, payload_purge_due_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, 'fetched', NOW(), CASE WHEN $15 = 'site' OR $18 = 'site' THEN NOW() + INTERVAL '24 hours' ELSE NULL END, NOW(), NOW()) RETURNING " + linkSelectColumns
-	updateLinkStateSQL    = "UPDATE links SET status = $2, error_msg = $3, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
-	updateLinkAnalysisSQL = "UPDATE links SET source_kind = COALESCE(NULLIF($2, ''), source_kind), source_key = COALESCE(NULLIF($3, ''), source_key), input_title = COALESCE($4, input_title), input_text = COALESCE($5, input_text), input_html = COALESCE($6, input_html), input_images = COALESCE($7::jsonb, input_images), source_metadata = COALESCE($8::jsonb, source_metadata), title = $9, summary = $10, tags = COALESCE($11, '{}'::text[]), fetcher_type = $12, is_low_confidence = $13, low_confidence_reason = $14, status = $15, error_msg = $16, domain = $17, content_type = $18, path_depth = $19, parent_path = $20, parent_id = $21, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
-	// updateLinkAnalysisForParseSQL owns the parser-only metadata fence. The
-	// prior CTE locks the live Link row and captures its revision before SET
-	// expressions run. A stale (or pre-rollout zero) attempt still updates its
-	// parse lifecycle artifacts, but leaves title/summary/tags byte-for-byte
-	// untouched so the revision trigger cannot advance or invalidate the user
-	// replacement. The RETURNING flag reflects the pre-write ownership check;
-	// the returned revision is the trigger-adjusted authoritative value for
-	// post-parse enrichments.
+	insertLinkValuesSQL    = "INSERT INTO links (url, source_kind, source_key, input_title, input_text, input_html, input_images, source_metadata, description, status, domain, content_type, library_kind, library_kind_locked, path_depth, parent_path, parent_id, content_source, first_collected_at, payload_purge_due_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'fetched', NOW(), CASE WHEN $13 = 'site' THEN NOW() + INTERVAL '24 hours' ELSE NULL END, NOW(), NOW())"
+	insertLinkSQL          = insertLinkValuesSQL + " RETURNING " + linkSelectColumns
+	insertSubmittedLinkSQL = insertLinkValuesSQL + " ON CONFLICT (source_key) DO NOTHING RETURNING " + linkSelectColumns
+	updateLinkStateSQL     = "UPDATE links SET status = $2, error_msg = $3, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
+	updateLinkAnalysisSQL  = "UPDATE links SET source_kind = COALESCE(NULLIF($2, ''), source_kind), source_key = COALESCE(NULLIF($3, ''), source_key), input_title = COALESCE($4, input_title), input_text = COALESCE($5, input_text), input_html = COALESCE($6, input_html), input_images = COALESCE($7::jsonb, input_images), source_metadata = COALESCE($8::jsonb, source_metadata), title = $9, summary = $10, tags = COALESCE($11, '{}'::text[]), fetcher_type = $12, is_low_confidence = $13, low_confidence_reason = $14, status = $15, error_msg = $16, domain = $17, content_type = $18, path_depth = $19, parent_path = $20, parent_id = $21, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
+	// updateLinkAnalysisForParseSQL owns both parser fences. Generation is a
+	// hard lease: stale River work cannot update any product state. Metadata
+	// revision is a narrower user-field lease: an edit made during the current
+	// parse preserves title/summary/tags while allowing that generation to
+	// finish its remaining derived fields.
 	updateLinkAnalysisForParseSQL = `WITH prior AS (
-			SELECT id, metadata_revision
+			SELECT id, metadata_revision, parse_generation
 			FROM links
 			WHERE id = $1 AND deleted_at IS NULL
 			FOR UPDATE
@@ -71,6 +70,9 @@ const (
 		updated_at = NOW()
 	FROM prior
 	WHERE link.id = prior.id
+		AND $23 > 0
+		AND prior.parse_generation = $23
+		AND link.status IN ('pending', 'processing')
 		RETURNING link.metadata_revision, ($22 > 0 AND prior.metadata_revision = $22) AS metadata_applied`
 	deleteLinkSQL = "UPDATE links SET deleted_at = COALESCE(deleted_at, NOW()), updated_at = CASE WHEN deleted_at IS NULL THEN NOW() ELSE updated_at END WHERE id = $1"
 	// The COUNT(*) fallback for the empty-page case is now built inline by
@@ -98,8 +100,8 @@ type txBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// PGXLinkRepository 是 LinkStore 的 PG 实现，包装 *pgxpool.Pool 完成 links
-// 表读写，并为 durablework 提供具体的 transaction-bound 写方法。
+// PGXLinkRepository 包装 links 表读写，并为 durablework 提供具体的
+// transaction-bound 写方法。
 type PGXLinkRepository struct {
 	db database.Querier
 	tx txBeginner
@@ -120,19 +122,8 @@ func NewPGXLinkRepository(db database.Querier) *PGXLinkRepository {
 	return &PGXLinkRepository{db: db, tx: begin}
 }
 
-// Compile-time assertions: PGXLinkRepository must implement every read/write
-// role interface plus the LinkStore composite. Durable command methods are
-// concrete adapter internals rather than service-facing repository ports. A future
-// interface change here surfaces as a build error rather than a confusing
-// runtime "method missing" panic in the wiring layer.
-var (
-	_ LinkReader = (*PGXLinkRepository)(nil)
-	_ LinkWriter = (*PGXLinkRepository)(nil)
-	_ LinkStore  = (*PGXLinkRepository)(nil)
-)
-
-// Create 向 links 表插入一行并返回完整模型。非事务场景下的快速入口，
-// 想配合 parse_jobs 一起原子写入请走 SubmitNew。
+// Create 向 links 表插入一行并返回完整模型。需要和 River 入队原子提交时，
+// 应通过 durable command adapter 使用事务入口。
 func (r *PGXLinkRepository) Create(ctx context.Context, params CreateLinkParams) (*model.Link, error) {
 	return insertLinkOn(ctx, r.db, params)
 }
@@ -315,9 +306,10 @@ func updateLinkAnalysisForParseOn(ctx context.Context, db database.Querier, para
 		params.ParentPath,
 		nullableUUIDValue(params.ParentID),
 		params.ExpectedMetadataRevision,
+		params.ExpectedParseGeneration,
 	).Scan(&result.MetadataRevision, &result.MetadataApplied)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return CompleteReadingParseResult{}, ErrNotFound
+		return CompleteReadingParseResult{}, ErrParseAttemptNotRunnable
 	}
 	if err != nil {
 		return CompleteReadingParseResult{}, fmt.Errorf("update link analysis for parse: %w", err)
@@ -332,10 +324,13 @@ func (r *PGXLinkRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.DeleteLifecycle(ctx, id)
 }
 
-// insertLinkOn shares the link INSERT body between Create (uses r.db) and
-// SubmitNew (uses a tx). Keeping the body in one place avoids a future schema
-// change ending up half-applied in only one of the two paths.
+// insertLinkOn shares the link INSERT body between direct repository creation
+// and the durable submit transaction.
 func insertLinkOn(ctx context.Context, exec database.Querier, params CreateLinkParams) (*model.Link, error) {
+	return insertLinkWithSQLOn(ctx, exec, insertLinkSQL, params)
+}
+
+func insertLinkWithSQLOn(ctx context.Context, exec database.Querier, query string, params CreateLinkParams) (*model.Link, error) {
 	inputImages, err := marshalJSONB(params.InputImages)
 	if err != nil {
 		return nil, fmt.Errorf("marshal input images: %w", err)
@@ -344,12 +339,11 @@ func insertLinkOn(ctx context.Context, exec database.Querier, params CreateLinkP
 	if err != nil {
 		return nil, fmt.Errorf("marshal source metadata: %w", err)
 	}
-	requestedKind, requestedSource := normalizeRequestedLibraryIntent(params.RequestedLibraryKind, params.RequestedLibraryKindSource)
-	libraryKind, libraryKindSource, libraryKindLocked := requestedLibraryClassification(requestedKind, requestedSource)
+	libraryKind, libraryKindLocked := requestedLibraryClassification(params.RequestedLibraryKind)
 
 	row := exec.QueryRow(
 		ctx,
-		insertLinkSQL,
+		query,
 		params.URL,
 		defaultSourceKind(params.SourceKind),
 		defaultSourceKey(params.SourceKey, params.URL),
@@ -362,12 +356,8 @@ func insertLinkOn(ctx context.Context, exec database.Querier, params CreateLinkP
 		params.Status,
 		params.Domain,
 		params.ContentType,
-		requestedKind,
-		requestedSource,
 		libraryKind,
-		libraryKindSource,
 		libraryKindLocked,
-		params.PredictedLibraryKind,
 		params.PathDepth,
 		params.ParentPath,
 		nullableUUIDValue(params.ParentID),
@@ -384,33 +374,15 @@ func insertLinkOn(ctx context.Context, exec database.Querier, params CreateLinkP
 // persisted final fields. Auto intentionally leaves the partition unresolved:
 // the parse pipeline supplies the eventual classifier decision, while an
 // explicit request is immediately final and cannot be auto-overridden.
-func requestedLibraryClassification(requested model.RequestedLibraryKind, requestedSource model.RequestedLibraryKindSource) (*model.LibraryKind, *model.LibraryKindSource, bool) {
-	source := model.LibraryKindSourceAuto
-	locked := false
-	if requestedSource == model.RequestedLibraryKindSourceUser {
-		source = model.LibraryKindSourceUser
-		locked = true
-	}
+func requestedLibraryClassification(requested model.RequestedLibraryKind) (*model.LibraryKind, bool) {
 	switch requested {
 	case model.RequestedLibraryKindReading:
 		kind := model.LibraryKindReading
-		return &kind, &source, locked
+		return &kind, true
 	case model.RequestedLibraryKindSite:
 		kind := model.LibraryKindSite
-		return &kind, &source, locked
+		return &kind, true
 	default:
-		return nil, nil, false
-	}
-}
-
-func normalizeRequestedLibraryIntent(kind model.RequestedLibraryKind, source model.RequestedLibraryKindSource) (model.RequestedLibraryKind, model.RequestedLibraryKindSource) {
-	switch kind {
-	case model.RequestedLibraryKindReading, model.RequestedLibraryKindSite:
-		if source == model.RequestedLibraryKindSourceAuto {
-			return kind, source
-		}
-		return kind, model.RequestedLibraryKindSourceUser
-	default:
-		return model.RequestedLibraryKindAuto, model.RequestedLibraryKindSourceAuto
+		return nil, false
 	}
 }

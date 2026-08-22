@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 
@@ -11,9 +10,9 @@ import (
 
 	"webtag/internal/contentdoc"
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
 	"webtag/internal/observability"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
@@ -21,19 +20,12 @@ import (
 // 写入/读取已保存原文。生产实现是 *repository.PGXLinkRepository。
 type ContentLinkStore interface {
 	GetParseInputByID(ctx context.Context, id uuid.UUID) (*repository.LinkParseInput, error)
-	// 两个写方法返回 (新的 content_revision, 是否写入成功, error)。代次要一路
+	// 写方法返回 (新的 content_revision, 是否写入成功, error)。代次要一路
 	// 交到响应里，客户端才不用等列表刷新就知道正文换了代。
 	UpdateContentIfCurrent(ctx context.Context, id uuid.UUID, expectedUpdatedAt time.Time, content model.SavedContent) (int64, bool, error)
-	ReplaceContentIfCurrent(ctx context.Context, id uuid.UUID, expectedUpdatedAt time.Time, content model.SavedContent) (int64, bool, error)
-	GetContent(ctx context.Context, id uuid.UUID) (*model.SavedContent, error)
-}
-
-type contentEditor interface {
-	EditContentIfRevision(ctx context.Context, id uuid.UUID, expectedRevision int64, content model.SavedContent) (int64, bool, error)
-}
-
-type revisionAwareContentReplacer interface {
 	ReplaceContentIfCurrentWithRevision(ctx context.Context, id uuid.UUID, expectedUpdatedAt time.Time, expectedContentRevision int64, content model.SavedContent) (int64, bool, error)
+	EditContentIfRevision(ctx context.Context, id uuid.UUID, expectedRevision int64, content model.SavedContent) (int64, bool, error)
+	GetContent(ctx context.Context, id uuid.UUID) (*model.SavedContent, error)
 }
 
 // ContentService implements original-content snapshots independently from
@@ -68,14 +60,14 @@ func (s *ContentService) Save(ctx context.Context, linkID string) (dto.LinkConte
 func (s *ContentService) Get(ctx context.Context, linkID string) (dto.LinkContentResponse, error) {
 	id, err := uuid.Parse(strings.TrimSpace(linkID))
 	if err != nil {
-		return dto.LinkContentResponse{}, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return dto.LinkContentResponse{}, problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 	stored, err := s.loadStoredContent(ctx, id)
 	if err != nil {
 		return dto.LinkContentResponse{}, err
 	}
 	if stored == nil {
-		return dto.LinkContentResponse{}, httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "saved content not found")
+		return dto.LinkContentResponse{}, problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "saved content not found")
 	}
 	return *stored, nil
 }
@@ -101,7 +93,7 @@ func (s *ContentService) Edit(ctx context.Context, linkID string, request dto.Co
 		return dto.LinkContentResponse{}, err
 	}
 	if request.ExpectedContentRevision != authoritativeRevision {
-		return dto.LinkContentResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeContentRevisionConflict, "saved content changed; reload before editing")
+		return dto.LinkContentResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeContentRevisionConflict, "saved content changed; reload before editing")
 	}
 
 	edited, err := buildEditedContent(request.Content, link.URL, stored.Format)
@@ -109,11 +101,7 @@ func (s *ContentService) Edit(ctx context.Context, linkID string, request dto.Co
 		return dto.LinkContentResponse{}, err
 	}
 
-	editor, ok := s.links.(contentEditor)
-	if !ok {
-		return dto.LinkContentResponse{}, httperr.New(http.StatusServiceUnavailable, "content editing is not configured")
-	}
-	revision, written, err := editor.EditContentIfRevision(ctx, id, request.ExpectedContentRevision, edited)
+	revision, written, err := s.links.EditContentIfRevision(ctx, id, request.ExpectedContentRevision, edited)
 	if err != nil {
 		return dto.LinkContentResponse{}, err
 	}
@@ -127,13 +115,13 @@ func (s *ContentService) Edit(ctx context.Context, linkID string, request dto.Co
 func validateContentEditRequest(linkID string, request dto.ContentEditRequest) (uuid.UUID, error) {
 	id, err := uuid.Parse(strings.TrimSpace(linkID))
 	if err != nil {
-		return uuid.Nil, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return uuid.Nil, problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 	if request.ExpectedContentRevision <= 0 {
-		return uuid.Nil, httperr.NewWithCode(http.StatusUnprocessableEntity, "invalid_content_revision", "expected_content_revision must be positive")
+		return uuid.Nil, problem.NewWithCode(problem.Invalid, "invalid_content_revision", "expected_content_revision must be positive")
 	}
 	if len([]byte(request.Content)) > 2<<20 {
-		return uuid.Nil, httperr.NewWithCode(http.StatusRequestEntityTooLarge, httperr.CodeContentTooLarge, "saved content exceeds the 2 MiB UTF-8 limit")
+		return uuid.Nil, problem.NewWithCode(problem.TooLarge, problem.CodeContentTooLarge, "saved content exceeds the 2 MiB UTF-8 limit")
 	}
 	return id, nil
 }
@@ -144,13 +132,13 @@ func (s *ContentService) loadEditableContent(ctx context.Context, id uuid.UUID) 
 		return nil, model.SavedContent{}, 0, err
 	}
 	if link == nil {
-		return nil, model.SavedContent{}, 0, httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return nil, model.SavedContent{}, 0, problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 	if link.LibraryKind != nil && *link.LibraryKind == model.LibraryKindSite {
-		return nil, model.SavedContent{}, 0, httperr.NewWithCode(http.StatusConflict, httperr.CodeSiteOriginalContentForbidden, "website entries cannot edit original content")
+		return nil, model.SavedContent{}, 0, problem.NewWithCode(problem.Conflict, problem.CodeSiteOriginalContentForbidden, "website entries cannot edit original content")
 	}
 	if link.Status != model.LinkStatusDone {
-		return nil, model.SavedContent{}, 0, httperr.NewWithCode(http.StatusConflict, httperr.CodeLinkNotReady, "link is not parsed yet")
+		return nil, model.SavedContent{}, 0, problem.NewWithCode(problem.Conflict, problem.CodeLinkNotReady, "link is not parsed yet")
 	}
 
 	stored, err := s.links.GetContent(ctx, id)
@@ -158,7 +146,7 @@ func (s *ContentService) loadEditableContent(ctx context.Context, id uuid.UUID) 
 		return nil, model.SavedContent{}, 0, err
 	}
 	if stored == nil || strings.TrimSpace(stored.Text) == "" {
-		return nil, model.SavedContent{}, 0, httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "saved content not found")
+		return nil, model.SavedContent{}, 0, problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "saved content not found")
 	}
 	revision := stored.Revision
 	if revision <= 0 {
@@ -177,11 +165,11 @@ func buildEditedContent(source, baseURL string, format model.ContentFormat) (mod
 	} else {
 		edited, err = contentdoc.FromMarkdown(source, baseURL)
 		if err != nil {
-			return model.SavedContent{}, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeContentEmpty, "content could not be normalized")
+			return model.SavedContent{}, problem.NewWithCode(problem.Malformed, problem.CodeContentEmpty, "content could not be normalized")
 		}
 	}
 	if strings.TrimSpace(edited.Text) == "" {
-		return model.SavedContent{}, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeContentEmpty, "content must not be empty")
+		return model.SavedContent{}, problem.NewWithCode(problem.Malformed, problem.CodeContentEmpty, "content must not be empty")
 	}
 	edited.Source = model.ContentSourceUser
 	edited.CJKChars, edited.Words = countReadingUnits(edited.Text)
@@ -194,15 +182,15 @@ func (s *ContentService) classifyEditMiss(ctx context.Context, id uuid.UUID, exp
 		return dto.LinkContentResponse{}, err
 	}
 	if currentRevision != expectedRevision {
-		return dto.LinkContentResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeContentRevisionConflict, "saved content changed; reload before editing")
+		return dto.LinkContentResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeContentRevisionConflict, "saved content changed; reload before editing")
 	}
-	return dto.LinkContentResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeLinkNotReady, "saved content changed while editing; retry after reload")
+	return dto.LinkContentResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeLinkNotReady, "saved content changed while editing; retry after reload")
 }
 
 func (s *ContentService) persist(ctx context.Context, linkID string, replace bool) (dto.LinkContentResponse, error) { //nolint:gocyclo // 保存正文需按格式与来源分派，并处理各自的冲突路径
 	id, err := uuid.Parse(strings.TrimSpace(linkID))
 	if err != nil {
-		return dto.LinkContentResponse{}, httperr.NewWithCode(http.StatusBadRequest, httperr.CodeInvalidLinkID, "invalid link id")
+		return dto.LinkContentResponse{}, problem.NewWithCode(problem.Malformed, problem.CodeInvalidLinkID, "invalid link id")
 	}
 
 	link, err := s.links.GetParseInputByID(ctx, id)
@@ -210,10 +198,10 @@ func (s *ContentService) persist(ctx context.Context, linkID string, replace boo
 		return dto.LinkContentResponse{}, err
 	}
 	if link == nil {
-		return dto.LinkContentResponse{}, httperr.NewWithCode(http.StatusNotFound, httperr.CodeLinkNotFound, "link not found")
+		return dto.LinkContentResponse{}, problem.NewWithCode(problem.NotFound, problem.CodeLinkNotFound, "link not found")
 	}
 	if link.LibraryKind != nil && *link.LibraryKind == model.LibraryKindSite {
-		return dto.LinkContentResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeSiteOriginalContentForbidden, "website entries cannot store original content")
+		return dto.LinkContentResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeSiteOriginalContentForbidden, "website entries cannot store original content")
 	}
 
 	if !replace {
@@ -228,7 +216,7 @@ func (s *ContentService) persist(ctx context.Context, linkID string, replace boo
 	// 仅解析完成后允许保存原文：与前端「done 之后才出现按钮」一致，也避免对
 	// pending/failed 的 link 做无意义抓取。
 	if link.Status != model.LinkStatusDone {
-		return dto.LinkContentResponse{}, httperr.NewWithCode(http.StatusConflict, httperr.CodeLinkNotReady, "link not parsed yet; save original after parsing completes")
+		return dto.LinkContentResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeLinkNotReady, "link not parsed yet; save original after parsing completes")
 	}
 
 	content, fetcherType, err := s.resolveContent(ctx, id, link, replace)
@@ -247,11 +235,7 @@ func (s *ContentService) persist(ctx context.Context, linkID string, replace boo
 		revision      int64
 	)
 	if replace {
-		if revisionAware, ok := s.links.(revisionAwareContentReplacer); ok {
-			revision, storedCurrent, err = revisionAware.ReplaceContentIfCurrentWithRevision(ctx, id, link.UpdatedAt, link.ContentRevision, content)
-		} else {
-			revision, storedCurrent, err = s.links.ReplaceContentIfCurrent(ctx, id, link.UpdatedAt, content)
-		}
+		revision, storedCurrent, err = s.links.ReplaceContentIfCurrentWithRevision(ctx, id, link.UpdatedAt, link.ContentRevision, content)
 	} else {
 		revision, storedCurrent, err = s.links.UpdateContentIfCurrent(ctx, id, link.UpdatedAt, content)
 	}
@@ -276,15 +260,15 @@ func (s *ContentService) persist(ctx context.Context, linkID string, replace boo
 			return dto.LinkContentResponse{}, currentErr
 		}
 		if current == nil {
-			return dto.LinkContentResponse{}, httperr.NewWithCode(
-				http.StatusNotFound,
-				httperr.CodeLinkNotFound,
+			return dto.LinkContentResponse{}, problem.NewWithCode(
+				problem.NotFound,
+				problem.CodeLinkNotFound,
 				"link not found",
 			)
 		}
-		return dto.LinkContentResponse{}, httperr.NewWithCode(
-			http.StatusConflict,
-			httperr.CodeLinkNotReady,
+		return dto.LinkContentResponse{}, problem.NewWithCode(
+			problem.Conflict,
+			problem.CodeLinkNotReady,
 			"link changed while content was being saved; retry after parsing completes",
 		)
 	}
@@ -339,9 +323,9 @@ func (s *ContentService) resolveContent(ctx context.Context, id uuid.UUID, link 
 				return content, strings.ToLower(strings.TrimSpace(link.SourceKind)), nil
 			}
 		}
-		return model.SavedContent{}, "", httperr.NewWithCode(
-			http.StatusConflict,
-			httperr.CodeLinkContentUnavailable,
+		return model.SavedContent{}, "", problem.NewWithCode(
+			problem.Conflict,
+			problem.CodeLinkContentUnavailable,
 			"saved source has no readable text content",
 		)
 	}
@@ -350,7 +334,7 @@ func (s *ContentService) resolveContent(ctx context.Context, id uuid.UUID, link 
 
 func (s *ContentService) fetchRemoteContent(ctx context.Context, id uuid.UUID, rawURL string) (model.SavedContent, string, error) {
 	if s.fetcher == nil {
-		return model.SavedContent{}, "", httperr.New(http.StatusServiceUnavailable, "content fetching is not configured")
+		return model.SavedContent{}, "", problem.New(problem.Unavailable, "content fetching is not configured")
 	}
 
 	content, err := s.fetcher.Fetch(ctx, rawURL)
@@ -358,11 +342,11 @@ func (s *ContentService) fetchRemoteContent(ctx context.Context, id uuid.UUID, r
 		if s.logger != nil {
 			s.logger.Warn("save-content fetch failed", "link_id", id.String(), "err", observability.SafeError(err))
 		}
-		return model.SavedContent{}, "", httperr.New(http.StatusBadGateway, "failed to fetch original content")
+		return model.SavedContent{}, "", problem.New(problem.Upstream, "failed to fetch original content")
 	}
 	body := strings.TrimSpace(content.Body)
 	if body == "" {
-		return model.SavedContent{}, "", httperr.New(http.StatusBadGateway, "fetched content is empty")
+		return model.SavedContent{}, "", problem.New(problem.Upstream, "fetched content is empty")
 	}
 	// Search summaries are discovery hints, not the source's canonical text.
 	if isSearchSummaryFetcher(content.FetcherType) {
@@ -370,7 +354,7 @@ func (s *ContentService) fetchRemoteContent(ctx context.Context, id uuid.UUID, r
 			s.logger.Warn("save-content rejected search-summary fallback (not original content)",
 				"link_id", id.String(), "fetcher_type", content.FetcherType)
 		}
-		return model.SavedContent{}, "", httperr.New(http.StatusBadGateway, "could not fetch original content (only a search summary was available)")
+		return model.SavedContent{}, "", problem.New(problem.Upstream, "could not fetch original content (only a search summary was available)")
 	}
 
 	document := model.SavedContent{}

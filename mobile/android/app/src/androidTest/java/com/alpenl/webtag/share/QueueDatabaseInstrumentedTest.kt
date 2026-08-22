@@ -126,7 +126,6 @@ class QueueDatabaseInstrumentedTest {
                 lastErrorCode = null,
                 lastHttpStatus = 500,
                 linkId = null,
-                jobId = null,
                 activeOrigin = entry.apiOrigin,
                 activeNamespace = entry.clientDataNamespace,
                 activationRevision = 1,
@@ -312,7 +311,6 @@ class QueueDatabaseInstrumentedTest {
                 lastErrorCode = "namespace_changed",
                 lastHttpStatus = 409,
                 linkId = "old-link",
-                jobId = "old-job",
                 activeOrigin = entry.apiOrigin,
                 activeNamespace = entry.clientDataNamespace,
                 activationRevision = 1,
@@ -339,7 +337,6 @@ class QueueDatabaseInstrumentedTest {
         assertNull(migrated.lastErrorCode)
         assertNull(migrated.lastHttpStatus)
         assertNull(migrated.linkId)
-        assertNull(migrated.jobId)
         assertNull(migrated.leaseOwner)
         assertNull(migrated.leaseExpiresAt)
     }
@@ -581,7 +578,6 @@ class QueueDatabaseInstrumentedTest {
                 null,
                 null,
                 null,
-                null,
                 activation,
                 now + 9,
             ),
@@ -604,7 +600,6 @@ class QueueDatabaseInstrumentedTest {
                 ErrorKind.HTTP_5XX,
                 null,
                 500,
-                null,
                 null,
                 activation,
                 now + 10,
@@ -648,7 +643,6 @@ class QueueDatabaseInstrumentedTest {
                 null,
                 500,
                 null,
-                null,
                 activation,
                 now + 11,
             ),
@@ -661,7 +655,6 @@ class QueueDatabaseInstrumentedTest {
                 RecentResult(
                     "https://example.org/reclaim",
                     "11111111-1111-1111-1111-111111111111",
-                    null,
                     "done",
                     now + 11,
                     identity,
@@ -710,7 +703,6 @@ class QueueDatabaseInstrumentedTest {
                 null,
                 500,
                 null,
-                null,
                 activationA,
                 now + 1,
             ),
@@ -723,7 +715,6 @@ class QueueDatabaseInstrumentedTest {
                 RecentResult(
                     "https://example.org/a",
                     "22222222-2222-2222-2222-222222222222",
-                    null,
                     "done",
                     now + 1,
                     identityA,
@@ -758,7 +749,7 @@ class QueueDatabaseInstrumentedTest {
             repository.recordRefreshSuccess(
                 activationA,
                 "a-link",
-                SubmitResponse("a-link", "processing", "late-job"),
+                SubmitResponse("a-link", "processing"),
                 now + 2,
             ),
         )
@@ -794,7 +785,7 @@ class QueueDatabaseInstrumentedTest {
             repository.recordRefreshSuccess(
                 activation,
                 expectedLinkId = oldResult.linkId,
-                response = SubmitResponse(oldResult.linkId, "processing", "old-refresh-job"),
+                response = SubmitResponse(oldResult.linkId, "processing"),
                 now = 3_000L,
             ),
         )
@@ -809,7 +800,6 @@ class QueueDatabaseInstrumentedTest {
 
         val stored = dao.recent()!!
         assertEquals(newResult.linkId, stored.linkId)
-        assertEquals(newResult.jobId, stored.jobId)
         assertEquals(newResult.status, stored.status)
         assertEquals(newResult.createdAt, stored.createdAt)
         assertNull(stored.refreshNotBefore)
@@ -836,7 +826,7 @@ class QueueDatabaseInstrumentedTest {
             repository.recordRefreshSuccess(
                 activation,
                 expectedLinkId = current.linkId,
-                response = SubmitResponse(current.linkId, "processing", "current-refresh-job"),
+                response = SubmitResponse(current.linkId, "processing"),
                 now = 5_000L,
             ),
         )
@@ -851,7 +841,6 @@ class QueueDatabaseInstrumentedTest {
 
         val stored = database.queueDao().recent()!!
         assertEquals(current.linkId, stored.linkId)
-        assertEquals("current-refresh-job", stored.jobId)
         assertEquals("processing", stored.status)
         assertEquals(5_000L, stored.createdAt)
         assertEquals(65_000L, stored.refreshNotBefore)
@@ -1434,7 +1423,6 @@ class QueueDatabaseInstrumentedTest {
         lastErrorCode = null,
         lastHttpStatus = null,
         linkId = null,
-        jobId = null,
         leaseOwner = null,
         leaseExpiresAt = null,
         updatedAt = now,
@@ -1466,7 +1454,6 @@ class QueueDatabaseInstrumentedTest {
         urlNonce = byteArrayOf(4, 5, 6),
         cryptoVersion = 1,
         linkId = linkId,
-        jobId = "job-$linkId",
         status = status,
         createdAt = createdAt,
         apiOrigin = identity.origin,

@@ -39,11 +39,6 @@ export interface MetadataEditView {
   saving: boolean
 }
 
-export interface HistoricalTranslationView {
-  item: TranslationResponse
-  state: 'stale' | 'legacy'
-}
-
 export interface HistoricalAnnotationView {
   readonly status: 'historical'
   readonly reason: string
@@ -84,7 +79,7 @@ export interface ArticleBodyProps {
   fullTranslation?: TranslationResponse
   hasStaleFullTranslation: boolean
   selectionTranslations: TranslationResponse[]
-  historicalTranslations: HistoricalTranslationView[]
+  historicalTranslations: TranslationResponse[]
   previous?: ArticlePagerTarget | null
   next?: ArticlePagerTarget | null
   onPickTag: (tag: string) => void
@@ -766,15 +761,13 @@ export function ArticleBody({
             <span className="translation-count">{historicalTranslations.length}</span>
           </div>
           <div className="selection-translation-list">
-            {historicalTranslations.map(({ item, state }) => (
+            {historicalTranslations.map((item) => (
               <article
                 className="selection-translation-item"
-                data-translation-source-state={state}
+                data-translation-source-state="stale"
                 key={item.id}
               >
-                <p className={`translation-history-state ${state}`}>
-                  {state === 'stale' ? '已过期译文' : '旧版未验证译文'}
-                </p>
+				<p className="translation-history-state stale">已过期译文</p>
                 <p className="translation-source" lang="und">{item.source_text}</p>
                 {item.translated_text ? (
                   <p className="translation-result" lang="zh-CN">{item.translated_text}</p>

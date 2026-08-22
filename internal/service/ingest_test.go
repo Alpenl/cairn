@@ -12,8 +12,8 @@ import (
 	"github.com/google/uuid"
 
 	"webtag/internal/dto"
-	"webtag/internal/httperr"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/repository"
 	"webtag/internal/repository/repotest"
 )
@@ -32,21 +32,11 @@ func TestIngestServiceCreatesSyntheticPendingLinkForTextSource(t *testing.T) {
 			}, nil
 		},
 	}
-	jobStore := &repotest.ObservableJobStore{
-		CreateFunc: func(_ context.Context, linkID uuid.UUID) (*model.ParseJob, error) {
-			return &model.ParseJob{
-				ID:        uuid.MustParse("d2222222-2222-2222-2222-222222222222"),
-				LinkID:    linkID,
-				Status:    model.JobStatusPending,
-				CreatedAt: time.Now().UTC(),
-				UpdatedAt: time.Now().UTC(),
-			}, nil
-		},
-	}
 	queue := &submitFakeQueue{}
-	service := newTestIngestService(linkStore, jobStore, queue, &submitFakeLocker{})
+	service := newTestIngestService(linkStore, queue, &submitFakeLocker{})
 
 	got, err := service.Ingest(context.Background(), dto.IngestRequest{
+		Destination: captureDestinationLibrary,
 		Sources: []dto.IngestSource{
 			{Kind: "text", Text: "Hello multimodal ingest"},
 		},
@@ -81,10 +71,7 @@ func TestIngestServiceCreatesSyntheticPendingLinkForTextSource(t *testing.T) {
 		t.Fatalf("queued ids = %#v, want one job", queue.ids)
 	}
 
-	syntheticJob, _ := jobStore.CreateFunc(context.Background(), queue.ids[0])
-	wantJobID := syntheticJob.ID.String()
 	want := dto.SubmitResponse{
-		JobID:  &wantJobID,
 		LinkID: queue.ids[0].String(),
 		Status: string(model.LinkStatusPending),
 	}
@@ -200,11 +187,10 @@ func TestIngestServiceURLOnlyReusesRichCaptureAcrossStates(t *testing.T) {
 		name       string
 		status     model.LinkStatus
 		sourceKind string
-		withJob    bool
 	}{
-		{name: "done browser capture", status: model.LinkStatusDone, sourceKind: "browser_capture", withJob: true},
-		{name: "failed multimodal capture", status: model.LinkStatusFailed, sourceKind: "multimodal", withJob: true},
-		{name: "pending capture without repair", status: model.LinkStatusPending, sourceKind: "browser_capture", withJob: false},
+		{name: "done browser capture", status: model.LinkStatusDone, sourceKind: "browser_capture"},
+		{name: "failed multimodal capture", status: model.LinkStatusFailed, sourceKind: "multimodal"},
+		{name: "pending capture", status: model.LinkStatusPending, sourceKind: "browser_capture"},
 	}
 
 	for _, tt := range tests {
@@ -212,7 +198,6 @@ func TestIngestServiceURLOnlyReusesRichCaptureAcrossStates(t *testing.T) {
 			t.Parallel()
 
 			linkID := uuid.New()
-			jobID := uuid.New()
 			title := "Captured title"
 			body := "Captured body"
 			link := &model.Link{
@@ -231,19 +216,11 @@ func TestIngestServiceURLOnlyReusesRichCaptureAcrossStates(t *testing.T) {
 					return nil
 				},
 			}
-			latest := map[uuid.UUID]*model.ParseJob{}
-			if tt.withJob {
-				latest[linkID] = &model.ParseJob{ID: jobID, LinkID: linkID, Status: model.JobStatus(tt.status)}
-			}
-			jobs := &repotest.ObservableJobStore{
-				LatestByLinkID: latest,
-				CreateResult:   &model.ParseJob{ID: uuid.New(), LinkID: linkID, Status: model.JobStatusPending},
-			}
 			queue := &submitFakeQueue{}
-			submitter := &submitFakeSubmitter{links: links, jobs: jobs}
-			service := newFakeIngestService(links, submitter, jobs, queue, &submitFakeLocker{})
+			submitter := &submitFakeSubmitter{links: links}
+			service := newFakeIngestService(links, submitter, queue, &submitFakeLocker{})
 
-			got, err := service.Ingest(context.Background(), dto.IngestRequest{Sources: []dto.IngestSource{{
+			got, err := service.Ingest(context.Background(), dto.IngestRequest{Destination: captureDestinationLibrary, Sources: []dto.IngestSource{{
 				Kind: "url",
 				URL:  link.URL,
 			}}})
@@ -253,17 +230,10 @@ func TestIngestServiceURLOnlyReusesRichCaptureAcrossStates(t *testing.T) {
 			if got.LinkID != linkID.String() || got.Status != string(tt.status) {
 				t.Fatalf("Ingest() = %#v, want existing %s rich capture", got, tt.status)
 			}
-			if tt.withJob && (got.JobID == nil || *got.JobID != jobID.String()) {
-				t.Fatalf("Ingest() JobID = %#v, want %s", got.JobID, jobID)
-			}
-			if !tt.withJob && got.JobID != nil {
-				t.Fatalf("Ingest() JobID = %#v, want nil without an existing attempt", got.JobID)
-			}
-			if len(submitter.requeueCaptures) != 0 || len(jobs.CreateCalls) != 0 || len(queue.ids) != 0 {
+			if len(submitter.requeueCaptures) != 0 || len(queue.ids) != 0 {
 				t.Fatalf(
-					"URL-only ingest created work: requeues=%d jobs=%d queued=%d",
+					"URL-only ingest created work: requeues=%d queued=%d",
 					len(submitter.requeueCaptures),
-					len(jobs.CreateCalls),
 					len(queue.ids),
 				)
 			}
@@ -380,7 +350,6 @@ func TestIngestServiceUsesRealURLForMixedSourcesAndDedupesBySourceKey(t *testing
 	t.Parallel()
 
 	linkID := uuid.MustParse("e1111111-1111-1111-1111-111111111111")
-	jobID := uuid.MustParse("e2222222-2222-2222-2222-222222222222")
 	linkStore := &repotest.ObservableLinkStore{}
 	linkStore.CreateFunc = func(_ context.Context, params repository.CreateLinkParams) (*model.Link, error) {
 		link := &model.Link{
@@ -411,22 +380,11 @@ func TestIngestServiceUsesRealURLForMixedSourcesAndDedupesBySourceKey(t *testing
 		linkStore.ByURL[params.URL] = link
 		return link, nil
 	}
-	jobStore := &repotest.ObservableJobStore{
-		CreateFunc: func(_ context.Context, createdLinkID uuid.UUID) (*model.ParseJob, error) {
-			return &model.ParseJob{
-				ID:        jobID,
-				LinkID:    createdLinkID,
-				Status:    model.JobStatusPending,
-				CreatedAt: time.Now().UTC(),
-				UpdatedAt: time.Now().UTC(),
-			}, nil
-		},
-		LatestByLinkID: map[uuid.UUID]*model.ParseJob{},
-	}
 	queue := &submitFakeQueue{}
-	service := newTestIngestService(linkStore, jobStore, queue, &submitFakeLocker{})
+	service := newTestIngestService(linkStore, queue, &submitFakeLocker{})
 
 	req := dto.IngestRequest{
+		Destination: captureDestinationLibrary,
 		Sources: []dto.IngestSource{
 			{Kind: "url", URL: "https://example.com/article"},
 			{Kind: "text", Text: "captured note"},
@@ -446,13 +404,6 @@ func TestIngestServiceUsesRealURLForMixedSourcesAndDedupesBySourceKey(t *testing
 	}
 	assertStringFieldIfPresent(t, linkStore.CreateCalls[0], "SourceKind", "multimodal")
 
-	jobStore.LatestByLinkID[linkID] = &model.ParseJob{
-		ID:        jobID,
-		LinkID:    linkID,
-		Status:    model.JobStatusPending,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
-	}
 	queue.ids = nil
 
 	second, err := service.Ingest(context.Background(), req)
@@ -481,8 +432,6 @@ func TestIngestServiceRequeuesOnlyMeaningfulBrowserCaptureChanges(t *testing.T) 
 	t.Parallel()
 
 	linkID := uuid.MustParse("e3111111-1111-1111-1111-111111111111")
-	oldJobID := uuid.MustParse("e3222222-2222-2222-2222-222222222222")
-	newJobID := uuid.MustParse("e3333333-3333-3333-3333-333333333333")
 	title := "Article"
 	body := "Captured body"
 	note := "Keep this"
@@ -503,24 +452,16 @@ func TestIngestServiceRequeuesOnlyMeaningfulBrowserCaptureChanges(t *testing.T) 
 			return nil
 		},
 	}
-	jobs := &repotest.ObservableJobStore{
-		LatestByLinkID: map[uuid.UUID]*model.ParseJob{
-			linkID: {ID: oldJobID, LinkID: linkID, Status: model.JobStatusDone},
-		},
-		CreateFunc: func(_ context.Context, gotLinkID uuid.UUID) (*model.ParseJob, error) {
-			return &model.ParseJob{ID: newJobID, LinkID: gotLinkID, Status: model.JobStatusPending}, nil
-		},
-	}
 	queue := &submitFakeQueue{}
-	submitter := &submitFakeSubmitter{links: links, jobs: jobs}
-	service := newFakeIngestService(links, submitter, jobs, queue, &submitFakeLocker{})
+	submitter := &submitFakeSubmitter{links: links}
+	service := newFakeIngestService(links, submitter, queue, &submitFakeLocker{})
 
 	request := func(capturedAt, text, userNote string) dto.IngestRequest {
 		metadata := map[string]any{"captured_at": capturedAt}
 		if userNote != "" {
 			metadata["note"] = userNote
 		}
-		return dto.IngestRequest{Sources: []dto.IngestSource{{
+		return dto.IngestRequest{Destination: captureDestinationLibrary, Sources: []dto.IngestSource{{
 			Kind: "browser_capture", URL: link.URL, Title: title, Text: text, Metadata: metadata,
 		}}}
 	}
@@ -529,8 +470,8 @@ func TestIngestServiceRequeuesOnlyMeaningfulBrowserCaptureChanges(t *testing.T) 
 	if err != nil {
 		t.Fatalf("unchanged Ingest() error = %v", err)
 	}
-	if unchanged.Status != string(model.LinkStatusDone) || unchanged.JobID == nil || *unchanged.JobID != oldJobID.String() {
-		t.Fatalf("unchanged Ingest() = %#v, want existing done job", unchanged)
+	if unchanged.Status != string(model.LinkStatusDone) {
+		t.Fatalf("unchanged Ingest() = %#v, want existing done link", unchanged)
 	}
 	if len(submitter.requeueCaptures) != 0 || len(queue.ids) != 0 {
 		t.Fatalf("metadata-only ingest requeued: captures=%d queued=%d", len(submitter.requeueCaptures), len(queue.ids))
@@ -543,8 +484,8 @@ func TestIngestServiceRequeuesOnlyMeaningfulBrowserCaptureChanges(t *testing.T) 
 	if err != nil {
 		t.Fatalf("changed Ingest() error = %v", err)
 	}
-	if changed.Status != string(model.LinkStatusPending) || changed.JobID == nil || *changed.JobID != newJobID.String() {
-		t.Fatalf("changed Ingest() = %#v, want new pending job", changed)
+	if changed.Status != string(model.LinkStatusPending) {
+		t.Fatalf("changed Ingest() = %#v, want pending requeue", changed)
 	}
 	if len(submitter.requeueCaptures) != 1 || submitter.requeueCaptures[0] == nil {
 		t.Fatalf("requeue captures = %#v, want one normalized capture", submitter.requeueCaptures)
@@ -564,11 +505,10 @@ func TestIngestServiceRequeuesOnlyMeaningfulBrowserCaptureChanges(t *testing.T) 
 	}
 }
 
-func TestIngestServiceReusesFailedJobForUnchangedBrowserCapture(t *testing.T) {
+func TestIngestServiceKeepsFailedLinkForUnchangedBrowserCapture(t *testing.T) {
 	t.Parallel()
 
 	linkID := uuid.MustParse("e4111111-1111-1111-1111-111111111111")
-	failedJobID := uuid.MustParse("e4222222-2222-2222-2222-222222222222")
 	title := "Article"
 	body := "Captured body"
 	link := &model.Link{
@@ -583,16 +523,12 @@ func TestIngestServiceReusesFailedJobForUnchangedBrowserCapture(t *testing.T) {
 	links := &repotest.ObservableLinkStore{
 		BySourceKey: map[string]*model.Link{link.SourceKey: link},
 	}
-	jobs := &repotest.ObservableJobStore{
-		LatestByLinkID: map[uuid.UUID]*model.ParseJob{
-			linkID: {ID: failedJobID, LinkID: linkID, Status: model.JobStatusFailed},
-		},
-	}
 	queue := &submitFakeQueue{}
-	submitter := &submitFakeSubmitter{links: links, jobs: jobs}
-	service := newFakeIngestService(links, submitter, jobs, queue, &submitFakeLocker{})
+	submitter := &submitFakeSubmitter{links: links}
+	service := newFakeIngestService(links, submitter, queue, &submitFakeLocker{})
 
 	got, err := service.Ingest(context.Background(), dto.IngestRequest{
+		Destination: captureDestinationLibrary,
 		Sources: []dto.IngestSource{{
 			Kind: "browser_capture", URL: link.URL, Title: title, Text: body,
 			Metadata: map[string]any{"captured_at": "2026-07-11T13:00:00Z"},
@@ -601,14 +537,11 @@ func TestIngestServiceReusesFailedJobForUnchangedBrowserCapture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ingest() error = %v", err)
 	}
-	if got.Status != string(model.LinkStatusFailed) || got.JobID == nil || *got.JobID != failedJobID.String() {
-		t.Fatalf("Ingest() = %#v, want existing failed job", got)
+	if got.Status != string(model.LinkStatusFailed) {
+		t.Fatalf("Ingest() = %#v, want existing failed link", got)
 	}
 	if len(submitter.requeueCaptures) != 0 {
 		t.Fatalf("requeue captures = %d, want 0", len(submitter.requeueCaptures))
-	}
-	if len(jobs.CreateCalls) != 0 {
-		t.Fatalf("created jobs = %#v, want none", jobs.CreateCalls)
 	}
 	if len(queue.ids) != 0 {
 		t.Fatalf("queued ids = %#v, want none", queue.ids)
@@ -635,8 +568,6 @@ func TestIngestServiceMultisourceBrowserCaptureRequeuesOnlyForContentChanges(t *
 			t.Parallel()
 
 			linkID := uuid.New()
-			oldJobID := uuid.New()
-			newJobID := uuid.New()
 			originalTitle := "Article"
 			originalBody := "Captured body\n\nSupplemental context"
 			link := &model.Link{
@@ -655,19 +586,12 @@ func TestIngestServiceMultisourceBrowserCaptureRequeuesOnlyForContentChanges(t *
 					return nil
 				},
 			}
-			jobs := &repotest.ObservableJobStore{
-				LatestByLinkID: map[uuid.UUID]*model.ParseJob{
-					linkID: {ID: oldJobID, LinkID: linkID, Status: model.JobStatusDone},
-				},
-				CreateFunc: func(_ context.Context, gotLinkID uuid.UUID) (*model.ParseJob, error) {
-					return &model.ParseJob{ID: newJobID, LinkID: gotLinkID, Status: model.JobStatusPending}, nil
-				},
-			}
 			queue := &submitFakeQueue{}
-			submitter := &submitFakeSubmitter{links: links, jobs: jobs}
-			service := newFakeIngestService(links, submitter, jobs, queue, &submitFakeLocker{})
+			submitter := &submitFakeSubmitter{links: links}
+			service := newFakeIngestService(links, submitter, queue, &submitFakeLocker{})
 
 			got, err := service.Ingest(context.Background(), dto.IngestRequest{
+				Destination: captureDestinationLibrary,
 				Sources: []dto.IngestSource{
 					{
 						Kind: "browser_capture", URL: link.URL, Title: tt.title, Text: tt.body,
@@ -681,23 +605,23 @@ func TestIngestServiceMultisourceBrowserCaptureRequeuesOnlyForContentChanges(t *
 			}
 
 			if !tt.wantRequeue {
-				if got.Status != string(model.LinkStatusDone) || got.JobID == nil || *got.JobID != oldJobID.String() {
-					t.Fatalf("Ingest() = %#v, want existing done job", got)
+				if got.Status != string(model.LinkStatusDone) {
+					t.Fatalf("Ingest() = %#v, want existing done link", got)
 				}
-				if len(submitter.requeueCaptures) != 0 || len(jobs.CreateCalls) != 0 || len(queue.ids) != 0 {
-					t.Fatalf("captured_at-only ingest created work: requeues=%d jobs=%d queued=%d", len(submitter.requeueCaptures), len(jobs.CreateCalls), len(queue.ids))
+				if len(submitter.requeueCaptures) != 0 || len(queue.ids) != 0 {
+					t.Fatalf("captured_at-only ingest created work: requeues=%d queued=%d", len(submitter.requeueCaptures), len(queue.ids))
 				}
 				return
 			}
 
-			if got.Status != string(model.LinkStatusPending) || got.JobID == nil || *got.JobID != newJobID.String() {
-				t.Fatalf("Ingest() = %#v, want new pending job", got)
+			if got.Status != string(model.LinkStatusPending) {
+				t.Fatalf("Ingest() = %#v, want pending requeue", got)
 			}
 			if len(submitter.requeueCaptures) != 1 || submitter.requeueCaptures[0] == nil {
 				t.Fatalf("requeue captures = %#v, want one content requeue", submitter.requeueCaptures)
 			}
-			if len(jobs.CreateCalls) != 1 || len(queue.ids) != 1 || queue.ids[0] != linkID {
-				t.Fatalf("created/queued work = %#v/%#v, want link once", jobs.CreateCalls, queue.ids)
+			if len(queue.ids) != 1 || queue.ids[0] != linkID {
+				t.Fatalf("queued work = %#v, want link once", queue.ids)
 			}
 		})
 	}
@@ -717,20 +641,10 @@ func TestIngestServiceAcceptsImageDataURLAndStoresSyntheticURL(t *testing.T) {
 			}, nil
 		},
 	}
-	jobStore := &repotest.ObservableJobStore{
-		CreateFunc: func(_ context.Context, linkID uuid.UUID) (*model.ParseJob, error) {
-			return &model.ParseJob{
-				ID:        uuid.MustParse("f2222222-2222-2222-2222-222222222222"),
-				LinkID:    linkID,
-				Status:    model.JobStatusPending,
-				CreatedAt: time.Now().UTC(),
-				UpdatedAt: time.Now().UTC(),
-			}, nil
-		},
-	}
-	service := newTestIngestService(linkStore, jobStore, &submitFakeQueue{}, &submitFakeLocker{})
+	service := newTestIngestService(linkStore, &submitFakeQueue{}, &submitFakeLocker{})
 
 	_, err := service.Ingest(context.Background(), dto.IngestRequest{
+		Destination: captureDestinationLibrary,
 		Sources: []dto.IngestSource{
 			{Kind: "image", URL: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA"},
 		},
@@ -751,7 +665,7 @@ func TestIngestServiceAcceptsImageDataURLAndStoresSyntheticURL(t *testing.T) {
 func TestIngestServiceRejectsInvalidRequests(t *testing.T) {
 	t.Parallel()
 
-	service := newTestIngestService(&repotest.ObservableLinkStore{}, &repotest.ObservableJobStore{}, &submitFakeQueue{}, &submitFakeLocker{})
+	service := newTestIngestService(&repotest.ObservableLinkStore{}, &submitFakeQueue{}, &submitFakeLocker{})
 
 	tests := []struct {
 		name string
@@ -799,15 +713,15 @@ func TestIngestServiceRejectsInvalidRequests(t *testing.T) {
 			t.Parallel()
 
 			_, err := service.Ingest(context.Background(), tt.req)
-			var statusErr *httperr.Error
+			var statusErr *problem.Error
 			if !errors.As(err, &statusErr) {
 				t.Fatalf("Ingest() error = %v, want StatusError", err)
 			}
-			if statusErr.HTTPStatus() != http.StatusUnprocessableEntity {
-				t.Fatalf("status = %d, want %d", statusErr.HTTPStatus(), http.StatusUnprocessableEntity)
+			if problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d", problemHTTPStatus(statusErr), http.StatusUnprocessableEntity)
 			}
-			if statusErr.HTTPMessage() != tt.want {
-				t.Fatalf("message = %q, want %q", statusErr.HTTPMessage(), tt.want)
+			if statusErr.Message() != tt.want {
+				t.Fatalf("message = %q, want %q", statusErr.Message(), tt.want)
 			}
 		})
 	}
@@ -851,23 +765,24 @@ func TestIngestServiceRejectsBrowserCaptureMetadataBounds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			service := newTestIngestService(&repotest.ObservableLinkStore{}, &repotest.ObservableJobStore{}, &submitFakeQueue{}, &submitFakeLocker{})
+			service := newTestIngestService(&repotest.ObservableLinkStore{}, &submitFakeQueue{}, &submitFakeLocker{})
 			_, err := service.Ingest(context.Background(), dto.IngestRequest{
+				Destination: captureDestinationLibrary,
 				Sources: []dto.IngestSource{{
 					Kind:     "browser_capture",
 					Title:    "anchor",
 					Metadata: tt.meta,
 				}},
 			})
-			var statusErr *httperr.Error
+			var statusErr *problem.Error
 			if !errors.As(err, &statusErr) {
 				t.Fatalf("Ingest() error = %v, want StatusError", err)
 			}
-			if statusErr.HTTPStatus() != http.StatusUnprocessableEntity {
-				t.Fatalf("status = %d, want %d", statusErr.HTTPStatus(), http.StatusUnprocessableEntity)
+			if problemHTTPStatus(statusErr) != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d", problemHTTPStatus(statusErr), http.StatusUnprocessableEntity)
 			}
-			if statusErr.HTTPMessage() != tt.want {
-				t.Fatalf("message = %q, want %q", statusErr.HTTPMessage(), tt.want)
+			if statusErr.Message() != tt.want {
+				t.Fatalf("message = %q, want %q", statusErr.Message(), tt.want)
 			}
 		})
 	}
@@ -918,19 +833,9 @@ func TestIngestServiceAcceptsBrowserCaptureMetadataAtLimits(t *testing.T) {
 					}, nil
 				},
 			}
-			jobStore := &repotest.ObservableJobStore{
-				CreateFunc: func(_ context.Context, linkID uuid.UUID) (*model.ParseJob, error) {
-					return &model.ParseJob{
-						ID:        uuid.MustParse("a2222222-2222-2222-2222-222222222222"),
-						LinkID:    linkID,
-						Status:    model.JobStatusPending,
-						CreatedAt: time.Now().UTC(),
-						UpdatedAt: time.Now().UTC(),
-					}, nil
-				},
-			}
-			service := newTestIngestService(linkStore, jobStore, &submitFakeQueue{}, &submitFakeLocker{})
+			service := newTestIngestService(linkStore, &submitFakeQueue{}, &submitFakeLocker{})
 			_, err := service.Ingest(context.Background(), dto.IngestRequest{
+				Destination: captureDestinationLibrary,
 				Sources: []dto.IngestSource{{
 					Kind:     "browser_capture",
 					Title:    "anchor",

@@ -7,7 +7,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if err := os.Setenv("READER_CURSOR_SIGNING_KEY", testReaderCursorKeyA); err != nil {
+	if err := os.Setenv("CURSOR_SIGNING_KEY", testCursorKeyA); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("EXTENSION_API_TOKEN", "test-installation-token"); err != nil {
 		panic(err)
 	}
 	os.Exit(m.Run())
@@ -32,14 +35,8 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.Server.ListenAddr != ":8000" {
 		t.Fatalf("Server.ListenAddr = %q, want %q", cfg.Server.ListenAddr, ":8000")
 	}
-	if cfg.CursorSigningKey != "" {
-		t.Fatalf("CursorSigningKey = %q, want blank Link cursor compatibility mode", cfg.CursorSigningKey)
-	}
-	if cfg.ReaderCursorSigningKey == "" {
-		t.Fatal("ReaderCursorSigningKey is empty; default replicas need a stable signing key")
-	}
-	if cfg.ReaderCursorSigningKey != testReaderCursorKeyA {
-		t.Fatalf("ReaderCursorSigningKey = %q, want dedicated explicit key", cfg.ReaderCursorSigningKey)
+	if cfg.CursorSigningKey != testCursorKeyA {
+		t.Fatalf("CursorSigningKey = %q, want explicit key", cfg.CursorSigningKey)
 	}
 
 	if len(cfg.Server.CORSOrigins) != 1 || cfg.Server.CORSOrigins[0] != "http://localhost:3000" {
@@ -79,40 +76,34 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsMissingReaderCursorSigningKeyOutsideDev(t *testing.T) {
+func TestLoadRejectsMissingCursorSigningKeyOutsideDev(t *testing.T) {
 	setBaseConfigEnv(t)
 	t.Setenv("APP_ENV", "prod")
-	t.Setenv("READER_CURSOR_SIGNING_KEY", "")
 	t.Setenv("CURSOR_SIGNING_KEY", "")
 
 	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "READER_CURSOR_SIGNING_KEY or CURSOR_SIGNING_KEY") {
-		t.Fatalf("Load() error = %v, want explicit Reader cursor signing key requirement", err)
+	if err == nil || !strings.Contains(err.Error(), "CURSOR_SIGNING_KEY") {
+		t.Fatalf("Load() error = %v, want explicit cursor signing key requirement", err)
 	}
 }
 
-func TestLoadKeepsPlaintextLinkCompatibilityWithDedicatedReaderKey(t *testing.T) {
+func TestLoadUsesOneCursorSigningKey(t *testing.T) {
 	setBaseConfigEnv(t)
 	t.Setenv("APP_ENV", "prod")
-	t.Setenv("READER_CURSOR_SIGNING_KEY", testReaderCursorKeyA)
-	t.Setenv("CURSOR_SIGNING_KEY", "")
+	t.Setenv("CURSOR_SIGNING_KEY", testCursorKeyA)
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CursorSigningKey != "" {
-		t.Fatalf("CursorSigningKey = %q, want blank Link compatibility mode", cfg.CursorSigningKey)
-	}
-	if cfg.ReaderCursorSigningKey != testReaderCursorKeyA {
-		t.Fatalf("ReaderCursorSigningKey = %q, want dedicated key", cfg.ReaderCursorSigningKey)
+	if cfg.CursorSigningKey != testCursorKeyA {
+		t.Fatalf("CursorSigningKey = %q, want configured key", cfg.CursorSigningKey)
 	}
 }
 
-func TestLoadAllowsDevelopmentReaderCursorFallback(t *testing.T) {
+func TestLoadAllowsDevelopmentCursorFallback(t *testing.T) {
 	setBaseConfigEnv(t)
 	t.Setenv("APP_ENV", "dev")
-	t.Setenv("READER_CURSOR_SIGNING_KEY", "")
 	t.Setenv("CURSOR_SIGNING_KEY", "")
 
 	cfg, err := Load()
@@ -120,8 +111,8 @@ func TestLoadAllowsDevelopmentReaderCursorFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := deriveDevelopmentCursorSigningKey(cfg.DatabaseURL, cfg.Analyzer.APIKey)
-	if cfg.ReaderCursorSigningKey != want {
-		t.Fatalf("ReaderCursorSigningKey = %q, want development fallback %q", cfg.ReaderCursorSigningKey, want)
+	if cfg.CursorSigningKey != want {
+		t.Fatalf("CursorSigningKey = %q, want development fallback %q", cfg.CursorSigningKey, want)
 	}
 }
 
@@ -173,7 +164,6 @@ func TestLoadReadsRetryConfiguration(t *testing.T) {
 	t.Setenv("AI_RETRY_ATTEMPTS", "3")
 	t.Setenv("AI_RETRY_DELAY_MS", "120")
 	t.Setenv("AI_REQUEST_TIMEOUT_MS", "900")
-	t.Setenv("AI_ALLOW_UNSAFE_TARGETS", "true")
 
 	cfg, err := Load()
 	if err != nil {
@@ -206,9 +196,6 @@ func TestLoadReadsRetryConfiguration(t *testing.T) {
 	}
 	if cfg.Analyzer.RequestTimeoutMS != 900 {
 		t.Fatalf("Analyzer.RequestTimeoutMS = %d, want 900", cfg.Analyzer.RequestTimeoutMS)
-	}
-	if !cfg.Analyzer.AllowUnsafeTargets {
-		t.Fatal("Analyzer.AllowUnsafeTargets = false, want true")
 	}
 }
 
@@ -273,68 +260,6 @@ func TestLoadRejectsNonPositiveTimeoutAndConcurrencyConfiguration(t *testing.T) 
 	}
 }
 
-// TestLoadReadsStructuredOutputEscapeHatch covers the env→config leg of
-// AI_DISABLE_STRUCTURED_OUTPUT. Without it the only coverage stops at
-// OpenAIAnalyzerOptions, so a typo in the env name here would leave the
-// escape hatch permanently dead with every test still green — and this is
-// the switch an operator reaches for when a gateway breaks tagging.
-func TestLoadReadsStructuredOutputEscapeHatch(t *testing.T) {
-	base := func(t *testing.T) {
-		t.Helper()
-		t.Setenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/webtag")
-		t.Setenv("AI_BASE_URL", "https://api.openai.com/v1")
-		t.Setenv("AI_API_KEY", "test-key")
-		t.Setenv("AI_MODEL", "gpt-4.1-mini")
-	}
-
-	t.Run("defaults to enabled", func(t *testing.T) {
-		base(t)
-		cfg, err := Load()
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-		if cfg.Analyzer.DisableStructuredOutput {
-			t.Fatal("DisableStructuredOutput = true with the env unset, want false (structured output on by default)")
-		}
-	})
-
-	t.Run("opt out", func(t *testing.T) {
-		base(t)
-		t.Setenv("AI_DISABLE_STRUCTURED_OUTPUT", "true")
-		cfg, err := Load()
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-		if !cfg.Analyzer.DisableStructuredOutput {
-			t.Fatal("AI_DISABLE_STRUCTURED_OUTPUT=true did not reach Analyzer.DisableStructuredOutput")
-		}
-	})
-
-	t.Run("rejects non-boolean", func(t *testing.T) {
-		base(t)
-		t.Setenv("AI_DISABLE_STRUCTURED_OUTPUT", "not-bool")
-		if _, err := Load(); err == nil {
-			t.Fatal("Load() error = nil, want invalid boolean error")
-		}
-	})
-}
-
-func TestLoadRejectsInvalidBooleanConfiguration(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/webtag")
-	t.Setenv("AI_BASE_URL", "https://api.openai.com/v1")
-	t.Setenv("AI_API_KEY", "test-key")
-	t.Setenv("AI_MODEL", "gpt-4.1-mini")
-	t.Setenv("AI_ALLOW_UNSAFE_TARGETS", "not-bool")
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("Load() error = nil, want invalid boolean configuration error")
-	}
-	if err.Error() != `AI_ALLOW_UNSAFE_TARGETS must be a valid boolean` {
-		t.Fatalf("error = %q, want %q", err.Error(), "AI_ALLOW_UNSAFE_TARGETS must be a valid boolean")
-	}
-}
-
 func TestLoadAppliesPoolSizingDefaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/webtag")
 	t.Setenv("AI_BASE_URL", "https://api.openai.com/v1")
@@ -384,8 +309,8 @@ func TestLoadAcceptsCustomShutdownTimeout(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsTooShortShutdownTimeout 锁定下界：< 1000ms 的预算无法
-// 完成 worker 排空（阶段 2 拿不到 300ms），Load 必须 fail-fast。
+// TestLoadRejectsTooShortShutdownTimeout 锁定下界：< 1000ms 的总预算无法
+// 可靠完成请求和 worker 排空，Load 必须 fail-fast。
 func TestLoadRejectsTooShortShutdownTimeout(t *testing.T) {
 	setBaseConfigEnv(t)
 	t.Setenv("SHUTDOWN_TIMEOUT_MS", "500")
@@ -395,52 +320,6 @@ func TestLoadRejectsTooShortShutdownTimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "SHUTDOWN_TIMEOUT_MS") {
 		t.Fatalf("error %q should mention SHUTDOWN_TIMEOUT_MS", err.Error())
-	}
-}
-
-// TestLoadOTelDefaults 锁定 OTel SDK 接入的三个 env 默认值：
-// endpoint 空（走 noop tracer）、ratio=0.05（OTel 社区推荐生产档位）、
-// insecure=true（本地 collector 友好；prod 应显式设 false）。
-func TestLoadOTelDefaults(t *testing.T) {
-	setBaseConfigEnv(t)
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.OTELEndpoint != "" {
-		t.Errorf("OTELEndpoint = %q, want empty (noop default)", cfg.OTELEndpoint)
-	}
-	if cfg.OTELSamplingRatio != 0.05 {
-		t.Errorf("OTELSamplingRatio = %v, want 0.05", cfg.OTELSamplingRatio)
-	}
-	if !cfg.OTELInsecure {
-		t.Error("OTELInsecure = false, want true (local-friendly default)")
-	}
-}
-
-// TestLoadRejectsOTelSamplingOutOfRange 锁定 ratio 必须在 [0,1] 内。
-// 双层防御中的外层（validateConfig 拒绝越界），内层是 InitTracer 内部
-// clamp 兜底。
-func TestLoadRejectsOTelSamplingOutOfRange(t *testing.T) {
-	cases := []struct {
-		name string
-		val  string
-	}{
-		{"negative", "-0.1"},
-		{"above_one", "1.5"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			setBaseConfigEnv(t)
-			t.Setenv("OTEL_SAMPLING_RATIO", tc.val)
-			_, err := Load()
-			if err == nil {
-				t.Fatalf("Load() error = nil, want OTEL_SAMPLING_RATIO=%s rejection", tc.val)
-			}
-			if !strings.Contains(err.Error(), "OTEL_SAMPLING_RATIO") {
-				t.Fatalf("error %q should mention OTEL_SAMPLING_RATIO", err.Error())
-			}
-		})
 	}
 }
 
@@ -471,7 +350,6 @@ func TestLoadIgnoresRetiredNoOpKnobs(t *testing.T) {
 	t.Setenv("DB_MAX_CONNS", "4")
 	t.Setenv("DB_MIN_CONNS", "1")
 	t.Setenv("PARSE_CONCURRENCY", "3")
-	t.Setenv("BATCH_SUBMIT_CONCURRENCY", "not-an-integer")
 	t.Setenv("IDEMPOTENCY_CAPACITY", "not-an-integer")
 
 	if _, err := Load(); err != nil {
@@ -479,32 +357,23 @@ func TestLoadIgnoresRetiredNoOpKnobs(t *testing.T) {
 	}
 }
 
-// TestIdempotencyDefaultsEnabled locks the live idempotency defaults.
-func TestIdempotencyDefaultsEnabled(t *testing.T) {
+func TestIdempotencyTTLDefaultsToMiddlewareValue(t *testing.T) {
 	setBaseConfigEnv(t)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if !cfg.IdempotencyEnabled {
-		t.Error("IdempotencyEnabled = false, want true (default-on per round-2 audit)")
 	}
 	if cfg.IdempotencyTTLMS != 0 {
 		t.Errorf("IdempotencyTTLMS = %d, want 0 (use middleware default)", cfg.IdempotencyTTLMS)
 	}
 }
 
-// TestIdempotencyAcceptsExplicitOverrides 锁定 env 覆盖路径。
-func TestIdempotencyAcceptsExplicitOverrides(t *testing.T) {
+func TestIdempotencyTTLAcceptsExplicitOverride(t *testing.T) {
 	setBaseConfigEnv(t)
-	t.Setenv("IDEMPOTENCY_ENABLED", "false")
 	t.Setenv("IDEMPOTENCY_TTL_MS", "60000")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if cfg.IdempotencyEnabled {
-		t.Error("IdempotencyEnabled = true after explicit false")
 	}
 	if cfg.IdempotencyTTLMS != 60000 {
 		t.Errorf("IdempotencyTTLMS = %d, want 60000", cfg.IdempotencyTTLMS)
@@ -520,162 +389,12 @@ func TestIdempotencyRejectsNegativeTTL(t *testing.T) {
 	}
 }
 
-func TestSiteMigrationDefaultsDisabledAndDryRun(t *testing.T) {
+func TestLoadRequiresExtensionAPIToken(t *testing.T) {
 	setBaseConfigEnv(t)
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.SiteMigrationEnabled || !cfg.SiteMigrationDryRun || cfg.SiteMigrationBatch != 100 || cfg.SiteMigrationIntervalMS != 900000 {
-		t.Fatalf("site migration defaults = %#v", cfg)
-	}
-}
-
-func TestWebsiteCollectionFeatureFlagsDefaultEnabledAndParseOverrides(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/webtag")
-	t.Setenv("AI_BASE_URL", "https://api.openai.com/v1")
-	t.Setenv("AI_API_KEY", "test-key")
-	t.Setenv("AI_MODEL", "gpt-4.1-mini")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.LibraryKindAPIEnabled || !cfg.SiteLibraryWriteEnabled || !cfg.SiteAutoClassificationEnabled || !cfg.SiteAdvancedManagementEnabled {
-		t.Fatalf("website flags should default enabled: %#v", cfg)
-	}
-	t.Setenv("SITE_LIBRARY_WRITE_ENABLED", "false")
-	t.Setenv("SITE_AUTO_CLASSIFICATION_ENABLED", "false")
-	cfg, err = Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.SiteLibraryWriteEnabled || cfg.SiteAutoClassificationEnabled {
-		t.Fatalf("website flag overrides ignored: %#v", cfg)
-	}
-}
-
-// TestPublicAPIOpenDefaultsToFalse 钉住本轮三个 P0 里最要害的那个默认值。
-//
-// 在此之前 MODE=single（默认）+ 未配 EXTENSION_API_TOKEN + 库里零把 key =
-// 公开 API 对所有人敞开。改成 fail-closed 之后，唯一的证人一度只有
-// scripts/container_smoke.sh 里那条 `assert_status /api/links 401`——而它是
-// Docker 门控的 job。把默认值改回 true，`go test ./internal/...` 全绿。
-//
-// 按本仓库审查日志收尾时立的规矩：「判定标准只有一条——去掉它，有没有测试
-// 会红。」这条就是那个会红的测试。
-func TestPublicAPIOpenDefaultsToFalse(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/db")
-	t.Setenv("AI_BASE_URL", "http://ai.internal/v1")
-	t.Setenv("AI_API_KEY", "k")
-	t.Setenv("AI_MODEL", "m")
-	// 显式清空，避免开发机 .env 或 CI 环境里残留的值让这条测试失去意义。
-	t.Setenv("PUBLIC_API_OPEN", "")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.PublicAPIOpen {
-		t.Fatal("PUBLIC_API_OPEN 未设置时必须为 false——默认开放意味着端口一暴露全库可读可删")
-	}
-}
-
-// 显式设为 true 时必须真的生效，否则这个开关本身就是装饰品。
-func TestPublicAPIOpenHonoursExplicitTrue(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/db")
-	t.Setenv("AI_BASE_URL", "http://ai.internal/v1")
-	t.Setenv("AI_API_KEY", "k")
-	t.Setenv("AI_MODEL", "m")
-	t.Setenv("PUBLIC_API_OPEN", "true")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !cfg.PublicAPIOpen {
-		t.Fatal("PUBLIC_API_OPEN=true 未生效")
-	}
-}
-
-// TestGzipDefaults 锁定压缩默认值：开启 + 1024 字节下限。
-//
-// 默认必须是"开"：反代层的 encode 只覆盖有反代的部署，直连 Go 二进制的
-// 自托管用户拿不到任何压缩。默认值改动会让那部分用户静默退回裸奔。
-func TestGzipDefaults(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/webtag")
-	t.Setenv("AI_BASE_URL", "https://api.openai.com/v1")
-	t.Setenv("AI_API_KEY", "test-key")
-	t.Setenv("AI_MODEL", "gpt-4.1-mini")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
-	if !cfg.GzipEnabled {
-		t.Fatal("GzipEnabled = false, want true by default")
-	}
-	if cfg.GzipMinLength != 1024 {
-		t.Fatalf("GzipMinLength = %d, want 1024", cfg.GzipMinLength)
-	}
-}
-
-// TestGzipReadsExplicitOverrides 覆盖两个 env 的解析路径。
-func TestGzipReadsExplicitOverrides(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/webtag")
-	t.Setenv("AI_BASE_URL", "https://api.openai.com/v1")
-	t.Setenv("AI_API_KEY", "test-key")
-	t.Setenv("AI_MODEL", "gpt-4.1-mini")
-	t.Setenv("GZIP_ENABLED", "false")
-	t.Setenv("GZIP_MIN_LENGTH", "4096")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
-	if cfg.GzipEnabled {
-		t.Fatal("GzipEnabled = true, want false from GZIP_ENABLED=false")
-	}
-	if cfg.GzipMinLength != 4096 {
-		t.Fatalf("GzipMinLength = %d, want 4096", cfg.GzipMinLength)
-	}
-}
-
-// TestGzipRejectsNonPositiveMinLength 覆盖 validate.go 里新增的校验分支。
-// minLength <= 0 会让中间件回退到默认值，而运维以为自己关掉了阈值——
-// fail-fast 比静默回退好。
-func TestGzipRejectsNonPositiveMinLength(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/webtag")
-	t.Setenv("AI_BASE_URL", "https://api.openai.com/v1")
-	t.Setenv("AI_API_KEY", "test-key")
-	t.Setenv("AI_MODEL", "gpt-4.1-mini")
-	t.Setenv("GZIP_MIN_LENGTH", "0")
+	t.Setenv("EXTENSION_API_TOKEN", "")
 
 	_, err := Load()
-	if err == nil {
-		t.Fatal("Load() = nil error, want failure on GZIP_MIN_LENGTH=0")
-	}
-	if !strings.Contains(err.Error(), "GZIP_MIN_LENGTH") {
-		t.Fatalf("error = %v, want it to name GZIP_MIN_LENGTH", err)
-	}
-}
-
-// TestTreeCacheDefaultsAndValidation 覆盖域名摘要缓存 TTL 的默认值与校验分支。
-func TestTreeCacheDefaultsAndValidation(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/webtag")
-	t.Setenv("AI_BASE_URL", "https://api.openai.com/v1")
-	t.Setenv("AI_API_KEY", "test-key")
-	t.Setenv("AI_MODEL", "gpt-4.1-mini")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
-	if cfg.TreeCacheTTLMS != 300000 {
-		t.Fatalf("TreeCacheTTLMS = %d, want 300000", cfg.TreeCacheTTLMS)
-	}
-
-	t.Setenv("TREE_CACHE_TTL_MS", "0")
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TREE_CACHE_TTL_MS") {
-		t.Fatalf("Load() error = %v, want it to reject TREE_CACHE_TTL_MS=0", err)
+	if err == nil || err.Error() != "EXTENSION_API_TOKEN is required" {
+		t.Fatalf("Load() error = %v, want EXTENSION_API_TOKEN requirement", err)
 	}
 }

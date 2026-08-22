@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river/rivertype"
@@ -13,127 +12,68 @@ import (
 	"webtag/internal/repository"
 )
 
-type inboxJobStoreStub struct {
-	repository.ReaderVNextStore
-	inbox           model.ReaderInbox
-	job             *model.ReaderInboxJob
-	beginCalls      int
-	claims          int
-	retries         int
-	fails           int
-	completed       int
-	lastSummary     string
-	lastTags        []string
-	expiryClaims    int
-	expiryFinalized int
-	expiryLeaseID   uuid.UUID
-	expiryNow       time.Time
+type inboxProposalStoreStub struct {
+	ReaderInboxStore
+	inbox            model.ReaderInbox
+	claimErr         error
+	completeErr      error
+	retryErr         error
+	failErr          error
+	claimCalls       int
+	retryCalls       int
+	failCalls        int
+	completeCalls    int
+	lastInboxID      uuid.UUID
+	lastRevision     int64
+	completedSummary string
+	completedTags    []string
 }
 
-func (s *inboxJobStoreStub) GetInbox(context.Context, uuid.UUID) (*model.ReaderInbox, error) {
+func (s *inboxProposalStoreStub) GetInbox(context.Context, uuid.UUID) (*model.ReaderInbox, error) {
 	item := s.inbox
-	item.Tags = append([]string(nil), s.inbox.Tags...)
-	item.SuggestedTags = append([]string(nil), s.inbox.SuggestedTags...)
+	item.Tags = append([]string(nil), item.Tags...)
 	return &item, nil
 }
 
-func (s *inboxJobStoreStub) BeginInboxResummarizeJob(_ context.Context, inboxID uuid.UUID, expectedRevision int64) (*model.ReaderInboxJob, bool, error) {
-	s.beginCalls++
-	if s.job != nil && s.job.Status != "failed" {
-		job := *s.job
-		return &job, false, nil
+func (s *inboxProposalStoreStub) ClaimInboxProposal(_ context.Context, id uuid.UUID, revision int64) (*model.ReaderInbox, error) {
+	s.claimCalls++
+	s.lastInboxID = id
+	s.lastRevision = revision
+	if s.claimErr != nil {
+		return nil, s.claimErr
 	}
-	now := time.Unix(100, 0).UTC()
-	job := &model.ReaderInboxJob{
-		ID:                       uuid.New(),
-		InboxID:                  inboxID,
-		ExpectedMetadataRevision: expectedRevision,
-		Status:                   "queued",
-		CreatedAt:                now,
-		UpdatedAt:                now,
-	}
-	s.job = job
-	id := job.ID
-	s.inbox.JobID = &id
-	return job, true, nil
+	item := s.inbox
+	item.ProposalStatus = "running"
+	return &item, nil
 }
 
-func (s *inboxJobStoreStub) GetInboxJob(context.Context, uuid.UUID) (*model.ReaderInboxJob, error) {
-	if s.job == nil {
-		return nil, repository.ErrNotFound
-	}
-	job := *s.job
-	return &job, nil
+func (s *inboxProposalStoreStub) RetryInboxProposal(_ context.Context, id uuid.UUID, revision int64) error {
+	s.retryCalls++
+	s.lastInboxID = id
+	s.lastRevision = revision
+	return s.retryErr
 }
 
-func (s *inboxJobStoreStub) ClaimInboxJob(context.Context, uuid.UUID) (*model.ReaderInboxJob, error) {
-	if s.job == nil {
-		return nil, repository.ErrNotFound
-	}
-	if s.job.Status != "queued" && s.job.Status != "running" {
-		return nil, repository.ErrReaderInboxJobNotRunnable
-	}
-	s.claims++
-	s.job.Status = "running"
-	s.job.Attempts++
-	job := *s.job
-	return &job, nil
+func (s *inboxProposalStoreStub) FailInboxProposal(_ context.Context, id uuid.UUID, revision int64) error {
+	s.failCalls++
+	s.lastInboxID = id
+	s.lastRevision = revision
+	return s.failErr
 }
 
-func (s *inboxJobStoreStub) RetryInboxJob(context.Context, uuid.UUID, string) error {
-	if s.job == nil || s.job.Status != "running" {
-		return repository.ErrReaderInboxJobNotRunnable
+func (s *inboxProposalStoreStub) CompleteInboxProposal(_ context.Context, id uuid.UUID, revision int64, summary string, tags []string) error {
+	s.completeCalls++
+	s.lastInboxID = id
+	s.lastRevision = revision
+	if s.completeErr != nil {
+		return s.completeErr
 	}
-	s.retries++
-	s.job.Status = "queued"
-	message := "reader_inbox_ai_failed"
-	s.job.ErrorMessage = &message
+	s.completedSummary = summary
+	s.completedTags = append([]string(nil), tags...)
 	return nil
 }
 
-func (s *inboxJobStoreStub) FailInboxJob(context.Context, uuid.UUID, string) error {
-	if s.job == nil || (s.job.Status != "running" && s.job.Status != "queued") {
-		return repository.ErrReaderInboxJobNotRunnable
-	}
-	s.fails++
-	s.job.Status = "failed"
-	message := "reader_inbox_ai_failed"
-	s.job.ErrorMessage = &message
-	return nil
-}
-
-func (s *inboxJobStoreStub) CompleteInboxJob(_ context.Context, _ uuid.UUID, summary string, tags []string) error {
-	if s.job == nil || s.job.Status != "running" {
-		return repository.ErrReaderInboxJobNotRunnable
-	}
-	s.completed++
-	s.lastSummary = summary
-	s.lastTags = append([]string(nil), tags...)
-	s.job.Status = "completed"
-	s.inbox.Summary = &summary
-	s.inbox.SuggestedTags = append([]string(nil), tags...)
-	return nil
-}
-
-func (s *inboxJobStoreStub) ClaimExpiredInbox(_ context.Context, leaseID uuid.UUID, now, _ time.Time, _ int) ([]model.ReaderInbox, error) {
-	s.expiryClaims++
-	s.expiryLeaseID = leaseID
-	s.expiryNow = now
-	if s.expiryClaims > 1 {
-		return nil, nil
-	}
-	return []model.ReaderInbox{{ID: uuid.New(), Status: "pending", Expired: true}}, nil
-}
-
-func (s *inboxJobStoreStub) FinalizeExpiredInbox(_ context.Context, leaseID uuid.UUID, now time.Time) (int64, error) {
-	if leaseID != s.expiryLeaseID || !now.Equal(s.expiryNow) {
-		return 0, errors.New("expiry lease mismatch")
-	}
-	s.expiryFinalized++
-	return 1, nil
-}
-
-type inboxJobAIStub struct {
+type inboxProposalAIStub struct {
 	body    string
 	summary string
 	tags    []string
@@ -141,168 +81,191 @@ type inboxJobAIStub struct {
 	calls   int
 }
 
-func (s *inboxJobAIStub) SummarizeInbox(_ context.Context, body string, _ []string) (string, []string, error) {
+func (s *inboxProposalAIStub) SummarizeInbox(_ context.Context, body string, _ []string) (string, []string, error) {
 	s.calls++
 	s.body = body
-	if s.err != nil {
-		return "", nil, s.err
-	}
-	return s.summary, append([]string(nil), s.tags...), nil
+	return s.summary, append([]string(nil), s.tags...), s.err
 }
 
-type inboxJobSchedulerStub struct {
-	args []ReaderInboxSummaryJobArgs
-	err  error
+type inboxProposalCommandsStub struct {
+	result  InboxProposalResult
+	err     error
+	command EnsureInboxProposalCommand
 }
 
-func (s *inboxJobSchedulerStub) EnqueueReaderInboxSummary(_ context.Context, args ReaderInboxSummaryJobArgs) error {
-	s.args = append(s.args, args)
-	return s.err
+func (s *inboxProposalCommandsStub) CreateInboxProposal(context.Context, CreateInboxProposalCommand) (InboxProposalResult, error) {
+	return s.result, s.err
 }
 
-func newInboxJobService(store *inboxJobStoreStub, ai *inboxJobAIStub, scheduler *inboxJobSchedulerStub) *ReaderVNextService {
-	service := NewReaderVNextService(store, nil)
-	service.ConfigureReaderInboxJobs(ai, scheduler)
-	return service
+func (s *inboxProposalCommandsStub) EnsureInboxProposal(_ context.Context, command EnsureInboxProposalCommand) (InboxProposalResult, error) {
+	s.command = command
+	return s.result, s.err
 }
 
-func TestResummarizeInboxJobReusesPendingJob(t *testing.T) {
+func newInboxProposalProcessor(store *inboxProposalStoreStub, ai *inboxProposalAIStub) *ReaderInboxSummaryProcessor {
+	return NewReaderInboxSummaryProcessor(store, ai)
+}
+
+func TestResummarizeInboxReturnsInboxPollingResource(t *testing.T) {
+	t.Parallel()
+
 	inboxID := uuid.New()
-	store := &inboxJobStoreStub{inbox: model.ReaderInbox{ID: inboxID, Body: "draft body", Status: "pending", MetadataRevision: 4}}
-	scheduler := &inboxJobSchedulerStub{}
-	service := newInboxJobService(store, &inboxJobAIStub{}, scheduler)
+	store := &inboxProposalStoreStub{inbox: model.ReaderInbox{ID: inboxID, MetadataRevision: 4, Status: "pending"}}
+	commands := &inboxProposalCommandsStub{result: InboxProposalResult{Inbox: &model.ReaderInbox{
+		ID: inboxID, URL: "https://example.com", MetadataRevision: 4, Status: "pending", ProposalStatus: "pending",
+	}}}
+	service := newReaderTestFeatureSet(readerTestStores(store), nil, ReaderApplicationOptions{InboxProposalCommands: commands})
 
-	first, err := service.ResummarizeInboxJob(context.Background(), inboxID.String())
+	response, err := service.ResummarizeInbox(context.Background(), inboxID)
 	if err != nil {
-		t.Fatalf("first ResummarizeInboxJob() error = %v", err)
+		t.Fatalf("ResummarizeInbox() error = %v", err)
 	}
-	second, err := service.ResummarizeInboxJob(context.Background(), inboxID.String())
-	if err != nil {
-		t.Fatalf("second ResummarizeInboxJob() error = %v", err)
+	if response.ID != inboxID || response.ProposalStatus != "pending" {
+		t.Fatalf("ResummarizeInbox() = %+v", response)
 	}
-	if first.JobID == "" || second.JobID != first.JobID || first.Status != "queued" || second.Status != "queued" {
-		t.Fatalf("job responses = %#v and %#v, want one queued job", first, second)
-	}
-	if store.beginCalls != 2 || len(scheduler.args) != 1 {
-		t.Fatalf("begin calls = %d, enqueue calls = %d, want 2 and 1", store.beginCalls, len(scheduler.args))
-	}
-	if scheduler.args[0].JobID.String() != first.JobID || scheduler.args[0].ExpectedMetadataRevision != 4 {
-		t.Fatalf("enqueued args = %#v, want job %s revision 4", scheduler.args[0], first.JobID)
+	if commands.command.InboxID != inboxID || commands.command.ExpectedMetadataRevision != 4 {
+		t.Fatalf("command = %+v", commands.command)
 	}
 }
 
-func TestRunReaderInboxSummaryJobOnlyCommitsAIFields(t *testing.T) {
+func TestRunReaderInboxSummaryJobCommitsOnlyProposalFields(t *testing.T) {
+	t.Parallel()
+
 	inboxID := uuid.New()
-	store := &inboxJobStoreStub{inbox: model.ReaderInbox{
-		ID:               inboxID,
-		Title:            stringPtr("user title"),
-		Body:             "current draft body",
-		Tags:             []string{"user-tag"},
-		Status:           "pending",
-		MetadataRevision: 2,
+	title := "user title"
+	store := &inboxProposalStoreStub{inbox: model.ReaderInbox{
+		ID: inboxID, Title: &title, Body: "current draft body", Tags: []string{"user-tag"},
+		Status: "pending", MetadataRevision: 2, ProposalStatus: "pending",
 	}}
-	ai := &inboxJobAIStub{summary: "AI summary", tags: []string{"suggested"}}
-	service := newInboxJobService(store, ai, &inboxJobSchedulerStub{})
-	response, err := service.ResummarizeInboxJob(context.Background(), inboxID.String())
-	if err != nil {
-		t.Fatalf("ResummarizeInboxJob() error = %v", err)
-	}
+	ai := &inboxProposalAIStub{summary: "AI summary", tags: []string{"suggested"}}
+	service := newInboxProposalProcessor(store, ai)
+	args := ReaderInboxSummaryJobArgs{InboxID: inboxID, ExpectedMetadataRevision: 2}
 
-	args := ReaderInboxSummaryJobArgs{JobID: uuid.MustParse(response.JobID), InboxID: inboxID, ExpectedMetadataRevision: 2}
 	if err := service.RunReaderInboxSummaryJob(context.Background(), args, 1, 3); err != nil {
 		t.Fatalf("RunReaderInboxSummaryJob() error = %v", err)
 	}
-	if ai.body != "current draft body" || ai.calls != 1 {
-		t.Fatalf("AI input = %q, calls = %d, want current body and one call", ai.body, ai.calls)
+	if ai.calls != 1 || ai.body != "current draft body" {
+		t.Fatalf("AI input = %q, calls = %d", ai.body, ai.calls)
 	}
-	if store.lastSummary != "AI summary" || len(store.lastTags) != 1 || store.lastTags[0] != "suggested" || store.completed != 1 {
-		t.Fatalf("committed fields = summary %q tags %#v completed %d", store.lastSummary, store.lastTags, store.completed)
+	if store.completeCalls != 1 || store.completedSummary != "AI summary" || len(store.completedTags) != 1 || store.completedTags[0] != "suggested" {
+		t.Fatalf("completion = calls:%d summary:%q tags:%v", store.completeCalls, store.completedSummary, store.completedTags)
 	}
-	if store.inbox.Title == nil || *store.inbox.Title != "user title" || len(store.inbox.Tags) != 1 || store.inbox.Tags[0] != "user-tag" || store.inbox.Body != "current draft body" {
-		t.Fatalf("user fields changed: %#v", store.inbox)
-	}
-	if store.inbox.MetadataRevision != 2 || store.job.Status != "completed" {
-		t.Fatalf("revision/status = %d/%s, want 2/completed", store.inbox.MetadataRevision, store.job.Status)
+	if store.lastInboxID != inboxID || store.lastRevision != 2 || store.inbox.MetadataRevision != 2 || *store.inbox.Title != title || store.inbox.Tags[0] != "user-tag" {
+		t.Fatalf("user fields or CAS changed: %+v", store)
 	}
 }
 
-func TestRunReaderInboxSummaryJobWritesOnlyProposalFieldsAfterUserEdit(t *testing.T) {
+func TestRunReaderInboxSummaryJobSkipsStaleRevisionBeforeAI(t *testing.T) {
+	t.Parallel()
+
 	inboxID := uuid.New()
-	store := &inboxJobStoreStub{inbox: model.ReaderInbox{ID: inboxID, Body: "body", Status: "pending", MetadataRevision: 1}}
-	ai := &inboxJobAIStub{summary: "must not be used"}
-	service := newInboxJobService(store, ai, &inboxJobSchedulerStub{})
-	response, err := service.ResummarizeInboxJob(context.Background(), inboxID.String())
-	if err != nil {
-		t.Fatalf("ResummarizeInboxJob() error = %v", err)
+	store := &inboxProposalStoreStub{claimErr: repository.ErrRevisionConflict}
+	ai := &inboxProposalAIStub{summary: "stale"}
+	service := newInboxProposalProcessor(store, ai)
+
+	if err := service.RunReaderInboxSummaryJob(context.Background(), ReaderInboxSummaryJobArgs{
+		InboxID: inboxID, ExpectedMetadataRevision: 1,
+	}, 1, 3); err != nil {
+		t.Fatalf("stale job error = %v", err)
 	}
-	store.inbox.MetadataRevision = 2
-	err = service.RunReaderInboxSummaryJob(context.Background(), ReaderInboxSummaryJobArgs{JobID: uuid.MustParse(response.JobID), InboxID: inboxID, ExpectedMetadataRevision: 1}, 1, 3)
-	if err != nil {
-		t.Fatalf("late proposal job returned %v", err)
-	}
-	if ai.calls != 1 || store.completed != 1 || store.fails != 0 || store.job.Status != "completed" || store.inbox.MetadataRevision != 2 {
-		t.Fatalf("late proposal result ai_calls=%d completed=%d fails=%d status=%s revision=%d", ai.calls, store.completed, store.fails, store.job.Status, store.inbox.MetadataRevision)
+	if ai.calls != 0 || store.completeCalls != 0 {
+		t.Fatalf("stale job reached AI/completion: ai=%d complete=%d", ai.calls, store.completeCalls)
 	}
 }
 
-func TestRunReaderInboxSummaryJobRetriesAndThenFailsAIError(t *testing.T) {
+func TestRunReaderInboxSummaryJobDropsResultAfterConcurrentEdit(t *testing.T) {
+	t.Parallel()
+
 	inboxID := uuid.New()
-	store := &inboxJobStoreStub{inbox: model.ReaderInbox{ID: inboxID, Body: "body", Status: "pending", MetadataRevision: 1}}
-	ai := &inboxJobAIStub{err: errors.New("provider detail must not persist")}
-	service := newInboxJobService(store, ai, &inboxJobSchedulerStub{})
-	response, err := service.ResummarizeInboxJob(context.Background(), inboxID.String())
-	if err != nil {
-		t.Fatalf("ResummarizeInboxJob() error = %v", err)
+	store := &inboxProposalStoreStub{
+		inbox:       model.ReaderInbox{ID: inboxID, Body: "old body", Status: "pending", MetadataRevision: 1},
+		completeErr: repository.ErrRevisionConflict,
 	}
-	args := ReaderInboxSummaryJobArgs{JobID: uuid.MustParse(response.JobID), InboxID: inboxID, ExpectedMetadataRevision: 1}
-	if err := service.RunReaderInboxSummaryJob(context.Background(), args, 1, 3); err == nil {
-		t.Fatal("first AI failure returned nil")
+	ai := &inboxProposalAIStub{summary: "stale summary"}
+	service := newInboxProposalProcessor(store, ai)
+
+	if err := service.RunReaderInboxSummaryJob(context.Background(), ReaderInboxSummaryJobArgs{
+		InboxID: inboxID, ExpectedMetadataRevision: 1,
+	}, 1, 3); err != nil {
+		t.Fatalf("late completion error = %v", err)
 	}
-	if store.retries != 1 || store.job.Status != "queued" || store.job.ErrorMessage == nil || *store.job.ErrorMessage != "reader_inbox_ai_failed" {
-		t.Fatalf("after retry: retries=%d status=%s error=%v", store.retries, store.job.Status, store.job.ErrorMessage)
+	if ai.calls != 1 || store.completeCalls != 1 || store.completedSummary != "" {
+		t.Fatalf("late result was persisted: ai=%d complete=%d summary=%q", ai.calls, store.completeCalls, store.completedSummary)
 	}
-	if err := service.RunReaderInboxSummaryJob(context.Background(), args, 3, 3); err == nil {
-		t.Fatal("terminal AI failure returned nil")
+}
+
+func TestRunReaderInboxSummaryJobRetriesThenFails(t *testing.T) {
+	t.Parallel()
+
+	inboxID := uuid.New()
+	store := &inboxProposalStoreStub{inbox: model.ReaderInbox{ID: inboxID, Body: "body", Status: "pending", MetadataRevision: 1}}
+	ai := &inboxProposalAIStub{err: errors.New("provider detail must not persist")}
+	service := newInboxProposalProcessor(store, ai)
+	args := ReaderInboxSummaryJobArgs{InboxID: inboxID, ExpectedMetadataRevision: 1}
+
+	if err := service.RunReaderInboxSummaryJob(context.Background(), args, 1, 3); err == nil || err.Error() != "reader_inbox_ai_failed" {
+		t.Fatalf("retry error = %v", err)
 	}
-	if store.fails != 1 || store.job.Status != "failed" || store.job.ErrorMessage == nil || *store.job.ErrorMessage != "reader_inbox_ai_failed" {
-		t.Fatalf("after terminal failure: fails=%d status=%s error=%v", store.fails, store.job.Status, store.job.ErrorMessage)
+	if store.retryCalls != 1 || store.failCalls != 0 {
+		t.Fatalf("first failure transitions = retry:%d fail:%d", store.retryCalls, store.failCalls)
+	}
+	if err := service.RunReaderInboxSummaryJob(context.Background(), args, 3, 3); err == nil || err.Error() != "reader_inbox_ai_failed" {
+		t.Fatalf("terminal error = %v", err)
+	}
+	if store.retryCalls != 1 || store.failCalls != 1 {
+		t.Fatalf("terminal transitions = retry:%d fail:%d", store.retryCalls, store.failCalls)
+	}
+}
+
+func TestRunReaderInboxSummaryJobStopsWhenFailureTransitionIsStale(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		attempt     int
+		maxAttempts int
+		configure   func(*inboxProposalStoreStub)
+	}{
+		{
+			name:    "retry transition",
+			attempt: 1, maxAttempts: 3,
+			configure: func(store *inboxProposalStoreStub) { store.retryErr = repository.ErrReaderInboxProposalNotRunnable },
+		},
+		{
+			name:    "terminal transition",
+			attempt: 3, maxAttempts: 3,
+			configure: func(store *inboxProposalStoreStub) { store.failErr = repository.ErrRevisionConflict },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			inboxID := uuid.New()
+			store := &inboxProposalStoreStub{inbox: model.ReaderInbox{
+				ID: inboxID, Body: "body", Status: "pending", MetadataRevision: 1,
+			}}
+			test.configure(store)
+			service := newInboxProposalProcessor(store, &inboxProposalAIStub{err: errors.New("provider failed")})
+
+			err := service.RunReaderInboxSummaryJob(context.Background(), ReaderInboxSummaryJobArgs{
+				InboxID: inboxID, ExpectedMetadataRevision: 1,
+			}, test.attempt, test.maxAttempts)
+			if err != nil {
+				t.Fatalf("stale failure transition error = %v, want nil", err)
+			}
+		})
 	}
 }
 
 func TestReaderInboxSummaryJobInsertOptsExcludeCompleted(t *testing.T) {
+	t.Parallel()
+
 	opts := (ReaderInboxSummaryJobArgs{}).InsertOpts()
 	if !opts.UniqueOpts.ByArgs {
-		t.Fatal("InsertOpts().UniqueOpts.ByArgs = false, want true")
+		t.Fatal("InsertOpts().UniqueOpts.ByArgs = false")
 	}
 	for _, state := range opts.UniqueOpts.ByState {
 		if state == rivertype.JobStateCompleted {
-			t.Fatal("completed jobs must not block a new job")
-		}
-	}
-}
-
-func TestRunReaderInboxExpiryJobClaimsAndFinalizesPendingRows(t *testing.T) {
-	store := &inboxJobStoreStub{}
-	service := NewReaderVNextService(store, nil)
-	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	service.now = func() time.Time { return now }
-
-	if err := service.RunReaderInboxExpiryJob(context.Background(), 10); err != nil {
-		t.Fatalf("RunReaderInboxExpiryJob() error = %v", err)
-	}
-	if store.expiryClaims != 1 || store.expiryFinalized != 1 || store.expiryLeaseID == uuid.Nil {
-		t.Fatalf("expiry calls = claims %d finalized %d lease %s, want one claimed/finalized batch", store.expiryClaims, store.expiryFinalized, store.expiryLeaseID)
-	}
-}
-
-func TestReaderInboxExpiryJobInsertOptsExcludeCompleted(t *testing.T) {
-	opts := (ReaderInboxExpiryJobArgs{}).InsertOpts()
-	if !opts.UniqueOpts.ByArgs {
-		t.Fatal("InsertOpts().UniqueOpts.ByArgs = false, want true")
-	}
-	for _, state := range opts.UniqueOpts.ByState {
-		if state == rivertype.JobStateCompleted {
-			t.Fatal("completed expiry jobs must not block a later sweep")
+			t.Fatal("completed jobs must not block a new proposal")
 		}
 	}
 }

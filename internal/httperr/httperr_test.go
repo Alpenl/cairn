@@ -5,7 +5,72 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+
+	"webtag/internal/problem"
 )
+
+func TestAsMapsApplicationProblemKinds(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		kind   problem.Kind
+		status int
+	}{
+		{problem.Internal, http.StatusInternalServerError},
+		{problem.Malformed, http.StatusBadRequest},
+		{problem.Invalid, http.StatusUnprocessableEntity},
+		{problem.NotFound, http.StatusNotFound},
+		{problem.Conflict, http.StatusConflict},
+		{problem.Precondition, http.StatusPreconditionRequired},
+		{problem.TooLarge, http.StatusRequestEntityTooLarge},
+		{problem.RateLimited, http.StatusTooManyRequests},
+		{problem.Forbidden, http.StatusForbidden},
+		{problem.Unavailable, http.StatusServiceUnavailable},
+		{problem.Upstream, http.StatusBadGateway},
+		{problem.Timeout, http.StatusGatewayTimeout},
+		{problem.Canceled, 499},
+	} {
+		applicationError := problem.NewWithCode(test.kind, "stable_code", "safe message")
+		carrier, ok := As(fmt.Errorf("wrapped: %w", applicationError))
+		if !ok {
+			t.Fatalf("kind %d did not map to an HTTP carrier", test.kind)
+		}
+		if carrier.HTTPStatus() != test.status || carrier.HTTPMessage() != "safe message" {
+			t.Fatalf("kind %d maps to status=%d message=%q, want %d/safe message", test.kind, carrier.HTTPStatus(), carrier.HTTPMessage(), test.status)
+		}
+		coder, ok := carrier.(ErrorCoder)
+		if !ok {
+			t.Fatalf("kind %d did not map to a coded carrier", test.kind)
+		}
+		if coder.HTTPErrorCode() != "stable_code" {
+			t.Fatalf("kind %d code = %q", test.kind, coder.HTTPErrorCode())
+		}
+	}
+}
+
+func TestAsMapsApplicationProblemMetadata(t *testing.T) {
+	t.Parallel()
+
+	revision := int64(7)
+	applicationError := problem.NewWithCodeAndCurrentIdentity(
+		problem.Conflict,
+		problem.CodeContentRevisionConflict,
+		"changed",
+		problem.ConflictIdentity{ContentRevision: &revision, BlockKey: "content"},
+	)
+	carrier, ok := As(applicationError)
+	if !ok {
+		t.Fatal("application problem did not map to HTTP carrier")
+	}
+	provider, ok := carrier.(CurrentIdentityProvider)
+	if !ok {
+		t.Fatal("application conflict did not map identity metadata")
+	}
+	identity, present := provider.HTTPCurrentIdentity()
+	if !present || identity.ContentRevision == nil || *identity.ContentRevision != revision || identity.BlockKey != "content" {
+		t.Fatalf("current identity = %+v, present=%v", identity, present)
+	}
+}
 
 func TestAs_NilError(t *testing.T) {
 	t.Parallel()
@@ -130,35 +195,6 @@ func TestAs_NonCarrier(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("As(plain) carrier = %v, want nil", got)
-	}
-}
-
-// fakeStatusError is a separate StatusCarrier implementation used to verify
-// that As's typed-nil defense generalises beyond *Error to any future
-// pointer-typed carrier added in another package.
-type fakeStatusError struct {
-	status int
-	msg    string
-}
-
-func (f *fakeStatusError) Error() string       { return f.msg }
-func (f *fakeStatusError) HTTPStatus() int     { return f.status }
-func (f *fakeStatusError) HTTPMessage() string { return f.msg }
-
-// TestAs_TypedNilForeignCarrier locks the contract that any pointer-typed
-// nil StatusCarrier (not just *Error) is filtered out. Without the reflect
-// IsNil check, a third-party carrier that does not bother with nil-receiver
-// guards would slip through As and panic in the handler.
-func TestAs_TypedNilForeignCarrier(t *testing.T) {
-	t.Parallel()
-
-	var typedNil *fakeStatusError
-	carrier, ok := As(fmt.Errorf("ctx: %w", error(typedNil)))
-	if ok {
-		t.Fatalf("As(foreign typed-nil) ok = true, want false")
-	}
-	if carrier != nil {
-		t.Fatalf("As(foreign typed-nil) carrier = %v, want nil", carrier)
 	}
 }
 

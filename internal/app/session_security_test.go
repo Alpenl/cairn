@@ -19,27 +19,15 @@ var sessionSecuritySigningKey = []byte("cairn-session-security-signing-key")
 
 type sessionSecurityVersions struct{}
 
-func (sessionSecurityVersions) Current(_ context.Context, components representation.ComponentSet) (representation.VersionBase, error) {
-	base := representation.VersionBase{
-		RepresentationNamespace: uuid.MustParse("11111111-1111-1111-1111-111111111111"),
-	}
-	switch components.Key() {
-	case "":
-	case string(representation.LibraryComponent):
-		base.Components = []representation.Component{{Name: representation.LibraryComponent, Revision: 1}}
-	default:
-		return representation.VersionBase{}, representation.ErrInvalidVersion
-	}
-	return base, nil
+func (sessionSecurityVersions) Current(_ context.Context) (representation.ClientIdentity, error) {
+	return representation.NewClientIdentity(uuid.MustParse("11111111-1111-1111-1111-111111111111"))
 }
 
-func newSessionSecurityRouter(token string, open bool, signingKey []byte) http.Handler {
-	return NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:                  "prod",
-		ExtensionAPIToken:       token,
-		AllowOpenAccess:         open,
-		SessionSigningKey:       signingKey,
-		ConditionalGetRevisions: sessionSecurityVersions{},
+func newSessionSecurityRouter(token string, signingKey []byte) http.Handler {
+	return NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
+		ExtensionAPIToken:    token,
+		SessionSigningKey:    signingKey,
+		InstallationIdentity: sessionSecurityVersions{},
 	})
 }
 
@@ -84,7 +72,7 @@ func sessionRequest(router http.Handler, method string, cookie *http.Cookie, csr
 
 func TestSessionExchangeAndBearerShareInstallationIdentity(t *testing.T) {
 	const installationToken = "single-installation-secret"
-	router := newSessionSecurityRouter(installationToken, false, sessionSecuritySigningKey)
+	router := newSessionSecurityRouter(installationToken, sessionSecuritySigningKey)
 
 	created := createBrowserSession(router, installationToken, "")
 	if created.Code != http.StatusCreated {
@@ -143,7 +131,7 @@ func TestSessionCookieSecurityAttributes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			router := newSessionSecurityRouter("installation-secret", false, sessionSecuritySigningKey)
+			router := newSessionSecurityRouter("installation-secret", sessionSecuritySigningKey)
 			rec := createBrowserSession(router, "installation-secret", tc.forwardedProto)
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("status = %d, want 201", rec.Code)
@@ -164,7 +152,7 @@ func TestSessionCookieSecurityAttributes(t *testing.T) {
 }
 
 func TestBrowserSessionRequiresCSRFHeader(t *testing.T) {
-	router := newSessionSecurityRouter("installation-secret", false, sessionSecuritySigningKey)
+	router := newSessionSecurityRouter("installation-secret", sessionSecuritySigningKey)
 	created := createBrowserSession(router, "installation-secret", "")
 	cookie := created.Result().Cookies()[0]
 
@@ -179,7 +167,7 @@ func TestBrowserSessionRequiresCSRFHeader(t *testing.T) {
 }
 
 func TestSessionLogoutClearsCookie(t *testing.T) {
-	router := newSessionSecurityRouter("installation-secret", false, sessionSecuritySigningKey)
+	router := newSessionSecurityRouter("installation-secret", sessionSecuritySigningKey)
 	created := createBrowserSession(router, "installation-secret", "")
 	cookie := created.Result().Cookies()[0]
 
@@ -197,7 +185,7 @@ func TestSessionLogoutClearsCookie(t *testing.T) {
 }
 
 func TestSessionExchangeRejectsInvalidTokenAndOldField(t *testing.T) {
-	router := newSessionSecurityRouter("installation-secret", false, sessionSecuritySigningKey)
+	router := newSessionSecurityRouter("installation-secret", sessionSecuritySigningKey)
 	for _, body := range []string{
 		`{"token":"wrong"}`,
 		`{"api_key":"installation-secret"}`,
@@ -218,20 +206,9 @@ func TestSessionExchangeRejectsInvalidTokenAndOldField(t *testing.T) {
 	}
 }
 
-func TestOpenInstallationSessionExchangeNeedsNoToken(t *testing.T) {
-	router := newSessionSecurityRouter("", true, sessionSecuritySigningKey)
-	created := createBrowserSession(router, "", "")
-	if created.Code != http.StatusCreated {
-		t.Fatalf("open POST session status = %d, want 201; body=%q", created.Code, created.Body.String())
-	}
-	if len(created.Result().Cookies()) != 1 {
-		t.Fatal("open installation did not issue browser session")
-	}
-}
-
 func TestSessionRoutesAreFailClosedOrUnmountedWhenConfigurationIsMissing(t *testing.T) {
 	t.Parallel()
-	closed := newSessionSecurityRouter("", false, sessionSecuritySigningKey)
+	closed := newSessionSecurityRouter("", sessionSecuritySigningKey)
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
 		rec := sessionRequest(closed, method, nil, false)
 		want := http.StatusUnauthorized
@@ -243,7 +220,7 @@ func TestSessionRoutesAreFailClosedOrUnmountedWhenConfigurationIsMissing(t *test
 		}
 	}
 
-	withoutSigning := newSessionSecurityRouter("installation-secret", false, nil)
+	withoutSigning := newSessionSecurityRouter("installation-secret", nil)
 	for _, method := range []string{http.MethodPost, http.MethodDelete} {
 		if rec := sessionRequest(withoutSigning, method, nil, false); rec.Code != http.StatusNotFound {
 			t.Errorf("without signing key %s status = %d, want 404", method, rec.Code)
@@ -252,7 +229,7 @@ func TestSessionRoutesAreFailClosedOrUnmountedWhenConfigurationIsMissing(t *test
 }
 
 func TestInvalidAuthorizationCannotDowngradeToOpenOrCookie(t *testing.T) {
-	router := newSessionSecurityRouter("installation-secret", true, sessionSecuritySigningKey)
+	router := newSessionSecurityRouter("installation-secret", sessionSecuritySigningKey)
 	created := createBrowserSession(router, "installation-secret", "")
 	cookie := created.Result().Cookies()[0]
 

@@ -8,7 +8,6 @@ import { err, ok, type ApiError, type ApiResult } from '../lib/api/result'
 import type { LinkResponse, ReaderActivityResponse } from '../lib/api/types'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { resourceStore } from '../lib/cache/store'
-import { isRecord } from '../lib/records'
 import { useReaderClient } from './useReaderClient'
 
 const ACTIVITY_CACHE_PREFIX = 'GET /api/reader/activity'
@@ -28,11 +27,6 @@ export interface ReaderActivityOptions {
   readonly kind?: ReaderActivityKind
   readonly allPages?: boolean
   readonly enabled?: boolean
-}
-
-interface NormalizedReaderActivityPayload {
-  readonly tags: Array<{ tag: string; last_at: string }>
-  readonly domains: Array<{ domain: string; last_at: string }>
 }
 
 interface CachedReaderActivityPage {
@@ -61,10 +55,6 @@ function identityNamespace(client: IdentityBoundReaderClient | null): string {
   }
 }
 
-function supportsActivity(client: IdentityBoundReaderClient | null): boolean {
-  return typeof (client as unknown as { getReaderActivity?: unknown } | null)?.getReaderActivity === 'function'
-}
-
 function isActiveClient(client: IdentityBoundReaderClient | null): boolean {
   if (!client) return false
   try {
@@ -81,38 +71,6 @@ function isActiveClient(client: IdentityBoundReaderClient | null): boolean {
 
 function isValidActivityTimestamp(value: string): boolean {
   return value.trim() !== '' && Number.isFinite(Date.parse(value))
-}
-
-function firstValidTimestamp(...values: unknown[]): string {
-  for (const value of values) {
-    if (typeof value === 'string' && isValidActivityTimestamp(value)) return value
-  }
-  return ''
-}
-
-function activityTimestamp(item: Record<string, unknown>): string {
-  return firstValidTimestamp(
-    item.last_at,
-    item.lastAt,
-    item.created_at,
-    item.createdAt,
-  )
-}
-
-/** Normalize old timestamp field names without treating the old wire shape as authoritative. */
-export function normalizeReaderActivityPayload(value: unknown): NormalizedReaderActivityPayload | null {
-  if (!isRecord(value) || !Array.isArray(value.tags) || !Array.isArray(value.domains)) return null
-  const tags = value.tags.flatMap((item) => {
-    if (!isRecord(item) || typeof item.tag !== 'string') return []
-    const tag = item.tag.trim()
-    return tag ? [{ tag, last_at: activityTimestamp(item) }] : []
-  })
-  const domains = value.domains.flatMap((item) => {
-    if (!isRecord(item) || typeof item.domain !== 'string') return []
-    const domain = item.domain.trim()
-    return domain ? [{ domain, last_at: activityTimestamp(item) }] : []
-  })
-  return { tags, domains }
 }
 
 function putNewest(map: Map<string, string>, key: string, timestamp: string): void {
@@ -150,11 +108,9 @@ function indexActivity(data: CachedReaderActivity | undefined): {
   const domains = new Map<string, string>()
   let rowCount = 0
   for (const page of data.pages) {
-    const normalized = normalizeReaderActivityPayload(page.response)
-    if (!normalized) return { tags: new Map(), domains: new Map(), usable: false }
-    rowCount += normalized.tags.length + normalized.domains.length
-    for (const item of normalized.tags) putNewest(tags, item.tag, item.last_at)
-    for (const item of normalized.domains) putNewest(domains, item.domain, item.last_at)
+    rowCount += page.response.tags.length + page.response.domains.length
+    for (const item of page.response.tags) putNewest(tags, item.tag, item.last_at)
+    for (const item of page.response.domains) putNewest(domains, item.domain, item.last_at)
   }
   return {
     tags: sortActivityMap(tags),
@@ -283,7 +239,7 @@ export function useReaderActivity(
   const client = useReaderClient(explicitClient)
   const kind = options.kind ?? 'all'
   const allPages = options.allPages ?? false
-  const canFetch = options.enabled !== false && isActiveClient(client) && supportsActivity(client)
+  const canFetch = options.enabled !== false && isActiveClient(client)
   const cacheKey = canFetch
     ? `${ACTIVITY_CACHE_PREFIX}?kind=${kind}&limit=${ACTIVITY_PAGE_LIMIT}#${identityNamespace(client)}`
     : null

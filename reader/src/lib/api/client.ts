@@ -32,11 +32,6 @@ import type {
 	ConversionPreviewResponse,
 	ConversionExecuteRequest,
 	ConversionExecuteResponse,
-	ClassificationRuleCreateRequest,
-	ClassificationRuleUpdateRequest,
-	ClassificationRuleResponse,
-	LibraryReviewResolveRequest,
-	LibraryReviewResponse,
 	GroupedSearchResponse,
   DomainTreeSummaryEnvelope,
   LinkResponse,
@@ -90,12 +85,7 @@ import type {
   ReaderInboxBulkRequest,
   ReaderInboxBulkResponse,
   ReaderInboxConfirmAIProposalsResponse,
-  ReaderInboxJobResponse,
   ReaderConfirmResponse,
-  ReaderCategoryRequest,
-  ReaderCategoryResponse,
-  ReaderCategoriesResponse,
-  ReaderCategoryMembershipRequest,
   ReaderTodoCreateRequest,
   ReaderTodoPatchRequest,
   ReaderTodoResponse,
@@ -108,9 +98,6 @@ import type {
   ReaderHomeResponse,
   ReaderLinkMetadataRequest,
   ReaderLinkMetadataResponse,
-  ReaderContentHistoryResponse,
-  ReaderContentHistoryRestoreRequest,
-  ReaderContentHistoryRestoreResponse,
   ReaderRelatedTagsResponse,
   ReaderActivityResponse,
   ReaderAIRequest,
@@ -128,10 +115,6 @@ import {
   isLinkContentResponse,
 	isConversionPreviewResponse,
 	isConversionExecuteResponse,
-	isClassificationRuleArray,
-	isClassificationRuleResponse,
-	isLibraryReviewArray,
-	isLibraryReviewResponse,
 	isGroupedSearchResponse,
   isHealthResponse,
   isLinkResponse,
@@ -163,10 +146,7 @@ import {
   isReaderInboxResponsePage,
   isReaderInboxBulkResponse,
   isReaderInboxConfirmAIProposalsResponse,
-  isReaderInboxJobResponse,
   isReaderConfirmResponse,
-  isReaderCategoryResponse,
-  isReaderCategoriesResponse,
   isReaderTodoResponse,
   isReaderTodosResponse,
   isReaderEngagementResponse,
@@ -175,8 +155,6 @@ import {
   isReaderHomeResponse,
   isReaderLinkMetadataResponse,
   hasCanonicalSafeLinkMetadataRevisionTokens,
-  isReaderContentHistoryResponse,
-  isReaderContentHistoryRestoreResponse,
   isReaderRelatedTagsResponse,
   isReaderActivityResponse,
   isReaderAIResponse,
@@ -243,20 +221,13 @@ export {
   type ArchiveV2Selection,
 } from './archive-v2'
 
-/** 条件请求（If-None-Match / 304）的进出通道。 */
-export interface ConditionalRequest {
-  /** 上一次拿到的 ETag；非空时作为 If-None-Match 发出。 */
-  ifNoneMatch?: string | null
-  /** 服务端回 200 时透出新的 ETag。 */
-  onETag?: (tag: string | null) => void
-  /** 服务端回 304 时的回调。 */
-  onNotModified?: () => void
-  /** Optional cancellation owned by the cache refresh caller. */
+export interface ReaderReadOptions {
+  /** Optional cancellation owned by the caller. */
   signal?: AbortSignal
 }
 
 /** Per-call cancellation for request paths that are scheduled by a component. */
-export interface ReaderRequestOptions {
+export interface ReaderRequestOptions extends ReaderReadOptions {
   readonly signal?: AbortSignal
 	/** Stable identity reused only when replaying the same mutation intent. */
 	readonly idempotencyKey?: string
@@ -747,11 +718,11 @@ export class ReaderClient {
     path: string,
     requestBody?: unknown,
     extraHeaders?: Record<string, string>,
-    conditional?: ConditionalRequest,
+    readOptions?: ReaderReadOptions,
     callerSignal?: AbortSignal,
     rawJSONContract?: 'link-metadata-revision',
   ): Promise<ApiResult<unknown>> {
-    const requestSignal = callerSignal ?? conditional?.signal
+    const requestSignal = callerSignal ?? readOptions?.signal
     const identity = this.identity
     if (!identity) {
       return err({
@@ -787,7 +758,6 @@ export class ReaderClient {
     const headers: Record<string, string> = { Accept: 'application/json', ...auth.headers }
     Object.assign(headers, extraHeaders)
     if (requestBody !== undefined) headers['Content-Type'] = 'application/json'
-    if (conditional?.ifNoneMatch) headers['If-None-Match'] = conditional.ifNoneMatch
 
     // 超时计时器必须存活到响应体读完为止：服务端可能在发完响应头后于
     // body 阶段挂起，若 headers 一到就 clearTimeout，res.text() 将无限期
@@ -861,17 +831,10 @@ export class ReaderClient {
         }
       }
 
-      // 304：服务端确认缓存仍然有效。它没有响应体，也不该被当成错误——
-      // 由调用方（缓存层）把它翻译成「继续用手里那份」。
-      if (res.status === 304) {
-        conditional?.onNotModified?.()
-        return { ok: false, error: { kind: 'not-modified', message: 'not modified', status: 304 } }
-      }
       if (!res.ok) {
         const retryAfter = res.status === 429 ? parseRetryAfter(res.headers) : undefined
         return err(normalizeHttpError(res.status, responseBody, retryAfter))
       }
-      conditional?.onETag?.(res.headers.get('ETag'))
       return ok(responseBody)
     } finally {
       clearTimeout(timer)
@@ -1108,14 +1071,14 @@ export class ReaderClient {
   /** GET /api/links —— 列表 / 搜索（q）/ 存在性检查（url）。 */
   async getLinks(
     params: ListLinksParams = {},
-    conditional?: ConditionalRequest,
+    options?: ReaderReadOptions,
   ): Promise<ApiResult<PaginatedLinksResponse>> {
     const r = await this.send(
       'GET',
       `/api/links${buildLinksQuery(params)}`,
       undefined,
       undefined,
-      conditional,
+      options,
       undefined,
       'link-metadata-revision',
     )
@@ -1281,46 +1244,6 @@ export class ReaderClient {
 		return isSiteSplitExecuteResponse(r.data) ? ok(r.data) : shapeMismatch('SiteSplitExecuteResponse')
 	}
 
-	async getClassificationRules(): Promise<ApiResult<ClassificationRuleResponse[]>> {
-		const r = await this.send('GET', '/api/library-classification-rules')
-		if (!r.ok) return r
-		return isClassificationRuleArray(r.data) ? ok(r.data) : shapeMismatch('ClassificationRuleResponse[]')
-	}
-
-	async createClassificationRule(request: ClassificationRuleCreateRequest): Promise<ApiResult<ClassificationRuleResponse>> {
-		const r = await this.send('POST', '/api/library-classification-rules', request)
-		if (!r.ok) return r
-		return isClassificationRuleResponse(r.data) ? ok(r.data) : shapeMismatch('ClassificationRuleResponse')
-	}
-
-	async updateClassificationRule(id: string, revision: number, request: ClassificationRuleUpdateRequest): Promise<ApiResult<ClassificationRuleResponse>> {
-		const r = await this.send('PATCH', `/api/library-classification-rules/${encodeURIComponent(id)}`, request, { 'If-Match': `"${revision}"` })
-		if (!r.ok) return r
-		return isClassificationRuleResponse(r.data) ? ok(r.data) : shapeMismatch('ClassificationRuleResponse')
-	}
-
-	async deleteClassificationRule(id: string, revision: number): Promise<ApiResult<void>> {
-		const r = await this.send('DELETE', `/api/library-classification-rules/${encodeURIComponent(id)}`, undefined, { 'If-Match': `"${revision}"` })
-		return r.ok ? ok(undefined) : r
-	}
-
-	async getLibraryReviews(params: { status?: 'pending' | 'applied' | 'dismissed'; type?: 'classification_uncertain' | 'migration_suggestion' | 'note_conflict' | 'merge_conflict'; limit?: number; offset?: number } = {}): Promise<ApiResult<LibraryReviewResponse[]>> {
-		const query = new URLSearchParams()
-		if (params.status) query.set('status', params.status)
-		if (params.type) query.set('type', params.type)
-		if (params.limit) query.set('limit', String(params.limit))
-		if (params.offset) query.set('offset', String(params.offset))
-		const r = await this.send('GET', `/api/library-reviews${query.size ? `?${query}` : ''}`)
-		if (!r.ok) return r
-		return isLibraryReviewArray(r.data) ? ok(r.data) : shapeMismatch('LibraryReviewResponse[]')
-	}
-
-	async resolveLibraryReview(id: string, request: LibraryReviewResolveRequest): Promise<ApiResult<LibraryReviewResponse>> {
-		const r = await this.send('POST', `/api/library-reviews/${encodeURIComponent(id)}/resolve`, request)
-		if (!r.ok) return r
-		return isLibraryReviewResponse(r.data) ? ok(r.data) : shapeMismatch('LibraryReviewResponse')
-	}
-
 	/** POST /api/links/{id}/conversion-preview — pure conversion consequences. */
 	async previewLinkConversion(id: string, request: ConversionPreviewRequest): Promise<ApiResult<ConversionPreviewResponse>> {
 		const r = await this.send('POST', `/api/links/${encodeURIComponent(id)}/conversion-preview`, request)
@@ -1335,13 +1258,13 @@ export class ReaderClient {
 		return isConversionExecuteResponse(r.data) ? ok(r.data) : shapeMismatch('ConversionExecuteResponse')
 	}
 
-  /** GET /api/tags —— 标签聚合；scope omitted preserves the legacy cache path. */
+  /** GET /api/tags —— 标签聚合；省略 scope 时返回全部资料库计数。 */
   async getTags(
     scope?: 'reading' | 'site' | 'all',
-    conditional?: ConditionalRequest,
+    options?: ReaderReadOptions,
   ): Promise<ApiResult<TagCountResponse[]>> {
     const query = scope ? `?library_kind=${encodeURIComponent(scope)}` : ''
-    const r = await this.send('GET', '/api/tags' + query, undefined, undefined, conditional)
+    const r = await this.send('GET', '/api/tags' + query, undefined, undefined, options)
     if (!r.ok) return r
     if (!isTagCountArray(r.data)) return shapeMismatch('TagCountResponse[]')
     // Scoped tag rows carry both partition components. Their presence lets
@@ -1363,10 +1286,10 @@ export class ReaderClient {
   /** GET /api/tree?view=domains —— truthful 域名聚合。 */
   async getDomainSummaries(
     scope?: 'reading' | 'site',
-    conditional?: ConditionalRequest,
+    options?: ReaderReadOptions,
   ): Promise<ApiResult<DomainTreeSummaryEnvelope>> {
     const query = scope ? `?view=domains&library_kind=${encodeURIComponent(scope)}` : '?view=domains'
-    const r = await this.send('GET', '/api/tree' + query, undefined, undefined, conditional)
+    const r = await this.send('GET', '/api/tree' + query, undefined, undefined, options)
     if (!r.ok) return r
     if (!isDomainTreeSummaryEnvelope(r.data)) {
       return shapeMismatch('DomainTreeSummaryEnvelope')
@@ -1443,10 +1366,10 @@ export class ReaderClient {
   /** GET /api/subscriptions -- RSS navigation metadata and truthful counts. */
   async getSubscriptions(
     url?: string,
-    conditional?: ConditionalRequest,
+    options?: ReaderReadOptions,
   ): Promise<ApiResult<SubscriptionsResponse>> {
     const query = url?.trim() ? `?url=${encodeURIComponent(url.trim())}` : ''
-    const r = await this.send('GET', `/api/subscriptions${query}`, undefined, undefined, conditional)
+    const r = await this.send('GET', `/api/subscriptions${query}`, undefined, undefined, options)
     if (!r.ok) return r
     if (!isSubscriptionsResponse(r.data)) return shapeMismatch('SubscriptionsResponse')
     return ok(r.data)
@@ -1500,9 +1423,9 @@ export class ReaderClient {
 
   async getFeedItems(
     params: ListFeedItemsParams = {},
-    conditional?: ConditionalRequest,
+    options?: ReaderReadOptions,
   ): Promise<ApiResult<PaginatedFeedItemsResponse>> {
-    const r = await this.send('GET', `/api/feed-items${buildFeedItemsQuery(params)}`, undefined, undefined, conditional)
+    const r = await this.send('GET', `/api/feed-items${buildFeedItemsQuery(params)}`, undefined, undefined, options)
     if (!r.ok) return r
     if (!isPaginatedFeedItems(r.data)) return shapeMismatch('PaginatedFeedItemsResponse')
     return ok(r.data)
@@ -1908,46 +1831,11 @@ export class ReaderClient {
     return r.ok ? ok(true) : r
   }
 
-  async resummarizeInbox(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderInboxJobResponse>> {
-	const r = await this.send('POST', `/api/inbox/${encodeURIComponent(id)}/resummarize`, undefined, readerIdempotencyHeaders(options), undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderInboxJobResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderInboxJobResponse')
-  }
-
-  async getInboxJob(jobID: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderInboxJobResponse>> {
-    const r = await this.send('GET', `/api/inbox/jobs/${encodeURIComponent(jobID)}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderInboxJobResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderInboxJobResponse')
-  }
-
-  async listCategories(options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderCategoriesResponse>> {
-    const r = await this.send('GET', '/api/categories', undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderCategoriesResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderCategoriesResponse')
-  }
-
-  async createCategory(
-    request: ReaderCategoryRequest,
-    options: ReaderRequestOptions = {},
-  ): Promise<ApiResult<ReaderCategoryResponse>> {
-    const r = await this.send('POST', '/api/categories', request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderCategoryResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderCategoryResponse')
-  }
-
-  async deleteCategory(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<true>> {
-    const r = await this.send('DELETE', `/api/categories/${encodeURIComponent(id)}`, undefined, undefined, undefined, options.signal)
-    return r.ok ? ok(true) : r
-  }
-
-  async setCategoryMembership(
-    id: string,
-    request: ReaderCategoryMembershipRequest,
-    options: ReaderRequestOptions = {},
-  ): Promise<ApiResult<true>> {
-    const r = await this.send('PUT', `/api/categories/${encodeURIComponent(id)}/members`, request, undefined, undefined, options.signal)
-    return r.ok ? ok(true) : r
-  }
+	async resummarizeInbox(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderInboxResponse>> {
+		const r = await this.send('POST', `/api/inbox/${encodeURIComponent(id)}/resummarize`, undefined, readerIdempotencyHeaders(options), undefined, options.signal)
+		if (!r.ok) return r
+		return isReaderInboxResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderInboxResponse')
+	}
 
   async createTodo(
     request: ReaderTodoCreateRequest,
@@ -2021,7 +1909,6 @@ export class ReaderClient {
   async getReaderFeed(
     params: {
       mode?: 'recommended' | 'chronological'
-      snapshotID?: string
       source?: readonly ReaderFeedSource[]
       after?: string
       limit?: number
@@ -2030,7 +1917,6 @@ export class ReaderClient {
   ): Promise<ApiResult<ReaderFeedResponse>> {
     const query = buildReaderQuery({
       mode: params.mode,
-      snapshot_id: params.snapshotID,
       source: normalizeReaderFeedSources(params.source),
       after: params.after,
       limit: readerLimit(params.limit, 50),
@@ -2071,38 +1957,6 @@ export class ReaderClient {
     )
     if (!r.ok) return r
     return isReaderLinkMetadataResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderLinkMetadataResponse')
-  }
-
-  async listContentHistory(
-    linkID: string,
-    limit = 50,
-    options: ReaderRequestOptions = {},
-  ): Promise<ApiResult<ReaderContentHistoryResponse[]>> {
-    const query = buildReaderQuery({ limit: readerLimit(limit, 50) })
-    const r = await this.send('GET', `/api/links/${encodeURIComponent(linkID)}/content-history${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    if (!isRecord(r.data) || !Array.isArray(r.data.items) || !r.data.items.every(isReaderContentHistoryResponse)) {
-      return shapeMismatch('ReaderContentHistoryResponse[]')
-    }
-    return ok(r.data.items)
-  }
-
-  async restoreContentHistory(
-    linkID: string,
-    historyID: number,
-    request: ReaderContentHistoryRestoreRequest,
-    options: ReaderRequestOptions = {},
-  ): Promise<ApiResult<ReaderContentHistoryRestoreResponse>> {
-    const r = await this.send(
-      'POST',
-      `/api/links/${encodeURIComponent(linkID)}/content-history/${encodeURIComponent(String(historyID))}/restore`,
-      request,
-      undefined,
-      undefined,
-      options.signal,
-    )
-    if (!r.ok) return r
-    return isReaderContentHistoryRestoreResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderContentHistoryRestoreResponse')
   }
 
   async getRelatedTags(

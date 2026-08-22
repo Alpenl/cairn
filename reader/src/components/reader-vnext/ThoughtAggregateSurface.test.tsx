@@ -10,12 +10,8 @@ import { enabledReaderCapabilityLease } from '../../test/capabilities'
 import { ownedDatabaseName } from '../../lib/storage-ownership'
 import { commitAnnotationOperation } from '../../lib/user-data/annotation-store'
 import {
-  ANNOTATION_MATERIALIZED_STORE,
-  THOUGHT_OUTBOX_STORE,
   resetUserDataDatabaseHandle,
-  runUserDataTransaction,
 } from '../../lib/user-data/idb'
-import { LEGACY_THOUGHT_OUTBOX_BLOCKED_REASON } from '../../lib/user-data/thought-types'
 import { HomeSurface } from './HomeSurface'
 import { ThoughtHistorySurface } from './ThoughtHistorySurface'
 
@@ -66,67 +62,25 @@ function homeFixture(thought: ReaderThoughtResponse): ReaderHomeResponse {
   }
 }
 
-async function seedCompactedLegacyUpdateTail(currentLease: IdentityLease): Promise<void> {
-  const annotationId = 'surface-compacted-tail'
-  const annotation = {
-    id: annotationId,
-    blockKey: 'content-document',
-    start: 0,
-    end: 4,
-    text: 'text',
-    note: 'materialized body before surface tail',
-    source: 'self' as const,
-    createdAt: 1_000,
-    updatedAt: 1_000,
-    sourceContentRevision: 7,
-    quote: { exact: 'text', prefix: '', suffix: '' },
-  }
-  await expect(runUserDataTransaction(
-    currentLease,
-    'seed aggregate compacted legacy update tail',
-    [THOUGHT_OUTBOX_STORE, ANNOTATION_MATERIALIZED_STORE],
-    'readwrite',
-    (transaction, _identity, setResult) => {
-      transaction.objectStore(THOUGHT_OUTBOX_STORE).put({
-        key: [currentLease.context.physicalNamespace, 50],
-        namespace: currentLease.context.physicalNamespace,
-        sequence: 50,
-        opId: 'surface-legacy-update-op',
-        deviceId: '',
-        contractVersion: 0,
-        logicalClock: 0,
-        operationKind: 'update',
-        annotationId,
-        hostKind: 'link',
-        hostId: 'L1',
-        linkId: 'L1',
-        target: TARGET,
-        targetKey: 'saved-content:7',
-        annotation: null,
-        patch: {
-          note: '离线压缩尾部正文',
-          source: 'ai',
-          updatedAt: 2_000,
-        },
-        createdAt: 1_000,
-        attemptCount: 0,
-        status: 'blocked',
-        blockedReason: LEGACY_THOUGHT_OUTBOX_BLOCKED_REASON,
-      })
-      transaction.objectStore(ANNOTATION_MATERIALIZED_STORE).put({
-        key: [currentLease.context.physicalNamespace, 'L1', 'saved-content:7', annotationId],
-        namespace: currentLease.context.physicalNamespace,
-        linkId: 'L1',
-        target: TARGET,
-        targetKey: 'saved-content:7',
-        annotationId,
-        sequence: 50,
-        annotation,
-        fallbackAnnotation: annotation,
-      })
-      setResult(undefined)
+async function seedLocalThought(currentLease: IdentityLease): Promise<void> {
+  await expect(commitAnnotationOperation(currentLease, {
+    kind: 'add',
+    opId: 'surface-local-operation',
+    linkId: 'L1',
+    target: TARGET,
+    draft: {
+      id: 'surface-local-thought',
+      blockKey: 'content-document',
+      start: 0,
+      end: 4,
+      text: 'text',
+      note: '离线持久化正文',
+      source: 'ai',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      quote: { exact: 'text', prefix: '', suffix: '' },
     },
-  )).resolves.toEqual({ ok: true, value: undefined })
+  })).resolves.toMatchObject({ ok: true, value: { status: 'committed' } })
 }
 
 function deferred<T>() {
@@ -152,9 +106,9 @@ afterEach(async () => {
 })
 
 describe('Thought aggregate surfaces', () => {
-  it('renders a pre-existing compacted local tail on Home and 我的想法 while offline', async () => {
+  it('renders a pre-existing local thought on Home and 我的想法 while offline', async () => {
     const currentLease = lease()
-    await seedCompactedLegacyUpdateTail(currentLease)
+    await seedLocalThought(currentLease)
 
     const getHome = vi.fn(async () => { throw new Error('offline home') })
     const listThoughts = vi.fn(async () => { throw new Error('offline thoughts') })
@@ -170,14 +124,14 @@ describe('Thought aggregate surfaces', () => {
     // The record is seeded before either surface mounts, so no post-mount
     // annotations-change event can be responsible for rendering it.
     const home = render(<HomeSurface capabilityLease={enabledReaderCapabilityLease()} client={offlineClient} lease={currentLease} onNavigate={vi.fn()} onOpenLink={vi.fn()} />)
-    await screen.findByText('离线压缩尾部正文')
+    await screen.findByText('离线持久化正文')
     expect(getHome).toHaveBeenCalledTimes(1)
     expect(pushThoughtOps).not.toHaveBeenCalled()
     home.unmount()
 
     window.history.replaceState({}, '', '/?tool=history&thought_view=live')
     const history = render(<ThoughtHistorySurface capabilityLease={enabledReaderCapabilityLease()} client={offlineClient} lease={currentLease} onNavigate={vi.fn()} />)
-    await screen.findByText('离线压缩尾部正文')
+    await screen.findByText('离线持久化正文')
     expect(listThoughts).toHaveBeenCalledTimes(1)
     expect(pushThoughtOps).not.toHaveBeenCalled()
     history.unmount()

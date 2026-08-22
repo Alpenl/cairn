@@ -34,7 +34,7 @@ func libraryOutputContract(requested model.RequestedLibraryKind) string {
 	if requested == model.RequestedLibraryKindSite {
 		kindInstruction = "用户已选择 site，library_kind 必须为 site。"
 	}
-	return "网站收藏 v2 输出：" + kindInstruction + "严格输出 schema_version=2 的 JSON。reading 使用 {\"schema_version\":2,\"library_kind\":\"reading\",\"classification_confidence\":0.0,\"classification_reason\":\"reason_code\",\"classification_explanation\":\"简短解释\",\"reading_profile\":{\"title\":\"标题\",\"summary\":\"摘要\",\"tags\":[\"标签\"]}}；site 使用 {\"schema_version\":2,\"library_kind\":\"site\",\"classification_confidence\":0.0,\"classification_reason\":\"reason_code\",\"classification_explanation\":\"简短解释\",\"site_profile\":{\"name\":\"网站名\",\"intro\":\"60-120字简介\",\"entry_name\":\"入口名\",\"purpose\":\"20-50字用途\",\"tags\":[\"标签\"]}}。site 不得生成 summary。"
+	return "网站收藏 v2 输出：" + kindInstruction + "严格输出 schema_version=2 的 JSON。reading 使用 {\"schema_version\":2,\"library_kind\":\"reading\",\"reading_profile\":{\"title\":\"标题\",\"summary\":\"摘要\",\"tags\":[\"标签\"]}}；site 使用 {\"schema_version\":2,\"library_kind\":\"site\",\"site_profile\":{\"name\":\"网站名\",\"intro\":\"60-120字简介\",\"entry_name\":\"入口名\",\"purpose\":\"20-50字用途\",\"tags\":[\"标签\"]}}。site 不得生成 summary。"
 }
 
 // interstitialGuardInstructions gates the whole analysis on the body being
@@ -45,12 +45,9 @@ func libraryOutputContract(requested model.RequestedLibraryKind) string {
 // stops it from inventing tags for that page.
 //
 // Empty tags are the part that matters. title/summary are per-link and a
-// wrong one stays wrong on one link, but tags are resolved into the shared
-// concept vocabulary — one "人机验证" concept then shows up as a retrieval
-// candidate for every link parsed afterwards, and goes on to compete in
-// merge proposals. The guard is stated as overriding the tag-count rules
-// because those demand 3-5 (free) / 2-4 (retrieve-select) tags and would
-// otherwise contradict it.
+// wrong one stays wrong on one link, but tags are shared across the library.
+// The guard is stated as overriding the tag-count rules because those demand
+// 3-5 tags and would otherwise contradict it.
 const interstitialGuardInstructions = "- 先判断正文是不是真实内容。若正文主体属于下列拦截页 / 占位页之一：\n" +
 	"  ① 错误页：404、403、5xx、DNS 解析失败、请求超时、服务不可用\n" +
 	"  ② 人机校验：Cloudflare 验证、CAPTCHA、机器人检查、浏览器校验、访问被拒绝\n" +
@@ -75,13 +72,6 @@ const freeTagInstructions = "- tags：3-5个，中英文均可。每个标签必
 	"  好标签示例：Go、AI、API、接口设计、错误处理、量化交易、科技周刊、开发工具\n" +
 	"  坏标签示例：空泛分类词（技术、互联网、其他、综合）、带空格短语、标题碎片"
 
-const retrieveTagInstructions = "- tags：优先从下方【候选标签】中选择 2-4 个最贴切的标签，**原样照抄候选标签的文字**，不要改写。\n" +
-	"  只有当候选标签都明显不贴切时，才允许新增**至多 1 个**新标签。\n" +
-	"  新增的标签必须是**短、单一概念、可复用的归类词**，遵守：① 不含空格（短语拆成独立概念）；② 不含斜杠或层级符；③ 尽量 ≤6 个字/词；④ 能被其它同类内容复用，禁止文章专属短语或标题碎片。\n" +
-	tagCentralityInstructions +
-	"  好标签示例：Go、AI、API、接口设计、错误处理、量化交易、科技周刊、开发工具\n" +
-	"  坏标签示例：空泛分类词（技术、互联网、其他、综合）、带空格短语（\"try proposal\"）、层级符（\"check/handle\"）"
-
 const urlDirectOutputContract = "你是内容分析助手，具备联网抓取能力。请抓取用户给出的 URL 的真实网页内容后分析。\n" +
 	"严格按以下 JSON 格式输出，不输出任何其他内容：\n" +
 	"{\"accessible\": true, \"title\": \"便于浏览的短标题\", \"summary\": \"自然、精炼的中文摘要\", \"tags\": [\"标签1\", \"标签2\"]}\n\n" +
@@ -101,20 +91,13 @@ func summaryInstructions(in summarypolicy.Input) string {
 		"  输出前按上述内容类型要求检查覆盖范围；若遗漏最终决定、重要后续章节或周刊其他栏目，先重写摘要再输出 JSON。"
 }
 
-// buildURLDirectPrompt composes the grok-direct system prompt: the
-// fetch-and-analyze base instructions plus an optional candidate-tag block
-// (same retrieve-then-select reuse hint as the fetched-content path) and the
-// content-type hint. Candidates/contentType are URL-derived so they are
-// available even before any fetch.
-func buildURLDirectPrompt(candidates []string, contentType string) string {
-	return buildURLDirectPromptFor(nil, candidates, summarypolicy.Input{ContentType: contentType})
+// buildURLDirectPrompt composes the grok-direct system prompt with the same tag
+// rules as the fetched-content path and a content-type hint.
+func buildURLDirectPrompt(contentType string) string {
+	return buildURLDirectPromptFor(nil, summarypolicy.Input{ContentType: contentType})
 }
 
-func buildURLDirectPromptFor(existingTags, candidates []string, in summarypolicy.Input) string {
-	tagInstructions := freeTagInstructions
-	if len(candidates) > 0 {
-		tagInstructions = retrieveTagInstructions
-	}
+func buildURLDirectPromptFor(existingTags []string, in summarypolicy.Input) string {
 	// No interstitial guard here, deliberately. URL-direct already has a
 	// stronger, purpose-built contract for exactly these pages:
 	// urlDirectOutputContract tells the model to answer {"accessible": false}
@@ -126,10 +109,8 @@ func buildURLDirectPromptFor(existingTags, candidates []string, in summarypolicy
 	// "Just a moment..." instead of retrying. Overlapping triggers with
 	// opposite required outputs is a net regression, so the accessible
 	// contract stays the sole authority on this path.
-	parts := []string{urlDirectOutputContract, titleInstructions, summaryInstructions(in), tagInstructions}
-	if len(candidates) > 0 {
-		parts = append(parts, "【候选标签】（优先从中原样选择，最多新增 1 个）："+strings.Join(candidates, "、"))
-	} else if len(existingTags) > 0 {
+	parts := []string{urlDirectOutputContract, titleInstructions, summaryInstructions(in), freeTagInstructions}
+	if len(existingTags) > 0 {
 		parts = append(parts, "已有标签库（优先复用相关的规范写法）："+strings.Join(existingTags, "、"))
 	}
 	if hint := contentTypeHints[in.ContentType]; hint != "" {
@@ -149,28 +130,6 @@ func buildSystemPromptFor(existingTags []string, in summarypolicy.Input) string 
 	parts := []string{outputContract, interstitialGuardInstructions, titleInstructions, summaryInstructions(in), freeTagInstructions}
 	if len(existingTags) > 0 {
 		parts = append(parts, "已有标签库（优先从中选择相关的）："+strings.Join(existingTags, "、"))
-	}
-	if hint := contentTypeHints[in.ContentType]; hint != "" {
-		parts = append(parts, hint)
-	}
-	return strings.Join(parts, "\n")
-}
-
-// buildRetrieveSelectPrompt composes the v3 retrieve-then-select system
-// prompt: the selection-mode base instructions, the candidate concept
-// list (one comma-separated block), and the same content-type hint the
-// free-generation prompt uses. Callers only reach this with a non-empty
-// candidate slice (the pipeline gates on len(candidates) > 0), but an
-// empty list still degrades to the base prompt without a candidate block
-// so the function is safe to call unconditionally.
-func buildRetrieveSelectPrompt(candidates []string, contentType string) string {
-	return buildRetrieveSelectPromptFor(candidates, summarypolicy.Input{ContentType: contentType})
-}
-
-func buildRetrieveSelectPromptFor(candidates []string, in summarypolicy.Input) string {
-	parts := []string{outputContract, interstitialGuardInstructions, titleInstructions, summaryInstructions(in), retrieveTagInstructions}
-	if len(candidates) > 0 {
-		parts = append(parts, "【候选标签】（优先从中原样选择）："+strings.Join(candidates, "、"))
 	}
 	if hint := contentTypeHints[in.ContentType]; hint != "" {
 		parts = append(parts, hint)
@@ -255,12 +214,6 @@ func (a *OpenAIAnalyzer) buildUserPrompt(req AnalyzeRequest) string {
 		title = "（无标题）"
 	}
 
-	searchSection := ""
-	if req.Content.Metadata != nil {
-		if rawSearch, ok := req.Content.Metadata["search_summary"].(string); ok && strings.TrimSpace(rawSearch) != "" {
-			searchSection = "\n\n辅助搜索上下文:\n" + strings.TrimSpace(rawSearch)
-		}
-	}
 	outlineSection := ""
 	if outline != "" {
 		outlineSection = "\n文档结构概览（用于确保摘要覆盖全文，不要只总结第一节）：\n" + outline + "\n"
@@ -275,7 +228,7 @@ func (a *OpenAIAnalyzer) buildUserPrompt(req AnalyzeRequest) string {
 	}
 
 	projectedURL, _ := security.ThirdPartyURLProjection(req.Content.URL)
-	return fmt.Sprintf("URL: %s\n标题: %s\n%s%s%s%s\n正文:\n%s%s", projectedURL, title, descriptionLine, outlineSection, previewSection, coverageSection, body, searchSection)
+	return fmt.Sprintf("URL: %s\n标题: %s\n%s%s%s%s\n正文:\n%s", projectedURL, title, descriptionLine, outlineSection, previewSection, coverageSection, body)
 }
 
 const maxDigestLeadRunes = 2200

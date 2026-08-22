@@ -21,7 +21,6 @@ export { foldUnicodeCase } from './case-fold'
 export {
   isCapabilitiesResponse,
   isErrorResponse,
-  isJobResponse,
   isLinkContentResponse,
   isLinkResponse,
   isPaginatedLinksResponse,

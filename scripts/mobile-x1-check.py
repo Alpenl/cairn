@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ FIXTURES = MOBILE / "shared" / "fixtures"
 ANDROID_WORKFLOW = REPOSITORY / ".github/workflows/mobile-android.yml"
 IOS_WORKFLOW = REPOSITORY / ".github/workflows/mobile-ios.yml"
 CI_WORKFLOW = REPOSITORY / ".github/workflows/ci.yml"
+CI_PATH_FILTER = REPOSITORY / "scripts/ci-path-filter.mjs"
 
 QUEUE_STATES = {
     "pending_submit",
@@ -365,6 +367,35 @@ def check_network_storage_and_release_security(gate: Gate) -> None:
     gate.require(not hits, f"sensitive or signed Mobile files are present: {hits}")
 
 
+def classify_ci_path(gate: Gate, path: str) -> dict[str, str]:
+    try:
+        result = subprocess.run(
+            ["node", str(CI_PATH_FILTER)],
+            cwd=REPOSITORY,
+            input=f"{path}\0".encode(),
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        gate.require(False, f"cannot run {CI_PATH_FILTER.relative_to(REPOSITORY)}: {error}")
+        return {}
+
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace").strip()
+        gate.require(
+            False,
+            f"{CI_PATH_FILTER.relative_to(REPOSITORY)} failed for {path}: {stderr}",
+        )
+        return {}
+
+    outputs: dict[str, str] = {}
+    for line in result.stdout.decode(errors="replace").splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            outputs[key] = value
+    return outputs
+
+
 def check_ci_dispatch(gate: Gate) -> None:
     """Prove the PR gate runs each native workflow for its owned paths.
 
@@ -373,35 +404,32 @@ def check_ci_dispatch(gate: Gate) -> None:
     request runs them exactly once, through ``ci.yml``'s aggregate gate,
     instead of twice with one run sitting outside the aggregate.
 
-    Both workflows must cover shared fixtures and ``scripts/mobile-*`` because
-    those inputs define the cross-platform contract. Platform-only source stays
-    with its own workflow so an unrelated native build is not run on every PR.
+    The central path classifier must cover shared fixtures and
+    ``scripts/mobile-*`` because those inputs define the cross-platform
+    contract. Platform-only source stays with its own workflow so an unrelated
+    native build is not run on every PR.
     """
     ci_workflow = gate.file(CI_WORKFLOW)
     label = str(CI_WORKFLOW.relative_to(REPOSITORY))
+    gate.require(
+        "node scripts/ci-path-filter.mjs" in ci_workflow,
+        f"{label} must use the central NUL-delimited path classifier",
+    )
 
     for surface, workflow, platform_path in (
         ("android", "./.github/workflows/mobile-android.yml", "mobile/android/app/build.gradle.kts"),
         ("ios", "./.github/workflows/mobile-ios.yml", "mobile/ios/WebTagShare/Shared/WebTagShareCore.swift"),
     ):
         gate.require(workflow in ci_workflow, f"{label} must call {workflow}")
-        match = re.search(
-            rf"^\s*decide\s+{surface}\s+'([^']*)'",
-            ci_workflow,
-            flags=re.MULTILINE,
-        )
-        if match is None:
-            gate.require(False, f"{label} has no path filter for the {surface} surface")
-            continue
-        pattern = match.group(1)
         for triggering_path in (
             platform_path,
             "mobile/shared/fixtures/share-payloads.json",
             "scripts/mobile-x1-check.py",
             "scripts/mobile-wire-smoke.py",
         ):
+            outputs = classify_ci_path(gate, triggering_path)
             gate.require(
-                re.search(pattern, triggering_path) is not None,
+                outputs.get(surface) == "true",
                 f"{label} {surface} filter must trigger on changes to {triggering_path}",
             )
 

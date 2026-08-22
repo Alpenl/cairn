@@ -27,9 +27,9 @@ func TestListSitesRecentAppliesInclusiveCutoffToCountAndStableList(t *testing.T)
 		WithArgs(utcCutoff).
 		WillReturnRows(mock.NewRows([]string{"count"}).AddRow(2))
 	listPattern := `SELECT .* FROM sites s .* WHERE TRUE AND s\.last_collected_at >= \$1 GROUP BY s\.id, pe\.normalized_url ORDER BY s\.last_collected_at DESC, s\.id DESC LIMIT \$2 OFFSET \$3`
-	rows := mock.NewRows([]string{"id", "site_key", "name", "intro", "homepage_url", "icon_url", "pinned", "needs_review", "revision", "first_collected_at", "last_collected_at", "primary_entry_id", "normalized_url", "entry_count", "tags"}).
-		AddRow(newerID, "v1:host:newer.test", "Newer", "", nil, nil, false, false, int64(1), utcCutoff, utcCutoff.Add(time.Millisecond), nil, nil, int64(0), []string{}).
-		AddRow(olderID, "v1:host:older.test", "Older", "", nil, nil, false, false, int64(1), utcCutoff, utcCutoff, nil, nil, int64(0), []string{})
+	rows := mock.NewRows([]string{"id", "site_key", "name", "intro", "homepage_url", "icon_url", "pinned", "revision", "first_collected_at", "last_collected_at", "primary_entry_id", "normalized_url", "entry_count", "tags"}).
+		AddRow(newerID, "v1:host:newer.test", "Newer", "", nil, nil, false, int64(1), utcCutoff, utcCutoff.Add(time.Millisecond), nil, nil, int64(0), []string{}).
+		AddRow(olderID, "v1:host:older.test", "Older", "", nil, nil, false, int64(1), utcCutoff, utcCutoff, nil, nil, int64(0), []string{})
 	mock.ExpectQuery(listPattern).WithArgs(utcCutoff, 2, 4).WillReturnRows(rows)
 
 	items, total, err := repo.ListSites(context.Background(), SiteListFilter{View: "recent", RecentCutoff: &cutoff, Limit: 2, Offset: 4})

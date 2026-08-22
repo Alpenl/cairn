@@ -760,19 +760,14 @@ struct SettingsScreen: View {
                                     .foregroundStyle(recent.status == "failed" ? .red : .green)
                             }
                             // Everything below the identity check is redacted on a
-                            // mismatch: the link ID, the job ID and the result time
-                            // all describe another identity's data.
+                            // mismatch: the link ID and result time describe another
+                            // identity's data.
                             if !recent.isIdentityMismatch {
                                 Text("链接 ID：\(recent.linkID)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .textSelection(.enabled)
                                     .accessibilityIdentifier("settings.recent.link-id")
-                                if let jobID = recent.jobID {
-                                    Text("任务 ID：\(jobID)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
                                 if let resultTime = SettingsTimeFormatter.absolute(recent.createdAt) {
                                     Text("结果时间：\(resultTime)")
                                         .font(.caption)

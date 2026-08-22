@@ -457,42 +457,6 @@ func TestAnalyzeRemovesReportTemplatePhrasesFromProductionSummary(t *testing.T) 
 	}
 }
 
-func TestAnalyzeAppliesEvidenceBackedSummaryCanonicalization(t *testing.T) {
-	t.Parallel()
-
-	rawSummary := "公共API需严格避免破用户空间的改变，只能添加字段而不能移除现有结构。"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{
-				"message": map[string]any{
-					"content": `{"summary":` + strconv.Quote(rawSummary) + `,"tags":["API"]}`,
-				},
-			}},
-		})
-	}))
-	t.Cleanup(server.Close)
-
-	a := NewOpenAIAnalyzer(OpenAIAnalyzerOptions{
-		BaseURL: server.URL, APIKey: "test", Model: "grok-test",
-		HTTPClient: server.Client(), EmptyResponseRetries: 1,
-	})
-	got, err := a.Analyze(context.Background(), AnalyzeRequest{
-		Content: fetcher.Content{
-			Title: "Everything I know about good API design",
-			Body:  "WE DO NOT BREAK USERSPACE. Additive fields preserve compatibility.",
-		},
-		ContentType: "article",
-	})
-	if err != nil {
-		t.Fatalf("Analyze() error = %v", err)
-	}
-	want := "公共API需严格避免破坏用户代码的变更，只能添加字段而不能移除现有结构。"
-	if got.Summary != want {
-		t.Fatalf("Analyze() summary = %q, want %q", got.Summary, want)
-	}
-}
-
 func TestAnalyzeConformsHomepageBulletsToProse(t *testing.T) {
 	t.Parallel()
 
@@ -630,43 +594,6 @@ func TestOpenAIAnalyzerSendsMultimodalUserMessageWhenImagesPresent(t *testing.T)
 	}
 	if len(got.Tags) != 2 || got.Tags[0] != "Vision" || got.Tags[1] != "Go" {
 		t.Fatalf("tags = %#v, want [Vision Go]", got.Tags)
-	}
-}
-
-func TestOpenAIAnalyzerBuildUserPromptIncludesSearchSummarySeparately(t *testing.T) {
-	t.Parallel()
-
-	analyzer := NewOpenAIAnalyzer(OpenAIAnalyzerOptions{
-		BaseURL:              "https://example.com",
-		APIKey:               "secret-key",
-		Model:                "gpt-test",
-		BodyPreviewChars:     16,
-		EmptyResponseRetries: 1,
-		MaxSummaryChars:      50,
-		MinTags:              1,
-		MaxTags:              5,
-		MaxTagChars:          12,
-	})
-
-	prompt := analyzer.buildUserPrompt(AnalyzeRequest{
-		Content: fetcher.Content{
-			URL:   "https://example.com/post",
-			Title: "Example title",
-			Body:  strings.Repeat("A", 64),
-			Metadata: map[string]any{
-				"search_summary": "1. Search hit one\n2. Search hit two",
-			},
-		},
-	})
-
-	if !strings.Contains(prompt, "正文:\n"+strings.Repeat("A", 16)) {
-		t.Fatalf("prompt = %q, want truncated body section", prompt)
-	}
-	if !strings.Contains(prompt, "辅助搜索上下文:") {
-		t.Fatalf("prompt = %q, want separate search context section", prompt)
-	}
-	if !strings.Contains(prompt, "Search hit two") {
-		t.Fatalf("prompt = %q, want preserved search summary", prompt)
 	}
 }
 

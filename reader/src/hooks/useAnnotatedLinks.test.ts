@@ -18,7 +18,7 @@ import {
   commitAnnotationOperation,
   listAnnotatedLinks,
 } from '../lib/user-data/annotation-store'
-import type { LegacyStaleAnnotationAddDraft } from '../lib/user-data/annotation-types'
+import type { SavedContentAnnotationAddDraft } from '../lib/user-data/annotation-types'
 import { resetUserDataDatabaseHandle } from '../lib/user-data/idb'
 import {
   linkDetailCacheKey,
@@ -66,10 +66,10 @@ async function settleAnnotationReloads(lease: IdentityLease): Promise<void> {
   })
 }
 
-function annotation(id: string): LegacyStaleAnnotationAddDraft {
+function annotation(id: string): SavedContentAnnotationAddDraft {
   return {
     id,
-    blockKey: 'content-document',
+    blockKey: 'content',
     start: 0,
     end: 4,
     text: 'text',
@@ -80,7 +80,7 @@ function annotation(id: string): LegacyStaleAnnotationAddDraft {
   }
 }
 
-async function addLegacyAnnotation(
+async function addAnnotation(
   lease: IdentityLease,
   linkId: string,
   operationId = `op-${linkId}`,
@@ -89,7 +89,7 @@ async function addLegacyAnnotation(
     kind: 'add',
     opId: operationId,
     linkId,
-    target: { kind: 'legacy-stale', sourceKey: `quarantine:${linkId}` },
+    target: { kind: 'saved-content', contentRevision: 1 },
     draft: annotation(`annotation-${linkId}`),
   })
   expect(result).toMatchObject({ ok: true, value: { status: 'committed' } })
@@ -144,7 +144,7 @@ describe('useAnnotatedLinks complete durable view', () => {
       physicalNamespace: 'physical-A',
       localEpoch: leaseB.context.localEpoch + 1,
     })
-    await addLegacyAnnotation(leaseA, 'A-private-link')
+    await addAnnotation(leaseA, 'A-private-link')
     const getLink = vi.fn(async () => ({
       ok: true as const,
       data: makeLink({ id: 'A-private-link', title: 'A private title' }),
@@ -177,9 +177,9 @@ describe('useAnnotatedLinks complete durable view', () => {
       ['B-one', makeLink({ id: 'B-one' })],
     ])
     for (const linkID of ['A-one', 'A-site', 'A-pending']) {
-      await addLegacyAnnotation(leaseA, linkID)
+      await addAnnotation(leaseA, linkID)
     }
-    await addLegacyAnnotation(leaseB, 'B-one')
+    await addAnnotation(leaseB, 'B-one')
     const makeCountClient = (owner: IdentityLease) => bindClient({
       getLink: vi.fn(async (id: string) => ({ ok: true as const, data: states.get(id)! })),
     } as unknown as ReaderClient, owner)
@@ -192,7 +192,7 @@ describe('useAnnotatedLinks complete durable view', () => {
 
     await waitFor(() => expect(result.current).toBe(1))
     states.set('A-three', makeLink({ id: 'A-three' }))
-    await addLegacyAnnotation(leaseA, 'A-three')
+    await addAnnotation(leaseA, 'A-three')
     act(() => window.dispatchEvent(new Event('webtag:annotations-change')))
     await waitFor(() => expect(result.current).toBe(2))
 
@@ -205,7 +205,7 @@ describe('useAnnotatedLinks complete durable view', () => {
 
   it('suppresses stale count hints while local and visibility fallbacks force a durable reread', async () => {
     const lease = readerIdentity.activeLease!
-    await addLegacyAnnotation(lease, 'first-count-link')
+    await addAnnotation(lease, 'first-count-link')
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
     const client = bindClient({
       getLink: vi.fn(async (id: string) => ({ ok: true as const, data: makeLink({ id }) })),
@@ -213,7 +213,7 @@ describe('useAnnotatedLinks complete durable view', () => {
     const { result } = renderHook(() => useAnnotatedLinkCount(client))
     await waitFor(() => expect(result.current).toBe(1))
 
-    await addLegacyAnnotation(lease, 'second-count-link')
+    await addAnnotation(lease, 'second-count-link')
     act(() => dispatchAnnotationHint(lease, 'first-count-link', 1))
     await settleAnnotationReloads(lease)
     expect(result.current).toBe(1)
@@ -221,7 +221,7 @@ describe('useAnnotatedLinks complete durable view', () => {
     act(() => dispatchAnnotationHint(lease, 'second-count-link', 2))
     await waitFor(() => expect(result.current).toBe(2))
 
-    await addLegacyAnnotation(lease, 'third-count-link')
+    await addAnnotation(lease, 'third-count-link')
     act(() => dispatchAnnotationHint(lease, 'second-count-link', 2))
     await settleAnnotationReloads(lease)
     expect(result.current).toBe(2)
@@ -229,7 +229,7 @@ describe('useAnnotatedLinks complete durable view', () => {
     act(() => document.dispatchEvent(new Event('visibilitychange')))
     await waitFor(() => expect(result.current).toBe(3))
 
-    await addLegacyAnnotation(lease, 'fourth-count-link')
+    await addAnnotation(lease, 'fourth-count-link')
     act(() => window.dispatchEvent(new Event('webtag:annotations-change')))
     await waitFor(() => expect(result.current).toBe(4))
     visibility.mockRestore()
@@ -242,7 +242,7 @@ describe('useAnnotatedLinks complete durable view', () => {
       created_at: new Date(Date.UTC(2026, 0, 150 - index)).toISOString(),
     }))
     const oldest = links[149]
-    await addLegacyAnnotation(lease, oldest.id)
+    await addAnnotation(lease, oldest.id)
     const { client, getLink, getLinks } = fakeClient(links)
 
     const { result } = renderHook(() => useAnnotatedLinks(bindClient(client, lease)))
@@ -262,7 +262,7 @@ describe('useAnnotatedLinks complete durable view', () => {
       id: `indexed-${String(index + 1).padStart(3, '0')}`,
       created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
     }))
-    for (const link of links) await addLegacyAnnotation(lease, link.id)
+    for (const link of links) await addAnnotation(lease, link.id)
     const { client, getLink, getLinks } = fakeClient(links)
 
     const { result } = renderHook(() => useAnnotatedLinks(bindClient(client, lease)))
@@ -281,8 +281,8 @@ describe('useAnnotatedLinks complete durable view', () => {
     const lease = readerIdentity.activeLease!
     const cached = makeLink({ id: 'mixed-cached', title: 'Cached title' })
     const missing = makeLink({ id: 'mixed-missing', title: 'Point-read title' })
-    await addLegacyAnnotation(lease, cached.id)
-    await addLegacyAnnotation(lease, missing.id)
+    await addAnnotation(lease, cached.id)
+    await addAnnotation(lease, missing.id)
     resourceStore.set(linkDetailCacheKey(cached.id), cached)
     const getLink = vi.fn(async (
       id: string,
@@ -309,7 +309,7 @@ describe('useAnnotatedLinks complete durable view', () => {
   it('renders a namespace-owned point-cache hit without issuing a point read', async () => {
     const lease = readerIdentity.activeLease!
     const cached = makeLink({ id: 'cached-legacy-link', title: 'Cached title' })
-    await addLegacyAnnotation(lease, cached.id)
+    await addAnnotation(lease, cached.id)
     resourceStore.set(linkDetailCacheKey(cached.id), cached)
     const getLink = vi.fn(async (): Promise<ApiResult<LinkResponse>> => ({
       ok: true,
@@ -329,7 +329,7 @@ describe('useAnnotatedLinks complete durable view', () => {
     const lease = readerIdentity.activeLease!
     const first = makeLink({ id: 'reload-cached-link', title: 'First title' })
     const updated = makeLink({ ...first, title: 'Updated title' })
-    await addLegacyAnnotation(lease, first.id)
+    await addAnnotation(lease, first.id)
     const getLink = vi.fn()
       .mockResolvedValueOnce({ ok: true, data: first })
       .mockResolvedValueOnce({ ok: true, data: updated })
@@ -349,7 +349,7 @@ describe('useAnnotatedLinks complete durable view', () => {
     const lease = readerIdentity.activeLease!
     const first = makeLink({ id: 'cancel-annotated-link', title: 'Visible title' })
     const late = makeLink({ ...first, title: 'Late title' })
-    await addLegacyAnnotation(lease, first.id)
+    await addAnnotation(lease, first.id)
     let resolveLate!: (result: ApiResult<LinkResponse>) => void
     const lateRead = new Promise<ApiResult<LinkResponse>>((resolve) => {
       resolveLate = resolve
@@ -391,7 +391,7 @@ describe('useAnnotatedLinks complete durable view', () => {
   it('settles a same-tick superseded reload instead of leaving its waiter pending', async () => {
     const lease = readerIdentity.activeLease!
     const link = makeLink({ id: 'superseded-annotated-link' })
-    await addLegacyAnnotation(lease, link.id)
+    await addAnnotation(lease, link.id)
     resourceStore.set(linkDetailCacheKey(link.id), link)
     const client = bindClient({ getLink: vi.fn() } as unknown as ReaderClient, lease)
     const { result } = renderHook(() => useAnnotatedLinks(client))
@@ -416,7 +416,7 @@ describe('useAnnotatedLinks complete durable view', () => {
   it('uses per-link version high-water for hints but always honors visibility recovery', async () => {
     const lease = readerIdentity.activeLease!
     const link = makeLink({ id: 'hinted-link' })
-    await addLegacyAnnotation(lease, link.id)
+    await addAnnotation(lease, link.id)
     const { client, getLink } = fakeClient([link])
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
     renderHook(() => useAnnotatedLinks(bindClient(client, lease)))
@@ -452,7 +452,7 @@ describe('useAnnotatedLinks complete durable view', () => {
     const readable = [makeLink({ id: 'readable-A' }), makeLink({ id: 'readable-B' })]
     const orphanId = 'deleted-orphan'
     for (const linkId of [readable[0].id, orphanId, readable[1].id]) {
-      await addLegacyAnnotation(lease, linkId)
+      await addAnnotation(lease, linkId)
     }
     const byId = new Map(readable.map((link) => [link.id, link]))
     const getLink = vi.fn(async (id: string): Promise<ApiResult<LinkResponse>> => {
@@ -476,7 +476,7 @@ describe('useAnnotatedLinks complete durable view', () => {
     const links = [makeLink({ id: 'before-error' }), makeLink({ id: 'after-error' })]
     const failedId = 'server-failure'
     for (const linkId of [links[0].id, failedId, links[1].id]) {
-      await addLegacyAnnotation(lease, linkId)
+      await addAnnotation(lease, linkId)
     }
     const byId = new Map(links.map((link) => [link.id, link]))
     const failure = { kind: 'other' as const, message: 'HTTP 503', status: 503 }
@@ -497,7 +497,7 @@ describe('useAnnotatedLinks complete durable view', () => {
   it('runs at most six point reads and starts queued work only as a slot opens', async () => {
     const lease = readerIdentity.activeLease!
     const links = Array.from({ length: 8 }, (_, index) => makeLink({ id: `queued-${index}` }))
-    for (const link of links) await addLegacyAnnotation(lease, link.id)
+    for (const link of links) await addAnnotation(lease, link.id)
     const byId = new Map(links.map((link) => [link.id, link]))
     const releases = new Map<string, () => void>()
     let active = 0
@@ -544,7 +544,7 @@ describe('useAnnotatedLinks complete durable view', () => {
   it('aborts in-flight reads and never starts queued IDs after the selection changes', async () => {
     const lease = readerIdentity.activeLease!
     const links = Array.from({ length: 8 }, (_, index) => makeLink({ id: `selection-${index}` }))
-    for (const link of links) await addLegacyAnnotation(lease, link.id)
+    for (const link of links) await addAnnotation(lease, link.id)
     const signals: AbortSignal[] = []
     const releases = new Map<string, (result: ApiResult<LinkResponse>) => void>()
     const getLink = vi.fn((id: string, options?: ReaderRequestOptions) =>
@@ -594,8 +594,8 @@ describe('useAnnotatedLinks complete durable view', () => {
     })
     const linksA = Array.from({ length: 7 }, (_, index) => makeLink({ id: `A-${index}` }))
     const linkB = makeLink({ id: 'B-only' })
-    for (const link of linksA) await addLegacyAnnotation(leaseA, link.id)
-    await addLegacyAnnotation(leaseB, linkB.id)
+    for (const link of linksA) await addAnnotation(leaseA, link.id)
+    await addAnnotation(leaseB, linkB.id)
     const signalsA: AbortSignal[] = []
     const getLink = vi.fn((id: string, options?: ReaderRequestOptions): Promise<ApiResult<LinkResponse>> => {
       if (id === linkB.id) return Promise.resolve({ ok: true, data: linkB })
@@ -635,7 +635,7 @@ describe('useAnnotatedLinks complete durable view', () => {
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.links).toEqual([])
 
-    await addLegacyAnnotation(lease, late.id)
+    await addAnnotation(lease, late.id)
     act(() => document.dispatchEvent(new Event('visibilitychange')))
 
     await waitFor(() => expect(result.current.links.map((link) => link.id)).toEqual([late.id]))

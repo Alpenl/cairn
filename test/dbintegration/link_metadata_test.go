@@ -3,26 +3,18 @@ package dbintegration
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/pgvector/pgvector-go"
 
 	"webtag/internal/dto"
 	"webtag/internal/model"
 	"webtag/internal/repository"
 	"webtag/internal/service"
-)
-
-const (
-	readerMetadataActivityBlockClass = 70_070
-	readerMetadataActivityBlockKey   = 1
 )
 
 func TestReaderLinkMetadataCASReplacesImmediateProjections(t *testing.T) {
@@ -38,39 +30,13 @@ func TestReaderLinkMetadataCASReplacesImmediateProjections(t *testing.T) {
 		"https://reader-vnext.example/metadata-cas", "Before metadata", "metadata body", "Before summary")
 	neighbourID := seedReaderVNextSavedLink(t, pool,
 		"https://reader-vnext.example/metadata-neighbour", "Neighbour", "neighbour body", "Neighbour summary")
-	siblingID := seedReaderVNextSavedLink(t, pool,
-		"https://reader-vnext.example/metadata-sibling", "Sibling", "sibling body", "Sibling summary")
 	setTags(t, pool, linkID, []string{"legacy", "obsolete"})
 	setTags(t, pool, neighbourID, []string{"fresh", "related"})
-	setTags(t, pool, siblingID, []string{"sibling"})
-
-	conceptID := uuid.New()
-	if _, err := pool.Exec(t.Context(), `INSERT INTO concept
-		(id,primary_name,display_name)
-		VALUES ($1,'metadata-concept','Legacy Surface')`, conceptID); err != nil {
-		t.Fatalf("insert metadata concept: %v", err)
-	}
-	for _, edge := range []struct {
-		linkID     uuid.UUID
-		surfaceTag string
-	}{
-		{linkID: linkID, surfaceTag: "Legacy Surface"},
-		{linkID: siblingID, surfaceTag: "Sibling Surface"},
-	} {
-		if _, err := pool.Exec(t.Context(), `INSERT INTO link_concept (link_id,concept_id,surface_tag) VALUES ($1,$2,$3)`, edge.linkID, conceptID, edge.surfaceTag); err != nil {
-			t.Fatalf("attach metadata concept to %s: %v", edge.linkID, err)
-		}
-	}
 
 	before, err := links.GetByID(ctx, linkID)
 	if err != nil || before == nil {
 		t.Fatalf("read fixture link: %#v, %v", before, err)
 	}
-	vector := linkMetadataVector(1)
-	if _, err := pool.Exec(t.Context(), `UPDATE links SET embedding=$2,embedding_model='pre-metadata' WHERE id=$1`, linkID, pgvector.NewVector(vector)); err != nil {
-		t.Fatalf("seed pre-metadata embedding: %v", err)
-	}
-
 	newTitle := "Revised metadata title"
 	newSummary := "Revised metadata summary phrase"
 	newTags := []string{"fresh", "replacement"}
@@ -87,15 +53,6 @@ func TestReaderLinkMetadataCASReplacesImmediateProjections(t *testing.T) {
 	if updated.MetadataRevision != before.MetadataRevision+1 || !updated.TagsChanged {
 		t.Fatalf("metadata update result = %#v, want revision %d with tags changed", updated, before.MetadataRevision+1)
 	}
-
-	// The trigger invalidates semantic vectors immediately, and a background
-	// backfill computed from the old revision must not restore it.
-	if applied, err := links.UpdateLinkEmbedding(ctx, linkID, before.MetadataRevision, vector, "stale-backfill"); err != nil {
-		t.Fatalf("stale embedding write returned error: %v", err)
-	} else if applied {
-		t.Fatal("stale embedding write applied = true, want false")
-	}
-	assertLinkMetadataEmbeddingNil(t, pool, linkID)
 
 	after, err := links.GetByID(ctx, linkID)
 	if err != nil || after == nil {
@@ -130,7 +87,7 @@ func TestReaderLinkMetadataCASReplacesImmediateProjections(t *testing.T) {
 	if linkMetadataCount(counts, "legacy") != 0 || linkMetadataCount(counts, "obsolete") != 0 || linkMetadataCount(counts, "replacement") != 1 || linkMetadataCount(counts, "fresh") != 2 {
 		t.Fatalf("tag counts = %#v, want old tags removed and replacement counted", counts)
 	}
-	related, _, _, err := reader.RelatedTags(ctx, &linkID, 12)
+	related, err := reader.RelatedTags(ctx, &linkID, 12)
 	if err != nil {
 		t.Fatalf("related tags after replacement: %v", err)
 	}
@@ -146,21 +103,6 @@ func TestReaderLinkMetadataCASReplacesImmediateProjections(t *testing.T) {
 	}
 	if !linkMetadataActivityContains(activityPage.Items, "replacement") || linkMetadataActivityContains(activityPage.Items, "legacy") || linkMetadataActivityContains(activityPage.Items, "obsolete") {
 		t.Fatalf("tag activity = %#v, want replacement tags and no stale entries", activityPage.Items)
-	}
-
-	var displayName string
-	if err := pool.QueryRow(t.Context(), `SELECT display_name FROM concept WHERE id=$1`, conceptID).Scan(&displayName); err != nil {
-		t.Fatalf("read repaired concept display name: %v", err)
-	}
-	if displayName != "Sibling Surface" {
-		t.Fatalf("concept display_name = %q, want remaining sibling surface", displayName)
-	}
-	var remainingEdges int
-	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM link_concept WHERE link_id=$1`, linkID).Scan(&remainingEdges); err != nil {
-		t.Fatalf("count cleared metadata concept edges: %v", err)
-	}
-	if remainingEdges != 0 {
-		t.Fatalf("link_concept rows after tag replacement = %d, want 0", remainingEdges)
 	}
 
 	if _, err := reader.UpdateLinkMetadata(ctx, model.ReaderLinkMetadataPatch{
@@ -293,7 +235,7 @@ func TestUpdateLinkMetadataRejectsNonEligibleLinksWithoutWrite(t *testing.T) {
 			name: "confirmed site link",
 			apply: func(linkID uuid.UUID) error {
 				_, err := pool.Exec(t.Context(), `UPDATE links
-					SET library_kind='site',library_kind_source='user',summary=NULL,content=NULL,content_document=NULL
+					SET library_kind='site',library_kind_locked=true,summary=NULL,content=NULL,content_document=NULL
 					WHERE id=$1`, linkID)
 				return err
 			},
@@ -309,7 +251,7 @@ func TestUpdateLinkMetadataRejectsNonEligibleLinksWithoutWrite(t *testing.T) {
 			name: "unclassified done link",
 			apply: func(linkID uuid.UUID) error {
 				_, err := pool.Exec(t.Context(), `UPDATE links
-					SET library_kind=NULL,library_kind_source=NULL
+					SET library_kind=NULL,library_kind_locked=false
 					WHERE id=$1`, linkID)
 				return err
 			},
@@ -408,125 +350,7 @@ func TestUpdateLinkMetadataEligibilityRaceRejectsWithoutWrite(t *testing.T) {
 	}
 }
 
-func TestRefreshActivityAndMetadataCASDoNotRestoreStaleTagActivity(t *testing.T) {
-	pool := StartPostgres(t)
-
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	legacyTag := "legacy-activity-race"
-	replacementTag := "replacement-activity-race"
-	linkID := seedReaderVNextSavedLink(t, pool,
-		"https://reader-vnext.example/metadata-activity-race", "Original metadata", "body", "Original summary")
-	setTags(t, pool, linkID, []string{legacyTag})
-	initialReader := repository.NewPGXReaderVNextRepository(pool)
-	if err := initialReader.RefreshActivity(ctx); err != nil {
-		t.Fatalf("seed legacy activity: %v", err)
-	}
-	links := repository.NewPGXLinkRepository(pool)
-	before := linkMetadataReadLink(t, links, ctx, linkID)
-
-	if _, err := pool.Exec(ctx, fmt.Sprintf(`
-		DROP TRIGGER IF EXISTS webtag_test_block_legacy_reader_activity ON reader_tag_activity;
-		DROP FUNCTION IF EXISTS webtag_test_block_legacy_reader_activity();
-		CREATE FUNCTION webtag_test_block_legacy_reader_activity() RETURNS trigger
-		LANGUAGE plpgsql AS $fn$
-		BEGIN
-			IF NEW.tag = $tag$%s$tag$ THEN
-				PERFORM pg_advisory_xact_lock(%d, %d);
-			END IF;
-			RETURN NEW;
-		END
-		$fn$;
-		CREATE TRIGGER webtag_test_block_legacy_reader_activity
-		BEFORE INSERT OR UPDATE ON reader_tag_activity
-		FOR EACH ROW EXECUTE FUNCTION webtag_test_block_legacy_reader_activity()`, legacyTag, readerMetadataActivityBlockClass, readerMetadataActivityBlockKey)); err != nil {
-		t.Fatalf("install activity race blocker: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `
-			DROP TRIGGER IF EXISTS webtag_test_block_legacy_reader_activity ON reader_tag_activity;
-			DROP FUNCTION IF EXISTS webtag_test_block_legacy_reader_activity()`)
-	})
-
-	gateConn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire activity race gate: %v", err)
-	}
-	if _, err := gateConn.Exec(ctx, `SELECT pg_advisory_lock($1,$2)`, readerMetadataActivityBlockClass, readerMetadataActivityBlockKey); err != nil {
-		gateConn.Release()
-		t.Fatalf("hold activity race gate: %v", err)
-	}
-	gateReleased := false
-	releaseGate := func() {
-		if gateReleased {
-			return
-		}
-		gateReleased = true
-		if _, err := gateConn.Exec(context.Background(), `SELECT pg_advisory_unlock($1,$2)`, readerMetadataActivityBlockClass, readerMetadataActivityBlockKey); err != nil {
-			t.Errorf("release activity race gate: %v", err)
-		}
-		gateConn.Release()
-	}
-	t.Cleanup(releaseGate)
-
-	refreshApplication := "webtag_activity_refresh_" + uuid.NewString()
-	metadataApplication := "webtag_metadata_activity_" + uuid.NewString()
-	refreshPool := openNamedPool(t, refreshApplication)
-	metadataPool := openNamedPool(t, metadataApplication)
-	refreshReader := repository.NewPGXReaderVNextRepository(refreshPool)
-	metadataReader := repository.NewPGXReaderVNextRepository(metadataPool)
-	refreshDone := make(chan error, 1)
-	go func() {
-		refreshDone <- refreshReader.RefreshActivity(ctx)
-	}()
-	waitForPostgresLock(t, ctx, pool, refreshApplication)
-
-	title := "Replaced while activity refresh is stale"
-	summary := "Replaced activity summary"
-	metadataDone := make(chan error, 1)
-	go func() {
-		_, updateErr := metadataReader.UpdateLinkMetadata(ctx, model.ReaderLinkMetadataPatch{
-			LinkID:           linkID,
-			Title:            &title,
-			Summary:          &summary,
-			Tags:             []string{replacementTag},
-			ExpectedRevision: before.MetadataRevision,
-		})
-		metadataDone <- updateErr
-	}()
-	waitForPostgresLock(t, ctx, pool, metadataApplication)
-
-	releaseGate()
-	select {
-	case err := <-refreshDone:
-		if err != nil {
-			t.Fatalf("stale RefreshActivity(): %v", err)
-		}
-	case <-ctx.Done():
-		t.Fatalf("stale RefreshActivity did not finish: %v", ctx.Err())
-	}
-	select {
-	case err := <-metadataDone:
-		if err != nil {
-			t.Fatalf("racing UpdateLinkMetadata(): %v", err)
-		}
-	case <-ctx.Done():
-		t.Fatalf("racing UpdateLinkMetadata did not finish: %v", ctx.Err())
-	}
-
-	activityPage, err := initialReader.ListActivity(ctx, model.ReaderActivityQuery{
-		Kind:  model.ReaderActivityKindTag,
-		Limit: 100,
-	})
-	if err != nil {
-		t.Fatalf("list activity after race: %v", err)
-	}
-	if !linkMetadataActivityContains(activityPage.Items, replacementTag) || linkMetadataActivityContains(activityPage.Items, legacyTag) {
-		t.Fatalf("activity after metadata race = %#v, want replacement without legacy", activityPage.Items)
-	}
-}
-
-func TestLinkMetadataRevisionTriggerCoversDirectWritersAndStaleBackfill(t *testing.T) {
+func TestLinkMetadataRevisionTriggerCoversDirectWriters(t *testing.T) {
 	pool := StartPostgres(t)
 
 	ctx := t.Context()
@@ -537,11 +361,6 @@ func TestLinkMetadataRevisionTriggerCoversDirectWritersAndStaleBackfill(t *testi
 	if err != nil || before == nil {
 		t.Fatalf("read direct-writer fixture: %#v, %v", before, err)
 	}
-	vector := linkMetadataVector(2)
-	if _, err := pool.Exec(t.Context(), `UPDATE links SET embedding=$2,embedding_model='old-model' WHERE id=$1`, linkID, pgvector.NewVector(vector)); err != nil {
-		t.Fatalf("seed direct-writer embedding: %v", err)
-	}
-
 	if _, err := pool.Exec(t.Context(), `UPDATE links SET title=$2 WHERE id=$1`, linkID, "Direct title"); err != nil {
 		t.Fatalf("direct title writer: %v", err)
 	}
@@ -549,14 +368,6 @@ func TestLinkMetadataRevisionTriggerCoversDirectWritersAndStaleBackfill(t *testi
 	if afterTitle.MetadataRevision != before.MetadataRevision+1 {
 		t.Fatalf("revision after direct title = %d, want %d", afterTitle.MetadataRevision, before.MetadataRevision+1)
 	}
-	assertLinkMetadataEmbeddingNil(t, pool, linkID)
-	if applied, err := links.UpdateLinkEmbedding(ctx, linkID, before.MetadataRevision, vector, "stale-model"); err != nil {
-		t.Fatalf("stale direct-writer backfill returned error: %v", err)
-	} else if applied {
-		t.Fatal("stale direct-writer backfill applied = true, want false")
-	}
-	assertLinkMetadataEmbeddingNil(t, pool, linkID)
-
 	if _, err := pool.Exec(t.Context(), `UPDATE links SET summary=$2 WHERE id=$1`, linkID, "Direct summary"); err != nil {
 		t.Fatalf("direct summary writer: %v", err)
 	}
@@ -580,41 +391,6 @@ func TestLinkMetadataRevisionTriggerCoversDirectWritersAndStaleBackfill(t *testi
 	}
 }
 
-func TestParseEmbeddingCannotRestoreVectorAfterMetadataTitleReplacement(t *testing.T) {
-	pool := StartPostgres(t)
-	ctx := t.Context()
-	links := repository.NewPGXLinkRepository(pool)
-	reader := repository.NewPGXReaderVNextRepository(pool)
-
-	link, attempt, err := links.SubmitNew(ctx, repository.CreateLinkParams{
-		URL:                        "https://reader-vnext.example/metadata-parse-race",
-		Status:                     model.LinkStatusPending,
-		RequestedLibraryKind:       model.RequestedLibraryKindReading,
-		RequestedLibraryKindSource: model.RequestedLibraryKindSourceAuto,
-	})
-	if err != nil {
-		t.Fatalf("SubmitNew: %v", err)
-	}
-	oldTitle := "Parser title"
-	completeEmbeddingAttempt(t, links, link.ID, attempt.ID, attempt.ExpectedMetadataRevision, oldTitle)
-	before := linkMetadataReadLink(t, links, ctx, link.ID)
-	newTitle := "User replacement title"
-	if _, err := reader.UpdateLinkMetadata(ctx, model.ReaderLinkMetadataPatch{
-		LinkID:           link.ID,
-		Title:            &newTitle,
-		Summary:          nil,
-		Tags:             []string{},
-		ExpectedRevision: before.MetadataRevision,
-	}); err != nil {
-		t.Fatalf("UpdateLinkMetadata title replacement: %v", err)
-	}
-
-	if err := links.UpdateLinkEmbeddingForParse(ctx, link.ID, attempt.ID, &oldTitle, nil, linkMetadataVector(3), "late-parser"); err != nil {
-		t.Fatalf("late parser embedding write returned error: %v", err)
-	}
-	assertLinkMetadataEmbeddingNil(t, pool, link.ID)
-}
-
 func linkMetadataReadLink(t *testing.T, links *repository.PGXLinkRepository, ctx context.Context, linkID uuid.UUID) *model.Link {
 	t.Helper()
 	link, err := links.GetByID(ctx, linkID)
@@ -622,25 +398,6 @@ func linkMetadataReadLink(t *testing.T, links *repository.PGXLinkRepository, ctx
 		t.Fatalf("GetByID(%s) = %#v, %v", linkID, link, err)
 	}
 	return link
-}
-
-func linkMetadataVector(first float32) []float32 {
-	vector := make([]float32, 1536)
-	vector[0] = first
-	return vector
-}
-
-func assertLinkMetadataEmbeddingNil(t *testing.T, pool interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}, linkID uuid.UUID) {
-	t.Helper()
-	var embedding, modelName *string
-	if err := pool.QueryRow(t.Context(), `SELECT embedding::text,embedding_model FROM links WHERE id=$1`, linkID).Scan(&embedding, &modelName); err != nil {
-		t.Fatalf("read embedding state: %v", err)
-	}
-	if embedding != nil || modelName != nil {
-		t.Fatalf("embedding state = vector=%v model=%v, want both NULL", embedding, modelName)
-	}
 }
 
 func assertLinkMetadataResponse(t *testing.T, items []dto.LinkResponse, linkID uuid.UUID, title, summary string, tags []string, revision int64, surface string) {

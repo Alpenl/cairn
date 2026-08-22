@@ -54,7 +54,7 @@ func TestHostBoundHTMLFetcherFetchesAndParses(t *testing.T) {
 	defer ts.Close()
 
 	host := strings.TrimPrefix(ts.URL, "http://")
-	client := NewHTTPClientWithOptions(HTTPClientOptions{Client: ts.Client(), AllowUnsafeTargets: true})
+	client := NewHTTPClientWithOptions(HTTPClientOptions{Client: ts.Client(), allowUnsafeTargets: true})
 	f := NewHostBoundHTMLFetcher(client, HostBoundHTMLFetcherOptions{
 		Hosts:      []string{host},
 		UserAgent:  "Test/1.0",
@@ -108,7 +108,7 @@ func TestHostBoundHTMLFetcherAppliesRateLimit(t *testing.T) {
 	defer ts.Close()
 
 	host := strings.TrimPrefix(ts.URL, "http://")
-	client := NewHTTPClientWithOptions(HTTPClientOptions{Client: ts.Client(), AllowUnsafeTargets: true})
+	client := NewHTTPClientWithOptions(HTTPClientOptions{Client: ts.Client(), allowUnsafeTargets: true})
 	f := NewHostBoundHTMLFetcher(client, HostBoundHTMLFetcherOptions{
 		Hosts:      []string{host},
 		FetcherTag: "test_rl",

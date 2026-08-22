@@ -5,11 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"webtag/internal/errsafe"
-
-	"webtag/internal/observability"
 )
 
 func TestRouterSelectsFirstMatchingFetcherAndFallsBack(t *testing.T) {
@@ -49,9 +46,8 @@ func TestManagerReturnsRouterContentWhenBodyIsSufficient(t *testing.T) {
 			return Content{}, nil
 		},
 	}
-	search := &stubSearcher{}
 
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
+	manager := NewManager(NewRouter(primary), jina)
 	manager.setMinBodyChars(20)
 
 	got, err := manager.Fetch(context.Background(), "https://example.com/post")
@@ -64,9 +60,6 @@ func TestManagerReturnsRouterContentWhenBodyIsSufficient(t *testing.T) {
 	}
 	if primary.calls != 1 {
 		t.Fatalf("primary calls = %d, want 1", primary.calls)
-	}
-	if search.calls != 0 {
-		t.Fatalf("search calls = %d, want 0", search.calls)
 	}
 }
 
@@ -94,9 +87,8 @@ func TestManagerStillTriesJinaWhenPrimaryTitleIsGeneric(t *testing.T) {
 			}, nil
 		},
 	}
-	search := &stubSearcher{}
 
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
+	manager := NewManager(NewRouter(primary), jina)
 	manager.setMinBodyChars(20)
 
 	got, err := manager.Fetch(context.Background(), "https://example.com/post")
@@ -112,9 +104,6 @@ func TestManagerStillTriesJinaWhenPrimaryTitleIsGeneric(t *testing.T) {
 	}
 	if primary.calls != 1 || jina.calls != 1 {
 		t.Fatalf("primary/jina calls = %d/%d, want 1/1", primary.calls, jina.calls)
-	}
-	if search.calls != 0 {
-		t.Fatalf("search calls = %d, want 0", search.calls)
 	}
 }
 
@@ -137,9 +126,8 @@ func TestManagerDoesNotMarkGenericTitleEscalationAsThinContentWhenFallbacksDoNot
 			return Content{}, &FetchError{URL: "https://example.com/post", Reason: "jina failed"}
 		},
 	}
-	search := &stubSearcher{}
 
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
+	manager := NewManager(NewRouter(primary), jina)
 	manager.setMinBodyChars(20)
 
 	got, err := manager.Fetch(context.Background(), "https://example.com/post")
@@ -173,9 +161,8 @@ func TestManagerFallsBackToJinaAfterPrimaryError(t *testing.T) {
 			}, nil
 		},
 	}
-	search := &stubSearcher{}
 
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
+	manager := NewManager(NewRouter(primary), jina)
 	manager.setMinBodyChars(20)
 
 	got, err := manager.Fetch(context.Background(), "https://example.com/post")
@@ -188,9 +175,6 @@ func TestManagerFallsBackToJinaAfterPrimaryError(t *testing.T) {
 	}
 	if primary.calls != 1 || jina.calls != 1 {
 		t.Fatalf("primary/jina calls = %d/%d, want 1/1", primary.calls, jina.calls)
-	}
-	if search.calls != 0 {
-		t.Fatalf("search calls = %d, want 0", search.calls)
 	}
 }
 
@@ -211,7 +195,7 @@ func TestManagerKeepsSensitiveURLLocalWhenFallbackWouldDelegate(t *testing.T) {
 		t.Fatal("Jina must not receive a credentialed/signed URL")
 		return Content{}, nil
 	}}
-	manager := NewManager(NewRouter(primary), jina, nil, ManagerOptions{})
+	manager := NewManager(NewRouter(primary), jina)
 	manager.setMinBodyChars(20)
 	got, err := manager.Fetch(context.Background(), sensitive)
 	if err != nil {
@@ -219,210 +203,6 @@ func TestManagerKeepsSensitiveURLLocalWhenFallbackWouldDelegate(t *testing.T) {
 	}
 	if got.URL != sensitive || primary.calls != 1 || jina.calls != 0 {
 		t.Fatalf("result URL/calls = %q/%d/%d, want original/1/0", got.URL, primary.calls, jina.calls)
-	}
-}
-
-func TestManagerFallsBackToSearchAfterThinContent(t *testing.T) {
-	primary := &stubFetcher{
-		match: func(string) bool { return true },
-		fetch: func(context.Context, string) (Content, error) {
-			return Content{
-				URL:         "https://example.com/post",
-				Title:       "Example Post",
-				Body:        "too short",
-				FetcherType: "basic",
-			}, nil
-		},
-	}
-	jina := &stubFetcher{
-		fetch: func(context.Context, string) (Content, error) {
-			return Content{}, &FetchError{URL: "https://example.com/post", Reason: "jina failed"}
-		},
-	}
-	search := &stubSearcher{
-		result: "1. Example Post — recovered from search",
-	}
-
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
-	manager.setMinBodyChars(20)
-
-	got, err := manager.Fetch(context.Background(), "https://example.com/post")
-	if err != nil {
-		t.Fatalf("Fetch() returned error: %v", err)
-	}
-
-	if got.FetcherType != "basic+search" {
-		t.Fatalf("FetcherType = %q, want %q", got.FetcherType, "basic+search")
-	}
-	if got.Body != "too short" {
-		t.Fatalf("Body = %q, want original body preserved", got.Body)
-	}
-	if searchSummary, ok := got.Metadata["search_summary"].(string); !ok || !strings.Contains(searchSummary, "recovered from search") {
-		t.Fatalf("search_summary metadata = %#v, want preserved recovered search result", got.Metadata["search_summary"])
-	}
-	if search.query != "Example Post" {
-		t.Fatalf("search query = %q, want title fallback", search.query)
-	}
-}
-
-func TestManagerReturnsThinFallbackWhenSearchAddsNothing(t *testing.T) {
-	primary := &stubFetcher{
-		match: func(string) bool { return true },
-		fetch: func(context.Context, string) (Content, error) {
-			return Content{
-				URL:         "https://example.com/post",
-				Title:       "Example Post",
-				Body:        "too short",
-				FetcherType: "basic",
-			}, nil
-		},
-	}
-	jina := &stubFetcher{
-		fetch: func(context.Context, string) (Content, error) {
-			return Content{}, &FetchError{URL: "https://example.com/post", Reason: "jina failed"}
-		},
-	}
-	search := &stubSearcher{}
-
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
-	manager.setMinBodyChars(20)
-
-	got, err := manager.Fetch(context.Background(), "https://example.com/post")
-	if err != nil {
-		t.Fatalf("Fetch() returned error: %v", err)
-	}
-
-	if got.FetcherType != "basic+thin" {
-		t.Fatalf("FetcherType = %q, want %q", got.FetcherType, "basic+thin")
-	}
-	if got.Body != "too short" {
-		t.Fatalf("Body = %q, want thin original content", got.Body)
-	}
-}
-
-func TestManagerIgnoresLowSignalSearchFallback(t *testing.T) {
-	t.Parallel()
-
-	primary := &stubFetcher{
-		match: func(string) bool { return true },
-		fetch: func(context.Context, string) (Content, error) {
-			return Content{
-				URL:         "https://example.com/post",
-				Title:       "Example Post",
-				Body:        "thin body",
-				FetcherType: "basic",
-			}, nil
-		},
-	}
-	jina := &stubFetcher{
-		fetch: func(context.Context, string) (Content, error) {
-			return Content{}, &FetchError{URL: "https://example.com/post", Reason: "jina failed"}
-		},
-	}
-	search := &stubSearcher{
-		result: "Go",
-	}
-
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
-	manager.setMinBodyChars(20)
-
-	got, err := manager.Fetch(context.Background(), "https://example.com/post")
-	if err != nil {
-		t.Fatalf("Fetch() returned error: %v", err)
-	}
-
-	if got.FetcherType != "basic+thin" {
-		t.Fatalf("FetcherType = %q, want %q", got.FetcherType, "basic+thin")
-	}
-	if got.Body != "thin body" {
-		t.Fatalf("Body = %q, want original thin content", got.Body)
-	}
-}
-
-func TestManagerUsesSearchFallbackWhenItHasMultipleMeaningfulLines(t *testing.T) {
-	t.Parallel()
-
-	primary := &stubFetcher{
-		match: func(string) bool { return true },
-		fetch: func(context.Context, string) (Content, error) {
-			return Content{
-				URL:         "https://example.com/post",
-				Title:       "Example Post",
-				Body:        "thin body",
-				FetcherType: "basic",
-			}, nil
-		},
-	}
-	jina := &stubFetcher{
-		fetch: func(context.Context, string) (Content, error) {
-			return Content{}, &FetchError{URL: "https://example.com/post", Reason: "jina failed"}
-		},
-	}
-	search := &stubSearcher{
-		result: "1. Example Post - detailed summary\n2. Related result - extra context",
-	}
-
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
-	manager.setMinBodyChars(20)
-
-	got, err := manager.Fetch(context.Background(), "https://example.com/post")
-	if err != nil {
-		t.Fatalf("Fetch() returned error: %v", err)
-	}
-
-	if got.FetcherType != "basic+search" {
-		t.Fatalf("FetcherType = %q, want %q", got.FetcherType, "basic+search")
-	}
-	if got.Body != "thin body" {
-		t.Fatalf("Body = %q, want original body preserved", got.Body)
-	}
-	if searchSummary, ok := got.Metadata["search_summary"].(string); !ok || !strings.Contains(searchSummary, "Related result") {
-		t.Fatalf("search_summary metadata = %#v, want meaningful search fallback content", got.Metadata["search_summary"])
-	}
-}
-
-func TestManagerStoresSearchFallbackAsSeparateMetadataSignal(t *testing.T) {
-	t.Parallel()
-
-	primary := &stubFetcher{
-		match: func(string) bool { return true },
-		fetch: func(context.Context, string) (Content, error) {
-			return Content{
-				URL:         "https://example.com/post",
-				Title:       "Example Post",
-				Body:        "thin body",
-				FetcherType: "basic",
-			}, nil
-		},
-	}
-	jina := &stubFetcher{
-		fetch: func(context.Context, string) (Content, error) {
-			return Content{}, &FetchError{URL: "https://example.com/post", Reason: "jina failed"}
-		},
-	}
-	search := &stubSearcher{
-		result: "1. Example Post - detailed summary\n2. Related result - extra context",
-	}
-
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
-	manager.setMinBodyChars(20)
-
-	got, err := manager.Fetch(context.Background(), "https://example.com/post")
-	if err != nil {
-		t.Fatalf("Fetch() returned error: %v", err)
-	}
-
-	if got.Body != "thin body" {
-		t.Fatalf("Body = %q, want original body preserved for analyzer body section", got.Body)
-	}
-
-	rawSearch, ok := got.Metadata["search_summary"].(string)
-	if !ok || !strings.Contains(rawSearch, "Related result") {
-		t.Fatalf("search_summary metadata = %#v, want preserved search summary", got.Metadata["search_summary"])
-	}
-
-	if source, ok := got.Metadata["search_context"].(string); !ok || source != "duckduckgo" {
-		t.Fatalf("search_context metadata = %#v, want duckduckgo", got.Metadata["search_context"])
 	}
 }
 
@@ -439,9 +219,8 @@ func TestManagerReturnsOriginalFetchErrorWhenNoFallbackProducesContent(t *testin
 			return Content{}, &FetchError{URL: "https://example.com/post", Reason: "jina failed"}
 		},
 	}
-	search := &stubSearcher{}
 
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
+	manager := NewManager(NewRouter(primary), jina)
 	manager.setMinBodyChars(20)
 
 	_, err := manager.Fetch(context.Background(), "https://example.com/post")
@@ -453,10 +232,9 @@ func TestManagerReturnsOriginalFetchErrorWhenNoFallbackProducesContent(t *testin
 	}
 }
 
-func TestNewDefaultManagerSharesSingleHTTPClientWithoutSearchFallback(t *testing.T) {
-	manager := NewDefaultManager(nil, ManagerOptions{})
+func TestNewDefaultManagerSharesSingleHTTPClient(t *testing.T) {
+	manager := NewDefaultManager(nil, "")
 
-	// Default options omit YtdlpBinaryPath, so YtdlpFetcher is not registered.
 	arxivFetcher, ok := manager.router.fetchers[0].(*ArxivFetcher)
 	if !ok {
 		t.Fatalf("fetcher[0] = %T, want *ArxivFetcher", manager.router.fetchers[0])
@@ -481,9 +259,6 @@ func TestNewDefaultManagerSharesSingleHTTPClientWithoutSearchFallback(t *testing
 	if !ok {
 		t.Fatalf("jina = %T, want *JinaFetcher", manager.jina)
 	}
-	if manager.search != nil {
-		t.Fatalf("search = %T, want nil for the production default", manager.search)
-	}
 
 	if arxivFetcher.client != githubFetcher.client ||
 		arxivFetcher.client != pdfFetcher.client ||
@@ -491,44 +266,6 @@ func TestNewDefaultManagerSharesSingleHTTPClientWithoutSearchFallback(t *testing
 		arxivFetcher.client != basicFetcher.client ||
 		arxivFetcher.client != jinaFetcher.client {
 		t.Fatal("expected all default fetchers to share one HTTP client")
-	}
-}
-
-func TestNewDefaultManagerWiresMetricsIntoPDFFetcher(t *testing.T) {
-	t.Parallel()
-
-	metrics := observability.NewMetrics()
-	manager := NewDefaultManager(nil, ManagerOptions{Metrics: metrics})
-	pdfFetcher, ok := manager.router.fetchers[2].(*PDFFetcher)
-	if !ok {
-		t.Fatalf("fetcher[2] = %T, want *PDFFetcher", manager.router.fetchers[2])
-	}
-	if pdfFetcher.metrics != metrics {
-		t.Fatal("default PDF fetcher did not receive ManagerOptions.Metrics")
-	}
-}
-
-func TestNewDefaultManagerRegistersYtdlpWhenConfigured(t *testing.T) {
-	manager := NewDefaultManager(nil, ManagerOptions{
-		YtdlpBinaryPath: "yt-dlp",
-		YtdlpTimeout:    5 * time.Second,
-	})
-
-	if _, ok := manager.router.fetchers[0].(*ArxivFetcher); !ok {
-		t.Fatalf("fetcher[0] = %T, want *ArxivFetcher", manager.router.fetchers[0])
-	}
-	ytdlp, ok := manager.router.fetchers[1].(*YtdlpFetcher)
-	if !ok {
-		t.Fatalf("fetcher[1] = %T, want *YtdlpFetcher", manager.router.fetchers[1])
-	}
-	if ytdlp.BinaryPath != "yt-dlp" {
-		t.Fatalf("YtdlpFetcher.BinaryPath = %q, want yt-dlp", ytdlp.BinaryPath)
-	}
-	if ytdlp.Timeout != 5*time.Second {
-		t.Fatalf("YtdlpFetcher.Timeout = %v, want 5s", ytdlp.Timeout)
-	}
-	if _, ok := manager.router.fetchers[2].(*GitHubFetcher); !ok {
-		t.Fatalf("fetcher[2] = %T, want *GitHubFetcher", manager.router.fetchers[2])
 	}
 }
 
@@ -590,9 +327,8 @@ func TestManagerPrefersBetterThinJinaContentBeforeThinFallback(t *testing.T) {
 			}, nil
 		},
 	}
-	search := &stubSearcher{}
 
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
+	manager := NewManager(NewRouter(primary), jina)
 
 	got, err := manager.Fetch(context.Background(), "https://example.com/post")
 	if err != nil {
@@ -631,9 +367,8 @@ func TestManagerDoesNotPreferJinaWhenItIsOnlyLongerByBytes(t *testing.T) {
 			}, nil
 		},
 	}
-	search := &stubSearcher{}
 
-	manager := NewManager(NewRouter(primary), jina, search, ManagerOptions{})
+	manager := NewManager(NewRouter(primary), jina)
 
 	got, err := manager.Fetch(context.Background(), "https://example.com/post")
 	if err != nil {
@@ -669,19 +404,6 @@ func (s *stubFetcher) Fetch(ctx context.Context, url string) (Content, error) {
 	return s.fetch(ctx, url)
 }
 
-type stubSearcher struct {
-	result string
-	err    error
-	query  string
-	calls  int
-}
-
-func (s *stubSearcher) Search(_ context.Context, query string) (string, error) {
-	s.calls++
-	s.query = query
-	return s.result, s.err
-}
-
 // 这是本次修复的核心回归：mp.weixin.qq.com 的风控页是 HTTP 200 + 有标题有正文，
 // 修复前它能满足 isSufficient 而被当成文章交给模型总结，链接以 status=done 入库、
 // 标题「微信公众号环境异常验证页」、摘要一本正经地解释这里没有文章。抓取失败是可见
@@ -711,7 +433,7 @@ func TestManagerRejectsInterstitialInsteadOfSummarisingIt(t *testing.T) {
 		},
 	}
 
-	manager := NewManager(NewRouter(primary), jina, nil, ManagerOptions{})
+	manager := NewManager(NewRouter(primary), jina)
 	manager.setMinBodyChars(20)
 
 	got, err := manager.Fetch(context.Background(), "https://mp.weixin.qq.com/s/example")

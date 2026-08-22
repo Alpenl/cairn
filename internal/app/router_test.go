@@ -17,8 +17,6 @@ import (
 
 	"webtag/internal/buildinfo"
 	"webtag/internal/handler"
-	"webtag/internal/middleware"
-	"webtag/internal/observability"
 )
 
 func TestNewRouterAddsRequestIDHeader(t *testing.T) {
@@ -44,34 +42,32 @@ func TestNewRouterAddsRequestIDHeader(t *testing.T) {
 }
 
 func TestRouterIgnoresSpoofedForwardedHeadersWithoutTrustedProxy(t *testing.T) {
-	handler, controller := middleware.RateLimit(middleware.RateLimitOptions{RPS: 1, Burst: 1, SweepDisabled: true})
-	if err := controller.Start(context.Background()); err != nil {
-		t.Fatalf("start limiter: %v", err)
-	}
-	t.Cleanup(func() { _ = controller.Stop(context.Background()) })
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{AppEnv: "dev"}, handler)
+	var clientIP string
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{}, func(c *gin.Context) {
+		clientIP = c.ClientIP()
+		c.Next()
+	})
 
-	for index, spoofed := range []string{"198.51.100.1", "198.51.100.2"} {
+	for _, spoofed := range []string{"198.51.100.1", "198.51.100.2"} {
 		req := httptest.NewRequest(http.MethodGet, "/health", nil)
 		req.RemoteAddr = "203.0.113.10:4321"
 		req.Header.Set("X-Forwarded-For", spoofed)
 		req.Header.Set("X-Real-IP", spoofed)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
-		want := http.StatusOK
-		if index == 1 {
-			want = http.StatusTooManyRequests
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 		}
-		if rec.Code != want {
-			t.Fatalf("request %d status = %d, want %d", index+1, rec.Code, want)
+		if clientIP != "203.0.113.10" {
+			t.Fatalf("ClientIP() = %q, want direct peer; spoofed X-Forwarded-For was %q", clientIP, spoofed)
 		}
 	}
 }
 
 func TestRouterUsesForwardedClientFromExplicitTrustedProxy(t *testing.T) {
 	var clientIP string
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv: "dev", TrustedProxyCIDRs: []string{"192.0.2.0/24"},
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
+		TrustedProxyCIDRs: []string{"192.0.2.0/24"},
 	}, func(c *gin.Context) {
 		clientIP = c.ClientIP()
 		c.Next()
@@ -87,8 +83,8 @@ func TestRouterUsesForwardedClientFromExplicitTrustedProxy(t *testing.T) {
 
 func TestRouterUsesRightToLeftTrustedProxyChainAcrossIPFamilies(t *testing.T) {
 	var clientIP string
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv: "dev", TrustedProxyCIDRs: []string{"192.0.2.0/24", "2001:db8::/32"},
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
+		TrustedProxyCIDRs: []string{"192.0.2.0/24", "2001:db8::/32"},
 	}, func(c *gin.Context) {
 		clientIP = c.ClientIP()
 		c.Next()
@@ -146,9 +142,9 @@ func TestReadyRouteReturnsReadyByDefault(t *testing.T) {
 }
 
 func TestReadyRouteReturnsServiceUnavailableWhenReadinessFails(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, readinessCheckerFunc(func(context.Context) error {
+	router := NewRouterWithDependencies(smokeDeps(), readinessCheckerFunc(func(context.Context) error {
 		return errors.New("database unavailable")
-	}), nil, nil, RouterOptions{AppEnv: "dev"})
+	}), nil, RouterOptions{})
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ready", nil))
@@ -184,53 +180,10 @@ func TestNewRouterRegistersAPIRoutes(t *testing.T) {
 	}
 }
 
-func TestNewRouterExposesMetricsWhenHandlerProvided(t *testing.T) {
-	metrics := observability.NewMetrics()
-	metrics.ParseRunsTotal.WithLabelValues("success", "basic", "article").Inc()
-	router := NewRouterWithDependencies(smokeDeps(), metrics.Handler(), nil, nil, metrics, RouterOptions{AppEnv: "dev"})
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if rec.Body.Len() == 0 {
-		t.Fatal("expected /metrics to return exposition data")
-	}
-	if rec.Body.String() == "" || !containsMetric(rec.Body.String(), "webtag_parser_runs_total") {
-		t.Fatalf("metrics body = %q, want parser metrics exposition", rec.Body.String())
-	}
-}
-
-func TestNewRouterExposesHTTPMetricsWhenHandlerProvided(t *testing.T) {
-	metrics := observability.NewMetrics()
-	router := NewRouterWithDependencies(smokeDeps(), metrics.Handler(), nil, nil, metrics, RouterOptions{AppEnv: "dev"})
-
-	healthRec := httptest.NewRecorder()
-	router.ServeHTTP(healthRec, httptest.NewRequest(http.MethodGet, "/health", nil))
-	if healthRec.Code != http.StatusOK {
-		t.Fatalf("health status = %d, want %d", healthRec.Code, http.StatusOK)
-	}
-
-	metricsRec := httptest.NewRecorder()
-	router.ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-
-	if metricsRec.Code != http.StatusOK {
-		t.Fatalf("metrics status = %d, want %d", metricsRec.Code, http.StatusOK)
-	}
-	if !containsMetric(metricsRec.Body.String(), "webtag_http_requests_total") {
-		t.Fatalf("metrics body = %q, want HTTP request counter exposition", metricsRec.Body.String())
-	}
-	if !containsMetric(metricsRec.Body.String(), "webtag_http_request_duration_seconds") {
-		t.Fatalf("metrics body = %q, want HTTP request duration exposition", metricsRec.Body.String())
-	}
-}
-
 func TestNewRouterWithDependenciesWritesAccessLog(t *testing.T) {
 	var logBuffer bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuffer, nil))
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, logger, nil, RouterOptions{AppEnv: "dev"})
+	router := NewRouterWithDependencies(smokeDeps(), nil, logger, RouterOptions{})
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -271,71 +224,21 @@ func TestNewRouterWithDependenciesWritesAccessLog(t *testing.T) {
 	}
 }
 
-func containsMetric(body, name string) bool {
-	return strings.Contains(body, name)
-}
-
-func TestServeOpenAPIReturnsValidSpec(t *testing.T) {
+func TestRemovedRuntimeRoutesAreNotServed(t *testing.T) {
 	router := NewRouter()
 
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
-		t.Fatalf("content-type = %q, want application/json", ct)
-	}
-
-	var spec map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
-		t.Fatalf("Unmarshal() returned error: %v", err)
-	}
-	openAPIVersion, _ := spec["openapi"].(string)
-	if !strings.HasPrefix(openAPIVersion, "3.1") {
-		t.Fatalf("openapi version = %q, want 3.1.x", openAPIVersion)
-	}
-	paths, _ := spec["paths"].(map[string]any)
-	if len(paths) == 0 {
-		t.Fatal("expected non-empty paths map in spec")
-	}
-	for _, required := range []string{"/api/links", "/api/ingest", "/api/jobs/{job_id}", "/health", "/openapi.json", "/static/{path}"} {
-		if _, ok := paths[required]; !ok {
-			t.Fatalf("expected spec to declare %s path", required)
+	for _, path := range []string{"/docs", "/openapi.json", "/static/openapi.json", "/debug/pprof/cmdline"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("GET %s status = %d, want 404", path, recorder.Code)
 		}
-	}
-}
-
-func TestServeDocsReturnsScalarHTML(t *testing.T) {
-	router := NewRouter()
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/docs", nil))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
-		t.Fatalf("content-type = %q, want text/html", ct)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `data-url="/openapi.json"`) {
-		t.Fatalf("body missing data-url attribute pointing to /openapi.json: %s", body)
-	}
-	if !strings.Contains(strings.ToLower(body), "scalar") {
-		t.Fatalf("body missing scalar reference: %s", body)
-	}
-	// Pinning + Subresource Integrity is the only thing keeping a poisoned
-	// jsdelivr response from injecting same-origin JS into /docs.
-	if !strings.Contains(body, "integrity=") {
-		t.Fatalf("body missing integrity= attribute on the Scalar script: %s", body)
 	}
 }
 
 // TestServeRootRedirectsToReaderOnFullRouter 在完整 NewRouter 上确认站点根
 // 通向 Reader。reader_test.go 已在裸 engine 上覆盖了重定向本身，这条额外锁住
-// 「Reader 路由确实被 registerStaticAndHealthRoutes 挂进了真实路由表」——
+// 「Reader 路由确实被 registerOperationalRoutes 挂进了真实路由表」——
 // 之前 GET / 返回的是一页手写调试 UI，那是唯一随二进制发布的界面。
 func TestServeRootRedirectsToReaderOnFullRouter(t *testing.T) {
 	router := NewRouter()
@@ -351,64 +254,6 @@ func TestServeRootRedirectsToReaderOnFullRouter(t *testing.T) {
 	}
 }
 
-// TestServeAdminConceptMergesReturnsHTMLPage covers the GET
-// /admin/concept-merges path that serves the review UI bundled with
-// P3-D. Smoke test only — the JS/HTML contract is exercised manually
-// against the live API in dev.
-func TestServeAdminConceptMergesReturnsHTMLPage(t *testing.T) {
-	router := NewRouter()
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/concept-merges", nil))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
-		t.Fatalf("content-type = %q, want text/html", ct)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "Concept Merge Review") {
-		t.Fatalf("body missing UI title: %s", body[:min(len(body), 200)])
-	}
-	if !strings.Contains(body, "/api/admin/concept-merges") {
-		t.Fatalf("body does not reference the API endpoint: %s", body[:min(len(body), 200)])
-	}
-}
-
-// TestWithHealthExtraFieldsMergesIntoHealthBody verifies the middleware
-// surface that lets BuildRuntime expose runtime flags (notably
-// unsafe_targets_allowed) on /health without changing the router
-// constructor signature.
-func TestWithHealthExtraFieldsMergesIntoHealthBody(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{AppEnv: "dev"}, WithHealthExtraFields(map[string]any{
-		"unsafe_targets_allowed": true,
-		"custom_label":           "value",
-	}))
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("Unmarshal() returned error: %v", err)
-	}
-	if body["unsafe_targets_allowed"] != true {
-		t.Fatalf("unsafe_targets_allowed = %v, want true", body["unsafe_targets_allowed"])
-	}
-	if body["custom_label"] != "value" {
-		t.Fatalf("custom_label = %v, want \"value\"", body["custom_label"])
-	}
-	// Base fields must still be present so additive overlay is non-destructive.
-	if body["status"] != "ok" {
-		t.Fatalf("base status field overwritten: %v", body["status"])
-	}
-}
-
 type readinessCheckerFunc func(context.Context) error
 
 func (fn readinessCheckerFunc) Ready(ctx context.Context) error {
@@ -416,71 +261,16 @@ func (fn readinessCheckerFunc) Ready(ctx context.Context) error {
 }
 
 // smokeDeps returns a Dependencies populated with the same zero-value
-// stubs that NewRouter() uses. Tests that exercise non-API routes
-// (/health, /ready, /metrics, /docs) can use this to satisfy the M4
+// stubs that NewRouter() uses. Tests that exercise operational routes
+// (/health, /ready) can use this to satisfy the M4
 // boot-time fail-fast check without dragging in handler test fakes.
 func smokeDeps() handler.Dependencies {
 	return handler.Dependencies{
 		LinksWrite: smokeLinkWriteService{},
 		LinksRead:  smokeLinkReadService{},
 		Ingest:     smokeIngestService{},
-		Jobs:       smokeJobService{},
 		Tags:       smokeTagService{},
 		Tree:       smokeTreeService{},
-	}
-}
-
-// TestPprofRouteDisabledByDefault 锁定 Wave 12.5 H3 之后 pprof 必须显式
-// 开启：即使设置了 METRICS_AUTH_TOKEN，PProfEnabled=false 时 /debug/pprof/*
-// 路径完全不挂载，应当返回 404 而不是 401。
-func TestPprofRouteDisabledByDefault(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:           "dev",
-		MetricsAuthToken: "secret-token",
-		PProfEnabled:     false,
-	})
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/cmdline", nil))
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 (pprof not mounted when PProfEnabled=false)", rec.Code)
-	}
-}
-
-// TestPprofRouteDisabledWhenTokenMissing 锁定 fail-closed 行为：
-// PProfEnabled=true 但 MetricsAuthToken 为空时，pprof 仍然不挂载（防止
-// "我以为打开了其实没鉴权"的运维事故）。
-func TestPprofRouteDisabledWhenTokenMissing(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:       "dev",
-		PProfEnabled: true,
-		// MetricsAuthToken 故意留空
-	})
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/cmdline", nil))
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 (pprof refused without token)", rec.Code)
-	}
-}
-
-// TestPprofRouteRejectsMissingToken 验证显式开启 pprof 且配置了 token
-// 时，路由确实挂载，未带 Bearer 头返回 401。Drive-by 攻击者打到
-// /debug/pprof/heap 必须是 401 而不是 goroutine dump。
-func TestPprofRouteRejectsMissingToken(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:           "dev",
-		PProfEnabled:     true,
-		MetricsAuthToken: "secret-token",
-	})
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/cmdline", nil))
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 (token required)", rec.Code)
 	}
 }
 
@@ -488,8 +278,7 @@ func TestPprofRouteRejectsMissingToken(t *testing.T) {
 // MaxRequestBodyBytes 通过 RouterOptions 挂上去后，所有路由（包括
 // 没有 handler-级 MaxBytesReader 的）默认收到全局上限。
 func TestRouterMaxRequestBodyEnforcedGlobally(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:              "dev",
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
 		MaxRequestBodyBytes: 16,
 	})
 
@@ -528,8 +317,7 @@ func TestRouterGlobalAndHandlerBodyLimitsTakeStricter(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-				AppEnv:              "dev",
+			router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
 				MaxRequestBodyBytes: tc.globalCap,
 			})
 			router.POST("/probe", func(c *gin.Context) {
@@ -557,8 +345,7 @@ func TestRouterGlobalAndHandlerBodyLimitsTakeStricter(t *testing.T) {
 // 路径的真实 body 大小（1.5 MiB）——防回归：曾经默认值 1 MiB 会把
 // /api/ingest 这条 4 MiB 上限路径误打成 413。
 func TestRouterGlobalBodyLimitAllowsIngestSize(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:              "dev",
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
 		MaxRequestBodyBytes: 4 << 20, // 默认值
 	})
 	router.POST("/probe", func(c *gin.Context) {
@@ -584,8 +371,7 @@ func TestRouterGlobalBodyLimitAllowsIngestSize(t *testing.T) {
 // TestRouterRequestDeadlineInjectsCtxDeadline 锁定 Wave 5 M1：
 // RequestDeadlineTimeout 配置后，业务 handler 拿到的 ctx 必须带 deadline。
 func TestRouterRequestDeadlineInjectsCtxDeadline(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:                 "dev",
+	router := NewRouterWithDependencies(smokeDeps(), nil, nil, RouterOptions{
 		RequestDeadlineTimeout: 10 * time.Second,
 		RequestDeadlinePercent: 0.9,
 	})
@@ -601,25 +387,5 @@ func TestRouterRequestDeadlineInjectsCtxDeadline(t *testing.T) {
 
 	if !hasDeadline {
 		t.Fatal("ctx has no deadline; RequestDeadline middleware not installed")
-	}
-}
-
-// TestPprofRouteAcceptsValidToken closes the loop: with PProfEnabled=true,
-// MetricsAuthToken set, and the right Bearer header attached, the handler
-// returns 200.
-func TestPprofRouteAcceptsValidToken(t *testing.T) {
-	router := NewRouterWithDependencies(smokeDeps(), nil, nil, nil, nil, RouterOptions{
-		AppEnv:           "dev",
-		PProfEnabled:     true,
-		MetricsAuthToken: "secret-token",
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/cmdline", nil)
-	req.Header.Set("Authorization", "Bearer secret-token")
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (valid token)", rec.Code)
 	}
 }

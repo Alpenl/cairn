@@ -73,9 +73,6 @@ interface SourceLine {
 
 interface ParsedTask extends ChecklistBlock {
   readonly markerStart: number
-  readonly legacyBlockRef: string
-  readonly legacyOccurrence: number
-  readonly paddedBlockRef: string
 }
 
 const TASK_RE = /^(\s*)([-+*]|\d+[.)])\s+\[([ xX])\]\s+(.*?)\s*$/
@@ -115,14 +112,6 @@ function nearestHeading(lines: readonly SourceLine[], index: number): string {
   return ''
 }
 
-function nextNonEmptyLine(lines: readonly SourceLine[], index: number): string {
-  for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-    const value = lines[cursor].value.trim()
-    if (value !== '') return value
-  }
-  return ''
-}
-
 function blockRef(
   lines: readonly SourceLine[],
   index: number,
@@ -135,30 +124,10 @@ function blockRef(
   return `task:${hash(JSON.stringify([text.trim(), heading]))}`
 }
 
-function paddedBlockRef(
-  lines: readonly SourceLine[],
-  index: number,
-  text: string,
-): string {
-  const heading = nearestHeading(lines, index)
-  return `task:${hash(JSON.stringify([text.trim(), heading])).padStart(8, '0')}`
-}
-
-function legacyBlockRef(
-  lines: readonly SourceLine[],
-  index: number,
-  text: string,
-): string {
-  const heading = nearestHeading(lines, index)
-  const next = nextNonEmptyLine(lines, index)
-  return `task:${hash(JSON.stringify([text.trim(), heading, next]))}`
-}
-
 function parseTasks(source: string): ParsedTask[] {
   const lines = linesOf(source)
   const tasks: ParsedTask[] = []
   const occurrences = new Map<string, number>()
-  const legacyOccurrences = new Map<string, number>()
   let fence: { readonly marker: '`' | '~'; readonly length: number } | null = null
   lines.forEach((line, index) => {
     const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line.value)
@@ -173,12 +142,8 @@ function parseTasks(source: string): ParsedTask[] {
     if (!match) return
     const markerStart = match[1].length + match[2].length + 2
     const ref = blockRef(lines, index, match[4])
-    const paddedRef = paddedBlockRef(lines, index, match[4])
-    const oldRef = legacyBlockRef(lines, index, match[4])
     const occurrence = (occurrences.get(ref) ?? 0) + 1
-    const oldOccurrence = (legacyOccurrences.get(oldRef) ?? 0) + 1
     occurrences.set(ref, occurrence)
-    legacyOccurrences.set(oldRef, oldOccurrence)
     tasks.push({
       blockRef: ref,
       text: match[4],
@@ -187,9 +152,6 @@ function parseTasks(source: string): ParsedTask[] {
       lineStart: line.start,
       lineEnd: line.end,
       markerStart: line.start + markerStart,
-      legacyBlockRef: oldRef,
-      legacyOccurrence: oldOccurrence,
-      paddedBlockRef: paddedRef,
     })
   })
   return tasks
@@ -199,12 +161,12 @@ export function listChecklistBlocks(source: string): readonly ChecklistBlock[] {
   return parseTasks(source).map((task) => toChecklistBlock(task))
 }
 
-function toChecklistBlock(task: ParsedTask, occurrence = task.occurrence): ChecklistBlock {
+function toChecklistBlock(task: ParsedTask): ChecklistBlock {
   return {
     blockRef: task.blockRef,
     text: task.text,
     done: task.done,
-    occurrence,
+    occurrence: task.occurrence,
     lineStart: task.lineStart,
     lineEnd: task.lineEnd,
   }
@@ -219,20 +181,11 @@ export function updateChecklistState(
 ): ChecklistUpdateResult {
   const parsed = parseTasks(source)
   const normalizedOccurrence = occurrence !== undefined && occurrence <= 0 ? 1 : occurrence
-  const stableMatches = parsed.filter((task) => task.blockRef === blockRef)
-  const paddedMatches = stableMatches.length === 0
-    ? parsed.filter((task) => task.paddedBlockRef === blockRef)
-    : []
-  const useLegacyRef = stableMatches.length === 0 && paddedMatches.length === 0
-  const matches = stableMatches.length > 0
-    ? stableMatches
-    : paddedMatches.length > 0
-      ? paddedMatches
-      : parsed.filter((task) => task.legacyBlockRef === blockRef)
+  const matches = parsed.filter((task) => task.blockRef === blockRef)
   if (matches.length === 0) return { status: 'not-found' }
   const task = normalizedOccurrence === undefined
     ? matches.length === 1 ? matches[0] : undefined
-    : matches.find((candidate) => (useLegacyRef ? candidate.legacyOccurrence : candidate.occurrence) === normalizedOccurrence)
+    : matches.find((candidate) => candidate.occurrence === normalizedOccurrence)
   if (!task) return normalizedOccurrence === undefined ? { status: 'ambiguous' } : { status: 'not-found' }
   if (expectedDone !== undefined && task.done !== expectedDone) {
     return { status: 'conflict', expectedDone, actualDone: task.done }
@@ -245,7 +198,7 @@ export function updateChecklistState(
     status: 'updated',
     source: nextSource,
     block: {
-      ...toChecklistBlock(task, useLegacyRef ? task.legacyOccurrence : task.occurrence),
+      ...toChecklistBlock(task),
       done,
     },
   }

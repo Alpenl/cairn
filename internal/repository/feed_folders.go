@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"webtag/internal/model"
 )
@@ -58,7 +59,8 @@ func (r *PGXFeedRepository) UpdateFolder(ctx context.Context, id uuid.UUID, name
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.FeedFolder{}, ErrNotFound
 	}
-	if IsUniqueViolation(err) {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return model.FeedFolder{}, fmt.Errorf("update feed folder: %w", ErrFeedFolderNameConflict)
 	}
 	if err != nil {

@@ -2,20 +2,18 @@ package service
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
 
-	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
 	"webtag/internal/repository"
 )
 
 type noteDraftStoreStub struct {
-	repository.ReaderVNextStore
+	ReaderNoteStore
 	err      error
 	note     *model.ReaderNote
 	commands []model.ReaderNoteDraftCommand
@@ -39,21 +37,12 @@ func TestSaveNoteDraftMapsMissingBeforeRevisionConflict(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &noteDraftStoreStub{err: test.storeErr}
-			_, err := NewReaderVNextService(store, nil).SaveNoteDraft(context.Background(), noteID.String(), dto.ReaderNoteDraftRequest{Content: "draft", ExpectedDraftRevision: 1})
-			var carrier httperr.StatusCarrier
-			var coder httperr.ErrorCoder
-			if !errors.As(err, &carrier) || carrier.HTTPStatus() != test.wantStatus || !errors.As(err, &coder) || coder.HTTPErrorCode() != test.wantCode {
+			_, err := newReaderTestFeatureSet(readerTestStores(store), nil).SaveNoteDraft(context.Background(), model.ReaderNoteDraftCommand{NoteID: noteID, Content: "draft", ExpectedDraftRevision: 1})
+			carrier, ok := httperr.As(err)
+			coder, coded := carrier.(httperr.ErrorCoder)
+			if !ok || !coded || carrier.HTTPStatus() != test.wantStatus || coder.HTTPErrorCode() != test.wantCode {
 				t.Fatalf("SaveNoteDraft() error = %v, want %d/%s", err, test.wantStatus, test.wantCode)
 			}
 		})
-	}
-}
-
-func TestSaveNoteDraftRejectsInvalidIDBeforeStore(t *testing.T) {
-	store := &noteDraftStoreStub{}
-	_, err := NewReaderVNextService(store, nil).SaveNoteDraft(context.Background(), "not-a-uuid", dto.ReaderNoteDraftRequest{Content: "draft"})
-	var carrier httperr.StatusCarrier
-	if !errors.As(err, &carrier) || carrier.HTTPStatus() != http.StatusUnprocessableEntity || len(store.commands) != 0 {
-		t.Fatalf("SaveNoteDraft(invalid ID) = %v, commands=%d; want 422 without storage write", err, len(store.commands))
 	}
 }

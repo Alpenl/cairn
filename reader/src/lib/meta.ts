@@ -31,8 +31,8 @@ export const SRC_COLOR: Record<string, string> = {
 }
 
 /**
- * fetcher_type 归一化：后端会给 fetcher_type 追加后缀（如 jina+light、basic+thin、
- * github+search），展示映射只认主类型。取「+」前的主段即可。
+ * fetcher_type 归一化：后端会给低质量结果追加后缀（如 basic+thin），
+ * 展示映射只认主类型。取「+」前的主段即可。
  */
 export function fetcherKey(raw: string | null | undefined): string {
   if (!raw) return ''
@@ -41,20 +41,17 @@ export function fetcherKey(raw: string | null | undefined): string {
 
 /**
  * fetcher_type → 图标名。键为后端实际产出的主类型（见 internal/fetcher 各
- * FetcherType / FetcherTag：basic/ytdlp/arxiv/github/jina/pdf/light/grok/search/wechat）。
- * 查表前务必先经 fetcherKey() 剥掉 +light / +thin / +search 等后缀。
+ * FetcherType / FetcherTag：basic/arxiv/github/jina/pdf/grok/wechat）。
+ * 查表前务必先经 fetcherKey() 剥掉 +thin 等后缀。
  */
 export const FETCHER_ICON: Record<string, IconName> = {
-  basic: 'globe',
-  light: 'globe',
-  github: 'code',
+	basic: 'globe',
+	github: 'code',
   arxiv: 'doc',
   pdf: 'doc',
-  ytdlp: 'youtube',
-  jina: 'type',
-  grok: 'sparkles',
-  search: 'search',
-  wechat: 'rss',
+	jina: 'type',
+	grok: 'sparkles',
+	wechat: 'rss',
 }
 
 /** fetcher_type（已归一化）→ 图标名，未命中回退 link。 */
