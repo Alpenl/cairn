@@ -169,11 +169,15 @@ docker exec "$CONTAINER_NAME" pg_dump \
     --schema-only \
     --no-owner \
     --no-privileges \
-    | sed '/^\\restrict /d; /^\\unrestrict /d' \
+    | sed \
+        -e '/^\\restrict /d' \
+        -e '/^\\unrestrict /d' \
+        -e '/^-- Dumped from database version /d' \
+        -e '/^-- Dumped by pg_dump version /d' \
     > "$OUT_FILE.tmp"
-# 过滤 \restrict / \unrestrict 行：PG16 引入的随机 session-id 标记，每次
-# dump 都会变。保留它会让 schema.sql 在没改 migration 时也 diff，破坏
-# "schema.sql 稳定 + 改了再变" 的语义。
+# 过滤 \restrict / \unrestrict 行与 dump 工具版本注释：前者带随机
+# session-id，后者会随 postgres:16 的补丁版本变化。它们都不是 schema，保留
+# 任一项都会让没有 migration 变化的 snapshot 产生环境噪音。
 
 # pg_dump versions can emit more than one blank line after the completion
 # marker. Strip only trailing empty lines so the tracked snapshot is stable
