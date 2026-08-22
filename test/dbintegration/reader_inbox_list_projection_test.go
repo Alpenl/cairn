@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"webtag/internal/handler"
 	"webtag/internal/repository"
 	"webtag/internal/service"
 )
@@ -23,7 +24,7 @@ func TestReaderInboxListDoesNotCarryOversizedCaptureBody(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	repo := repository.NewPGXReaderVNextRepository(pool)
-	reader := service.NewReaderVNextService(postgresReaderStores(repo), nil)
+	reader := handler.NewReaderInboxRoutes(service.NewReaderApplications(postgresReaderStores(repo), nil).Inbox)
 
 	const bodyMarker = "BODY-MUST-NOT-REACH-THE-INBOX-LIST"
 	const noteTailMarker = "NOTE-TAIL-MUST-NOT-REACH-THE-INBOX-LIST"

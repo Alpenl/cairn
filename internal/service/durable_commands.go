@@ -65,6 +65,34 @@ type InboxProposalCommands interface {
 	EnsureInboxProposal(context.Context, EnsureInboxProposalCommand) (InboxProposalResult, error)
 }
 
+// ReaderInboxConfirmCommands owns one Inbox confirmation that may restore a
+// canonical Link and therefore must coordinate PostgreSQL state with River in
+// one transaction.
+type ReaderInboxConfirmCommands interface {
+	ConfirmInbox(context.Context, uuid.UUID, *int64) (uuid.UUID, error)
+}
+
+type ReaderInboxBulkConfirmCommands interface {
+	BulkConfirmInbox(context.Context, []model.ReaderInboxBulkConfirmation) ([]model.ReaderInboxBulkResult, error)
+}
+
+type ReaderInboxAIConfirmCommands interface {
+	ConfirmAIProposals(context.Context, model.ReaderInboxPartition) (model.ReaderInboxAIProposalConfirmation, error)
+}
+
+// ReaderFeedFeedbackCommands owns feed feedback that may create, restore, or
+// trash a Feed-managed Link.
+type ReaderFeedFeedbackCommands interface {
+	FeedbackFeed(context.Context, string, string) (model.ReaderFeedFeedback, error)
+}
+
+// ReaderHostRestoreCommands owns polymorphic host restoration. Link restores
+// can schedule durable parse work; Note and Inbox restores use the same
+// application command without exposing transaction details.
+type ReaderHostRestoreCommands interface {
+	RestoreHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error)
+}
+
 type SubmitLinkCommand struct {
 	Capture LinkCapture
 }

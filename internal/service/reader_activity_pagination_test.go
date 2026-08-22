@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
 )
@@ -49,14 +48,14 @@ func TestReaderActivityPaginatesBeyondOneHundredWithoutDuplicates(t *testing.T) 
 			Kind: "tag", Key: key, NormalizedKey: key, LastAt: when,
 		})
 	}
-	service := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{CursorSigningKey: "activity-test-key"})
+	service := newReaderTestFeatureSet(readerTestStores(store), nil, ReaderApplicationOptions{CursorSigningKey: "activity-test-key"})
 	ctx := context.Background()
 
 	first, err := service.Activity(ctx, "tag", "", 100)
 	if err != nil {
 		t.Fatalf("Activity(first) error = %v", err)
 	}
-	if len(first.Tags) != 100 || first.Tags[0].Tag != "tag-000" || first.Tags[99].Tag != "tag-099" || first.NextCursor == "" {
+	if len(first.Items) != 100 || first.Items[0].Key != "tag-000" || first.Items[99].Key != "tag-099" || first.NextCursor == "" {
 		t.Fatalf("first page = %#v, want tag-000..tag-099 plus next_cursor", first)
 	}
 
@@ -64,13 +63,13 @@ func TestReaderActivityPaginatesBeyondOneHundredWithoutDuplicates(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Activity(second) error = %v", err)
 	}
-	if len(second.Tags) != 2 || second.Tags[0].Tag != "tag-100" || second.Tags[1].Tag != "tag-101" || second.NextCursor != "" {
+	if len(second.Items) != 2 || second.Items[0].Key != "tag-100" || second.Items[1].Key != "tag-101" || second.NextCursor != "" {
 		t.Fatalf("second page = %#v, want tag-100..tag-101 and no next_cursor", second)
 	}
 	seen := make(map[string]struct{}, 102)
-	for _, page := range []dto.ReaderActivityResponse{first, second} {
-		for _, item := range page.Tags {
-			tag := item.Tag
+	for _, page := range []ReaderActivityResult{first, second} {
+		for _, item := range page.Items {
+			tag := item.Key
 			if _, duplicate := seen[tag]; duplicate {
 				t.Fatalf("duplicate activity tag %q across pages", tag)
 			}
@@ -88,7 +87,7 @@ func TestReaderActivityCursorRejectsTamperingAndCrossQueryReuse(t *testing.T) {
 		{Kind: "tag", Key: "alpha", NormalizedKey: "alpha", LastAt: when},
 		{Kind: "tag", Key: "beta", NormalizedKey: "beta", LastAt: when},
 	}}
-	service := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{CursorSigningKey: "activity-test-key"})
+	service := newReaderTestFeatureSet(readerTestStores(store), nil, ReaderApplicationOptions{CursorSigningKey: "activity-test-key"})
 	ctx := context.Background()
 
 	first, err := service.Activity(ctx, "tag", "", 1)

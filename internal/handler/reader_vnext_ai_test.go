@@ -16,7 +16,7 @@ import (
 )
 
 type readerAIHandlerStub struct {
-	ReaderAggregateRoutes
+	ReaderLibraryRoutes
 	response dto.ReaderAIResponse
 	err      error
 	calls    int

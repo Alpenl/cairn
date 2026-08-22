@@ -114,13 +114,13 @@ func TestResummarizeInboxReturnsInboxPollingResource(t *testing.T) {
 	commands := &inboxProposalCommandsStub{result: InboxProposalResult{Inbox: &model.ReaderInbox{
 		ID: inboxID, URL: "https://example.com", MetadataRevision: 4, Status: "pending", ProposalStatus: "pending",
 	}}}
-	service := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{InboxProposalCommands: commands})
+	service := newReaderTestFeatureSet(readerTestStores(store), nil, ReaderApplicationOptions{InboxProposalCommands: commands})
 
-	response, err := service.ResummarizeInbox(context.Background(), inboxID.String())
+	response, err := service.ResummarizeInbox(context.Background(), inboxID)
 	if err != nil {
 		t.Fatalf("ResummarizeInbox() error = %v", err)
 	}
-	if response.ID != inboxID.String() || response.ProposalStatus != "pending" {
+	if response.ID != inboxID || response.ProposalStatus != "pending" {
 		t.Fatalf("ResummarizeInbox() = %+v", response)
 	}
 	if commands.command.InboxID != inboxID || commands.command.ExpectedMetadataRevision != 4 {

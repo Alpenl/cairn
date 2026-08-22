@@ -52,7 +52,7 @@ func TestTodoReadsDoNotReconcile(t *testing.T) {
 		page:      model.ReaderTodoPage{Items: []model.ReaderTodo{projection}},
 		aggregate: model.ReaderHomeAggregate{Todos: []model.ReaderTodo{projection}, Counts: map[string]int{"todos": 1}},
 	}
-	service := NewReaderVNextService(readerTestStores(store), nil)
+	service := newReaderTestFeatureSet(readerTestStores(store), nil)
 	ctx := context.Background()
 
 	todos, err := service.ListTodos(ctx, "", 200)

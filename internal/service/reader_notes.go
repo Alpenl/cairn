@@ -3,102 +3,87 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
-	"webtag/internal/dto"
+	"github.com/google/uuid"
+
 	"webtag/internal/model"
 	"webtag/internal/notetitle"
 	"webtag/internal/problem"
 )
 
+type ReaderNoteCreateCommand struct {
+	Title   string
+	Content string
+}
+
+type ReaderNotePage struct {
+	Items      []model.ReaderNote
+	Count      int
+	NextCursor string
+}
+
 func deriveNoteTitle(content string) string {
 	return notetitle.Derive(content)
 }
 
-func (s *ReaderVNextService) CreateNote(ctx context.Context, request dto.ReaderNoteCreateRequest) (dto.ReaderNoteResponse, error) {
-	title := strings.TrimSpace(request.Title)
+func (s *ReaderNoteApplication) CreateNote(ctx context.Context, command ReaderNoteCreateCommand) (model.ReaderNote, error) {
+	title := strings.TrimSpace(command.Title)
 	if title == "" {
-		title = deriveNoteTitle(request.Content)
+		title = deriveNoteTitle(command.Content)
 	}
 	note := model.ReaderNote{Title: title, PublishedContent: ""}
-	if request.Content != "" {
-		note.DraftContent = &request.Content
+	if command.Content != "" {
+		note.DraftContent = &command.Content
 	}
 	created, err := s.notes.CreateNote(ctx, note)
 	if err != nil {
-		return dto.ReaderNoteResponse{}, mapReaderError(err)
+		return model.ReaderNote{}, mapReaderError(err)
 	}
-	return noteResponse(*created), nil
+	return *created, nil
 }
 
-func (s *ReaderVNextService) ListNotes(ctx context.Context, after string, limit int) (dto.ReaderNotesResponse, error) {
+func (s *ReaderNoteApplication) ListNotes(ctx context.Context, after string, limit int) (ReaderNotePage, error) {
 	items, count, next, err := s.notes.ListNotes(ctx, after, limit)
 	if err != nil {
-		return dto.ReaderNotesResponse{}, mapReaderError(err)
+		return ReaderNotePage{}, mapReaderError(err)
 	}
-	out := dto.ReaderNotesResponse{Items: make([]dto.ReaderNoteResponse, 0, len(items)), Count: count, NextCursor: next}
-	for _, item := range items {
-		out.Items = append(out.Items, noteResponse(item))
-	}
-	return out, nil
+	return ReaderNotePage{Items: items, Count: count, NextCursor: next}, nil
 }
 
-func (s *ReaderVNextService) GetNote(ctx context.Context, rawID string) (dto.ReaderNoteResponse, error) {
-	id, err := readerUUID(rawID, "note_id")
-	if err != nil {
-		return dto.ReaderNoteResponse{}, err
-	}
+func (s *ReaderNoteApplication) GetNote(ctx context.Context, id uuid.UUID) (model.ReaderNote, error) {
 	note, err := s.notes.GetNote(ctx, id)
 	if err != nil {
-		return dto.ReaderNoteResponse{}, mapReaderError(err)
+		return model.ReaderNote{}, mapReaderError(err)
 	}
-	return noteResponse(*note), nil
+	return *note, nil
 }
 
-func noteResponse(note model.ReaderNote) dto.ReaderNoteResponse {
-	dirty := note.DraftContent != nil && *note.DraftContent != note.PublishedContent
-	return dto.ReaderNoteResponse{ID: note.ID.String(), Title: note.Title, PublishedContent: note.PublishedContent, PublishedRevision: note.PublishedRevision, DraftContent: note.DraftContent, DraftRevision: note.DraftRevision, DraftUpdatedAt: note.DraftUpdatedAt, DeletedAt: note.DeletedAt, CreatedAt: note.CreatedAt, UpdatedAt: note.UpdatedAt, Dirty: dirty}
+func (s *ReaderNoteApplication) SaveNoteDraft(ctx context.Context, command model.ReaderNoteDraftCommand) (model.ReaderNote, error) {
+	note, err := s.notes.SaveNoteDraft(ctx, command)
+	if err != nil {
+		return model.ReaderNote{}, mapReaderError(err)
+	}
+	return *note, nil
 }
 
-func (s *ReaderVNextService) SaveNoteDraft(ctx context.Context, rawID string, request dto.ReaderNoteDraftRequest) (dto.ReaderNoteResponse, error) {
-	id, err := readerUUID(rawID, "note_id")
-	if err != nil {
-		return dto.ReaderNoteResponse{}, err
-	}
-	note, err := s.notes.SaveNoteDraft(ctx, model.ReaderNoteDraftCommand{NoteID: id, Content: request.Content, ExpectedDraftRevision: request.ExpectedDraftRevision})
-	if err != nil {
-		return dto.ReaderNoteResponse{}, mapReaderError(err)
-	}
-	return noteResponse(*note), nil
-}
-
-func (s *ReaderVNextService) DiscardNoteDraft(ctx context.Context, rawID string, expectedRevision int64) error {
-	id, err := readerUUID(rawID, "note_id")
-	if err != nil {
-		return err
-	}
-	if expectedRevision < 1 {
+func (s *ReaderNoteApplication) DiscardNoteDraft(ctx context.Context, command model.ReaderNoteDiscardDraftCommand) error {
+	if command.ExpectedDraftRevision < 1 {
 		return problem.NewWithCode(problem.Invalid, "invalid_draft_revision", "draft revision must be positive")
 	}
-	return mapReaderError(s.notes.DiscardNoteDraft(ctx, model.ReaderNoteDiscardDraftCommand{NoteID: id, ExpectedDraftRevision: expectedRevision}))
+	return mapReaderError(s.notes.DiscardNoteDraft(ctx, command))
 }
 
-func (s *ReaderVNextService) PublishNote(ctx context.Context, rawID string, request dto.ReaderNotePublishRequest) (dto.ReaderNoteResponse, error) {
-	id, err := readerUUID(rawID, "note_id")
+func (s *ReaderNoteApplication) PublishNote(ctx context.Context, command model.ReaderNotePublishCommand) (model.ReaderNote, error) {
+	if err := validateReaderReanchorOps(command.ReanchorOps); err != nil {
+		return model.ReaderNote{}, err
+	}
+	note, err := s.notes.PublishNote(ctx, command)
 	if err != nil {
-		return dto.ReaderNoteResponse{}, err
+		return model.ReaderNote{}, mapReaderError(err)
 	}
-	if request.ExpectedDraftRevision == nil || request.ExpectedPublishedRevision == nil {
-		return dto.ReaderNoteResponse{}, problem.NewWithCode(problem.Invalid, "note_revision_required", "draft and published revisions are required")
-	}
-	if err := validateReaderReanchorOps(request.ReanchorOps); err != nil {
-		return dto.ReaderNoteResponse{}, err
-	}
-	note, err := s.notes.PublishNote(ctx, model.ReaderNotePublishCommand{NoteID: id, ExpectedDraftRevision: *request.ExpectedDraftRevision, ExpectedPublishedRevision: *request.ExpectedPublishedRevision, ReanchorOps: request.ReanchorOps})
-	if err != nil {
-		return dto.ReaderNoteResponse{}, mapReaderError(err)
-	}
-	return noteResponse(*note), nil
+	return *note, nil
 }
 
 func validateReaderReanchorOps(ops []json.RawMessage) error {
@@ -117,60 +102,40 @@ func validateReaderReanchorOps(ops []json.RawMessage) error {
 	return nil
 }
 
-func (s *ReaderVNextService) DeleteNote(ctx context.Context, rawID string) (dto.ReaderHostLifecycleResponse, error) {
-	id, err := readerUUID(rawID, "note_id")
-	if err != nil {
-		return dto.ReaderHostLifecycleResponse{}, err
-	}
+func (s *ReaderNoteApplication) DeleteNote(ctx context.Context, id uuid.UUID) (model.ReaderHostLifecycleResult, error) {
 	result, err := s.hosts.SoftDeleteHost(ctx, model.ReaderHostNote, id)
 	if err != nil {
-		return dto.ReaderHostLifecycleResponse{}, mapReaderError(err)
+		return model.ReaderHostLifecycleResult{}, mapReaderError(err)
 	}
-	return readerHostLifecycleResponse(result), nil
+	return result, nil
 }
 
-func (s *ReaderVNextService) RestoreNote(ctx context.Context, rawID string) (dto.ReaderHostLifecycleResponse, error) {
-	id, err := readerUUID(rawID, "note_id")
-	if err != nil {
-		return dto.ReaderHostLifecycleResponse{}, err
+func (s *ReaderNoteApplication) RestoreNote(ctx context.Context, id uuid.UUID) (model.ReaderHostLifecycleResult, error) {
+	if s.hostRestores == nil {
+		return model.ReaderHostLifecycleResult{}, errors.New("reader host restore commands are not configured")
 	}
-	result, err := s.hosts.RestoreHost(ctx, model.ReaderHostNote, id)
+	result, err := s.hostRestores.RestoreHost(ctx, model.ReaderHostNote, id)
 	if err != nil {
-		return dto.ReaderHostLifecycleResponse{}, mapReaderError(err)
+		return model.ReaderHostLifecycleResult{}, mapReaderError(err)
 	}
-	return readerHostLifecycleResponse(result), nil
+	return result, nil
 }
 
-func (s *ReaderVNextService) ListNoteHistory(ctx context.Context, rawID string, limit int) ([]dto.ReaderNoteHistoryResponse, error) {
-	id, err := readerUUID(rawID, "note_id")
-	if err != nil {
-		return nil, err
-	}
+func (s *ReaderNoteApplication) ListNoteHistory(ctx context.Context, id uuid.UUID, limit int) ([]model.ReaderNoteHistory, error) {
 	items, err := s.notes.ListNoteHistory(ctx, id, limit)
 	if err != nil {
 		return nil, mapReaderError(err)
 	}
-	out := make([]dto.ReaderNoteHistoryResponse, 0, len(items))
-	for _, item := range items {
-		out = append(out, dto.ReaderNoteHistoryResponse{ID: item.ID, Revision: item.Revision, Title: item.Title, Content: item.Content, ReanchorOps: item.ReanchorOps, CreatedAt: item.CreatedAt})
-	}
-	return out, nil
+	return items, nil
 }
 
-func (s *ReaderVNextService) RestoreNoteRevision(ctx context.Context, rawID string, revision int64, request dto.ReaderNoteRestoreRequest) (dto.ReaderNoteResponse, error) {
-	id, err := readerUUID(rawID, "note_id")
+func (s *ReaderNoteApplication) RestoreNoteRevision(ctx context.Context, command model.ReaderNoteRestoreCommand) (model.ReaderNote, error) {
+	if err := validateReaderReanchorOps(command.ReanchorOps); err != nil {
+		return model.ReaderNote{}, err
+	}
+	note, err := s.notes.RestoreNoteRevision(ctx, command)
 	if err != nil {
-		return dto.ReaderNoteResponse{}, err
+		return model.ReaderNote{}, mapReaderError(err)
 	}
-	if request.ExpectedDraftRevision == nil || request.ExpectedPublishedRevision == nil {
-		return dto.ReaderNoteResponse{}, problem.NewWithCode(problem.Invalid, "note_revision_required", "draft and published revisions are required")
-	}
-	if err := validateReaderReanchorOps(request.ReanchorOps); err != nil {
-		return dto.ReaderNoteResponse{}, err
-	}
-	note, err := s.notes.RestoreNoteRevision(ctx, model.ReaderNoteRestoreCommand{NoteID: id, Revision: revision, ExpectedDraftRevision: *request.ExpectedDraftRevision, ExpectedPublishedRevision: *request.ExpectedPublishedRevision, ReanchorOps: request.ReanchorOps})
-	if err != nil {
-		return dto.ReaderNoteResponse{}, mapReaderError(err)
-	}
-	return noteResponse(*note), nil
+	return *note, nil
 }

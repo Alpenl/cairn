@@ -24,7 +24,7 @@ type readerHandlerStub struct {
 	ReaderNoteRoutes
 	ReaderInboxRoutes
 	ReaderTodoRoutes
-	ReaderAggregateRoutes
+	ReaderLibraryRoutes
 	restoreInbox         func(context.Context, string) error
 	restoreInboxID       string
 	confirmBulk          func(context.Context, []string, map[string]int64) ([]model.ReaderInboxBulkResult, error)
@@ -198,7 +198,7 @@ func TestReaderActivityHandlerRejectsTamperedAndCrossBoundCursor(t *testing.T) {
 		{Kind: "tag", Key: "alpha", NormalizedKey: "alpha", LastAt: when},
 		{Kind: "tag", Key: "beta", NormalizedKey: "beta", LastAt: when},
 	}}
-	reader := service.NewReaderVNextService(readerServiceTestStores(store), nil, service.ReaderVNextServiceOptions{CursorSigningKey: "handler-activity-key"})
+	reader := service.NewReaderApplications(readerServiceTestStores(store), nil, service.ReaderApplicationOptions{CursorSigningKey: "handler-activity-key"})
 	router := gin.New()
 	RegisterReaderRoutes(router, readerTestRoutes(reader))
 
@@ -327,7 +327,7 @@ func TestReaderTodoPatchHTTPPreservesExpectedHostRevisionPresence(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			store := &readerTodoPatchPresenceStore{err: tt.storeErr}
 			router := gin.New()
-			reader := service.NewReaderVNextService(readerServiceTestStores(store), nil)
+			reader := service.NewReaderApplications(readerServiceTestStores(store), nil)
 			RegisterReaderRoutes(router, readerTestRoutes(reader))
 
 			response := httptest.NewRecorder()

@@ -64,6 +64,14 @@ linters:
               desc: middleware belongs to HTTP assembly
             - pkg: "webtag/internal/httperr"
               desc: use internal/problem below handler; httperr is the HTTP adapter
+        reader-application-transport-boundary:
+          files:
+            - "internal/service/reader*.go"
+            - "**/internal/service/reader*.go"
+            - "!$test"
+          deny:
+            - pkg: "webtag/internal/dto"
+              desc: Reader applications expose transport-neutral commands and model values; handlers own HTTP DTO mapping
     gosec:
       # G104：unhandled errors 已经由 errcheck 负责，重复报噪音大
       # G404：math/rand 用于非加密场景（jitter、采样），项目内已有判断

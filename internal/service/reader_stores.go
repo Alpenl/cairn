@@ -35,9 +35,6 @@ type ReaderInboxStore interface {
 	PatchInbox(context.Context, model.ReaderInboxPatch) (*model.ReaderInbox, error)
 	DiscardInbox(context.Context, uuid.UUID) error
 	RestoreInbox(context.Context, uuid.UUID) error
-	ConfirmInbox(context.Context, uuid.UUID, *int64) (uuid.UUID, error)
-	BulkConfirmInbox(context.Context, []model.ReaderInboxBulkConfirmation) ([]model.ReaderInboxBulkResult, error)
-	ConfirmAIProposals(context.Context, model.ReaderInboxPartition) (model.ReaderInboxAIProposalConfirmation, error)
 	BulkDiscardInbox(context.Context, []uuid.UUID) ([]model.ReaderInboxBulkResult, error)
 }
 
@@ -53,7 +50,6 @@ type ReaderLibraryStore interface {
 	PatchEngagement(context.Context, model.ReaderEngagementPatch) (*model.ReaderEngagement, error)
 	LoadHomeAggregate(context.Context) (model.ReaderHomeAggregate, error)
 	ListFeedWithSources(context.Context, string, string, []string, int) (*model.ReaderFeedPage, error)
-	FeedbackFeed(context.Context, string, string) (model.ReaderFeedFeedback, error)
 	RelatedTags(context.Context, *uuid.UUID, int) ([]string, error)
 	ListActivity(context.Context, model.ReaderActivityQuery) (model.ReaderActivityPage, error)
 	UpdateLinkMetadata(context.Context, model.ReaderLinkMetadataPatch) (model.ReaderLinkMetadataUpdate, error)
@@ -62,7 +58,6 @@ type ReaderLibraryStore interface {
 
 type ReaderHostStore interface {
 	SoftDeleteHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error)
-	RestoreHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error)
 	PurgeHost(context.Context, model.ReaderHostKind, uuid.UUID, uuid.UUID) error
 	ListTrash(context.Context, *model.ReaderHostKind, string, int) ([]model.ReaderTrashItem, int, string, error)
 }

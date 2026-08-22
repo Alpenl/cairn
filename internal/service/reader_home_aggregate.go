@@ -4,19 +4,30 @@ import (
 	"context"
 	"fmt"
 
-	"webtag/internal/dto"
 	"webtag/internal/model"
 )
 
+type ReaderHomeResult struct {
+	Today           string
+	Summary         string
+	Counts          map[string]int
+	ContinueReading []model.ReaderFeedItem
+	RecentThoughts  []model.ReaderThought
+	Todos           []model.ReaderTodo
+	Freshness       model.ReaderHomeFreshness
+	Partial         bool
+	Stale           bool
+}
+
 // HomeAggregate is the single service call boundary for the Home surface. The
 // repository returns one transactionally coherent result; this method only
-// maps domain projections to the existing Home DTO and derives the display
-// summary. It deliberately does not reconcile through ListTodos, because that
+// derives the stable Home summary and freshness state. It deliberately does
+// not reconcile through ListTodos, because that
 // would reopen the multi-read and multi-snapshot behavior this seam replaces.
-func (s *ReaderVNextService) HomeAggregate(ctx context.Context) (dto.ReaderHomeResponse, error) {
+func (s *ReaderLibraryApplication) HomeAggregate(ctx context.Context) (ReaderHomeResult, error) {
 	aggregate, err := s.library.LoadHomeAggregate(ctx)
 	if err != nil {
-		return dto.ReaderHomeResponse{}, mapReaderError(err)
+		return ReaderHomeResult{}, mapReaderError(err)
 	}
 
 	var counts map[string]int
@@ -34,37 +45,15 @@ func (s *ReaderVNextService) HomeAggregate(ctx context.Context) (dto.ReaderHomeR
 	if hasPending && hasTodos {
 		summary = formatHomeSummary(today, pendingCount, todoCount)
 	}
-	freshness, partial, stale := homeFreshnessWireState(aggregate.Freshness)
+	freshness, partial, stale := homeFreshnessState(aggregate.Freshness)
 
-	var reading []dto.ReaderFeedItemResponse
-	if aggregate.ContinueReading != nil {
-		reading = make([]dto.ReaderFeedItemResponse, 0, len(aggregate.ContinueReading))
-		for _, item := range aggregate.ContinueReading {
-			reading = append(reading, feedItemResponse(item))
-		}
-	}
-	var recent []dto.ReaderThoughtResponse
-	if aggregate.RecentThoughts != nil {
-		recent = make([]dto.ReaderThoughtResponse, 0, len(aggregate.RecentThoughts))
-		for _, thought := range aggregate.RecentThoughts {
-			recent = append(recent, thoughtResponse(thought))
-		}
-	}
-	var todos []dto.ReaderTodoResponse
-	if aggregate.Todos != nil {
-		todos = make([]dto.ReaderTodoResponse, 0, len(aggregate.Todos))
-		for _, todo := range aggregate.Todos {
-			todos = append(todos, todoResponse(todo))
-		}
-	}
-
-	return dto.ReaderHomeResponse{
+	return ReaderHomeResult{
 		Today:           today,
 		Summary:         summary,
 		Counts:          counts,
-		ContinueReading: reading,
-		RecentThoughts:  recent,
-		Todos:           todos,
+		ContinueReading: aggregate.ContinueReading,
+		RecentThoughts:  aggregate.RecentThoughts,
+		Todos:           aggregate.Todos,
 		Freshness:       freshness,
 		Partial:         partial,
 		Stale:           stale,
@@ -80,19 +69,19 @@ func homeCount(counts map[string]int, keys ...string) (int, bool) {
 	return 0, false
 }
 
-func homeFreshnessWireState(freshness model.ReaderHomeFreshness) (string, bool, bool) {
+func homeFreshnessState(freshness model.ReaderHomeFreshness) (model.ReaderHomeFreshness, bool, bool) {
 	switch freshness {
 	case model.ReaderHomeFreshnessFresh:
-		return string(model.ReaderHomeFreshnessFresh), false, false
+		return model.ReaderHomeFreshnessFresh, false, false
 	case model.ReaderHomeFreshnessStale:
-		return string(model.ReaderHomeFreshnessStale), false, true
+		return model.ReaderHomeFreshnessStale, false, true
 	case model.ReaderHomeFreshnessPartial:
-		return string(model.ReaderHomeFreshnessPartial), true, false
+		return model.ReaderHomeFreshnessPartial, true, false
 	default:
 		// An absent or future repository state is not evidence of freshness.
 		// Keep the compatibility stale flag false because an unverified result
 		// is not necessarily old; partial is the closed wire state for it.
-		return string(model.ReaderHomeFreshnessPartial), true, false
+		return model.ReaderHomeFreshnessPartial, true, false
 	}
 }
 

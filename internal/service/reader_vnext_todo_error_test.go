@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
 	"webtag/internal/repository"
@@ -50,9 +49,9 @@ func TestReaderTodoPatchErrorContract(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &readerTodoPatchErrorStore{err: tt.repository}
-			service := NewReaderVNextService(readerTestStores(store), nil)
-			id := uuid.New().String()
-			_, err := service.PatchTodo(context.Background(), id, dto.ReaderTodoPatchRequest{})
+			service := newReaderTestFeatureSet(readerTestStores(store), nil)
+			id := uuid.New()
+			_, err := service.PatchTodo(context.Background(), ReaderTodoPatchCommand{ID: id})
 			carrier, ok := httperr.As(err)
 			if !ok {
 				t.Fatalf("PatchTodo() error = %v, want HTTP error", err)
@@ -74,36 +73,17 @@ func TestReaderTodoPatchErrorContract(t *testing.T) {
 	}
 }
 
-func TestReaderTodoPatchRejectsInvalidIDBeforeStore(t *testing.T) {
-	store := &readerTodoPatchErrorStore{}
-	service := NewReaderVNextService(readerTestStores(store), nil)
-
-	_, err := service.PatchTodo(context.Background(), "not-a-uuid", dto.ReaderTodoPatchRequest{})
-	carrier, ok := httperr.As(err)
-	if !ok || carrier.HTTPStatus() != http.StatusUnprocessableEntity {
-		t.Fatalf("PatchTodo() error = %v, want 422 HTTP error", err)
-	}
-	coder, ok := carrier.(httperr.ErrorCoder)
-	if !ok {
-		t.Fatalf("PatchTodo() error = %v, want coded HTTP error", err)
-	}
-	if coder.HTTPErrorCode() != "invalid_todo_id" {
-		t.Fatalf("PatchTodo() error code = %q, want invalid_todo_id", coder.HTTPErrorCode())
-	}
-	if store.calls != 0 {
-		t.Fatalf("PatchTodo() store calls = %d, want 0", store.calls)
-	}
-}
-
 func TestReaderTodoPatchPassesNegativeHostRevisionToProjectedCAS(t *testing.T) {
 	negative := int64(-1)
 	done := true
 	store := &readerTodoPatchCaptureStore{err: repository.ErrRevisionConflict}
-	service := NewReaderVNextService(readerTestStores(store), nil)
+	service := newReaderTestFeatureSet(readerTestStores(store), nil)
 
-	_, err := service.PatchTodo(context.Background(), uuid.New().String(), dto.ReaderTodoPatchRequest{
-		Done:                 &done,
-		ExpectedHostRevision: &negative,
+	_, err := service.PatchTodo(context.Background(), ReaderTodoPatchCommand{
+		ID:                      uuid.New(),
+		Done:                    &done,
+		ExpectedHostRevision:    &negative,
+		ExpectedHostRevisionSet: true,
 	})
 	carrier, ok := httperr.As(err)
 	if !ok || carrier.HTTPStatus() != http.StatusConflict {

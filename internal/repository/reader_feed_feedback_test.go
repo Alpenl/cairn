@@ -101,7 +101,7 @@ func TestUnsaveSubscriptionTrashesLastFeedManagedLink(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	expectLinkThoughtTodoProjectionRefresh(mock, linkID)
 
-	visibleLink, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID)
+	visibleLink, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID, nil)
 	if err != nil || visibleLink != nil {
 		t.Fatalf("unsaveSubscriptionFeedItem() = %+v, %v", visibleLink, err)
 	}
@@ -127,7 +127,7 @@ func TestUnsaveSubscriptionPreservesIndependentLibraryLink(t *testing.T) {
 	mock.ExpectQuery("SELECT EXISTS.*reader_feed_saves").WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"exists"}).AddRow(false))
 
-	if _, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID); err != nil {
+	if _, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID, nil); err != nil {
 		t.Fatalf("unsaveSubscriptionFeedItem() error = %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -152,7 +152,7 @@ func TestUnsaveSubscriptionReturnsSeparateAnalyzeLink(t *testing.T) {
 	mock.ExpectQuery("SELECT EXISTS.*reader_feed_saves").WithArgs(savedLinkID).
 		WillReturnRows(mock.NewRows([]string{"exists"}).AddRow(false))
 
-	visibleLink, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID)
+	visibleLink, err := NewPGXReaderVNextRepository(mock).unsaveSubscriptionFeedItem(t.Context(), mock, itemID, nil)
 	if err != nil || visibleLink == nil || *visibleLink != analyzedLinkID {
 		t.Fatalf("unsaveSubscriptionFeedItem() = %v, %v; want Analyze Link %s", visibleLink, err, analyzedLinkID)
 	}

@@ -1,12 +1,15 @@
-package service
+package handler
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"webtag/internal/dto"
 	"webtag/internal/model"
+	"webtag/internal/service"
 )
 
 func TestReaderTodoSourceHrefUsesCanonicalReaderRoutes(t *testing.T) {
@@ -30,7 +33,6 @@ func TestReaderTodoSourceHrefUsesCanonicalReaderRoutes(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := readerTodoSourceHref(tc.item)
@@ -44,6 +46,22 @@ func TestReaderTodoSourceHrefUsesCanonicalReaderRoutes(t *testing.T) {
 				t.Fatalf("readerTodoSourceHref() = %v, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestReaderTodoRoutesRejectInvalidIDBeforeApplicationStore(t *testing.T) {
+	t.Parallel()
+
+	store := &readerTodoPatchPresenceStore{}
+	applications := service.NewReaderApplications(readerServiceTestStores(store), nil)
+	routes := NewReaderTodoRoutes(applications.Todos)
+
+	_, err := routes.PatchTodo(context.Background(), "not-a-uuid", dto.ReaderTodoPatchRequest{})
+	if err == nil {
+		t.Fatal("PatchTodo() error = nil for invalid id")
+	}
+	if len(store.commands) != 0 {
+		t.Fatalf("PatchTodo() store calls = %d, want 0", len(store.commands))
 	}
 }
 

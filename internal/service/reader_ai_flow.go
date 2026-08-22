@@ -5,26 +5,38 @@ import (
 	"strconv"
 	"strings"
 
-	"webtag/internal/dto"
 	"webtag/internal/model"
 	"webtag/internal/problem"
 )
 
-// validateReaderAIRequest normalises and bounds the request before any saved
-// content is resolved, keeping the wire contract deterministic when AI is off.
-func validateReaderAIRequest(ctx context.Context, request dto.ReaderAIRequest) (prompt, scope, selected string, err error) {
-	prompt = strings.TrimSpace(request.Prompt)
+type ReaderAICommand struct {
+	Prompt       string
+	Scope        string
+	LinkID       string
+	SelectedText string
+}
+
+type ReaderAIResult struct {
+	Enabled bool
+	Answer  string
+	Model   string
+}
+
+// validateReaderAICommand normalises and bounds the command before any saved
+// content is resolved, keeping capability-off behavior deterministic.
+func validateReaderAICommand(ctx context.Context, command ReaderAICommand) (prompt, scope, selected string, err error) {
+	prompt = strings.TrimSpace(command.Prompt)
 	if prompt == "" {
 		return "", "", "", problem.NewWithCode(problem.Invalid, "ai_prompt_required", "prompt is required")
 	}
-	scope = strings.TrimSpace(request.Scope)
+	scope = strings.TrimSpace(command.Scope)
 	if scope == "" {
 		scope = "general"
 	}
 	if scope != "general" && scope != "selection" && scope != "thought" {
 		return "", "", "", problem.NewWithCode(problem.Invalid, "ai_scope_invalid", "unsupported AI scope")
 	}
-	selected = strings.TrimSpace(request.SelectedText)
+	selected = strings.TrimSpace(command.SelectedText)
 	if scope == "selection" && selected == "" {
 		return "", "", "", problem.NewWithCode(problem.Invalid, "ai_selection_required", "selected text is required for selection scope")
 	}
@@ -36,9 +48,9 @@ func validateReaderAIRequest(ctx context.Context, request dto.ReaderAIRequest) (
 
 // composeReaderAIPrompt appends the untrusted selection and link context and
 // enforces the context bound.
-func (s *ReaderVNextService) composeReaderAIPrompt(ctx context.Context, request dto.ReaderAIRequest, prompt, selected string) (string, error) {
+func (s *ReaderLibraryApplication) composeReaderAIPrompt(ctx context.Context, command ReaderAICommand, prompt, selected string) (string, error) {
 	var linkContext *model.ReaderAIContext
-	if rawLinkID := strings.TrimSpace(request.LinkID); rawLinkID != "" {
+	if rawLinkID := strings.TrimSpace(command.LinkID); rawLinkID != "" {
 		linkID, err := readerUUID(rawLinkID, "link_id")
 		if err != nil {
 			return "", err
@@ -60,7 +72,7 @@ func (s *ReaderVNextService) composeReaderAIPrompt(ctx context.Context, request 
 	return prompt, nil
 }
 
-func (s *ReaderVNextService) completeReaderAI(ctx context.Context, prompt, scope string) (answer, modelName string, err error) {
+func (s *ReaderLibraryApplication) completeReaderAI(ctx context.Context, prompt, scope string) (answer, modelName string, err error) {
 	answer, modelName, err = s.ai.Complete(ctx, prompt, scope)
 	if err != nil {
 		return "", "", mapReaderAIError(err)
@@ -75,27 +87,27 @@ func (s *ReaderVNextService) completeReaderAI(ctx context.Context, prompt, scope
 	return answer, modelName, nil
 }
 
-func (s *ReaderVNextService) CompleteAI(ctx context.Context, request dto.ReaderAIRequest) (dto.ReaderAIResponse, error) {
-	prompt, scope, selected, err := validateReaderAIRequest(ctx, request)
+func (s *ReaderLibraryApplication) CompleteAI(ctx context.Context, command ReaderAICommand) (ReaderAIResult, error) {
+	prompt, scope, selected, err := validateReaderAICommand(ctx, command)
 	if err != nil {
-		return dto.ReaderAIResponse{}, err
+		return ReaderAIResult{}, err
 	}
 	// Capability-off is an explicit privacy boundary: do not resolve a link
 	// identity into content, tags, or thoughts when no provider is available.
 	// Basic request validation above remains useful to keep the wire contract
 	// deterministic without touching saved content.
 	if s.ai == nil {
-		return dto.ReaderAIResponse{Enabled: false}, nil
+		return ReaderAIResult{Enabled: false}, nil
 	}
-	prompt, err = s.composeReaderAIPrompt(ctx, request, prompt, selected)
+	prompt, err = s.composeReaderAIPrompt(ctx, command, prompt, selected)
 	if err != nil {
-		return dto.ReaderAIResponse{}, err
+		return ReaderAIResult{}, err
 	}
 	answer, modelName, err := s.completeReaderAI(ctx, prompt, scope)
 	if err != nil {
-		return dto.ReaderAIResponse{}, err
+		return ReaderAIResult{}, err
 	}
-	return dto.ReaderAIResponse{Enabled: true, Answer: answer, Model: strings.TrimSpace(modelName)}, nil
+	return ReaderAIResult{Enabled: true, Answer: answer, Model: strings.TrimSpace(modelName)}, nil
 }
 
 func readerAIContextText(context model.ReaderAIContext) string {

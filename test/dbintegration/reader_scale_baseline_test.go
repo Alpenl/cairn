@@ -40,6 +40,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"webtag/internal/handler"
 	"webtag/internal/model"
 	"webtag/internal/repository"
 	"webtag/internal/service"
@@ -215,8 +216,10 @@ func newReaderScaleTracedPool(t *testing.T, tracer *readerScaleTracer) *pgxpool.
 // ------------------------------------------------------------------- paths
 
 type readerScaleDeps struct {
-	repo *repository.PGXReaderVNextRepository
-	svc  *service.ReaderVNextService
+	repo    *repository.PGXReaderVNextRepository
+	library handler.ReaderLibraryRoutes
+	todos   handler.ReaderTodoRoutes
+	inbox   handler.ReaderInboxRoutes
 }
 
 // readerScalePath is one measured request-equivalent. run must perform exactly
@@ -241,7 +244,7 @@ func readerScalePaths() []readerScalePath {
 			note:         "GET /api/home: one read-only repeatable-read snapshot over the stored projection; it no longer reconciles or writes",
 			planSelector: "FROM reader_thoughts t",
 			run: func(ctx context.Context, deps readerScaleDeps) (any, error) {
-				return deps.svc.HomeAggregate(ctx)
+				return deps.library.Home(ctx)
 			},
 		},
 		{
@@ -249,7 +252,7 @@ func readerScalePaths() []readerScalePath {
 			note:         "GET /api/todos: one keyset page straight off reader_todos; the read no longer parses bodies or reconciles",
 			planSelector: "FROM reader_todos",
 			run: func(ctx context.Context, deps readerScaleDeps) (any, error) {
-				return deps.svc.ListTodos(ctx, "", 30)
+				return deps.todos.ListTodos(ctx, "", 30)
 			},
 		},
 		{
@@ -257,7 +260,7 @@ func readerScalePaths() []readerScalePath {
 			note:         "GET /api/inbox: first screen of the active partition; list rows carry a bounded preview, never the body or full note",
 			planSelector: "FROM reader_inbox",
 			run: func(ctx context.Context, deps readerScaleDeps) (any, error) {
-				return deps.svc.ListInbox(ctx, string(model.ReaderInboxPartitionActive), "", 30)
+				return deps.inbox.ListInbox(ctx, string(model.ReaderInboxPartitionActive), "", 30)
 			},
 		},
 		{
@@ -282,7 +285,7 @@ func readerScalePaths() []readerScalePath {
 			// for, and it is the first statement mentioning feed feedback.
 			planSelector: "reader_feed_hides",
 			run: func(ctx context.Context, deps readerScaleDeps) (any, error) {
-				return deps.svc.FeedWithSources(ctx, "recommended", "", nil, 30)
+				return deps.library.FeedWithSources(ctx, "recommended", "", nil, 30)
 			},
 		},
 		{
@@ -441,7 +444,8 @@ func TestReaderScaleFixtureContract(t *testing.T) {
 	tracer := &readerScaleTracer{}
 	tracedPool := newReaderScaleTracedPool(t, tracer)
 	repo := repository.NewPGXReaderVNextRepository(tracedPool)
-	deps := readerScaleDeps{repo: repo, svc: service.NewReaderVNextService(postgresReaderStores(repo), nil)}
+	applications := service.NewReaderApplications(postgresReaderStores(repo), nil)
+	deps := readerScaleDeps{repo: repo, library: handler.NewReaderLibraryRoutes(applications.Library), todos: handler.NewReaderTodoRoutes(applications.Todos), inbox: handler.NewReaderInboxRoutes(applications.Inbox)}
 	ctx := t.Context()
 
 	queryCounts := map[string]int{}
@@ -683,7 +687,8 @@ func TestReaderScaleHotPathMeasurements(t *testing.T) {
 	tracer := &readerScaleTracer{}
 	tracedPool := newReaderScaleTracedPool(t, tracer)
 	repo := repository.NewPGXReaderVNextRepository(tracedPool)
-	deps := readerScaleDeps{repo: repo, svc: service.NewReaderVNextService(postgresReaderStores(repo), nil)}
+	applications := service.NewReaderApplications(postgresReaderStores(repo), nil)
+	deps := readerScaleDeps{repo: repo, library: handler.NewReaderLibraryRoutes(applications.Library), todos: handler.NewReaderTodoRoutes(applications.Todos), inbox: handler.NewReaderInboxRoutes(applications.Inbox)}
 	ctx := t.Context()
 
 	var version, sharedBuffers, blockSize string

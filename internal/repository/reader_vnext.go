@@ -8,38 +8,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"webtag/internal/database"
-	"webtag/internal/model"
 )
 
 type PGXReaderVNextRepository struct {
-	db                 database.Querier
-	linkLifecycleQueue ReaderLinkLifecycleQueue
+	db database.Querier
 }
 
 func NewPGXReaderVNextRepository(db database.Querier) *PGXReaderVNextRepository {
 	return &PGXReaderVNextRepository{db: db}
-}
-
-func NewPGXReaderVNextRepositoryWithLinkLifecycle(
-	db database.Querier,
-	queue ReaderLinkLifecycleQueue,
-) *PGXReaderVNextRepository {
-	if queue == nil {
-		panic("repository: nil Reader Link lifecycle queue")
-	}
-	return &PGXReaderVNextRepository{db: db, linkLifecycleQueue: queue}
-}
-
-// ReaderLinkLifecycleQueue is the transaction-bound River port required when
-// Reader entry points trash or restore a Link. It stays narrow so the
-// repository does not depend on the worker package.
-type ReaderLinkLifecycleQueue interface {
-	EnqueueTx(context.Context, pgx.Tx, model.ParseAttempt) error
-	CancelAllActiveTx(context.Context, pgx.Tx, uuid.UUID) error
 }
 
 type readerTxBeginner interface {

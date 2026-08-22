@@ -496,6 +496,55 @@ func (r *PGXReaderVNextRepository) appendSubscriptionFeedItems(ctx context.Conte
 }
 
 func (r *PGXReaderVNextRepository) FeedbackFeed(ctx context.Context, itemKey, action string) (model.ReaderFeedFeedback, error) {
+	return r.feedbackFeed(ctx, itemKey, action, nil)
+}
+
+// FeedbackFeedTx applies feed feedback in a caller-owned transaction. The
+// lifecycle callback is used only when a save restores, or an unsave trashes,
+// a Link whose durable work must change atomically with the feed association.
+func (r *PGXReaderVNextRepository) FeedbackFeedTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	itemKey string,
+	action string,
+	lifecycle ReaderLinkLifecycle,
+) (model.ReaderFeedFeedback, error) {
+	return r.feedbackFeedOn(ctx, tx, itemKey, action, lifecycle)
+}
+
+func (r *PGXReaderVNextRepository) feedbackFeed(
+	ctx context.Context,
+	itemKey string,
+	action string,
+	lifecycle ReaderLinkLifecycle,
+) (model.ReaderFeedFeedback, error) {
+	itemKey = strings.TrimSpace(itemKey)
+	kind, _, err := parseReaderFeedItemKey(itemKey)
+	if err != nil {
+		return model.ReaderFeedFeedback{}, err
+	}
+	if err := validateReaderFeedAction(kind, action); err != nil {
+		return model.ReaderFeedFeedback{}, err
+	}
+	var result model.ReaderFeedFeedback
+	err = r.withTx(ctx, func(db database.Querier) error {
+		var err error
+		result, err = r.feedbackFeedOn(ctx, db, itemKey, action, lifecycle)
+		return err
+	})
+	if err != nil {
+		return model.ReaderFeedFeedback{}, err
+	}
+	return result, nil
+}
+
+func (r *PGXReaderVNextRepository) feedbackFeedOn(
+	ctx context.Context,
+	db database.Querier,
+	itemKey string,
+	action string,
+	lifecycle ReaderLinkLifecycle,
+) (model.ReaderFeedFeedback, error) {
 	itemKey = strings.TrimSpace(itemKey)
 	kind, id, err := parseReaderFeedItemKey(itemKey)
 	if err != nil {
@@ -506,42 +555,41 @@ func (r *PGXReaderVNextRepository) FeedbackFeed(ctx context.Context, itemKey, ac
 	}
 
 	result := model.ReaderFeedFeedback{ItemKey: itemKey, Action: action}
-	err = r.withTx(ctx, func(tx database.Querier) error {
-		if err := ensureReaderFeedItem(ctx, tx, kind, id); err != nil {
-			return err
-		}
-		if action == "save" && kind == "subscription" {
-			linkID, err := r.saveSubscriptionFeedItem(ctx, tx, id)
-			if err != nil {
-				return err
-			}
-			result.LinkID = &linkID
-		}
-		if action == "unsave" && kind == "subscription" {
-			linkID, err := r.unsaveSubscriptionFeedItem(ctx, tx, id)
-			if err != nil {
-				return err
-			}
-			result.LinkID = linkID
-		}
-		if action == "hide" {
-			if _, err := tx.Exec(ctx, `INSERT INTO reader_feed_hides (item_key) VALUES ($1) ON CONFLICT (item_key) DO UPDATE SET created_at=NOW()`, itemKey); err != nil {
-				return fmt.Errorf("hide reader feed item: %w", err)
-			}
-		} else if _, err := tx.Exec(ctx, `DELETE FROM reader_feed_hides WHERE item_key=$1`, itemKey); err != nil {
-			return fmt.Errorf("clear reader feed hide: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
+	if err := ensureReaderFeedItem(ctx, db, kind, id); err != nil {
 		return model.ReaderFeedFeedback{}, err
+	}
+	if action == "save" && kind == "subscription" {
+		linkID, err := r.saveSubscriptionFeedItem(ctx, db, id, lifecycle)
+		if err != nil {
+			return model.ReaderFeedFeedback{}, err
+		}
+		result.LinkID = &linkID
+	}
+	if action == "unsave" && kind == "subscription" {
+		linkID, err := r.unsaveSubscriptionFeedItem(ctx, db, id, lifecycle)
+		if err != nil {
+			return model.ReaderFeedFeedback{}, err
+		}
+		result.LinkID = linkID
+	}
+	if action == "hide" {
+		if _, err := db.Exec(ctx, `INSERT INTO reader_feed_hides (item_key) VALUES ($1) ON CONFLICT (item_key) DO UPDATE SET created_at=NOW()`, itemKey); err != nil {
+			return model.ReaderFeedFeedback{}, fmt.Errorf("hide reader feed item: %w", err)
+		}
+	} else if _, err := db.Exec(ctx, `DELETE FROM reader_feed_hides WHERE item_key=$1`, itemKey); err != nil {
+		return model.ReaderFeedFeedback{}, fmt.Errorf("clear reader feed hide: %w", err)
 	}
 	return result, nil
 }
 
 // saveSubscriptionFeedItem atomically reuses the canonical URL identity or
 // creates one Feed-managed reading link, then records the save association.
-func (r *PGXReaderVNextRepository) saveSubscriptionFeedItem(ctx context.Context, db database.Querier, feedItemID uuid.UUID) (uuid.UUID, error) {
+func (r *PGXReaderVNextRepository) saveSubscriptionFeedItem(
+	ctx context.Context,
+	db database.Querier,
+	feedItemID uuid.UUID,
+	lifecycle ReaderLinkLifecycle,
+) (uuid.UUID, error) {
 	var url, title, summary string
 	if err := db.QueryRow(ctx, `SELECT url,COALESCE(title,''),COALESCE(summary,'') FROM feed_items WHERE id=$1 FOR UPDATE`, feedItemID).Scan(&url, &title, &summary); err != nil {
 		return uuid.Nil, ErrNotFound
@@ -558,7 +606,7 @@ func (r *PGXReaderVNextRepository) saveSubscriptionFeedItem(ctx context.Context,
 	var existingLinkID uuid.UUID
 	err = db.QueryRow(ctx, `SELECT link_id FROM reader_feed_saves WHERE feed_item_id=$1`, feedItemID).Scan(&existingLinkID)
 	if err == nil {
-		if _, err := r.restoreLinkLifecycleOn(ctx, db, existingLinkID); err != nil {
+		if _, err := r.restoreLinkLifecycleOn(ctx, db, existingLinkID, lifecycle); err != nil {
 			return uuid.Nil, err
 		}
 		// The association may have disappeared while this save waited for the
@@ -583,7 +631,7 @@ func (r *PGXReaderVNextRepository) saveSubscriptionFeedItem(ctx context.Context,
 		}
 	} else {
 		linkID = *matched
-		if _, err := r.restoreLinkLifecycleOn(ctx, db, linkID); err != nil {
+		if _, err := r.restoreLinkLifecycleOn(ctx, db, linkID, lifecycle); err != nil {
 			return uuid.Nil, err
 		}
 	}
@@ -593,7 +641,12 @@ func (r *PGXReaderVNextRepository) saveSubscriptionFeedItem(ctx context.Context,
 	return linkID, nil
 }
 
-func (r *PGXReaderVNextRepository) unsaveSubscriptionFeedItem(ctx context.Context, db database.Querier, feedItemID uuid.UUID) (*uuid.UUID, error) {
+func (r *PGXReaderVNextRepository) unsaveSubscriptionFeedItem(
+	ctx context.Context,
+	db database.Querier,
+	feedItemID uuid.UUID,
+	lifecycle ReaderLinkLifecycle,
+) (*uuid.UUID, error) {
 	var savedLink, analyzedLink pgtype.UUID
 	err := db.QueryRow(ctx, `SELECT save.link_id,item.link_id
 		FROM feed_items item LEFT JOIN reader_feed_saves save ON save.feed_item_id=item.id
@@ -629,7 +682,7 @@ func (r *PGXReaderVNextRepository) unsaveSubscriptionFeedItem(ctx context.Contex
 		return nil, err
 	}
 	if !remaining && feedManaged {
-		err = r.trashUnclaimedFeedManagedLinkOn(ctx, db, linkID, linkStatus)
+		err = r.trashUnclaimedFeedManagedLinkOn(ctx, db, linkID, linkStatus, lifecycle)
 	}
 	if err != nil {
 		return nil, err
@@ -642,8 +695,9 @@ func (r *PGXReaderVNextRepository) trashUnclaimedFeedManagedLinkOn(
 	db database.Querier,
 	linkID uuid.UUID,
 	status model.LinkStatus,
+	lifecycle ReaderLinkLifecycle,
 ) error {
-	if r.linkLifecycleQueue == nil {
+	if lifecycle == nil {
 		if status == model.LinkStatusPending || status == model.LinkStatusProcessing {
 			return errors.New("trash Feed-managed in-flight Link: lifecycle queue is not configured")
 		}
@@ -653,7 +707,7 @@ func (r *PGXReaderVNextRepository) trashUnclaimedFeedManagedLinkOn(
 	if !ok {
 		return errors.New("trash Feed-managed Link: transaction-bound lifecycle queue requires pgx.Tx")
 	}
-	if err := r.linkLifecycleQueue.CancelAllActiveTx(ctx, tx, linkID); err != nil {
+	if err := lifecycle(ctx, tx, ReaderLinkLifecycleChange{LinkID: linkID}); err != nil {
 		return fmt.Errorf("cancel Feed-managed Link work: %w", err)
 	}
 	return terminalizeAndDeleteLockedLinkOn(ctx, db, linkID)

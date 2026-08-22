@@ -12,44 +12,45 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/text/cases"
 
-	"webtag/internal/dto"
 	"webtag/internal/model"
 	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
 
-func (s *ReaderVNextService) GetEngagement(ctx context.Context, rawID string) (dto.ReaderEngagementResponse, error) {
-	id, err := readerUUID(rawID, "link_id")
-	if err != nil {
-		return dto.ReaderEngagementResponse{}, err
-	}
+type ReaderActivityResult struct {
+	Kind       string
+	Items      []model.ReaderActivity
+	NextCursor string
+}
+
+type ReaderLinkMetadataCommand struct {
+	LinkID           uuid.UUID
+	Title            *string
+	Summary          *string
+	Tags             []string
+	ExpectedRevision int64
+}
+
+func (s *ReaderLibraryApplication) GetEngagement(ctx context.Context, id uuid.UUID) (model.ReaderEngagement, error) {
 	item, err := s.library.GetEngagement(ctx, id)
 	if err != nil {
-		return dto.ReaderEngagementResponse{}, mapReaderError(err)
+		return model.ReaderEngagement{}, mapReaderError(err)
 	}
-	return engagementResponse(*item), nil
+	return *item, nil
 }
 
-func (s *ReaderVNextService) PatchEngagement(ctx context.Context, rawID string, request dto.ReaderEngagementRequest) (dto.ReaderEngagementResponse, error) {
-	id, err := readerUUID(rawID, "link_id")
+func (s *ReaderLibraryApplication) PatchEngagement(ctx context.Context, patch model.ReaderEngagementPatch) (model.ReaderEngagement, error) {
+	if patch.Read == nil && patch.Progress == nil && patch.ReadLater == nil {
+		return model.ReaderEngagement{}, problem.NewWithCode(problem.Invalid, "engagement_patch_empty", "at least one engagement field is required")
+	}
+	if patch.Progress != nil && (math.IsNaN(float64(*patch.Progress)) || math.IsInf(float64(*patch.Progress), 0) || *patch.Progress < 0 || *patch.Progress > 1) {
+		return model.ReaderEngagement{}, problem.NewWithCode(problem.Invalid, "invalid_progress", "progress must be between 0 and 1")
+	}
+	item, err := s.library.PatchEngagement(ctx, patch)
 	if err != nil {
-		return dto.ReaderEngagementResponse{}, err
+		return model.ReaderEngagement{}, mapReaderError(err)
 	}
-	if request.Read == nil && request.Progress == nil && request.ReadLater == nil {
-		return dto.ReaderEngagementResponse{}, problem.NewWithCode(problem.Invalid, "engagement_patch_empty", "at least one engagement field is required")
-	}
-	if request.Progress != nil && (math.IsNaN(float64(*request.Progress)) || math.IsInf(float64(*request.Progress), 0) || *request.Progress < 0 || *request.Progress > 1) {
-		return dto.ReaderEngagementResponse{}, problem.NewWithCode(problem.Invalid, "invalid_progress", "progress must be between 0 and 1")
-	}
-	item, err := s.library.PatchEngagement(ctx, model.ReaderEngagementPatch{LinkID: id, Read: request.Read, Progress: request.Progress, ReadLater: request.ReadLater})
-	if err != nil {
-		return dto.ReaderEngagementResponse{}, mapReaderError(err)
-	}
-	return engagementResponse(*item), nil
-}
-
-func engagementResponse(item model.ReaderEngagement) dto.ReaderEngagementResponse {
-	return dto.ReaderEngagementResponse{LinkID: item.LinkID.String(), Read: item.Read, Progress: item.Progress, ReadLater: item.ReadLater, LastOpened: item.LastOpened, UpdatedAt: item.UpdatedAt}
+	return *item, nil
 }
 
 type readerFeedActionIdentity struct {
@@ -83,51 +84,23 @@ func readerFeedActionIdentityForKey(itemKey string) (readerFeedActionIdentity, e
 	return readerFeedActionIdentity{key: itemKey, kind: kind, source: source, id: id}, nil
 }
 
-func feedItemResponse(item model.ReaderFeedItem) dto.ReaderFeedItemResponse {
-	out := dto.ReaderFeedItemResponse{
-		Key:         item.Key,
-		Source:      item.Source,
-		ResourceKey: item.ResourceIdentity(),
-		Title:       item.Title,
-		Summary:     item.Summary,
-		URL:         item.URL,
-		Read:        item.Read,
-		ReadLater:   item.ReadLater,
-		Saved:       item.Saved,
-		EventAt:     item.VisibleEventAt(),
-	}
-	if item.LinkID != nil {
-		value := item.LinkID.String()
-		out.LinkID = &value
-	}
-	if item.InboxID != nil {
-		value := item.InboxID.String()
-		out.InboxID = &value
-	}
-	if item.FeedItemID != nil {
-		value := item.FeedItemID.String()
-		out.FeedItemID = &value
-	}
-	return out
-}
-
 // FeedWithSources returns one live mixed-feed page. The cursor carries its mode
 // and source filter, so changing either parameter while paging is rejected.
-func (s *ReaderVNextService) FeedWithSources(ctx context.Context, mode, after string, sources []string, limit int) (dto.ReaderFeedResponse, error) {
+func (s *ReaderLibraryApplication) FeedWithSources(ctx context.Context, mode, after string, sources []string, limit int) (model.ReaderFeedPage, error) {
 	mode = strings.TrimSpace(mode)
 	if err := validateReaderFeedRequestMode(mode); err != nil {
-		return dto.ReaderFeedResponse{}, err
+		return model.ReaderFeedPage{}, err
 	}
 	normalizedSources, err := normalizeReaderFeedSources(sources)
 	if err != nil {
-		return dto.ReaderFeedResponse{}, err
+		return model.ReaderFeedPage{}, err
 	}
 	page, err := s.library.ListFeedWithSources(ctx, mode, after, normalizedSources, limit)
 	if err != nil {
-		return dto.ReaderFeedResponse{}, mapReaderError(err)
+		return model.ReaderFeedPage{}, mapReaderError(err)
 	}
 	if page == nil {
-		return dto.ReaderFeedResponse{}, problem.NewWithCode(problem.Internal, "reader_feed_unavailable", "reader feed returned no page")
+		return model.ReaderFeedPage{}, problem.NewWithCode(problem.Internal, "reader_feed_unavailable", "reader feed returned no page")
 	}
 	responseMode := strings.TrimSpace(page.Mode)
 	if responseMode == "" {
@@ -137,17 +110,10 @@ func (s *ReaderVNextService) FeedWithSources(ctx context.Context, mode, after st
 		}
 	}
 	if responseMode != "recommended" && responseMode != "chronological" {
-		return dto.ReaderFeedResponse{}, problem.NewWithCode(problem.Invalid, "invalid_feed_mode", "unsupported feed mode")
+		return model.ReaderFeedPage{}, problem.NewWithCode(problem.Invalid, "invalid_feed_mode", "unsupported feed mode")
 	}
-	out := dto.ReaderFeedResponse{
-		Items:      make([]dto.ReaderFeedItemResponse, 0, len(page.Items)),
-		NextCursor: page.NextCursor,
-		Mode:       responseMode,
-	}
-	for _, item := range page.Items {
-		out.Items = append(out.Items, feedItemResponse(item))
-	}
-	return out, nil
+	page.Mode = responseMode
+	return *page, nil
 }
 
 func validateReaderFeedRequestMode(mode string) error {
@@ -191,111 +157,87 @@ func normalizeReaderFeedSources(raw []string) ([]string, error) {
 	return result, nil
 }
 
-func (s *ReaderVNextService) FeedbackFeed(ctx context.Context, itemKey, action string) (dto.ReaderFeedFeedbackResponse, error) {
+func (s *ReaderLibraryApplication) FeedbackFeed(ctx context.Context, itemKey, action string) (model.ReaderFeedFeedback, error) {
 	identity, err := readerFeedActionIdentityForKey(itemKey)
 	if err != nil {
-		return dto.ReaderFeedFeedbackResponse{}, err
+		return model.ReaderFeedFeedback{}, err
 	}
 	if action != "hide" && action != "save" && action != "unsave" {
-		return dto.ReaderFeedFeedbackResponse{}, problem.NewWithCode(problem.Invalid, "invalid_feed_action", "unsupported feed action")
+		return model.ReaderFeedFeedback{}, problem.NewWithCode(problem.Invalid, "invalid_feed_action", "unsupported feed action")
 	}
 	if identity.source != "subscription" && (action == "save" || action == "unsave") {
-		return dto.ReaderFeedFeedbackResponse{}, problem.NewWithCode(problem.Invalid, "invalid_feed_item", "only subscription items can be saved")
+		return model.ReaderFeedFeedback{}, problem.NewWithCode(problem.Invalid, "invalid_feed_item", "only subscription items can be saved")
 	}
-	feedback, err := s.library.FeedbackFeed(ctx, identity.key, action)
+	if s.feedFeedback == nil {
+		return model.ReaderFeedFeedback{}, errors.New("reader Feed feedback commands are not configured")
+	}
+	feedback, err := s.feedFeedback.FeedbackFeed(ctx, identity.key, action)
 	if err = mapReaderError(err); err != nil {
-		return dto.ReaderFeedFeedbackResponse{}, err
+		return model.ReaderFeedFeedback{}, err
 	}
-	response := dto.ReaderFeedFeedbackResponse{ItemKey: feedback.ItemKey, Action: feedback.Action}
-	if feedback.LinkID != nil {
-		linkID := feedback.LinkID.String()
-		response.LinkID = &linkID
-	}
-	return response, nil
+	return feedback, nil
 }
 
-func (s *ReaderVNextService) Home(ctx context.Context) (dto.ReaderHomeResponse, error) {
+func (s *ReaderLibraryApplication) Home(ctx context.Context) (ReaderHomeResult, error) {
 	return s.HomeAggregate(ctx)
 }
 
-func (s *ReaderVNextService) RelatedTags(ctx context.Context, rawLinkID string, limit int) (dto.ReaderRelatedTagsResponse, error) {
-	var linkID *uuid.UUID
-	if strings.TrimSpace(rawLinkID) != "" {
-		id, err := readerUUID(rawLinkID, "link_id")
-		if err != nil {
-			return dto.ReaderRelatedTagsResponse{}, err
-		}
-		linkID = &id
-	}
+func (s *ReaderLibraryApplication) RelatedTags(ctx context.Context, linkID *uuid.UUID, limit int) ([]string, error) {
 	items, err := s.library.RelatedTags(ctx, linkID, limit)
 	if err != nil {
-		return dto.ReaderRelatedTagsResponse{}, mapReaderError(err)
+		return nil, mapReaderError(err)
 	}
-	return dto.ReaderRelatedTagsResponse{Items: items}, nil
+	return items, nil
 }
 
-func (s *ReaderVNextService) Activity(ctx context.Context, rawKind, rawAfter string, limit int) (dto.ReaderActivityResponse, error) {
+func (s *ReaderLibraryApplication) Activity(ctx context.Context, rawKind, rawAfter string, limit int) (ReaderActivityResult, error) {
 	kind, err := normalizeReaderActivityKind(rawKind)
 	if err != nil {
-		return dto.ReaderActivityResponse{}, mapReaderError(err)
+		return ReaderActivityResult{}, mapReaderError(err)
 	}
 	after, err := s.decodeReaderActivityCursor(ctx, kind, rawAfter)
 	if err != nil {
-		return dto.ReaderActivityResponse{}, mapReaderError(err)
+		return ReaderActivityResult{}, mapReaderError(err)
 	}
 	if limit <= 0 || limit > 100 {
 		limit = 100
 	}
 	page, err := s.library.ListActivity(ctx, model.ReaderActivityQuery{Kind: kind, After: after, Limit: limit})
 	if err != nil {
-		return dto.ReaderActivityResponse{}, mapReaderError(err)
-	}
-	out := dto.ReaderActivityResponse{
-		Kind:    kind,
-		Tags:    make([]dto.ReaderTagActivityResponse, 0, len(page.Items)),
-		Domains: make([]dto.ReaderDomainActivityResponse, 0, len(page.Items)),
+		return ReaderActivityResult{}, mapReaderError(err)
 	}
 	for _, item := range page.Items {
 		switch item.Kind {
-		case model.ReaderActivityKindTag:
-			out.Tags = append(out.Tags, dto.ReaderTagActivityResponse{Tag: item.Key, LastAt: item.LastAt})
-		case model.ReaderActivityKindDomain:
-			out.Domains = append(out.Domains, dto.ReaderDomainActivityResponse{Domain: item.Key, LastAt: item.LastAt})
+		case model.ReaderActivityKindTag, model.ReaderActivityKindDomain:
 		default:
-			return dto.ReaderActivityResponse{}, mapReaderError(fmt.Errorf("%w: invalid activity row kind", repository.ErrInvalidReaderCursor))
+			return ReaderActivityResult{}, mapReaderError(fmt.Errorf("%w: invalid activity row kind", repository.ErrInvalidReaderCursor))
 		}
 	}
+	result := ReaderActivityResult{Kind: kind, Items: page.Items}
 	if page.HasMore {
 		if len(page.Items) == 0 {
-			return dto.ReaderActivityResponse{}, mapReaderError(fmt.Errorf("%w: empty activity continuation page", repository.ErrInvalidReaderCursor))
+			return ReaderActivityResult{}, mapReaderError(fmt.Errorf("%w: empty activity continuation page", repository.ErrInvalidReaderCursor))
 		}
-		out.NextCursor = s.encodeReaderActivityCursor(ctx, kind, page.Items[len(page.Items)-1])
+		result.NextCursor = s.encodeReaderActivityCursor(ctx, kind, page.Items[len(page.Items)-1])
 	}
-	return out, nil
+	return result, nil
 }
 
-func (s *ReaderVNextService) PatchLinkMetadata(ctx context.Context, rawID string, request dto.ReaderLinkMetadataRequest, expected int64) (dto.ReaderLinkMetadataResponse, error) {
-	id, err := readerUUID(rawID, "link_id")
-	if err != nil {
-		return dto.ReaderLinkMetadataResponse{}, err
+func (s *ReaderLibraryApplication) PatchLinkMetadata(ctx context.Context, command ReaderLinkMetadataCommand) (model.ReaderLinkMetadataUpdate, error) {
+	if err := validateLinkMetadataCommand(&command); err != nil {
+		return model.ReaderLinkMetadataUpdate{}, err
 	}
-	if !request.Complete() {
-		return dto.ReaderLinkMetadataResponse{}, problem.NewWithCode(problem.Invalid, problem.CodeMetadataFieldsRequired, "title, summary, and tags are required")
-	}
-	if err := validateLinkMetadataRequest(&request); err != nil {
-		return dto.ReaderLinkMetadataResponse{}, err
-	}
-	update, err := s.library.UpdateLinkMetadata(ctx, model.ReaderLinkMetadataPatch{LinkID: id, Title: request.Title, Summary: request.Summary, Tags: request.Tags, ExpectedRevision: expected})
+	update, err := s.library.UpdateLinkMetadata(ctx, model.ReaderLinkMetadataPatch{LinkID: command.LinkID, Title: command.Title, Summary: command.Summary, Tags: command.Tags, ExpectedRevision: command.ExpectedRevision})
 	if err != nil {
 		if errors.Is(err, repository.ErrRevisionConflict) {
-			return dto.ReaderLinkMetadataResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeMetadataRevisionConflict, "link metadata revision is stale")
+			return model.ReaderLinkMetadataUpdate{}, problem.NewWithCode(problem.Conflict, problem.CodeMetadataRevisionConflict, "link metadata revision is stale")
 		}
-		return dto.ReaderLinkMetadataResponse{}, mapReaderError(err)
+		return model.ReaderLinkMetadataUpdate{}, mapReaderError(err)
 	}
 	if update.MetadataRevision < 1 || update.MetadataRevision > model.LinkMetadataMaxRevision {
-		return dto.ReaderLinkMetadataResponse{}, problem.NewWithCode(problem.Conflict, problem.CodeMetadataRevisionConflict, "link metadata revision is outside the JavaScript-safe range")
+		return model.ReaderLinkMetadataUpdate{}, problem.NewWithCode(problem.Conflict, problem.CodeMetadataRevisionConflict, "link metadata revision is outside the JavaScript-safe range")
 	}
-	return dto.ReaderLinkMetadataResponse{LinkID: id.String(), MetadataRevision: update.MetadataRevision}, nil
+	return update, nil
 }
 
 const (
@@ -305,24 +247,24 @@ const (
 	maxLinkMetadataTagRunes     = 64
 )
 
-func validateLinkMetadataRequest(request *dto.ReaderLinkMetadataRequest) error {
-	if request.Title != nil && utf8.RuneCountInString(*request.Title) > maxLinkMetadataTitleRunes {
+func validateLinkMetadataCommand(command *ReaderLinkMetadataCommand) error {
+	if command.Title != nil && utf8.RuneCountInString(*command.Title) > maxLinkMetadataTitleRunes {
 		return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "title exceeds 512 characters")
 	}
-	if request.Summary != nil && utf8.RuneCountInString(*request.Summary) > maxLinkMetadataSummaryRunes {
+	if command.Summary != nil && utf8.RuneCountInString(*command.Summary) > maxLinkMetadataSummaryRunes {
 		return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "summary exceeds 4096 characters")
 	}
-	if request.Tags == nil {
+	if command.Tags == nil {
 		return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "tags must be an array")
 	}
-	if len(request.Tags) > maxLinkMetadataTags {
+	if len(command.Tags) > maxLinkMetadataTags {
 		return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "tags may contain at most 50 items")
 	}
 
 	folder := cases.Fold()
-	seen := make(map[string]struct{}, len(request.Tags))
-	tags := make([]string, 0, len(request.Tags))
-	for _, raw := range request.Tags {
+	seen := make(map[string]struct{}, len(command.Tags))
+	tags := make([]string, 0, len(command.Tags))
+	for _, raw := range command.Tags {
 		tag := strings.TrimSpace(raw)
 		if tag == "" {
 			return problem.NewWithCode(problem.Invalid, problem.CodeInvalidLinkMetadata, "tags must not contain empty values")
@@ -337,6 +279,6 @@ func validateLinkMetadataRequest(request *dto.ReaderLinkMetadataRequest) error {
 		seen[key] = struct{}{}
 		tags = append(tags, tag)
 	}
-	request.Tags = tags
+	command.Tags = tags
 	return nil
 }

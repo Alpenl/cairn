@@ -10,7 +10,6 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
-	"webtag/internal/dto"
 	"webtag/internal/model"
 	"webtag/internal/repository"
 )
@@ -68,7 +67,7 @@ type readerInboxSummaryStore interface {
 }
 
 // ReaderInboxSummaryProcessor is the River worker dependency. Keeping it
-// separate from ReaderVNextService breaks the queue/service construction cycle:
+// separate from ReaderInboxApplication breaks the queue/application construction cycle:
 // the worker needs only proposal state and AI, not the HTTP-facing Reader API.
 type ReaderInboxSummaryProcessor struct {
 	store readerInboxSummaryStore
@@ -81,28 +80,24 @@ func NewReaderInboxSummaryProcessor(store readerInboxSummaryStore, ai ReaderInbo
 
 // ResummarizeInbox changes the proposal state and inserts the matching River
 // job in one transaction. The returned Inbox is the only polling resource.
-func (s *ReaderVNextService) ResummarizeInbox(ctx context.Context, rawID string) (dto.ReaderInboxResponse, error) {
-	id, err := readerUUID(rawID, "inbox_id")
-	if err != nil {
-		return dto.ReaderInboxResponse{}, err
-	}
+func (s *ReaderInboxApplication) ResummarizeInbox(ctx context.Context, id uuid.UUID) (model.ReaderInbox, error) {
 	item, err := s.inbox.GetInbox(ctx, id)
 	if err != nil {
-		return dto.ReaderInboxResponse{}, mapReaderError(err)
+		return model.ReaderInbox{}, mapReaderError(err)
 	}
 	if s.inboxCommands == nil {
-		return dto.ReaderInboxResponse{}, errors.New("resummarize Reader inbox: durable commands are not configured")
+		return model.ReaderInbox{}, errors.New("resummarize Reader inbox: durable commands are not configured")
 	}
 	result, err := s.inboxCommands.EnsureInboxProposal(ctx, EnsureInboxProposalCommand{
 		InboxID: id, ExpectedMetadataRevision: item.MetadataRevision,
 	})
 	if err != nil {
-		return dto.ReaderInboxResponse{}, mapReaderError(err)
+		return model.ReaderInbox{}, mapReaderError(err)
 	}
 	if result.Inbox == nil {
-		return dto.ReaderInboxResponse{}, errors.New("resummarize Reader inbox: durable command returned nil item")
+		return model.ReaderInbox{}, errors.New("resummarize Reader inbox: durable command returned nil item")
 	}
-	return inboxResponse(*result.Inbox), nil
+	return *result.Inbox, nil
 }
 
 // RunReaderInboxSummaryJob commits AI output only when the Inbox still has the

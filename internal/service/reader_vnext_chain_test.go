@@ -3,13 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"webtag/internal/dto"
 	"webtag/internal/model"
 	"webtag/internal/readertext"
 	"webtag/internal/repository"
@@ -356,13 +354,14 @@ func mapReaderThoughts(thoughts map[string]model.ReaderThought) []model.ReaderTh
 	return items
 }
 
-func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
+func TestReaderFeatureApplicationsCrossSurfaceChain(t *testing.T) {
 	store := newReaderVNextChainStore()
-	service := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
-	service.now = func() time.Time { return store.now }
+	service := newReaderTestFeatureSet(readerTestStores(store), nil, ReaderApplicationOptions{InboxProposalCommands: store})
+	service.ReaderThoughtApplication.now = func() time.Time { return store.now }
+	service.ReaderLibraryApplication.now = func() time.Time { return store.now }
 	ctx := context.Background()
 
-	inbox, err := service.CreateInbox(ctx, dto.ReaderInboxCreateRequest{
+	inbox, err := service.CreateInbox(ctx, ReaderInboxCreateCommand{
 		URL: "https://capture.example.test/article", SourceKind: "browser_capture", Title: stringPointer("Captured article"), Body: "Captured body from the browser extension.",
 	})
 	if err != nil {
@@ -371,23 +370,24 @@ func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 	if inbox.Status != "pending" {
 		t.Fatalf("CreateInbox() status = %q, want pending", inbox.Status)
 	}
-	pending, err := service.ListInbox(ctx, "", "", 30)
+	pending, err := service.ListInbox(ctx, model.ReaderInboxPartitionActive, "", 30)
 	if err != nil || len(pending.Items) != 1 || pending.Items[0].ID != inbox.ID {
 		t.Fatalf("ListInbox() = %#v, error = %v", pending, err)
 	}
 	if pending.ActiveCount != 1 || pending.ExpiredCount != 0 {
 		t.Fatalf("ListInbox() partition counts = active %d expired %d, want 1/0", pending.ActiveCount, pending.ExpiredCount)
 	}
-	confirmed, err := service.ConfirmInbox(ctx, inbox.ID, inbox.MetadataRevision)
+	expectedInboxRevision := inbox.MetadataRevision
+	confirmed, err := service.ConfirmInbox(ctx, inbox.ID, &expectedInboxRevision)
 	if err != nil {
 		t.Fatalf("ConfirmInbox() error = %v", err)
 	}
-	if confirmed["target_kind"] != "link" || confirmed["link_id"] != store.linkID.String() || store.inbox.Status != "confirmed" {
+	if confirmed != store.linkID || store.inbox.Status != "confirmed" {
 		t.Fatalf("ConfirmInbox() = %#v, inbox status = %q", confirmed, store.inbox.Status)
 	}
 
 	thoughtID := "thought-1"
-	thoughtRequest := dto.ReaderThoughtOpsRequest{Ops: []dto.ReaderThoughtOpRequest{{
+	thoughtRequest := ReaderThoughtOpsCommand{Ops: []ReaderThoughtOpCommand{{
 		ContractVersion: 1, OpID: "thought-op-1", DeviceID: "reader-device-1", LogicalClock: 2,
 		OperationKind: "add", AnnotationID: thoughtID,
 		HostKind: "link", HostID: store.linkID.String(),
@@ -396,8 +396,7 @@ func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 	}}}
 	acks, err := service.PushThoughtOps(ctx, thoughtRequest)
 	if err != nil || len(acks) != 1 || acks[0].Sequence != 2 ||
-		acks[0].ContractVersion != 1 || acks[0].Disposition != "applied" ||
-		acks[0].CurrentWinnerKey.LogicalClock != 2 {
+		acks[0].Disposition != "applied" || acks[0].WinnerKey.LogicalClock != 2 {
 		t.Fatalf("PushThoughtOps() = %#v, error = %v", acks, err)
 	}
 	synced, err := service.SyncThoughts(ctx, "0", 100)
@@ -410,29 +409,29 @@ func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 		t.Fatalf("Search() thought projection = %#v, error = %v", search.Thoughts, err)
 	}
 
-	note, err := service.CreateNote(ctx, dto.ReaderNoteCreateRequest{Title: "Captured idea note"})
+	note, err := service.CreateNote(ctx, ReaderNoteCreateCommand{Title: "Captured idea note"})
 	if err != nil {
 		t.Fatalf("CreateNote() error = %v", err)
 	}
-	draft, err := service.SaveNoteDraft(ctx, note.ID, dto.ReaderNoteDraftRequest{Content: "# Follow up\n\n- [ ] Re-read the captured article", ExpectedDraftRevision: note.DraftRevision})
-	if err != nil || !draft.Dirty || draft.DraftContent == nil {
+	draft, err := service.SaveNoteDraft(ctx, model.ReaderNoteDraftCommand{NoteID: note.ID, Content: "# Follow up\n\n- [ ] Re-read the captured article", ExpectedDraftRevision: note.DraftRevision})
+	if err != nil || draft.DraftContent == nil || *draft.DraftContent == draft.PublishedContent {
 		t.Fatalf("SaveNoteDraft() = %#v, error = %v", draft, err)
 	}
 	expectedDraftRevision, expectedPublishedRevision := draft.DraftRevision, note.PublishedRevision
-	published, err := service.PublishNote(ctx, note.ID, dto.ReaderNotePublishRequest{
-		ExpectedDraftRevision: &expectedDraftRevision, ExpectedPublishedRevision: &expectedPublishedRevision,
+	published, err := service.PublishNote(ctx, model.ReaderNotePublishCommand{
+		NoteID: note.ID, ExpectedDraftRevision: expectedDraftRevision, ExpectedPublishedRevision: expectedPublishedRevision,
 		ReanchorOps: []json.RawMessage{json.RawMessage(`{"thought_id":"` + thoughtID + `","status":"reanchored"}`)},
 	})
-	if err != nil || published.Dirty || published.DraftContent != nil || published.PublishedContent == "" {
+	if err != nil || published.DraftContent != nil || published.PublishedContent == "" {
 		t.Fatalf("PublishNote() = %#v, error = %v", published, err)
 	}
 
 	todos, err := service.ListTodos(ctx, "", 200)
-	if err != nil || len(todos.Items) != 1 || todos.Items[0].OriginKind != "note" || todos.Items[0].OriginHostID == nil || *todos.Items[0].OriginHostID != note.ID {
+	if err != nil || len(todos.Items) != 1 || todos.Items[0].OriginKind != "note" || todos.Items[0].OriginHostID == nil || *todos.Items[0].OriginHostID != note.ID.String() {
 		t.Fatalf("ListTodos() projection = %#v, error = %v", todos, err)
 	}
 	done := true
-	completed, err := service.PatchTodo(ctx, todos.Items[0].ID, dto.ReaderTodoPatchRequest{Done: &done})
+	completed, err := service.PatchTodo(ctx, ReaderTodoPatchCommand{ID: todos.Items[0].ID, Done: &done})
 	if err != nil || !completed.Done || completed.CompletedAt == nil {
 		t.Fatalf("PatchTodo() = %#v, error = %v", completed, err)
 	}
@@ -445,8 +444,8 @@ func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 		t.Fatalf("FeedbackFeed() = (%q, %q), error = %v", store.feedbackKey, store.feedback, err)
 	}
 	read := true
-	engagement, err := service.PatchEngagement(ctx, store.linkID.String(), dto.ReaderEngagementRequest{Read: &read})
-	if err != nil || !engagement.Read || engagement.LinkID != store.linkID.String() {
+	engagement, err := service.PatchEngagement(ctx, model.ReaderEngagementPatch{LinkID: store.linkID, Read: &read})
+	if err != nil || !engagement.Read || engagement.LinkID != store.linkID {
 		t.Fatalf("PatchEngagement() = %#v, error = %v", engagement, err)
 	}
 
@@ -461,13 +460,14 @@ func TestReaderVNextServiceCrossSurfaceChain(t *testing.T) {
 
 func TestReaderVNextBulkConfirmCarriesEveryExpectedRevision(t *testing.T) {
 	store := newReaderVNextChainStore()
-	service := NewReaderVNextService(readerTestStores(store), nil)
+	service := newReaderTestFeatureSet(readerTestStores(store), nil)
 	first := store.inbox.ID
 	second := uuid.MustParse("00000000-0000-0000-0000-000000000003")
 
-	_, err := service.ConfirmInboxBulk(context.Background(), []string{first.String(), second.String(), first.String()}, map[string]int64{
-		first.String():  4,
-		second.String(): 9,
+	firstRevision, secondRevision := int64(4), int64(9)
+	_, err := service.ConfirmInboxBulk(context.Background(), []model.ReaderInboxBulkConfirmation{
+		{ID: first, ExpectedRevision: &firstRevision},
+		{ID: second, ExpectedRevision: &secondRevision},
 	})
 	if err != nil {
 		t.Fatalf("ConfirmInboxBulk() error = %v", err)
@@ -480,18 +480,5 @@ func TestReaderVNextBulkConfirmCarriesEveryExpectedRevision(t *testing.T) {
 	}
 	if store.bulkConfirmations[1].ExpectedRevision == nil || *store.bulkConfirmations[1].ExpectedRevision != 9 {
 		t.Fatalf("second expected revision = %#v, want 9", store.bulkConfirmations[1].ExpectedRevision)
-	}
-}
-
-func TestReaderVNextBulkConfirmRejectsPartialExpectedRevisions(t *testing.T) {
-	store := newReaderVNextChainStore()
-	service := NewReaderVNextService(readerTestStores(store), nil)
-	first := store.inbox.ID
-	second := uuid.MustParse("00000000-0000-0000-0000-000000000003")
-
-	_, err := service.ConfirmInboxBulk(context.Background(), []string{first.String(), second.String()}, map[string]int64{first.String(): 4})
-	assertReaderHTTPError(t, err, http.StatusUnprocessableEntity, "invalid_inbox_batch_revision")
-	if store.bulkConfirmations != nil {
-		t.Fatalf("store called for partial expected revisions: %#v", store.bulkConfirmations)
 	}
 }

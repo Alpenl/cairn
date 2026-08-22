@@ -45,12 +45,12 @@ func buildRuntimeRouter(
 	readerRoutes := handler.ReaderRoutes{}
 	if reader != nil {
 		readerRoutes = handler.ReaderRoutes{
-			Thoughts:  reader,
-			Notes:     reader,
-			Inbox:     reader,
-			Todos:     reader,
-			Aggregate: reader,
-			Hosts:     reader,
+			Thoughts: handler.NewReaderThoughtRoutes(reader.Thoughts),
+			Notes:    handler.NewReaderNoteRoutes(reader.Notes),
+			Inbox:    handler.NewReaderInboxRoutes(reader.Inbox),
+			Todos:    handler.NewReaderTodoRoutes(reader.Todos),
+			Library:  handler.NewReaderLibraryRoutes(reader.Library),
+			Hosts:    handler.NewReaderHostRoutes(reader.Hosts),
 		}
 	}
 	readerCapabilities := runtimeReaderCapabilities(cfg, reader != nil)

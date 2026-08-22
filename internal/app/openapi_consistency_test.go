@@ -174,7 +174,7 @@ func fullSmokeDeps() handler.Dependencies {
 		// expose the complete method set without duplicating a no-op implementation
 		// for every Reader vNext operation.
 		Reader: handler.ReaderRoutes{
-			Thoughts: smokeReaderService{}, Aggregate: smokeReaderService{},
+			Thoughts: smokeReaderService{}, Library: smokeReaderService{},
 			Notes: smokeReaderService{}, Hosts: smokeReaderService{},
 			Inbox: smokeReaderService{}, Todos: smokeReaderService{},
 		},
@@ -200,7 +200,7 @@ type smokeReaderService struct {
 	handler.ReaderNoteRoutes
 	handler.ReaderInboxRoutes
 	handler.ReaderTodoRoutes
-	handler.ReaderAggregateRoutes
+	handler.ReaderLibraryRoutes
 	handler.ReaderHostRoutes
 }
 

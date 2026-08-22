@@ -8,7 +8,7 @@ import (
 	"webtag/internal/dto"
 )
 
-func readerHome(reader ReaderAggregateRoutes) gin.HandlerFunc {
+func readerHome(reader ReaderLibraryRoutes) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		response, err := reader.Home(c.Request.Context())
 		if err != nil {
@@ -19,7 +19,7 @@ func readerHome(reader ReaderAggregateRoutes) gin.HandlerFunc {
 	}
 }
 
-func readerFeed(reader ReaderAggregateRoutes) gin.HandlerFunc {
+func readerFeed(reader ReaderLibraryRoutes) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		mode, after, limit := c.Query("mode"), c.Query("after"), queryInt(c, "limit", 30)
 		response, err := reader.FeedWithSources(c.Request.Context(), mode, after, readerFeedSources(c), limit)
@@ -37,7 +37,7 @@ func readerFeedSources(c *gin.Context) []string {
 	return values
 }
 
-func readerFeedFeedback(reader ReaderAggregateRoutes) gin.HandlerFunc {
+func readerFeedFeedback(reader ReaderLibraryRoutes) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var request dto.ReaderFeedFeedbackRequest
 		if !bindJSONWithLimit(c, &request, defaultMaxJSONBodyBytes) {
@@ -52,7 +52,7 @@ func readerFeedFeedback(reader ReaderAggregateRoutes) gin.HandlerFunc {
 	}
 }
 
-func readerGetEngagement(reader ReaderAggregateRoutes) gin.HandlerFunc {
+func readerGetEngagement(reader ReaderLibraryRoutes) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		response, err := reader.GetEngagement(c.Request.Context(), c.Param("link_id"))
 		if err != nil {
@@ -63,7 +63,7 @@ func readerGetEngagement(reader ReaderAggregateRoutes) gin.HandlerFunc {
 	}
 }
 
-func readerPatchEngagement(reader ReaderAggregateRoutes) gin.HandlerFunc {
+func readerPatchEngagement(reader ReaderLibraryRoutes) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var request dto.ReaderEngagementRequest
 		if !bindJSONWithLimit(c, &request, defaultMaxJSONBodyBytes) {
@@ -78,7 +78,7 @@ func readerPatchEngagement(reader ReaderAggregateRoutes) gin.HandlerFunc {
 	}
 }
 
-func readerPatchMetadata(reader ReaderAggregateRoutes) gin.HandlerFunc {
+func readerPatchMetadata(reader ReaderLibraryRoutes) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		expected, err := parseLinkMetadataIfMatch(c)
 		if err != nil {
@@ -99,7 +99,7 @@ func readerPatchMetadata(reader ReaderAggregateRoutes) gin.HandlerFunc {
 	}
 }
 
-func readerRelatedTags(reader ReaderAggregateRoutes) gin.HandlerFunc {
+func readerRelatedTags(reader ReaderLibraryRoutes) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		response, err := reader.RelatedTags(c.Request.Context(), c.Query("link_id"), queryInt(c, "limit", 12))
 		if err != nil {
@@ -110,7 +110,7 @@ func readerRelatedTags(reader ReaderAggregateRoutes) gin.HandlerFunc {
 	}
 }
 
-func readerActivity(reader ReaderAggregateRoutes) gin.HandlerFunc {
+func readerActivity(reader ReaderLibraryRoutes) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		response, err := reader.Activity(
 			c.Request.Context(),
@@ -126,7 +126,7 @@ func readerActivity(reader ReaderAggregateRoutes) gin.HandlerFunc {
 	}
 }
 
-func readerCompleteAI(reader ReaderAggregateRoutes) gin.HandlerFunc {
+func readerCompleteAI(reader ReaderLibraryRoutes) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var request dto.ReaderAIRequest
 		if !bindJSONWithLimit(c, &request, defaultMaxJSONBodyBytes) {

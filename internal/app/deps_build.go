@@ -12,7 +12,6 @@ import (
 	"webtag/internal/config"
 	"webtag/internal/middleware"
 	"webtag/internal/observability"
-	"webtag/internal/repository"
 	"webtag/internal/service"
 	"webtag/internal/service/linktranslation"
 	"webtag/internal/service/translator"
@@ -97,18 +96,23 @@ func buildRuntime(ctx context.Context, cfg config.Config) (built *Runtime, build
 	if err != nil {
 		return nil, fmt.Errorf("construct River queue: %w", err)
 	}
-	layer.reader = repository.NewPGXReaderVNextRepositoryWithLinkLifecycle(layer.pool, queue)
 	inboxCommands := durablework.NewInboxCommands(layer.pool, layer.reader, queue)
-	readerService := service.NewReaderVNextService(service.ReaderStores{
+	readerCommands := durablework.NewReaderCommands(layer.pool, layer.reader, queue)
+	readerApplications := service.NewReaderApplications(service.ReaderStores{
 		Thoughts: layer.reader,
 		Notes:    layer.reader,
 		Inbox:    layer.reader,
 		Todos:    layer.reader,
 		Library:  layer.reader,
 		Hosts:    layer.reader,
-	}, readerAI, service.ReaderVNextServiceOptions{
-		CursorSigningKey:      cfg.CursorSigningKey,
-		InboxProposalCommands: inboxCommands,
+	}, readerAI, service.ReaderApplicationOptions{
+		CursorSigningKey:         cfg.CursorSigningKey,
+		InboxProposalCommands:    inboxCommands,
+		InboxConfirmCommands:     readerCommands,
+		InboxBulkConfirmCommands: readerCommands,
+		InboxAIConfirmCommands:   readerCommands,
+		FeedFeedbackCommands:     readerCommands,
+		HostRestoreCommands:      readerCommands,
 	})
 
 	sitePayloadCleaner, err := worker.NewSitePayloadCleaner(worker.SitePayloadCleanerOptions{
@@ -126,7 +130,7 @@ func buildRuntime(ctx context.Context, cfg config.Config) (built *Runtime, build
 		queue,
 		stack.manager,
 		stack.fetchClient,
-		readerService,
+		readerApplications,
 		inboxCommands,
 		sitePayloadCleaner,
 	)

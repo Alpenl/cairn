@@ -155,22 +155,7 @@ func readerDiscardInboxBulk(reader ReaderInboxRoutes) gin.HandlerFunc {
 }
 
 func readerInboxBulkResponse(items []model.ReaderInboxBulkResult) dto.ReaderInboxBulkResponse {
-	response := dto.ReaderInboxBulkResponse{
-		Atomic: true,
-		Items:  make([]dto.ReaderInboxBulkItemResponse, 0, len(items)),
-	}
-	for _, item := range items {
-		out := dto.ReaderInboxBulkItemResponse{
-			InboxID: item.ID.String(),
-			Status:  item.Status,
-		}
-		if item.LinkID != nil {
-			linkID := item.LinkID.String()
-			out.LinkID = &linkID
-		}
-		response.Items = append(response.Items, out)
-	}
-	return response
+	return dto.ReaderInboxBulkResponse{Atomic: true, Items: readerInboxBulkItems(items)}
 }
 
 func readerResummarizeInbox(reader ReaderInboxRoutes) gin.HandlerFunc {

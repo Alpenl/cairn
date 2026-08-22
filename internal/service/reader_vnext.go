@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"webtag/internal/model"
 	"webtag/internal/problem"
 	"webtag/internal/repository"
 )
@@ -20,44 +19,89 @@ type ReaderAIBackend interface {
 	Complete(context.Context, string, string) (answer string, modelName string, err error)
 }
 
-type ReaderVNextService struct {
-	thoughts          ReaderThoughtStore
-	notes             ReaderNoteStore
-	inbox             ReaderInboxStore
-	todos             ReaderTodoStore
+type ReaderThoughtApplication struct {
+	thoughts ReaderThoughtStore
+	now      func() time.Time
+}
+
+type ReaderNoteApplication struct {
+	notes        ReaderNoteStore
+	hosts        ReaderHostStore
+	hostRestores ReaderHostRestoreCommands
+}
+
+type ReaderInboxApplication struct {
+	inbox            ReaderInboxStore
+	inboxCommands    InboxProposalCommands
+	inboxConfirm     ReaderInboxConfirmCommands
+	inboxBulkConfirm ReaderInboxBulkConfirmCommands
+	inboxAIConfirm   ReaderInboxAIConfirmCommands
+}
+
+type ReaderTodoApplication struct {
+	todos ReaderTodoStore
+}
+
+type ReaderLibraryApplication struct {
 	library           ReaderLibraryStore
-	hosts             ReaderHostStore
 	ai                ReaderAIBackend
-	inboxCommands     InboxProposalCommands
+	feedFeedback      ReaderFeedFeedbackCommands
 	now               func() time.Time
 	activityCursorKey []byte
 }
 
-type ReaderVNextServiceOptions struct {
-	CursorSigningKey      string
-	InboxProposalCommands InboxProposalCommands
+type ReaderHostApplication struct {
+	hosts        ReaderHostStore
+	hostRestores ReaderHostRestoreCommands
 }
 
-func NewReaderVNextService(stores ReaderStores, ai ReaderAIBackend, options ...ReaderVNextServiceOptions) *ReaderVNextService {
+// ReaderApplications is a composition result, not a facade. HTTP routing
+// injects each named feature directly and no caller can invoke Reader methods
+// through this aggregate.
+type ReaderApplications struct {
+	Thoughts *ReaderThoughtApplication
+	Notes    *ReaderNoteApplication
+	Inbox    *ReaderInboxApplication
+	Todos    *ReaderTodoApplication
+	Library  *ReaderLibraryApplication
+	Hosts    *ReaderHostApplication
+}
+
+type ReaderApplicationOptions struct {
+	CursorSigningKey         string
+	InboxProposalCommands    InboxProposalCommands
+	InboxConfirmCommands     ReaderInboxConfirmCommands
+	InboxBulkConfirmCommands ReaderInboxBulkConfirmCommands
+	InboxAIConfirmCommands   ReaderInboxAIConfirmCommands
+	FeedFeedbackCommands     ReaderFeedFeedbackCommands
+	HostRestoreCommands      ReaderHostRestoreCommands
+}
+
+func NewReaderApplications(stores ReaderStores, ai ReaderAIBackend, options ...ReaderApplicationOptions) *ReaderApplications {
 	cursorKey := processReaderCursorKey
-	var configured ReaderVNextServiceOptions
+	var configured ReaderApplicationOptions
 	if len(options) > 0 {
 		configured = options[0]
 	}
 	if configured.CursorSigningKey != "" {
 		cursorKey = []byte(configured.CursorSigningKey)
 	}
-	return &ReaderVNextService{
-		thoughts:          stores.Thoughts,
-		notes:             stores.Notes,
-		inbox:             stores.Inbox,
-		todos:             stores.Todos,
-		library:           stores.Library,
-		hosts:             stores.Hosts,
-		ai:                ai,
-		inboxCommands:     configured.InboxProposalCommands,
-		now:               time.Now,
-		activityCursorKey: append([]byte(nil), cursorKey...),
+	return &ReaderApplications{
+		Thoughts: &ReaderThoughtApplication{thoughts: stores.Thoughts, now: time.Now},
+		Notes: &ReaderNoteApplication{
+			notes: stores.Notes, hosts: stores.Hosts, hostRestores: configured.HostRestoreCommands,
+		},
+		Inbox: &ReaderInboxApplication{
+			inbox: stores.Inbox, inboxCommands: configured.InboxProposalCommands,
+			inboxConfirm: configured.InboxConfirmCommands, inboxBulkConfirm: configured.InboxBulkConfirmCommands,
+			inboxAIConfirm: configured.InboxAIConfirmCommands,
+		},
+		Todos: &ReaderTodoApplication{todos: stores.Todos},
+		Library: &ReaderLibraryApplication{
+			library: stores.Library, ai: ai, feedFeedback: configured.FeedFeedbackCommands,
+			now: time.Now, activityCursorKey: append([]byte(nil), cursorKey...),
+		},
+		Hosts: &ReaderHostApplication{hosts: stores.Hosts, hostRestores: configured.HostRestoreCommands},
 	}
 }
 
@@ -67,17 +111,6 @@ func readerUUID(raw, field string) (uuid.UUID, error) {
 		return uuid.Nil, problem.NewWithCode(problem.Invalid, "invalid_"+field, field+" must be a UUID")
 	}
 	return id, nil
-}
-
-func parseReaderInboxPartition(raw string, defaultActive bool) (model.ReaderInboxPartition, error) {
-	partition := model.ReaderInboxPartition(strings.TrimSpace(raw))
-	if partition == "" && defaultActive {
-		return model.ReaderInboxPartitionActive, nil
-	}
-	if !partition.Valid() {
-		return "", problem.NewWithCode(problem.Invalid, "invalid_inbox_partition", "partition must be active or expired")
-	}
-	return partition, nil
 }
 
 // readerErrorMapping binds repository sentinels to one public problem.

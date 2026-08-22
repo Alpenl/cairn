@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"webtag/internal/dto"
 	"webtag/internal/httperr"
 	"webtag/internal/model"
 	"webtag/internal/repository"
@@ -38,21 +37,12 @@ func TestSaveNoteDraftMapsMissingBeforeRevisionConflict(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &noteDraftStoreStub{err: test.storeErr}
-			_, err := NewReaderVNextService(readerTestStores(store), nil).SaveNoteDraft(context.Background(), noteID.String(), dto.ReaderNoteDraftRequest{Content: "draft", ExpectedDraftRevision: 1})
+			_, err := newReaderTestFeatureSet(readerTestStores(store), nil).SaveNoteDraft(context.Background(), model.ReaderNoteDraftCommand{NoteID: noteID, Content: "draft", ExpectedDraftRevision: 1})
 			carrier, ok := httperr.As(err)
 			coder, coded := carrier.(httperr.ErrorCoder)
 			if !ok || !coded || carrier.HTTPStatus() != test.wantStatus || coder.HTTPErrorCode() != test.wantCode {
 				t.Fatalf("SaveNoteDraft() error = %v, want %d/%s", err, test.wantStatus, test.wantCode)
 			}
 		})
-	}
-}
-
-func TestSaveNoteDraftRejectsInvalidIDBeforeStore(t *testing.T) {
-	store := &noteDraftStoreStub{}
-	_, err := NewReaderVNextService(readerTestStores(store), nil).SaveNoteDraft(context.Background(), "not-a-uuid", dto.ReaderNoteDraftRequest{Content: "draft"})
-	carrier, ok := httperr.As(err)
-	if !ok || carrier.HTTPStatus() != http.StatusUnprocessableEntity || len(store.commands) != 0 {
-		t.Fatalf("SaveNoteDraft(invalid ID) = %v, commands=%d; want 422 without storage write", err, len(store.commands))
 	}
 }

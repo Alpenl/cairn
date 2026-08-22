@@ -19,6 +19,49 @@ func readerTestStores(store any) ReaderStores {
 	return stores
 }
 
+// readerTestFeatureSet is test-only composition sugar. Production routes use
+// ReaderApplications' named fields directly; focused tests can still exercise
+// one feature without building unrelated fakes.
+type readerTestFeatureSet struct {
+	*ReaderThoughtApplication
+	*ReaderNoteApplication
+	*ReaderInboxApplication
+	*ReaderTodoApplication
+	*ReaderLibraryApplication
+	*ReaderHostApplication
+}
+
+func newReaderTestFeatureSet(stores ReaderStores, ai ReaderAIBackend, options ...ReaderApplicationOptions) *readerTestFeatureSet {
+	var configured ReaderApplicationOptions
+	if len(options) > 0 {
+		configured = options[0]
+	}
+	if configured.InboxConfirmCommands == nil {
+		configured.InboxConfirmCommands, _ = stores.Inbox.(ReaderInboxConfirmCommands)
+	}
+	if configured.InboxBulkConfirmCommands == nil {
+		configured.InboxBulkConfirmCommands, _ = stores.Inbox.(ReaderInboxBulkConfirmCommands)
+	}
+	if configured.InboxAIConfirmCommands == nil {
+		configured.InboxAIConfirmCommands, _ = stores.Inbox.(ReaderInboxAIConfirmCommands)
+	}
+	if configured.FeedFeedbackCommands == nil {
+		configured.FeedFeedbackCommands, _ = stores.Library.(ReaderFeedFeedbackCommands)
+	}
+	if configured.HostRestoreCommands == nil {
+		configured.HostRestoreCommands, _ = stores.Hosts.(ReaderHostRestoreCommands)
+	}
+	applications := NewReaderApplications(stores, ai, configured)
+	return &readerTestFeatureSet{
+		ReaderThoughtApplication: applications.Thoughts,
+		ReaderNoteApplication:    applications.Notes,
+		ReaderInboxApplication:   applications.Inbox,
+		ReaderTodoApplication:    applications.Todos,
+		ReaderLibraryApplication: applications.Library,
+		ReaderHostApplication:    applications.Hosts,
+	}
+}
+
 func problemHTTPStatus(err *problem.Error) int {
 	carrier, ok := httperr.As(err)
 	if !ok {

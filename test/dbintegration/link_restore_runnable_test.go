@@ -17,15 +17,16 @@ import (
 )
 
 type runnableLinkRestoreFixture struct {
-	pool       *pgxpool.Pool
-	reader     *repository.PGXReaderVNextRepository
-	commands   *durablework.LinkCommands
-	queue      *worker.RiverQueue
-	url        string
-	linkID     uuid.UUID
-	oldAttempt model.ParseAttempt
-	thoughtID  string
-	feedItemID uuid.UUID
+	pool           *pgxpool.Pool
+	reader         *repository.PGXReaderVNextRepository
+	commands       *durablework.LinkCommands
+	readerCommands *durablework.ReaderCommands
+	queue          *worker.RiverQueue
+	url            string
+	linkID         uuid.UUID
+	oldAttempt     model.ParseAttempt
+	thoughtID      string
+	feedItemID     uuid.UUID
 }
 
 type failAfterRestoreEnqueueQueue struct {
@@ -52,7 +53,7 @@ func TestDeletedInflightLinkRestoresWithOneRunnableReplacement(t *testing.T) {
 			var restoredID uuid.UUID
 			switch mode {
 			case "feed-existing-association":
-				result, err := fixture.reader.FeedbackFeed(t.Context(), "subscription:"+fixture.feedItemID.String(), "save")
+				result, err := fixture.readerCommands.FeedbackFeed(t.Context(), "subscription:"+fixture.feedItemID.String(), "save")
 				if err != nil || result.LinkID == nil {
 					t.Fatalf("Feed re-save = %#v, %v", result, err)
 				}
@@ -60,12 +61,12 @@ func TestDeletedInflightLinkRestoresWithOneRunnableReplacement(t *testing.T) {
 			case "inbox-confirm":
 				inboxID := seedReaderVNextInbox(t, fixture.pool, fixture.url, "Restore capture", "Restore body", "Restore summary")
 				var err error
-				restoredID, err = fixture.reader.ConfirmInbox(t.Context(), inboxID, nil)
+				restoredID, err = fixture.readerCommands.ConfirmInbox(t.Context(), inboxID, nil)
 				if err != nil {
 					t.Fatalf("ConfirmInbox() error = %v", err)
 				}
 			case "public-restore":
-				result, err := fixture.reader.RestoreHost(t.Context(), model.ReaderHostLink, fixture.linkID)
+				result, err := fixture.readerCommands.RestoreHost(t.Context(), model.ReaderHostLink, fixture.linkID)
 				if err != nil || !result.Changed {
 					t.Fatalf("RestoreHost() = %#v, %v", result, err)
 				}
@@ -91,12 +92,12 @@ func TestDeletedInflightLinkRestoresWithOneRunnableReplacement(t *testing.T) {
 func TestDeletedInflightLinkRestoreRollsBackAfterReplacementEnqueueFailure(t *testing.T) {
 	fixture := newRunnableLinkRestoreFixture(t, "public-restore-rollback")
 	wantErr := errors.New("injected failure after replacement enqueue")
-	fixture.reader = repository.NewPGXReaderVNextRepositoryWithLinkLifecycle(
-		fixture.pool,
+	fixture.readerCommands = durablework.NewReaderCommands(
+		fixture.pool, fixture.reader,
 		&failAfterRestoreEnqueueQueue{delegate: fixture.queue, err: wantErr},
 	)
 
-	if _, err := fixture.reader.RestoreHost(t.Context(), model.ReaderHostLink, fixture.linkID); !errors.Is(err, wantErr) {
+	if _, err := fixture.readerCommands.RestoreHost(t.Context(), model.ReaderHostLink, fixture.linkID); !errors.Is(err, wantErr) {
 		t.Fatalf("RestoreHost() error = %v, want %v", err, wantErr)
 	}
 	assertDeletedInflightLink(t, fixture.pool, fixture.reader, fixture.oldAttempt, fixture.thoughtID)
@@ -107,7 +108,8 @@ func newRunnableLinkRestoreFixture(t *testing.T, mode string) runnableLinkRestor
 	pool := StartPostgres(t)
 	links := repository.NewPGXLinkRepository(pool)
 	queue := newRiverQueue(t, pool, newRecordingProcessor(pool))
-	reader := repository.NewPGXReaderVNextRepositoryWithLinkLifecycle(pool, queue)
+	reader := repository.NewPGXReaderVNextRepository(pool)
+	readerCommands := durablework.NewReaderCommands(pool, reader, queue)
 	commands := dbLinkCommands(pool, links, queue)
 	url := "https://restore-runnable.example.test/" + mode
 
@@ -128,7 +130,7 @@ func newRunnableLinkRestoreFixture(t *testing.T, mode string) runnableLinkRestor
 	var feedItemID uuid.UUID
 	if mode == "feed-existing-association" {
 		feedItemID = seedReaderFeedSaveItem(t, pool, url, "restore-runnable")
-		saved, err := reader.FeedbackFeed(t.Context(), "subscription:"+feedItemID.String(), "save")
+		saved, err := readerCommands.FeedbackFeed(t.Context(), "subscription:"+feedItemID.String(), "save")
 		if err != nil || saved.LinkID == nil || *saved.LinkID != linkID {
 			t.Fatalf("seed Feed association = %#v, %v; want existing Link %s", saved, err, linkID)
 		}
@@ -140,7 +142,7 @@ func newRunnableLinkRestoreFixture(t *testing.T, mode string) runnableLinkRestor
 	assertDeletedInflightLink(t, pool, reader, oldAttempt, thought.id)
 
 	return runnableLinkRestoreFixture{
-		pool: pool, reader: reader, commands: commands, queue: queue, url: url,
+		pool: pool, reader: reader, commands: commands, readerCommands: readerCommands, queue: queue, url: url,
 		linkID: linkID, oldAttempt: oldAttempt, thoughtID: thought.id, feedItemID: feedItemID,
 	}
 }

@@ -249,8 +249,8 @@ func TestReaderTodoHostRevisionPostgresContract(t *testing.T) {
 		before := readReaderTodoPatchState(t, pool)
 		gin.SetMode(gin.TestMode)
 		router := gin.New()
-		readerService := readerservice.NewReaderVNextService(postgresReaderStores(reader), nil)
-		handler.RegisterReaderRoutes(router, handler.ReaderRoutes{Todos: readerService})
+		readerService := readerservice.NewReaderApplications(postgresReaderStores(reader), nil).Todos
+		handler.RegisterReaderRoutes(router, handler.ReaderRoutes{Todos: handler.NewReaderTodoRoutes(readerService)})
 		response := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPatch, "/api/todos/"+projected.ID.String(), strings.NewReader(`{"done":true,"expected_host_revision":null}`)).WithContext(ctx)
 		request.Header.Set("Content-Type", "application/json")

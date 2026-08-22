@@ -67,44 +67,70 @@ func (r *PGXReaderVNextRepository) SoftDeleteHost(ctx context.Context, kind mode
 }
 
 func (r *PGXReaderVNextRepository) RestoreHost(ctx context.Context, kind model.ReaderHostKind, id uuid.UUID) (model.ReaderHostLifecycleResult, error) {
+	var result model.ReaderHostLifecycleResult
+	err := r.withTx(ctx, func(db database.Querier) error {
+		var err error
+		result, err = r.restoreHostOn(ctx, db, kind, id, nil)
+		return err
+	})
+	return result, err
+}
+
+// RestoreHostTx restores a host in a caller-owned transaction. Link restores
+// receive the durable lifecycle callback explicitly; Note and Inbox restores
+// remain pure PostgreSQL transitions.
+func (r *PGXReaderVNextRepository) RestoreHostTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind model.ReaderHostKind,
+	id uuid.UUID,
+	lifecycle ReaderLinkLifecycle,
+) (model.ReaderHostLifecycleResult, error) {
+	return r.restoreHostOn(ctx, tx, kind, id, lifecycle)
+}
+
+func (r *PGXReaderVNextRepository) restoreHostOn(
+	ctx context.Context,
+	db database.Querier,
+	kind model.ReaderHostKind,
+	id uuid.UUID,
+	lifecycle ReaderLinkLifecycle,
+) (model.ReaderHostLifecycleResult, error) {
 	result := model.ReaderHostLifecycleResult{HostKind: kind, HostID: id, State: model.ReaderHostLive}
 	if !kind.Valid() {
 		return result, ErrInvalidReaderHostKind
 	}
-	err := r.withTx(ctx, func(db database.Querier) error {
-		if kind == model.ReaderHostLink {
-			restored, err := r.restoreLinkLifecycleOn(ctx, db, id)
-			if err != nil {
-				return err
-			}
-			if _, err := db.Exec(ctx, adoptSubmittedLinkSQL, id); err != nil {
-				return fmt.Errorf("adopt explicitly restored link: %w", err)
-			}
-			result.Changed = restored.changed
-			return nil
-		}
-		host, err := lockReaderHost(ctx, db, kind, id)
+	if kind == model.ReaderHostLink {
+		restored, err := r.restoreLinkLifecycleOn(ctx, db, id, lifecycle)
 		if err != nil {
-			return err
+			return result, err
 		}
-		if host.deletedAt == nil {
-			return nil
+		if _, err := db.Exec(ctx, adoptSubmittedLinkSQL, id); err != nil {
+			return result, fmt.Errorf("adopt explicitly restored link: %w", err)
 		}
-		if err := updateReaderHostDeletedAt(ctx, db, kind, id, false); err != nil {
-			return err
+		result.Changed = restored.changed
+		return result, nil
+	}
+	host, err := lockReaderHost(ctx, db, kind, id)
+	if err != nil {
+		return result, err
+	}
+	if host.deletedAt == nil {
+		return result, nil
+	}
+	if err := updateReaderHostDeletedAt(ctx, db, kind, id, false); err != nil {
+		return result, err
+	}
+	if err := r.restoreReaderHostThoughts(ctx, db, kind, id, host.body, host.revision); err != nil {
+		return result, err
+	}
+	if kind == model.ReaderHostNote {
+		if err := r.replaceNoteTodoProjectionsOn(ctx, db, id); err != nil {
+			return result, err
 		}
-		if err := r.restoreReaderHostThoughts(ctx, db, kind, id, host.body, host.revision); err != nil {
-			return err
-		}
-		if kind == model.ReaderHostNote {
-			if err := r.replaceNoteTodoProjectionsOn(ctx, db, id); err != nil {
-				return err
-			}
-		}
-		result.Changed = true
-		return nil
-	})
-	return result, err
+	}
+	result.Changed = true
+	return result, nil
 }
 
 func lockReaderHost(ctx context.Context, db database.Querier, kind model.ReaderHostKind, id uuid.UUID) (readerLockedHost, error) {

@@ -86,8 +86,8 @@ func collectionEntryPoints() []urlEntryPoint {
 			name: "reader inbox ingest",
 			identity: func(t *testing.T, raw string) (string, error) {
 				store := &inboxIdentityStore{}
-				service := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
-				_, err := service.CreateInbox(context.Background(), dto.ReaderInboxCreateRequest{URL: raw})
+				service := newReaderTestFeatureSet(readerTestStores(store), nil, ReaderApplicationOptions{InboxProposalCommands: store})
+				_, err := service.CreateInbox(context.Background(), ReaderInboxCreateCommand{URL: raw})
 				if err != nil {
 					if store.created {
 						t.Fatalf("CreateInbox(%q) wrote an inbox row before failing", raw)
@@ -343,8 +343,8 @@ func TestRSSCapturePreservesDisplayURLAndUsesCanonicalIdentity(t *testing.T) {
 func TestReaderInboxPreservesDisplayURLAndStoresCanonicalIdentity(t *testing.T) {
 	submitted := "  HTTPS://WWW.Contract.Example.com//docs/guide/?b=2&a=1&utm_source=news#frag  "
 	store := &inboxIdentityStore{}
-	reader := NewReaderVNextService(readerTestStores(store), nil, ReaderVNextServiceOptions{InboxProposalCommands: store})
-	if _, err := reader.CreateInbox(context.Background(), dto.ReaderInboxCreateRequest{URL: submitted}); err != nil {
+	reader := newReaderTestFeatureSet(readerTestStores(store), nil, ReaderApplicationOptions{InboxProposalCommands: store})
+	if _, err := reader.CreateInbox(context.Background(), ReaderInboxCreateCommand{URL: submitted}); err != nil {
 		t.Fatalf("CreateInbox() error = %v", err)
 	}
 	if store.url != strings.TrimSpace(submitted) {

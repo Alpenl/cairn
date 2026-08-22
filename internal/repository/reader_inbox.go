@@ -316,7 +316,7 @@ func (r *PGXReaderVNextRepository) discardInboxOn(ctx context.Context, db databa
 func (r *PGXReaderVNextRepository) ConfirmInbox(ctx context.Context, id uuid.UUID, expectedRevision *int64) (uuid.UUID, error) {
 	var linkID uuid.UUID
 	err := r.withTx(ctx, func(db database.Querier) error {
-		result, err := r.confirmInboxOn(ctx, db, id, expectedRevision)
+		result, err := r.confirmInboxOn(ctx, db, id, expectedRevision, nil)
 		if err == nil && result.LinkID != nil {
 			linkID = *result.LinkID
 		}
@@ -325,7 +325,29 @@ func (r *PGXReaderVNextRepository) ConfirmInbox(ctx context.Context, id uuid.UUI
 	return linkID, err
 }
 
-func (r *PGXReaderVNextRepository) confirmInboxOn(ctx context.Context, db database.Querier, id uuid.UUID, expectedRevision *int64) (model.ReaderInboxBulkResult, error) {
+// ConfirmInboxTx confirms an Inbox capture in a caller-owned transaction so
+// canonical Link restoration and durable parse work commit together.
+func (r *PGXReaderVNextRepository) ConfirmInboxTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id uuid.UUID,
+	expectedRevision *int64,
+	lifecycle ReaderLinkLifecycle,
+) (uuid.UUID, error) {
+	result, err := r.confirmInboxOn(ctx, tx, id, expectedRevision, lifecycle)
+	if err != nil || result.LinkID == nil {
+		return uuid.Nil, err
+	}
+	return *result.LinkID, nil
+}
+
+func (r *PGXReaderVNextRepository) confirmInboxOn(
+	ctx context.Context,
+	db database.Querier,
+	id uuid.UUID,
+	expectedRevision *int64,
+	lifecycle ReaderLinkLifecycle,
+) (model.ReaderInboxBulkResult, error) {
 	item, err := lockInboxForConfirmation(ctx, db, id, expectedRevision)
 	if err != nil {
 		return model.ReaderInboxBulkResult{}, err
@@ -334,7 +356,7 @@ func (r *PGXReaderVNextRepository) confirmInboxOn(ctx context.Context, db databa
 	if err != nil {
 		return model.ReaderInboxBulkResult{}, err
 	}
-	linkID, err := r.resolveInboxConfirmationLink(ctx, db, *item, identityURL)
+	linkID, err := r.resolveInboxConfirmationLink(ctx, db, *item, identityURL, lifecycle)
 	if err != nil {
 		return model.ReaderInboxBulkResult{}, err
 	}
@@ -372,7 +394,13 @@ func inboxConfirmationIdentity(item model.ReaderInbox) (string, error) {
 	return identityURL, nil
 }
 
-func (r *PGXReaderVNextRepository) resolveInboxConfirmationLink(ctx context.Context, db database.Querier, item model.ReaderInbox, identityURL string) (*uuid.UUID, error) {
+func (r *PGXReaderVNextRepository) resolveInboxConfirmationLink(
+	ctx context.Context,
+	db database.Querier,
+	item model.ReaderInbox,
+	identityURL string,
+	lifecycle ReaderLinkLifecycle,
+) (*uuid.UUID, error) {
 	if err := lockCanonicalLinkIdentity(ctx, db, identityURL); err != nil {
 		return nil, err
 	}
@@ -393,7 +421,7 @@ func (r *PGXReaderVNextRepository) resolveInboxConfirmationLink(ctx context.Cont
 		linkID = matched
 	}
 	if !inserted {
-		if _, err := r.restoreLinkLifecycleOn(ctx, db, *linkID); err != nil {
+		if _, err := r.restoreLinkLifecycleOn(ctx, db, *linkID, lifecycle); err != nil {
 			return nil, err
 		}
 	}
@@ -511,6 +539,29 @@ func insertInboxSavedLink(ctx context.Context, db database.Querier, item model.R
 }
 
 func (r *PGXReaderVNextRepository) BulkConfirmInbox(ctx context.Context, confirmations []model.ReaderInboxBulkConfirmation) ([]model.ReaderInboxBulkResult, error) {
+	ids, expectedRevisions, err := readerInboxConfirmations(confirmations)
+	if err != nil {
+		return nil, err
+	}
+	return r.bulkConfirmInbox(ctx, ids, expectedRevisions)
+}
+
+// BulkConfirmInboxTx confirms a client-selected Inbox batch under one
+// caller-owned transaction and one durable Link lifecycle boundary.
+func (r *PGXReaderVNextRepository) BulkConfirmInboxTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	confirmations []model.ReaderInboxBulkConfirmation,
+	lifecycle ReaderLinkLifecycle,
+) ([]model.ReaderInboxBulkResult, error) {
+	ids, expectedRevisions, err := readerInboxConfirmations(confirmations)
+	if err != nil {
+		return nil, err
+	}
+	return r.bulkConfirmInboxOn(ctx, tx, ids, expectedRevisions, lifecycle)
+}
+
+func readerInboxConfirmations(confirmations []model.ReaderInboxBulkConfirmation) ([]uuid.UUID, map[uuid.UUID]*int64, error) {
 	ids := make([]uuid.UUID, 0, len(confirmations))
 	expectedRevisions := make(map[uuid.UUID]*int64, len(confirmations))
 	for _, confirmation := range confirmations {
@@ -520,13 +571,13 @@ func (r *PGXReaderVNextRepository) BulkConfirmInbox(ctx context.Context, confirm
 				continue
 			}
 			if previous == nil || confirmation.ExpectedRevision == nil || *previous != *confirmation.ExpectedRevision {
-				return nil, ErrRevisionConflict
+				return nil, nil, ErrRevisionConflict
 			}
 			continue
 		}
 		expectedRevisions[confirmation.ID] = confirmation.ExpectedRevision
 	}
-	return r.bulkConfirmInbox(ctx, ids, expectedRevisions)
+	return ids, expectedRevisions, nil
 }
 
 const readerInboxAIProposalBatchSize = 100
@@ -539,13 +590,44 @@ func (r *PGXReaderVNextRepository) ConfirmAIProposals(ctx context.Context, parti
 		return model.ReaderInboxAIProposalConfirmation{}, ErrReaderInboxStateConflict
 	}
 
-	result := model.ReaderInboxAIProposalConfirmation{Items: make([]model.ReaderInboxBulkResult, 0, readerInboxAIProposalBatchSize)}
+	var result model.ReaderInboxAIProposalConfirmation
 	err := r.withTx(ctx, func(db database.Querier) error {
-		partitionClause := `(inbox.expires_at IS NULL OR inbox.expires_at > NOW())`
-		if partition == model.ReaderInboxPartitionExpired {
-			partitionClause = `inbox.expires_at IS NOT NULL AND inbox.expires_at <= NOW()`
-		}
-		rows, err := db.Query(ctx, `
+		var err error
+		result, err = r.confirmAIProposalsOn(ctx, db, partition, nil)
+		return err
+	})
+	if err != nil {
+		return model.ReaderInboxAIProposalConfirmation{}, err
+	}
+	return result, nil
+}
+
+// ConfirmAIProposalsTx confirms the server-selected proposal batch in the
+// durable adapter's transaction.
+func (r *PGXReaderVNextRepository) ConfirmAIProposalsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	partition model.ReaderInboxPartition,
+	lifecycle ReaderLinkLifecycle,
+) (model.ReaderInboxAIProposalConfirmation, error) {
+	if !partition.Valid() {
+		return model.ReaderInboxAIProposalConfirmation{}, ErrReaderInboxStateConflict
+	}
+	return r.confirmAIProposalsOn(ctx, tx, partition, lifecycle)
+}
+
+func (r *PGXReaderVNextRepository) confirmAIProposalsOn(
+	ctx context.Context,
+	db database.Querier,
+	partition model.ReaderInboxPartition,
+	lifecycle ReaderLinkLifecycle,
+) (model.ReaderInboxAIProposalConfirmation, error) {
+	result := model.ReaderInboxAIProposalConfirmation{Items: make([]model.ReaderInboxBulkResult, 0, readerInboxAIProposalBatchSize)}
+	partitionClause := `(inbox.expires_at IS NULL OR inbox.expires_at > NOW())`
+	if partition == model.ReaderInboxPartitionExpired {
+		partitionClause = `inbox.expires_at IS NOT NULL AND inbox.expires_at <= NOW()`
+	}
+	rows, err := db.Query(ctx, `
 			SELECT `+readerInboxColumnsQualified+`
 			FROM reader_inbox inbox
 			WHERE inbox.status='pending'
@@ -556,49 +638,44 @@ func (r *PGXReaderVNextRepository) ConfirmAIProposals(ctx context.Context, parti
 			ORDER BY inbox.created_at ASC,inbox.id ASC
 			LIMIT $1
 			FOR UPDATE OF inbox`, readerInboxAIProposalBatchSize)
-		if err != nil {
-			return fmt.Errorf("select AI-ready inbox proposals: %w", err)
-		}
-		ids := make([]uuid.UUID, 0, readerInboxAIProposalBatchSize)
-		for rows.Next() {
-			item, scanErr := scanReaderInbox(rows)
-			if scanErr != nil {
-				rows.Close()
-				return fmt.Errorf("scan AI-ready inbox proposal: %w", scanErr)
-			}
-			ids = append(ids, item.ID)
-		}
-		if err := rows.Err(); err != nil {
+	if err != nil {
+		return model.ReaderInboxAIProposalConfirmation{}, fmt.Errorf("select AI-ready inbox proposals: %w", err)
+	}
+	ids := make([]uuid.UUID, 0, readerInboxAIProposalBatchSize)
+	for rows.Next() {
+		item, scanErr := scanReaderInbox(rows)
+		if scanErr != nil {
 			rows.Close()
-			return fmt.Errorf("read AI-ready inbox proposals: %w", err)
+			return model.ReaderInboxAIProposalConfirmation{}, fmt.Errorf("scan AI-ready inbox proposal: %w", scanErr)
 		}
+		ids = append(ids, item.ID)
+	}
+	if err := rows.Err(); err != nil {
 		rows.Close()
+		return model.ReaderInboxAIProposalConfirmation{}, fmt.Errorf("read AI-ready inbox proposals: %w", err)
+	}
+	rows.Close()
 
-		for _, id := range ids {
-			confirmed, confirmErr := r.confirmInboxOn(ctx, db, id, nil)
-			if confirmErr != nil {
-				return confirmErr
-			}
-			result.Items = append(result.Items, confirmed)
+	for _, id := range ids {
+		confirmed, confirmErr := r.confirmInboxOn(ctx, db, id, nil, lifecycle)
+		if confirmErr != nil {
+			return model.ReaderInboxAIProposalConfirmation{}, confirmErr
 		}
+		result.Items = append(result.Items, confirmed)
+	}
 
-		var remaining int
-		if err := db.QueryRow(ctx, `
+	var remaining int
+	if err := db.QueryRow(ctx, `
 			SELECT count(*)::int
 			FROM reader_inbox inbox
 			WHERE inbox.status='pending'
 				AND inbox.deleted_at IS NULL
 				AND `+partitionClause+`
-				AND btrim(COALESCE(inbox.title,'')) <> ''
-				AND inbox.proposal_status='completed'`).Scan(&remaining); err != nil {
-			return fmt.Errorf("count remaining AI-ready inbox proposals: %w", err)
-		}
-		result.RemainingCount = remaining
-		return nil
-	})
-	if err != nil {
-		return model.ReaderInboxAIProposalConfirmation{}, err
+			AND btrim(COALESCE(inbox.title,'')) <> ''
+			AND inbox.proposal_status='completed'`).Scan(&remaining); err != nil {
+		return model.ReaderInboxAIProposalConfirmation{}, fmt.Errorf("count remaining AI-ready inbox proposals: %w", err)
 	}
+	result.RemainingCount = remaining
 	return result, nil
 }
 
@@ -622,23 +699,33 @@ func prepareInboxBatch(ids []uuid.UUID) ([]uuid.UUID, []uuid.UUID, error) {
 }
 
 func (r *PGXReaderVNextRepository) bulkConfirmInbox(ctx context.Context, ids []uuid.UUID, expectedRevisions map[uuid.UUID]*int64) ([]model.ReaderInboxBulkResult, error) {
+	var results []model.ReaderInboxBulkResult
+	err := r.withTx(ctx, func(db database.Querier) error {
+		var err error
+		results, err = r.bulkConfirmInboxOn(ctx, db, ids, expectedRevisions, nil)
+		return err
+	})
+	return results, err
+}
+
+func (r *PGXReaderVNextRepository) bulkConfirmInboxOn(
+	ctx context.Context,
+	db database.Querier,
+	ids []uuid.UUID,
+	expectedRevisions map[uuid.UUID]*int64,
+	lifecycle ReaderLinkLifecycle,
+) ([]model.ReaderInboxBulkResult, error) {
 	unique, lockOrder, err := prepareInboxBatch(ids)
 	if err != nil {
 		return nil, err
 	}
 	byID := make(map[uuid.UUID]model.ReaderInboxBulkResult, len(unique))
-	err = r.withTx(ctx, func(db database.Querier) error {
-		for _, id := range lockOrder {
-			result, err := r.confirmInboxOn(ctx, db, id, expectedRevisions[id])
-			if err != nil {
-				return err
-			}
-			byID[id] = result
+	for _, id := range lockOrder {
+		result, err := r.confirmInboxOn(ctx, db, id, expectedRevisions[id], lifecycle)
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		byID[id] = result
 	}
 	results := make([]model.ReaderInboxBulkResult, 0, len(unique))
 	for _, id := range unique {

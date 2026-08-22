@@ -91,7 +91,7 @@ type RiverQueueOptions struct {
 	// multi-chunk translations. Zero falls back to JobTimeout.
 	TranslationJobTimeout time.Duration
 	// ReaderInboxProcessor is optional for parse-only test harnesses. Production
-	// wiring supplies the shared ReaderVNextService so durable Inbox summary
+	// wiring supplies the Reader Inbox processor so durable summary
 	// jobs run on this same River client.
 	ReaderInboxProcessor service.ReaderInboxSummaryJobProcessor
 	// MaxWorkers 是默认队列的并发 worker 数，映射自 PARSE_CONCURRENCY。<=0

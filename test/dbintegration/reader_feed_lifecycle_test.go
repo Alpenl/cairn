@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"webtag/internal/app/durablework"
 	"webtag/internal/model"
 	"webtag/internal/repository"
 	"webtag/internal/service"
@@ -16,7 +17,7 @@ import (
 )
 
 type failAfterFeedLifecycleCancel struct {
-	delegate repository.ReaderLinkLifecycleQueue
+	delegate durablework.ReaderLinkQueue
 	err      error
 }
 
@@ -41,6 +42,7 @@ func (q *failAfterFeedLifecycleCancel) CancelAllActiveTx(
 
 type readerFeedLifecycleFixture struct {
 	reader        *repository.PGXReaderVNextRepository
+	commands      *durablework.ReaderCommands
 	queue         *worker.RiverQueue
 	feedItemID    uuid.UUID
 	linkID        uuid.UUID
@@ -52,7 +54,7 @@ func TestReaderFeedLastUnsaveCancelsInflightLifecycleAtomically(t *testing.T) {
 	pool := StartPostgres(t)
 	fixture := seedReaderFeedInflightLifecycle(t, pool, "cancel")
 
-	result, err := fixture.reader.FeedbackFeed(
+	result, err := fixture.commands.FeedbackFeed(
 		t.Context(),
 		"subscription:"+fixture.feedItemID.String(),
 		"unsave",
@@ -74,15 +76,15 @@ func TestReaderFeedLastUnsaveRollsBackAfterLifecycleCancellationFailure(t *testi
 	pool := StartPostgres(t)
 	fixture := seedReaderFeedInflightLifecycle(t, pool, "cancel-rollback")
 	wantErr := errors.New("injected Feed lifecycle cancellation failure")
-	fixture.reader = repository.NewPGXReaderVNextRepositoryWithLinkLifecycle(
-		pool,
+	fixture.commands = durablework.NewReaderCommands(
+		pool, fixture.reader,
 		&failAfterFeedLifecycleCancel{
 			delegate: fixture.queue,
 			err:      wantErr,
 		},
 	)
 
-	_, err := fixture.reader.FeedbackFeed(
+	_, err := fixture.commands.FeedbackFeed(
 		t.Context(),
 		"subscription:"+fixture.feedItemID.String(),
 		"unsave",
@@ -116,14 +118,15 @@ func seedReaderFeedInflightLifecycle(
 	t.Helper()
 	ctx := t.Context()
 	queue := newRiverQueue(t, pool, newRecordingProcessor(pool))
-	reader := repository.NewPGXReaderVNextRepositoryWithLinkLifecycle(pool, queue)
+	reader := repository.NewPGXReaderVNextRepository(pool)
+	readerCommands := durablework.NewReaderCommands(pool, reader, queue)
 	feedItemID := seedReaderFeedSaveItem(
 		t,
 		pool,
 		"https://feed-lifecycle.example.test/"+suffix,
 		suffix,
 	)
-	saved, err := reader.FeedbackFeed(ctx, "subscription:"+feedItemID.String(), "save")
+	saved, err := readerCommands.FeedbackFeed(ctx, "subscription:"+feedItemID.String(), "save")
 	if err != nil || saved.LinkID == nil {
 		t.Fatalf("seed Feed save = %#v, %v", saved, err)
 	}
@@ -150,6 +153,7 @@ func seedReaderFeedInflightLifecycle(
 	)
 	fixture := readerFeedLifecycleFixture{
 		reader:        reader,
+		commands:      readerCommands,
 		queue:         queue,
 		feedItemID:    feedItemID,
 		linkID:        linkID,

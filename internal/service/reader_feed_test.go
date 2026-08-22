@@ -61,7 +61,7 @@ func TestReaderFeedServiceMapsLivePage(t *testing.T) {
 		},
 	}}
 
-	response, err := NewReaderVNextService(readerTestStores(store), nil).FeedWithSources(
+	response, err := newReaderTestFeatureSet(readerTestStores(store), nil).FeedWithSources(
 		context.Background(),
 		"recommended",
 		"cursor-before",
@@ -78,17 +78,17 @@ func TestReaderFeedServiceMapsLivePage(t *testing.T) {
 		len(store.filteredSources) != 2 || store.filteredSources[0] != "reading" || store.filteredSources[1] != "subscription" {
 		t.Fatalf("store request = mode %q after %q sources %v limit %d", store.mode, store.after, store.filteredSources, store.limit)
 	}
-	if got := response.Items[0].ResourceKey; got != "link:"+linkID.String() {
+	if got := response.Items[0].ResourceIdentity(); got != "link:"+linkID.String() {
 		t.Fatalf("reading resource_key = %q", got)
 	}
-	if got := response.Items[1].ResourceKey; got != "inbox:"+inboxID.String() {
+	if got := response.Items[1].ResourceIdentity(); got != "inbox:"+inboxID.String() {
 		t.Fatalf("inbox resource_key = %q", got)
 	}
-	if got := response.Items[2].ResourceKey; got != "link:"+linkedID.String() {
+	if got := response.Items[2].ResourceIdentity(); got != "link:"+linkedID.String() {
 		t.Fatalf("subscription resource_key = %q", got)
 	}
-	if !response.Items[2].EventAt.Equal(publishedAt) {
-		t.Fatalf("subscription event_at = %s, want %s", response.Items[2].EventAt, publishedAt)
+	if !response.Items[2].VisibleEventAt().Equal(publishedAt) {
+		t.Fatalf("subscription event_at = %s, want %s", response.Items[2].VisibleEventAt(), publishedAt)
 	}
 }
 
@@ -103,7 +103,7 @@ func TestReaderFeedServiceRejectsInvalidRequestBeforeStore(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &readerFeedStoreStub{}
-			_, err := NewReaderVNextService(readerTestStores(store), nil).FeedWithSources(context.Background(), test.mode, "", test.sources, 30)
+			_, err := newReaderTestFeatureSet(readerTestStores(store), nil).FeedWithSources(context.Background(), test.mode, "", test.sources, 30)
 			if err == nil || store.listCalls != 0 {
 				t.Fatalf("error = %v, list calls = %d", err, store.listCalls)
 			}
@@ -112,7 +112,7 @@ func TestReaderFeedServiceRejectsInvalidRequestBeforeStore(t *testing.T) {
 }
 
 func TestReaderFeedServiceRejectsNilPage(t *testing.T) {
-	_, err := NewReaderVNextService(readerTestStores(&readerFeedStoreStub{}), nil).FeedWithSources(context.Background(), "", "", nil, 30)
+	_, err := newReaderTestFeatureSet(readerTestStores(&readerFeedStoreStub{}), nil).FeedWithSources(context.Background(), "", "", nil, 30)
 	carrier, ok := httperr.As(err)
 	if !ok || carrier.HTTPStatus() != http.StatusInternalServerError {
 		t.Fatalf("error = %v, want 500", err)
@@ -122,7 +122,7 @@ func TestReaderFeedServiceRejectsNilPage(t *testing.T) {
 func TestReaderFeedServiceUsesCanonicalFeedbackIdentity(t *testing.T) {
 	itemKey := "subscription:" + uuid.NewString()
 	store := &readerFeedStoreStub{}
-	response, err := NewReaderVNextService(readerTestStores(store), nil).FeedbackFeed(context.Background(), "  "+itemKey+"  ", "save")
+	response, err := newReaderTestFeatureSet(readerTestStores(store), nil).FeedbackFeed(context.Background(), "  "+itemKey+"  ", "save")
 	if err != nil || response.LinkID == nil {
 		t.Fatalf("FeedbackFeed() error = %v", err)
 	}
@@ -134,7 +134,7 @@ func TestReaderFeedServiceUsesCanonicalFeedbackIdentity(t *testing.T) {
 func TestReaderFeedServiceRejectsNonSubscriptionSave(t *testing.T) {
 	for _, source := range []string{"link", "inbox"} {
 		store := &readerFeedStoreStub{}
-		_, err := NewReaderVNextService(readerTestStores(store), nil).FeedbackFeed(context.Background(), source+":"+uuid.NewString(), "save")
+		_, err := newReaderTestFeatureSet(readerTestStores(store), nil).FeedbackFeed(context.Background(), source+":"+uuid.NewString(), "save")
 		if err == nil || store.feedbackCalls != 0 {
 			t.Fatalf("source %s: error = %v, feedback calls = %d", source, err, store.feedbackCalls)
 		}
@@ -143,7 +143,7 @@ func TestReaderFeedServiceRejectsNonSubscriptionSave(t *testing.T) {
 
 func TestReaderFeedServiceRejectsRemovedRecommendationFeedback(t *testing.T) {
 	store := &readerFeedStoreStub{}
-	_, err := NewReaderVNextService(readerTestStores(store), nil).FeedbackFeed(
+	_, err := newReaderTestFeatureSet(readerTestStores(store), nil).FeedbackFeed(
 		context.Background(),
 		"subscription:"+uuid.NewString(),
 		"not_interested",

@@ -56,7 +56,7 @@ type ReaderTodoRoutes interface {
 	DeleteTodo(context.Context, string) error
 }
 
-type ReaderAggregateRoutes interface {
+type ReaderLibraryRoutes interface {
 	GetEngagement(context.Context, string) (dto.ReaderEngagementResponse, error)
 	PatchEngagement(context.Context, string, dto.ReaderEngagementRequest) (dto.ReaderEngagementResponse, error)
 	Home(context.Context) (dto.ReaderHomeResponse, error)
@@ -75,19 +75,19 @@ type ReaderHostRoutes interface {
 }
 
 // ReaderRoutes keeps each Reader feature independently replaceable and
-// testable. Production currently wires one service into every field.
+// testable. Production wires one feature-specific HTTP adapter into each field.
 type ReaderRoutes struct {
-	Thoughts  ReaderThoughtRoutes
-	Notes     ReaderNoteRoutes
-	Inbox     ReaderInboxRoutes
-	Todos     ReaderTodoRoutes
-	Aggregate ReaderAggregateRoutes
-	Hosts     ReaderHostRoutes
+	Thoughts ReaderThoughtRoutes
+	Notes    ReaderNoteRoutes
+	Inbox    ReaderInboxRoutes
+	Todos    ReaderTodoRoutes
+	Library  ReaderLibraryRoutes
+	Hosts    ReaderHostRoutes
 }
 
 func (r ReaderRoutes) Enabled() bool {
 	return r.Thoughts != nil || r.Notes != nil || r.Inbox != nil ||
-		r.Todos != nil || r.Aggregate != nil || r.Hosts != nil
+		r.Todos != nil || r.Library != nil || r.Hosts != nil
 }
 
 // RegisterReaderRoutes mounts only the Reader vNext endpoints. The existing
@@ -106,8 +106,8 @@ func RegisterReaderRoutes(router gin.IRouter, reader ReaderRoutes) {
 	if reader.Todos != nil {
 		registerReaderTodoRoutes(router, apiRoutePrefix, reader.Todos)
 	}
-	if reader.Aggregate != nil {
-		registerReaderAggregateRoutes(router, apiRoutePrefix, reader.Aggregate)
+	if reader.Library != nil {
+		registerReaderLibraryRoutes(router, apiRoutePrefix, reader.Library)
 	}
 	if reader.Hosts != nil {
 		registerReaderHostLifecycleRoutes(router, apiRoutePrefix, reader.Hosts)
@@ -167,7 +167,7 @@ func registerReaderTodoRoutes(router gin.IRouter, prefix string, reader ReaderTo
 	router.DELETE(prefix+"/todos/:id", readerDeleteTodo(reader))
 }
 
-func registerReaderAggregateRoutes(router gin.IRouter, prefix string, reader ReaderAggregateRoutes) {
+func registerReaderLibraryRoutes(router gin.IRouter, prefix string, reader ReaderLibraryRoutes) {
 	router.GET(prefix+"/home", readerHome(reader))
 	router.GET(prefix+"/reader-feed", readerFeed(reader))
 	router.POST(prefix+"/reader-feed/feedback", readerFeedFeedback(reader))
