@@ -7,13 +7,14 @@ linters:
   #   - 第一波（v0）：errcheck/govet/ineffassign/staticcheck/unused
   #   - 第二波（M5 errsafe 漂移防御）：bodyclose/errorlint/gocyclo/gocritic/
   #     misspell/nilerr/gosec
-  # depguard（handler→repository 方向）需要先做架构梳理，留给后续 PR。
+  # depguard 只守住后端层级方向，避免业务/持久层重新依赖 HTTP 适配层。
   enable:
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
+    - depguard
     - bodyclose    # HTTP response body 未关闭，errsafe 漂移高风险点
     - errorlint    # %v→%w wrap 漂移；err == ErrXxx 应改 errors.Is
     - gocyclo      # 复杂度阈值 15，超出需 //nolint:gocyclo // reason
@@ -31,6 +32,38 @@ linters:
         - (io.Closer).Close
     gocyclo:
       min-complexity: 15
+    depguard:
+      rules:
+        backend-layer-boundary:
+          files:
+            - "internal/service/*.go"
+            - "internal/service/**/*.go"
+            - "**/internal/service/*.go"
+            - "**/internal/service/**/*.go"
+            - "internal/repository/*.go"
+            - "internal/repository/**/*.go"
+            - "**/internal/repository/*.go"
+            - "**/internal/repository/**/*.go"
+            - "internal/worker/*.go"
+            - "internal/worker/**/*.go"
+            - "**/internal/worker/*.go"
+            - "**/internal/worker/**/*.go"
+            - "internal/feed/*.go"
+            - "internal/feed/**/*.go"
+            - "**/internal/feed/*.go"
+            - "**/internal/feed/**/*.go"
+            - "internal/app/durablework/*.go"
+            - "internal/app/durablework/**/*.go"
+            - "**/internal/app/durablework/*.go"
+            - "**/internal/app/durablework/**/*.go"
+            - "!$test"
+          deny:
+            - pkg: "webtag/internal/handler"
+              desc: lower backend layers must not depend on HTTP handlers
+            - pkg: "webtag/internal/middleware"
+              desc: middleware belongs to HTTP assembly
+            - pkg: "webtag/internal/httperr"
+              desc: use internal/problem below handler; httperr is the HTTP adapter
     gosec:
       # G104：unhandled errors 已经由 errcheck 负责，重复报噪音大
       # G404：math/rand 用于非加密场景（jitter、采样），项目内已有判断
