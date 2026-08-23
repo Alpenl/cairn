@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SitesView } from './SitesView'
-import type { ReaderClient } from '../lib/api/client'
+import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type {
   ListSitesParams,
   SiteDetailResponse,
@@ -13,6 +13,7 @@ import { resourceStore } from '../lib/cache/store'
 import { err, ok } from '../lib/api/result'
 import { enabledReaderCapabilityLease } from '../test/capabilities'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
+import { IdentityLease } from '../lib/identity'
 
 const site: SiteListItemResponse = {
   id: '11111111-1111-1111-1111-111111111111',
@@ -80,7 +81,34 @@ function sitePage(items: SiteListItemResponse[], params: ListSitesParams = {}) {
   return ok({ items: items.slice(start, start + limit), total: items.length, page, limit })
 }
 
-beforeEach(() => resourceStore.clear())
+let testNumber = 0
+let identityLease: IdentityLease
+
+function makeIdentityLease(prefix: string): IdentityLease {
+  return new IdentityLease({
+    serverClientDataNamespace: `${prefix}-server`,
+    physicalNamespace: `${prefix}-physical`,
+    localEpoch: testNumber,
+  })
+}
+
+function bindClient<T extends object>(client: T): T & IdentityBoundReaderClient {
+  return {
+    identityLease,
+    ...client,
+  } as unknown as T & IdentityBoundReaderClient
+}
+
+beforeEach(() => {
+  testNumber += 1
+  identityLease = makeIdentityLease(`sites-view-${testNumber}`)
+  resourceStore.clear()
+  resourceStore.activateIdentity(identityLease)
+})
+
+afterEach(() => {
+  resourceStore.deactivateIdentity()
+})
 
 function capabilityClient(siteDetail: SiteDetailResponse = detail) {
   const getSites = vi.fn(async () => ok({ items: [site], total: 1, page: 1, limit: 30 }))
@@ -96,7 +124,7 @@ function capabilityClient(siteDetail: SiteDetailResponse = detail) {
   const executeSiteMerge = vi.fn()
   const previewSiteSplit = vi.fn()
   const executeSiteSplit = vi.fn()
-  const client = {
+  const client = bindClient({
     isIdentityCurrent: vi.fn(() => true),
     getSites,
     getSite,
@@ -111,7 +139,7 @@ function capabilityClient(siteDetail: SiteDetailResponse = detail) {
     executeSiteMerge,
     previewSiteSplit,
     executeSiteSplit,
-  } as unknown as ReaderClient
+  })
   return {
     client,
     getSites,
@@ -132,7 +160,7 @@ function capabilityClient(siteDetail: SiteDetailResponse = detail) {
   }
 }
 
-function sitesElement(client: ReaderClient, capabilityLease: ReaderCapabilityLease) {
+function sitesElement(client: IdentityBoundReaderClient, capabilityLease: ReaderCapabilityLease) {
   return (
     <SitesView
       client={client}
@@ -178,7 +206,7 @@ const splitDetail: SiteDetailResponse = {
   ],
 }
 
-async function openSplitDialog(client: ReaderClient, onToast = vi.fn()) {
+async function openSplitDialog(client: IdentityBoundReaderClient, onToast = vi.fn()) {
   render(
     <SitesView
       client={client}
@@ -289,13 +317,13 @@ describe('SitesView card grid', () => {
 
   it('reserves no detail pane until a card is selected and toggles it closed', async () => {
     const getSite = vi.fn(async () => ok(detail))
-    const client = {
+    const client = bindClient({
       isIdentityCurrent: vi.fn(() => true),
       getSites: vi.fn(async () =>
         ok({ items: [site], total: 1, page: 1, limit: 30 }),
       ),
       getSite,
-    } as unknown as ReaderClient
+    })
     const { container } = render(
       <SitesView
         client={client}
@@ -331,10 +359,10 @@ describe('SitesView card grid', () => {
 
   it('网站工作区复用 canonical surface/tool 导航', async () => {
     const onNavigate = vi.fn()
-    const client = {
+    const client = bindClient({
       isIdentityCurrent: vi.fn(() => true),
       getSites: vi.fn(async () => ok({ items: [], total: 0, page: 1, limit: 30 })),
-    } as unknown as ReaderClient
+    })
 
     render(
       <SitesView
@@ -370,11 +398,11 @@ describe('SitesView card grid', () => {
       if (!item) throw new Error(`unknown site ${id}`)
       return ok(numberedDetail(item))
     })
-    const client = {
+    const client = bindClient({
       isIdentityCurrent: vi.fn(() => true),
       getSites,
       getSite,
-    } as unknown as ReaderClient
+    })
     const { container } = render(
       <SitesView
         client={client}
@@ -427,13 +455,13 @@ describe('SitesView card grid', () => {
       moved_entries: 2,
       deleted_duplicate_links: 0,
     }))
-    const client = {
+    const client = bindClient({
       isIdentityCurrent: vi.fn(() => true),
       getSites,
       getSite,
       previewSiteMerge,
       executeSiteMerge,
-    } as unknown as ReaderClient
+    })
     const { container } = render(
       <SitesView
         client={client}
@@ -506,13 +534,13 @@ describe('SitesView card grid', () => {
       })
     })
     const executeSiteSplit = vi.fn(async (_siteID: string, _request: SiteSplitRequest) => ok({ source_site_id: splitDetail.id, source_revision: 4, new_site_id: '88888888-8888-8888-8888-888888888888', new_site_revision: 1, moved_entries: 1 }))
-    const client = {
+    const client = bindClient({
       isIdentityCurrent: vi.fn(() => true),
       getSites: vi.fn(async () => ok({ items: [site], total: 1, page: 1, limit: 60 })),
       getSite: vi.fn(async () => ok(splitDetail)),
       previewSiteSplit,
       executeSiteSplit,
-    } as unknown as ReaderClient
+    })
     await openSplitDialog(client)
 
     expect(screen.getByLabelText('新网站名称')).toHaveValue('')
@@ -579,13 +607,13 @@ describe('SitesView card grid', () => {
       detailReads += 1
       return ok(detailReads === 1 ? splitDetail : refreshedSplitDetail)
     })
-    const client = {
+    const client = bindClient({
       isIdentityCurrent: vi.fn(() => true),
       getSites: vi.fn(async () => ok({ items: [site], total: 1, page: 1, limit: 60 })),
       getSite,
       previewSiteSplit,
       executeSiteSplit,
-    } as unknown as ReaderClient
+    })
     await openSplitDialog(client, onToast)
 
     fireEvent.click(screen.getByRole('checkbox', { name: /API reference/ }))
@@ -645,11 +673,11 @@ describe('SitesView 对话框外壳', () => {
   })
 
   it('「拆分网站」空闲时按下 backdrop 关闭，表单仍由 submit 触发预览', async () => {
-    const client = {
+    const client = bindClient({
       isIdentityCurrent: vi.fn(() => true),
       getSites: vi.fn(async () => ok({ items: [site], total: 1, page: 1, limit: 60 })),
       getSite: vi.fn(async () => ok(splitDetail)),
-    } as unknown as ReaderClient
+    })
     await openSplitDialog(client)
     const dialog = await screen.findByRole('dialog', { name: '拆分网站' })
 
@@ -713,13 +741,13 @@ describe('SitesView 对话框外壳', () => {
   it('转换进行中，关闭按钮、Escape 和 backdrop 三条路径都关不掉「移到阅读」', async () => {
     let release: ((value: unknown) => void) | undefined
     const convertLink = vi.fn(() => new Promise((resolve) => { release = resolve }))
-    const client = {
+    const client = bindClient({
       isIdentityCurrent: vi.fn(() => true),
       getSites: vi.fn(async () => ok({ items: [site], total: 1, page: 1, limit: 30 })),
       getSite: vi.fn(async () => ok(detail)),
       getLink: vi.fn(async () => ok({ content_revision: 7 })),
       convertLink,
-    } as unknown as ReaderClient
+    })
     render(sitesElement(client, enabledReaderCapabilityLease()))
     await openCapabilityDetail()
 
