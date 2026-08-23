@@ -9,7 +9,6 @@ import (
 
 	"webtag/internal/model"
 	"webtag/internal/repository"
-	readerservice "webtag/internal/service"
 )
 
 type readerTodoProjectionRow struct {
@@ -57,7 +56,7 @@ func TestReaderDismissedTodoProjectionStaysDismissed(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	reader := repository.NewPGXReaderVNextRepository(pool)
-	service := readerservice.NewReaderApplications(postgresReaderStores(reader), nil).Todos
+	service := postgresReaderApplications(reader).Todos
 
 	note, err := reader.CreateNote(ctx, model.ReaderNote{
 		Title: "Dismissed projection host", PublishedContent: "- [ ] dismissed by the user",
@@ -132,7 +131,7 @@ func TestReaderDismissedTodoProjectionSurvivesSourceRewrite(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	reader := repository.NewPGXReaderVNextRepository(pool)
-	service := readerservice.NewReaderApplications(postgresReaderStores(reader), nil).Todos
+	service := postgresReaderApplications(reader).Todos
 
 	note, err := reader.CreateNote(ctx, model.ReaderNote{
 		Title: "Rewritten projection host", PublishedContent: "- [ ] rewritten by the source",

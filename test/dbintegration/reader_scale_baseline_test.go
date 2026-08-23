@@ -43,7 +43,6 @@ import (
 	"webtag/internal/handler"
 	"webtag/internal/model"
 	"webtag/internal/repository"
-	"webtag/internal/service"
 )
 
 const (
@@ -444,7 +443,7 @@ func TestReaderScaleFixtureContract(t *testing.T) {
 	tracer := &readerScaleTracer{}
 	tracedPool := newReaderScaleTracedPool(t, tracer)
 	repo := repository.NewPGXReaderVNextRepository(tracedPool)
-	applications := service.NewReaderApplications(postgresReaderStores(repo), nil)
+	applications := postgresReaderApplications(repo)
 	deps := readerScaleDeps{repo: repo, library: handler.NewReaderLibraryRoutes(applications.Library), todos: handler.NewReaderTodoRoutes(applications.Todos), inbox: handler.NewReaderInboxRoutes(applications.Inbox)}
 	ctx := t.Context()
 
@@ -687,7 +686,7 @@ func TestReaderScaleHotPathMeasurements(t *testing.T) {
 	tracer := &readerScaleTracer{}
 	tracedPool := newReaderScaleTracedPool(t, tracer)
 	repo := repository.NewPGXReaderVNextRepository(tracedPool)
-	applications := service.NewReaderApplications(postgresReaderStores(repo), nil)
+	applications := postgresReaderApplications(repo)
 	deps := readerScaleDeps{repo: repo, library: handler.NewReaderLibraryRoutes(applications.Library), todos: handler.NewReaderTodoRoutes(applications.Todos), inbox: handler.NewReaderInboxRoutes(applications.Inbox)}
 	ctx := t.Context()
 
