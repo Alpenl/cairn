@@ -54,6 +54,7 @@ jobs:
       android: ${{ steps.decide.outputs.android }}
       ios: ${{ steps.decide.outputs.ios }}
       database: ${{ steps.decide.outputs.database }}
+      delivery: ${{ steps.decide.outputs.delivery }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -75,7 +76,7 @@ jobs:
           # 而且 merge_group 事件没有可靠的 base 可比。
           if [ "$EVENT_NAME" != "pull_request" ]; then
             echo "事件为 $EVENT_NAME，跳过路径过滤，全部执行"
-            for surface in go lint reader extension android ios database; do
+            for surface in go lint reader extension android ios database delivery; do
               emit "$surface" true
             done
             exit 0
@@ -171,6 +172,13 @@ jobs:
       contents: read
     uses: ./.github/workflows/dbintegration.yml
 
+  delivery:
+    needs: changes
+    if: needs.changes.outputs.delivery == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/delivery.yml
+
   # ---------------------------------------------------------------- 汇总闸门
   gate:
     name: gate
@@ -180,7 +188,7 @@ jobs:
     # ⚠ 本文件里新增任何 job 都必须同时加进下面的 needs。不加不会报错——它只是不再
     # 参与门禁，看起来仍然在跑，红了也照样能合。
     if: always()
-    needs: [changes, commitlint, go, lint, reader, extension, android, ios, database]
+    needs: [changes, commitlint, go, lint, reader, extension, android, ios, database, delivery]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

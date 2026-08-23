@@ -2,16 +2,18 @@
 
 import { fileURLToPath } from 'node:url'
 
-export const surfaces = ['go', 'lint', 'reader', 'extension', 'android', 'ios', 'database']
+export const surfaces = ['go', 'lint', 'reader', 'extension', 'android', 'ios', 'database', 'delivery']
 
 const patterns = {
-  go: /^(cmd|internal|test)\/|^go\.(mod|sum)$|^vendor\/|^Makefile$|^Dockerfile$|^\.env\.example$|^scripts\/(version(\.test)?|container_smoke|db_migrate_smoke|db-dump-schema)\.sh$|^\.github\/workflows\/go-verify\.yml$/,
-  lint: /^(cmd|internal|test)\/|^go\.(mod|sum)$|^vendor\/|^Makefile$|^\.golangci|^\.github\/workflows\//,
+  go: /^(cmd|internal|test)\/|^go\.(mod|sum)$|^vendor\/|^Makefile$|^Dockerfile$|^\.dockerignore$|^\.env\.example$|^scripts\/(version(\.test)?|container_smoke|db_migrate_smoke|db-dump-schema)\.sh$|^\.github\/workflows\/go-verify\.yml$/,
+  lint: /^(cmd|internal|test)\/|^go\.(mod|sum)$|^vendor\/|^Makefile$|^Dockerfile$|^\.dockerignore$|^\.golangci|^\.github\/workflows\/|^scripts\/verify-action-pins\.sh$/,
   reader: /^(reader|packages)\/|^internal\/app\/assets\/openapi\.json$|^pnpm-|^package\.json$|^\.github\/workflows\/reader-ci\.yml$/,
   extension: /^(extension|packages)\/|^internal\/app\/assets\/openapi\.json$|^pnpm-|^package\.json$|^\.github\/workflows\/extension-ci\.yml$/,
   android: /^mobile\/(android|shared)\/|^scripts\/mobile-|^\.github\/workflows\/mobile-android\.yml$/,
   ios: /^mobile\/(ios|shared)\/|^scripts\/mobile-|^\.github\/workflows\/mobile-ios\.yml$/,
-  database: /^internal\/|^test\/dbintegration\/|\.sql$|^go\.(mod|sum)$|^scripts\/(db-dump-schema|db_migrate_smoke)\.sh$|^\.github\/workflows\/dbintegration\.yml$/,
+  database: /^internal\/|^test\/dbintegration\/|\.sql$|^go\.(mod|sum)$|^scripts\/(db-dump-schema|db_migrate_smoke|migrate-dbintegration)\.sh$|^\.github\/workflows\/dbintegration\.yml$/,
+  delivery:
+    /^(?:Dockerfile$|\.dockerignore$|\.env\.example$|Makefile$|(?:deploy|legal\/core|\.github\/rulesets)\/|\.github\/workflows\/(?:ci|delivery|release-core)\.yml$|scripts\/(?:ci-path-filter(?:\.test)?|ci-run-diagnose(?:\.test)?|validate-main-ruleset(?:\.test)?|deploy-contracts\.test|cairn-install(?:\.test)?|migrate-dbintegration|container_smoke|db_migrate_smoke|reader-vnext-release(?:\.test)?|core-(?:legal|release-(?:series|build|verify|manifest|promote))(?:\.test)?)\.(?:mjs|sh)$|scripts\/core_release_workflow_test\.go$)/,
 }
 
 const dispatcherPattern =
