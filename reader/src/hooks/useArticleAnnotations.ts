@@ -39,11 +39,11 @@ import {
 import type { IdentityLease } from '../lib/identity'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../lib/reader-events'
 import {
-  commitAnnotationOperation,
   compactAnnotationOperations,
   listAnnotatedLinks,
   readAnnotationSnapshot,
 } from '../lib/user-data/annotation-store'
+import type { AnnotationOperationInput } from '../lib/user-data/annotation-types'
 
 export interface ArticleAnnotationRevisionChange {
   readonly previousRevision: number
@@ -491,20 +491,29 @@ export function useArticleAnnotations(
         setReanchorState({ identityKey, status: 'failed' })
         return { status: 'failed', reanchoredCount, historicalCount, results }
       }
-      const committed = await commitAnnotationOperation(lease, operation, { signal })
-      if (!committed.ok || committed.value.status === 'op-id-conflict') {
-        const status = signal.aborted ? 'stale' : 'failed'
+      const committed = await commitAnnotationCommand({
+        lease,
+        linkId,
+        target,
+        operation,
+        annotationId: result.annotation.id,
+        commandSignal: signal,
+        afterCommit: (outcome) => {
+          const hint: AnnotationChangeHintInput = {
+            linkId,
+            documentRevision: currentRevision,
+            annotationStoreVersion: outcome.annotationStoreVersion,
+          }
+          channelRef.current?.publish(hint)
+          emitReaderEvent(READER_EVENTS.annotationsChanged)
+          scheduleCompaction(lease, linkId, target)
+        },
+      })
+      if (committed.status !== 'committed' && committed.status !== 'duplicate') {
+        const status = committed.status === 'stale' ? 'stale' : 'failed'
         setReanchorState({ identityKey, status })
         return { status, reanchoredCount, historicalCount, results }
       }
-      const hint: AnnotationChangeHintInput = {
-        linkId,
-        documentRevision: currentRevision,
-        annotationStoreVersion: committed.value.annotationStoreVersion,
-      }
-      channelRef.current?.publish(hint)
-      emitReaderEvent(READER_EVENTS.annotationsChanged)
-      scheduleCompaction(lease, linkId, target)
       reanchoredCount += 1
     }
 
@@ -586,7 +595,7 @@ export function useArticleAnnotations(
   }, [refresh])
 
   const commit = useCallback(async (
-    operation: Parameters<typeof commitAnnotationOperation>[1],
+    operation: AnnotationOperationInput,
     target: AnnotationTarget,
     annotationId: string,
     options: ArticleAnnotationCommandOptions | undefined,

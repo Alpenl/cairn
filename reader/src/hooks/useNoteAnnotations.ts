@@ -8,15 +8,21 @@ import {
   type AnnotationPatch,
   type NoteAnnotationTarget,
 } from '../lib/annotation-domain'
+import {
+  buildAnnotationAddOperation,
+  buildAnnotationDeleteOperation,
+  buildAnnotationUpdateOperation,
+  commitAnnotationCommand,
+  loadAnnotationTargets,
+  randomAnnotationCommandToken,
+  type AnnotationCommandResult,
+} from '../lib/annotation-commands'
 import type { IdentityLease } from '../lib/identity'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../lib/reader-events'
 import {
   compactAnnotationOperations,
-  commitAnnotationOperation,
-  readAnnotationSnapshot,
-  type AnnotationCommitResult,
 } from '../lib/user-data/annotation-store'
-import { cloneTargetAnnotation } from '../lib/user-data/annotation-codec'
+import type { AnnotationOperationInput } from '../lib/user-data/annotation-types'
 
 export type NoteAnnotationCommandResult =
   | {
@@ -38,22 +44,11 @@ export interface UseNoteAnnotationsResult {
 
 const EMPTY_ANNOTATIONS: readonly Annotation[] = Object.freeze([])
 
-function randomToken(): string | null {
-  try {
-    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
-    const bytes = new Uint8Array(16)
-    crypto.getRandomValues(bytes)
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
-  } catch {
-    return null
-  }
-}
-
-function commandResult(result: AnnotationCommitResult, annotationId: string): NoteAnnotationCommandResult {
-  if (result.status === 'op-id-conflict') return { status: result.status }
+function noteCommandResult(result: AnnotationCommandResult): NoteAnnotationCommandResult {
+  if (result.status !== 'committed' && result.status !== 'duplicate') return result
   return {
     status: result.status,
-    annotationId,
+    annotationId: result.annotationId,
     sequence: result.sequence,
   }
 }
@@ -105,13 +100,13 @@ export function useNoteAnnotations(
     updateState(stateRef.current.identityKey === identityKey
       ? { ...stateRef.current, status: 'loading' }
       : { identityKey, status: 'loading', annotations: EMPTY_ANNOTATIONS })
-    const result = await readAnnotationSnapshot(lease, noteID, target)
+    const result = await loadAnnotationTargets(lease, noteID, [target])
     if (generation.controller.signal.aborted) return false
     if (!result.ok) {
       updateState({ identityKey, status: 'error', annotations: EMPTY_ANNOTATIONS })
       return false
     }
-    updateState({ identityKey, status: 'ready', annotations: result.value.annotations })
+    updateState({ identityKey, status: 'ready', annotations: result.annotations })
     return true
   }, [generation, identityKey, lease, noteID, target, updateState])
 
@@ -137,79 +132,73 @@ export function useNoteAnnotations(
   }, [refresh])
 
   const commit = useCallback(async (
-    operation: Parameters<typeof commitAnnotationOperation>[1],
+    operation: AnnotationOperationInput,
     annotationId: string,
   ): Promise<NoteAnnotationCommandResult> => {
     if (!lease || !noteID || !target || generation.controller.signal.aborted) return { status: 'stale' }
-    const result = await commitAnnotationOperation(lease, operation, {
-      signal: generation.controller.signal,
+    const outcome = await commitAnnotationCommand({
+      lease,
+      linkId: noteID,
+      target,
+      operation,
+      annotationId,
+      commandSignal: generation.controller.signal,
+      afterCommit: async () => {
+        await refresh()
+        emitReaderEvent(READER_EVENTS.annotationsChanged)
+        void compactAnnotationOperations(lease, noteID, target)
+      },
     })
-    if (!result.ok) return generation.controller.signal.aborted ? { status: 'stale' } : { status: 'failed' }
-    const outcome = commandResult(result.value, annotationId)
-    if (outcome.status === 'op-id-conflict') return outcome
-    await refresh()
-    emitReaderEvent(READER_EVENTS.annotationsChanged)
-    void compactAnnotationOperations(lease, noteID, target)
-    return outcome
+    return noteCommandResult(outcome)
   }, [generation, lease, noteID, refresh, target])
 
   const add = useCallback(async (input: AnnotationInput): Promise<NoteAnnotationCommandResult> => {
     if (!target || !noteID) return { status: 'stale' }
-    const annotationToken = randomToken()
-    const operationToken = randomToken()
+    const annotationToken = randomAnnotationCommandToken()
+    const operationToken = randomAnnotationCommandToken()
     if (!annotationToken || !operationToken) return { status: 'failed' }
     const annotationId = `an:${annotationToken}`
-    const now = Date.now()
-    return commit({
-      kind: 'add',
-      opId: `op:${operationToken}`,
+    const operation = buildAnnotationAddOperation({
       linkId: noteID,
       target,
-      draft: {
-        id: annotationId,
-        blockKey: input.blockKey || 'note',
-        start: input.start,
-        end: input.end,
-        text: input.text,
-        note: input.note ?? '',
-        source: input.source ?? 'self',
-        createdAt: now,
-        updatedAt: now,
-        quote: input.quote,
-      },
-    }, annotationId)
+      annotationId,
+      opId: `op:${operationToken}`,
+      annotation: input,
+    })
+    if (!operation) return { status: 'unsupported' }
+    return commit(operation, annotationId)
   }, [commit, noteID, target])
 
   const update = useCallback(async (
     annotation: Annotation,
     patch: AnnotationPatch,
   ): Promise<NoteAnnotationCommandResult> => {
-    if (!target || !noteID || annotation.sourceNoteRevision !== target.noteRevision ||
-      !cloneTargetAnnotation(annotation, target)) return { status: 'stale' }
-    const operationToken = randomToken()
+    if (!target || !noteID) return { status: 'stale' }
+    const operationToken = randomAnnotationCommandToken()
     if (!operationToken) return { status: 'failed' }
-    return commit({
-      kind: 'update',
-      opId: `op:${operationToken}`,
+    const operation = buildAnnotationUpdateOperation({
       linkId: noteID,
       target,
-      annotationId: annotation.id,
-      patch: { ...patch, updatedAt: Date.now() },
-    }, annotation.id)
+      annotation,
+      patch,
+      opId: `op:${operationToken}`,
+    })
+    if (!operation) return { status: 'stale' }
+    return commit(operation, annotation.id)
   }, [commit, noteID, target])
 
   const remove = useCallback(async (annotation: Annotation): Promise<NoteAnnotationCommandResult> => {
-    if (!target || !noteID || annotation.sourceNoteRevision !== target.noteRevision ||
-      !cloneTargetAnnotation(annotation, target)) return { status: 'stale' }
-    const operationToken = randomToken()
+    if (!target || !noteID) return { status: 'stale' }
+    const operationToken = randomAnnotationCommandToken()
     if (!operationToken) return { status: 'failed' }
-    return commit({
-      kind: 'delete',
-      opId: `op:${operationToken}`,
+    const operation = buildAnnotationDeleteOperation({
       linkId: noteID,
       target,
-      annotationId: annotation.id,
-    }, annotation.id)
+      opId: `op:${operationToken}`,
+      annotation,
+    })
+    if (!operation) return { status: 'stale' }
+    return commit(operation, annotation.id)
   }, [commit, noteID, target])
 
   const visibleState = state.identityKey === identityKey ? state : null
