@@ -499,14 +499,18 @@ describe('createSessionCaptureStore — storage 抛错容错', () => {
   it('setInFlight 失败的 warn 文案点出「跨 SW 续跑失效」语义', async () => {
     const store = createTestCaptureStore(makeThrowingArea())
     await store.setInFlight(makeInFlight())
-    const messages = warnSpy.mock.calls.map((c) => String(c[0]))
+    const messages: string[] = warnSpy.mock.calls.map((call: unknown[]) =>
+      String(call[0]),
+    )
     expect(messages.some((m) => m.includes('setInFlight'))).toBe(true)
   })
 
   it('clearInFlight 失败的 warn 文案点出「僵尸记录由陈旧判定自愈」语义', async () => {
     const store = createTestCaptureStore(makeThrowingArea())
     await store.clearInFlight()
-    const messages = warnSpy.mock.calls.map((c) => String(c[0]))
+    const messages: string[] = warnSpy.mock.calls.map((call: unknown[]) =>
+      String(call[0]),
+    )
     expect(messages.some((m) => m.includes('clearInFlight'))).toBe(true)
   })
 

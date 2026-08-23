@@ -503,7 +503,6 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
   ): Promise<CaptureSnapshot> {
     if (!(await activationIsCurrent(activation)))
       return abandonCapture(activation)
-    const client = activation.client
     const url = source.url ?? ''
     const title = source.title ?? ''
 
@@ -536,8 +535,8 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
       return snapshot
     }
 
-    // A duplicate library URL can return its existing failed state. It is not
-    // an implicit retry; explicit retry remains refreshLink.
+    // A duplicate library URL can return its existing failed state. Treat that
+    // as the final capture result instead of inventing a retry path here.
     if (submit.status === 'failed') {
       return finishCapture(
         makeSnapshot({

@@ -751,7 +751,6 @@ describe('createCaptureController — 提交阶段', () => {
   })
 
   it('微信公众号采集完成时自动保存浏览器中已渲染的原文', async () => {
-    let savedLinkId = ''
     const { deps, saveLinkContentCalls } = makeDeps({
       captureDestination: 'library',
       inject: {
@@ -768,9 +767,6 @@ describe('createCaptureController — 提交阶段', () => {
         link_id: 'wechat-link-1',
         status: 'done',
       }),
-      onSaveLinkContent: (linkId) => {
-        savedLinkId = linkId
-      },
     })
 
     const controller = createCaptureController(deps)
@@ -838,7 +834,6 @@ describe('createCaptureController — 提交阶段', () => {
 describe('createCaptureController — 轮询阶段', () => {
   it('轮询到后端 done 时推送 done 快照', async () => {
     vi.useFakeTimers()
-    let savedLinkId = ''
     const { deps, saveLinkContentCalls } = makeDeps({
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
@@ -846,9 +841,6 @@ describe('createCaptureController — 轮询阶段', () => {
         status: 'pending',
       }),
       getLink: ok(doneLink()),
-      onSaveLinkContent: (linkId) => {
-        savedLinkId = linkId
-      },
     })
     const controller = createCaptureController(deps)
     await controller.startCapture('')
@@ -1190,15 +1182,14 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
         fail('other', 'a persisted mutation must not re-probe capabilities'),
       ),
     )
-    const ingest = vi.fn(
-      (body: IngestRequest, options?: { idempotencyKey?: string }) =>
-        Promise.resolve(
-          ok<SubmitResponse>({
-            link_id: 'site-link-after-restart',
-            destination: 'site',
-            status: 'done',
-          }),
-        ),
+    const ingest = vi.fn<WebTagClient['ingest']>(() =>
+      Promise.resolve(
+        ok<SubmitResponse>({
+          link_id: 'site-link-after-restart',
+          destination: 'site',
+          status: 'done',
+        }),
+      ),
     )
     const injectCapture = vi.fn<CaptureDeps['injectCapture']>(() =>
       Promise.resolve({ ok: true, data: FAKE_RAW_CAPTURE }),
@@ -1769,7 +1760,10 @@ describe('createCaptureController — 并发守卫', () => {
     let ingestCount = 0
     const client: WebTagClient = {
       getCapabilities: capabilities,
-      ingest: (body, options) => {
+      ingest: ((
+        body: IngestRequest,
+        options: Parameters<WebTagClient['ingest']>[1],
+      ) => {
         bodies.push(body)
         keys.push(options?.idempotencyKey ?? '')
         ingestCount += 1
@@ -1785,7 +1779,7 @@ describe('createCaptureController — 并发守卫', () => {
             status: 'pending',
           }),
         )
-      },
+      }) as WebTagClient['ingest'],
     } as unknown as WebTagClient
     const deps: CaptureDeps = {
       activateConnection: () =>
