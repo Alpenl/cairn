@@ -49,7 +49,7 @@ import type {
 import { resetUserDataDatabaseHandle } from '../lib/user-data/idb'
 import { SavedArticleDocumentController } from '../lib/article/document'
 import { resourceStore } from '../lib/cache/store'
-import { linkDetailCacheKey } from '../hooks/useAnnotatedLinks'
+import { linkDetailCacheKey } from '../lib/cache/keys'
 import { ENABLED_READER_CAPABILITIES } from '../test/capabilities'
 
 type TestMainViewProps = Omit<React.ComponentProps<typeof MainView>, 'client'> & {

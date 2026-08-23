@@ -10,12 +10,12 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   ANNOTATED_LINKS_CACHE_KEY,
+  contentCacheKey,
   linkDetailCacheKey,
-} from '../../hooks/useAnnotatedLinks'
-import { translationsKey } from '../../hooks/useTranslations'
+  translationsKey,
+} from './keys'
 import { ok } from '@webtag/api'
 import {
-  contentCacheKey,
   invalidateLibrary,
   invalidateLink,
   invalidateLinkContent,

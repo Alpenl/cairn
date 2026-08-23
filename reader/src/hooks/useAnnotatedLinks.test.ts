@@ -20,11 +20,8 @@ import {
 } from '../lib/user-data/annotation-store'
 import type { SavedContentAnnotationAddDraft } from '../lib/user-data/annotation-types'
 import { resetUserDataDatabaseHandle } from '../lib/user-data/idb'
-import {
-  linkDetailCacheKey,
-  useAnnotatedLinkCount,
-  useAnnotatedLinks,
-} from './useAnnotatedLinks'
+import { linkDetailCacheKey } from '../lib/cache/keys'
+import { useAnnotatedLinkCount, useAnnotatedLinks } from './useAnnotatedLinks'
 
 function makeLink(over: Partial<LinkResponse> = {}): LinkResponse {
   return makeLinkFixture({ library_kind: 'reading', ...over })

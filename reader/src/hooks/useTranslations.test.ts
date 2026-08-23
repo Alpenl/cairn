@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { translationsKey, useTranslations } from './useTranslations'
+import { translationsKey } from '../lib/cache/keys'
+import { useTranslations } from './useTranslations'
 import type { ReaderClient } from '../lib/api/client'
 import type { TranslationListResponse, TranslationResponse } from '../lib/api/types'
 import { readerIdentity } from '../lib/identity'

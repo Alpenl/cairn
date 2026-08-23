@@ -8,6 +8,10 @@ import {
   AnnotationDocumentChannel,
   type AnnotationChangeHint,
 } from '../lib/article/document-channel'
+import {
+  ANNOTATED_LINKS_CACHE_KEY,
+  linkDetailCacheKey,
+} from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
 import type { IdentityLease } from '../lib/identity'
 import { READER_EVENTS, subscribeReaderEvents } from '../lib/reader-events'
@@ -59,16 +63,9 @@ interface ReloadWaiter {
   settled: boolean
 }
 
-/** Stable subscription key used to wake the indexed view after link-cache invalidation. */
-export const ANNOTATED_LINKS_CACHE_KEY = 'GET /api/links#smart:annotated'
-
 interface AnnotatedIndexSnapshot {
   readonly linkIds: readonly string[]
   readonly versionByLinkId: ReadonlyMap<string, number>
-}
-
-export function linkDetailCacheKey(linkId: string): string {
-  return `GET /api/links/${encodeURIComponent(linkId)}?include_content=false`
 }
 
 function sortByCreatedDesc(links: readonly LinkResponse[]): readonly LinkResponse[] {

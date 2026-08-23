@@ -19,8 +19,8 @@ import {
   resetDatabaseHandle,
   type PersistedRecord,
 } from './idb'
-import { translationsKey } from '../../hooks/useTranslations'
-import { contentCacheKey, invalidateLibrary } from './invalidate'
+import { invalidateLibrary } from './invalidate'
+import { contentCacheKey, translationsKey } from './keys'
 import {
   MAX_PERSISTED_BYTES,
   deletePersistedPrefix,
@@ -310,7 +310,7 @@ describe('PF4 落盘与恢复', () => {
     expect(resourceStore.peek<{ items: { id: string }[] }>(LINKS_KEY).data?.items[0].id).toBe('L1')
   })
 
-  // 已保存原文是自己一个键命名空间（不在 `GET /api/links` 之下，见 invalidate.ts）。
+  // 已保存原文是自己一个键命名空间（不在 `GET /api/links` 之下，见 keys.ts）。
   // 换命名空间的时候很容易忘了同步落盘白名单——那样正文就只剩内存，F5 之后
   // 展开原文又要重新下载一遍，正是这次要修的症状换个触发方式再来一遍。
   it('已保存原文同样落盘，刷新后仍在', async () => {

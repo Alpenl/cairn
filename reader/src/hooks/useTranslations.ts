@@ -9,28 +9,10 @@ import { err, type ApiError, type ApiResult } from '@webtag/api'
 import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { isSavedContentTranslationSource } from '../lib/article/document'
+import { cacheRevisionOrNull, translationsKey } from '../lib/cache/keys'
 import { usePolling } from './usePolling'
 
 const TRANSLATION_POLL_MS = 1200
-
-/**
- * 译文缓存键的前缀。
- *
- * 它**刻意不落在 `GET /api/links` 之下**。曾经是 `'GET /api/links/'`，而
- * `LINKS_CACHE_PREFIX` 是 `'GET /api/links'`（无尾随分隔符）——前者是后者的
- * 前缀，于是 `invalidateLibrary()` 会连坐把**全库每一篇的译文**一起打掉，而它
- * 在「添加链接」「刷新链接」「转为网站」这些日常动作上都会触发。
- *
- * 连坐的后果**当时**不是「多取一次」：条目被删之后 `useCachedResource` 会停在
- * 永久 loading，已译好的内容从界面消失，而 `hasActiveJobs` 从缓存推导，进行中的
- * 翻译任务轮询也一并停掉。（那条永久 loading 已由 `useCachedResource` 的「失效后
- * 自动重取」兜住，见那边；但独立命名空间仍然要留着——被打掉再自愈是一次白白的
- * 全库重取。）
- *
- * 命名空间的写法与 `CONTENT_CACHE_PREFIX` 对齐（`cache/invalidate.ts`），两者
- * 是同一条教训的两次应用。
- */
-export const TRANSLATIONS_CACHE_PREFIX = 'GET translations:/api/links'
 
 const NO_TRANSLATIONS: TranslationResponse[] = []
 
@@ -47,12 +29,6 @@ interface TranslationProjection {
   currentContentRevision: number | null
 }
 
-function contentRevisionOrNull(value: unknown): number | null {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0
-    ? value
-    : null
-}
-
 function projectTranslations(
   response: TranslationListResponse | undefined,
   expectedContentRevision?: number | null,
@@ -65,12 +41,12 @@ function projectTranslations(
       currentContentRevision: null,
     }
   }
-  const currentContentRevision = contentRevisionOrNull(
+  const currentContentRevision = cacheRevisionOrNull(
     response.current_content_revision,
   )
   const savedEnvelopeMatchesActive =
     expectedContentRevision === undefined ||
-    (contentRevisionOrNull(expectedContentRevision) === currentContentRevision &&
+    (cacheRevisionOrNull(expectedContentRevision) === currentContentRevision &&
       currentContentRevision !== null)
   const authoritativeSummaryHash = response.current_summary_source_hash
   const current: TranslationResponse[] = []
@@ -107,15 +83,6 @@ function projectTranslations(
     }
   }
   return { current, stale, currentContentRevision }
-}
-
-/** 某条 saved-content generation 的译文列表缓存键。 */
-export function translationsKey(
-  linkId: string,
-  contentRevision?: number | null,
-): string {
-  const revision = contentRevisionOrNull(contentRevision)
-  return `${TRANSLATIONS_CACHE_PREFIX}/${encodeURIComponent(linkId)}/translations?rev=${revision ?? 'unverified'}`
 }
 
 function mergeTranslation(

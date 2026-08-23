@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { DetailPane, type DetailPaneProps } from './DetailPane'
 import { makeLink } from '../test/fixtures'
 import { err, ok } from '@webtag/api'
-import { contentCacheKey } from '../lib/cache/invalidate'
+import { contentCacheKey } from '../lib/cache/keys'
 import { DEFAULT_CAPACITY, resourceStore } from '../lib/cache/store'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { LinkContentResponse, LinkResponse, TranslationResponse } from '../lib/api/types'

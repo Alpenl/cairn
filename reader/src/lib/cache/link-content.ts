@@ -12,7 +12,7 @@ import { useCallback, useSyncExternalStore } from 'react'
 import type { ReaderClient } from '../api/client'
 import { ok, type ApiResult } from '@webtag/api'
 import type { LinkContentResponse } from '../api/types'
-import { contentCacheKey } from './invalidate'
+import { contentCacheKey } from './keys'
 import { resourceStore } from './store'
 
 type LinkContentClient = Pick<ReaderClient, 'captureIdentity' | 'getContent'>
@@ -83,7 +83,7 @@ export function useCachedLinkContent(
  *
  * 代价要说清楚：这条键此后永不做后台校验。「不会读到过期正文」因此**不是**由这里
  * 保证的，而是由键本身保证——后端每次写正文都递增 content_revision，所以内容变了
- * 就是另一个键，旧内容读不到（见 invalidate.ts 的 contentCacheKey，含指向后端守卫
+ * 就是另一个键，旧内容读不到（见 keys.ts 的 contentCacheKey，含指向后端守卫
  * 测试的指针）。`invalidateLink` 只负责抹平「写完到列表校验拿到新 revision」之间
  * 那段本机窗口。
  *

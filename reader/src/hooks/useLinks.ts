@@ -21,13 +21,13 @@ import type { IdentityBoundReaderClient } from '../lib/api/client'
 import { buildLinksQuery, type ListLinksParams } from '../lib/api/client'
 import type { ApiError, ApiResult } from '@webtag/api'
 import type { LinkResponse, PaginatedLinksResponse } from '../lib/api/types'
+import {
+  linkDetailCacheKey,
+  linksFirstPageCacheKey,
+} from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'
-import {
-  ANNOTATED_LINKS_CACHE_KEY,
-  linkDetailCacheKey,
-  useAnnotatedLinks,
-} from './useAnnotatedLinks'
+import { useAnnotatedLinks } from './useAnnotatedLinks'
 import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryReload'
 import { registerReaderClient } from './useReaderClient'
 
@@ -65,9 +65,6 @@ const COMPLETED_READING_PARAMS: Pick<ListLinksParams, 'library_kind' | 'status'>
   library_kind: 'reading',
   status: 'done',
 }
-
-/** 链接列表在缓存里的键前缀。写操作按它整片失效。 */
-export const LINKS_CACHE_PREFIX = 'GET /api/links'
 
 /**
  * 首页静默刷新间隔。
@@ -213,8 +210,12 @@ function isAllReadingSelection(selection: Selection): boolean {
  * 前缀部分保持 `GET /api/links` 不变，好让写路径的前缀失效仍然覆盖到它们。
  */
 function firstPageKey(sel: Selection, params: ListLinksParams): string {
-  if (isAnnotatedSelection(sel)) return ANNOTATED_LINKS_CACHE_KEY
-  return `${LINKS_CACHE_PREFIX}${buildLinksQuery(params)}#${sel.type}:${sel.id}`
+  return linksFirstPageCacheKey({
+    query: buildLinksQuery(params),
+    selectionType: sel.type,
+    selectionId: sel.id,
+    annotated: isAnnotatedSelection(sel),
+  })
 }
 
 function primeLinkPointCache(

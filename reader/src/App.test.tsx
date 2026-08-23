@@ -11,9 +11,8 @@ import {
   resetDatabaseHandle,
 } from './lib/cache/idb'
 import { stopCachePersistence } from './lib/cache/bootstrap'
+import { DOMAIN_SUMMARIES_CACHE_KEY, TAGS_CACHE_KEY } from './lib/cache/keys'
 import { resourceStore } from './lib/cache/store'
-import { DOMAIN_SUMMARIES_CACHE_KEY } from './hooks/useDomainSummaries'
-import { TAGS_CACHE_KEY } from './hooks/useTags'
 import { derivePhysicalNamespace, readerIdentity } from './lib/identity'
 import { resetUserDataDatabaseHandle } from './lib/legacy-user-data'
 import { ownedDatabaseName, readOwnedStorage } from './lib/storage-ownership'

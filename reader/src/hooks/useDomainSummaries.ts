@@ -2,6 +2,7 @@ import { useCallback, useMemo } from 'react'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ApiError, ApiResult } from '@webtag/api'
 import type { DomainTreeSummaryEnvelope, DomainTreeSummaryResponse } from '../lib/api/types'
+import { DOMAIN_SUMMARIES_CACHE_KEY } from '../lib/cache/keys'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryReload'
 
@@ -13,9 +14,6 @@ export interface DomainSummariesState {
   error: ApiError | null
   reload: (options?: LibraryReloadOptions) => Promise<ApiResult<DomainTreeSummaryEnvelope> | null>
 }
-
-export const DOMAIN_SUMMARIES_CACHE_PREFIX = 'GET /api/tree?view=domains'
-export const DOMAIN_SUMMARIES_CACHE_KEY = `${DOMAIN_SUMMARIES_CACHE_PREFIX}&library_kind=reading`
 
 /** 读取 Reading partition 的 truthful 域名聚合；null 表示尚未成功取得摘要。 */
 export function useDomainSummaries(client: IdentityBoundReaderClient): DomainSummariesState {

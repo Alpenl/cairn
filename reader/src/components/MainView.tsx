@@ -51,7 +51,7 @@ import { useSidebarData } from '../hooks/useSidebarData'
 import { invalidateReaderActivity } from '../hooks/useReaderActivity'
 import { invalidateReaderRelatedTags } from '../hooks/useReaderRelatedTags'
 import { useAppShortcuts } from '../hooks/useAppChrome'
-import { translationsKey, useTranslations } from '../hooks/useTranslations'
+import { useTranslations } from '../hooks/useTranslations'
 import { usePrefetch, type PrefetchTarget } from '../hooks/usePrefetch'
 import {
   annotationMatchesLocator,
@@ -84,6 +84,7 @@ import {
   invalidateLinkProjection,
 } from '../lib/cache/invalidate'
 import { loadLinkContent } from '../lib/cache/link-content'
+import { translationsKey } from '../lib/cache/keys'
 import {
   loadRevisionFloors,
   mergeRevisionFloors,

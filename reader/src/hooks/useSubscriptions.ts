@@ -3,6 +3,7 @@ import type { ReaderClient } from '../lib/api/client'
 import type { ApiError } from '@webtag/api'
 import type { FeedSubscription, SubscriptionsResponse } from '../lib/api/types'
 import type { IdentityOwnership } from '../lib/identity'
+import { SUBSCRIPTIONS_CACHE_KEY } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 
@@ -11,8 +12,6 @@ const EMPTY_SUBSCRIPTIONS: SubscriptionsResponse = {
   subscriptions: [],
   counts: { all: 0, unread: 0, starred: 0, later: 0 },
 }
-
-export const SUBSCRIPTIONS_CACHE_KEY = 'GET /api/subscriptions'
 
 /**
  * RSS navigation data with retained-data refresh errors and a 60-second poll.
