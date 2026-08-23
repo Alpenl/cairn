@@ -23,6 +23,7 @@ import {
   compactAnnotationOperations,
 } from '../lib/user-data/annotation-store'
 import type { AnnotationOperationInput } from '../lib/user-data/annotation-types'
+import { useAbortGeneration } from './useAbortGeneration'
 import { useVisibilityRefresh } from './useVisibilityRefresh'
 
 export type NoteAnnotationCommandResult =
@@ -75,10 +76,7 @@ export function useNoteAnnotations(
   )
   const targetKey = target ? annotationTargetKey(target) : null
   const identityKey = `${lease?.context.physicalNamespace ?? 'none'}\0${noteID ?? 'none'}\0${targetKey ?? 'none'}`
-  const generation = useMemo(
-    () => ({ key: identityKey, controller: new AbortController() }),
-    [identityKey],
-  )
+  const generation = useAbortGeneration(identityKey)
   const [state, setState] = useState<{
     readonly identityKey: string
     readonly status: 'idle' | 'loading' | 'ready' | 'error'
@@ -90,8 +88,6 @@ export function useNoteAnnotations(
     stateRef.current = next
     setState(next)
   }, [])
-
-  useEffect(() => () => generation.controller.abort(), [generation])
 
   const refresh = useCallback(async (): Promise<boolean> => {
     if (!lease || !noteID || !target || generation.controller.signal.aborted) {

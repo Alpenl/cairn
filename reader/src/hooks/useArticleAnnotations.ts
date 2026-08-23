@@ -44,6 +44,7 @@ import {
   readAnnotationSnapshot,
 } from '../lib/user-data/annotation-store'
 import type { AnnotationOperationInput } from '../lib/user-data/annotation-types'
+import { useAbortGeneration } from './useAbortGeneration'
 import { useVisibilityRefresh } from './useVisibilityRefresh'
 
 export interface ArticleAnnotationRevisionChange {
@@ -301,20 +302,11 @@ export function useArticleAnnotations(
     if (!revisionChange) return null
     return `${identityKey}\0${revisionChange.previousRevision}\0${revisionChange.currentRevision ?? contentRevision ?? 'current'}\0${JSON.stringify(revisionChange.previousSource)}\0${JSON.stringify(revisionChange.currentSource)}`
   }, [contentRevision, identityKey, revisionChange])
-  const generation = useMemo(
-    () => ({ key: identityKey, controller: new AbortController() }),
-    [identityKey],
-  )
+  const generation = useAbortGeneration(identityKey)
   const savedCommandKey = `${namespace ?? 'none'}\0${linkId ?? 'none'}\0${targetIdentity(saved)}`
-  const savedCommandGeneration = useMemo(
-    () => ({ key: savedCommandKey, controller: new AbortController() }),
-    [savedCommandKey],
-  )
+  const savedCommandGeneration = useAbortGeneration(savedCommandKey)
   const summaryCommandKey = `${namespace ?? 'none'}\0${linkId ?? 'none'}\0${targetIdentity(summary)}`
-  const summaryCommandGeneration = useMemo(
-    () => ({ key: summaryCommandKey, controller: new AbortController() }),
-    [summaryCommandKey],
-  )
+  const summaryCommandGeneration = useAbortGeneration(summaryCommandKey)
   const [state, setState] = useState<LoadState>({
     identityKey,
     status: 'idle',
@@ -335,16 +327,6 @@ export function useArticleAnnotations(
     setState(next)
   }, [])
   const channelRef = useRef<AnnotationDocumentChannel | null>(null)
-
-  useEffect(() => () => generation.controller.abort(), [generation])
-  useEffect(
-    () => () => savedCommandGeneration.controller.abort(),
-    [savedCommandGeneration],
-  )
-  useEffect(
-    () => () => summaryCommandGeneration.controller.abort(),
-    [summaryCommandGeneration],
-  )
 
   const refresh = useCallback(async (): Promise<boolean> => {
     if (!lease || !linkId || generation.controller.signal.aborted) {
