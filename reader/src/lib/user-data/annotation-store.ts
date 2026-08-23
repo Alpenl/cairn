@@ -5,6 +5,10 @@ import {
   type AnnotationTarget,
 } from '../annotation-domain'
 import { isValidLinkId, isValidSourceHash } from '../article/source-block'
+import {
+  abortIDBTransaction,
+  handleIDBRequest,
+} from '../idb-core'
 import type { IdentityLease } from '../identity'
 import { asRecord } from '../records'
 import {
@@ -147,11 +151,7 @@ function operationIDKey(namespace: string, opId: string): string {
 }
 
 function abortTransaction(transaction: IDBTransaction): void {
-  try {
-    transaction.abort()
-  } catch {
-    // A request failure may already have aborted the transaction.
-  }
+  abortIDBTransaction(transaction)
 }
 
 function attachTransactionAbortSignal(
@@ -744,16 +744,14 @@ function readAnnotationProjection(
       abortTransaction(transaction)
     }
   }
-  currentRequest.onerror = () => abortTransaction(transaction)
-  stateRequest.onerror = () => abortTransaction(transaction)
-  currentRequest.onsuccess = () => {
+  handleIDBRequest(transaction, currentRequest, () => {
     currentDone = true
     finish()
-  }
-  stateRequest.onsuccess = () => {
+  })
+  handleIDBRequest(transaction, stateRequest, () => {
     stateDone = true
     finish()
-  }
+  })
 }
 
 /**
@@ -1085,16 +1083,14 @@ function finishDuplicate(
       annotation: materialized.annotation,
     })
   }
-  stateRequest.onerror = () => abortTransaction(transaction)
-  annotationRequest.onerror = () => abortTransaction(transaction)
-  stateRequest.onsuccess = () => {
+  handleIDBRequest(transaction, stateRequest, () => {
     stateDone = true
     finish()
-  }
-  annotationRequest.onsuccess = () => {
+  })
+  handleIDBRequest(transaction, annotationRequest, () => {
     annotationDone = true
     finish()
-  }
+  })
 }
 
 /**
