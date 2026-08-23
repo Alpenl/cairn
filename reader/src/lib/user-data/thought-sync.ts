@@ -1536,12 +1536,20 @@ function mergePushDueResults(left: PushDueResult, right: PushDueResult): PushDue
   }
 }
 
-async function recordPushFailure(
+interface PushDueOutboxConfig<T extends DispatchableSyncOutboxRecord> {
+  readonly storeName: SyncOutboxStore
+  readonly toWireOperation: (record: T) => ReaderThoughtOpRequest
+  readonly networkErrorMessage: string
+  readonly acknowledgementFailureMessage: string
+}
+
+async function recordOutboxPushFailure<T extends DispatchableSyncOutboxRecord>(
   lease: IdentityLease,
-  records: readonly ThoughtOutboxRecord[],
+  storeName: SyncOutboxStore,
+  records: readonly T[],
   error: ApiError,
 ): Promise<PushDueResult> {
-  const marked = await markPushFailure(lease, THOUGHT_OUTBOX_STORE, records, error)
+  const marked = await markPushFailure(lease, storeName, records, error)
   if (!marked.ok) {
     return { pushed: 0, completedIDs: [], stale: true, halt: true }
   }
@@ -1560,158 +1568,106 @@ async function recordPushFailure(
  * it until the poison record is singular, then block only that record.
  * Valid siblings still receive their normal acknowledgement in the same round.
  */
-async function pushDueOperations(
+async function pushDueOutboxOperations<T extends DispatchableSyncOutboxRecord>(
+  lease: IdentityLease,
+  client: IdentityBoundReaderClient,
+  records: readonly T[],
+  label: string,
+  config: PushDueOutboxConfig<T>,
+): Promise<PushDueResult> {
+  if (records.length === 0) return { pushed: 0, completedIDs: [], halt: false }
+  const operation = lease.capture(label)
+  if (!lease.isCurrent(operation)) {
+    return { pushed: 0, completedIDs: [], stale: true, halt: true }
+  }
+  let result: Awaited<ReturnType<IdentityBoundReaderClient['pushThoughtOps']>>
+  try {
+    result = await client.pushThoughtOps(
+      { ops: records.map(config.toWireOperation) },
+      { signal: operation.signal },
+    )
+  } catch (error) {
+    if (!lease.isCurrent(operation)) {
+      return { pushed: 0, completedIDs: [], stale: true, halt: true }
+    }
+    return recordOutboxPushFailure(lease, config.storeName, records, {
+      kind: 'network-unreachable',
+      message: error instanceof Error ? error.message : config.networkErrorMessage,
+    })
+  }
+  if (!lease.isCurrent(operation)) {
+    return { pushed: 0, completedIDs: [], stale: true, halt: true }
+  }
+  if (!result.ok) {
+    if (result.error.kind === 'identity-mismatch') {
+      return { pushed: 0, completedIDs: [], stale: true, halt: true }
+    }
+    if (isIsolatablePermanentPushFailure(result.error) && records.length > 1) {
+      const midpoint = Math.ceil(records.length / 2)
+      const left = await pushDueOutboxOperations(
+        lease,
+        client,
+        records.slice(0, midpoint),
+        `${label} left`,
+        config,
+      )
+      if (left.stale || left.halt) return left
+      const right = await pushDueOutboxOperations(
+        lease,
+        client,
+        records.slice(midpoint),
+        `${label} right`,
+        config,
+      )
+      return mergePushDueResults(left, right)
+    }
+    return recordOutboxPushFailure(lease, config.storeName, records, result.error)
+  }
+  const acknowledged = await acknowledge(lease, config.storeName, records, result.data)
+  if (!acknowledged.ok) {
+    if (!lease.isCurrent(lease.capture(`${label} after acknowledgement`))) {
+      return { pushed: 0, completedIDs: [], stale: true, halt: true }
+    }
+    return recordOutboxPushFailure(lease, config.storeName, records, {
+      kind: 'other',
+      message: config.acknowledgementFailureMessage,
+    })
+  }
+  return {
+    pushed: acknowledged.value.length,
+    // ACK op IDs complete the current round even when a history supersession is
+    // durably blocked rather than deleted.
+    completedIDs: result.data.map((ack) => ack.op_id),
+    halt: false,
+  }
+}
+
+function pushDueOperations(
   lease: IdentityLease,
   client: IdentityBoundReaderClient,
   records: readonly ThoughtOutboxRecord[],
   label: string,
 ): Promise<PushDueResult> {
-  if (records.length === 0) return { pushed: 0, completedIDs: [], halt: false }
-  const operation = lease.capture(label)
-  if (!lease.isCurrent(operation)) {
-    return { pushed: 0, completedIDs: [], stale: true, halt: true }
-  }
-  let result: Awaited<ReturnType<IdentityBoundReaderClient['pushThoughtOps']>>
-  try {
-    result = await client.pushThoughtOps(
-      { ops: records.map(toWireOperation) },
-      { signal: operation.signal },
-    )
-  } catch (error) {
-    if (!lease.isCurrent(operation)) {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    return recordPushFailure(lease, records, {
-      kind: 'network-unreachable',
-      message: error instanceof Error ? error.message : '想法推送失败',
-    })
-  }
-  if (!lease.isCurrent(operation)) {
-    return { pushed: 0, completedIDs: [], stale: true, halt: true }
-  }
-  if (!result.ok) {
-    if (result.error.kind === 'identity-mismatch') {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    if (isIsolatablePermanentPushFailure(result.error) && records.length > 1) {
-      const midpoint = Math.ceil(records.length / 2)
-      const left = await pushDueOperations(lease, client, records.slice(0, midpoint), `${label} left`)
-      if (left.stale || left.halt) return left
-      const right = await pushDueOperations(lease, client, records.slice(midpoint), `${label} right`)
-      return mergePushDueResults(left, right)
-    }
-    return recordPushFailure(lease, records, result.error)
-  }
-  const acknowledged = await acknowledge(lease, THOUGHT_OUTBOX_STORE, records, result.data)
-  if (!acknowledged.ok) {
-    if (!lease.isCurrent(lease.capture(`${label} after acknowledgement`))) {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    return recordPushFailure(lease, records, {
-      kind: 'other',
-      message: '无法保存想法同步确认',
-    })
-  }
-  return {
-    pushed: acknowledged.value.length,
-    completedIDs: result.data.map((ack) => ack.op_id),
-    halt: false,
-  }
+  return pushDueOutboxOperations(lease, client, records, label, {
+    storeName: THOUGHT_OUTBOX_STORE,
+    toWireOperation,
+    networkErrorMessage: '想法推送失败',
+    acknowledgementFailureMessage: '无法保存想法同步确认',
+  })
 }
 
-async function recordHistoryPushFailure(
-  lease: IdentityLease,
-  records: readonly ThoughtHistoryOutboxRecord[],
-  error: ApiError,
-): Promise<PushDueResult> {
-  const marked = await markPushFailure(lease, THOUGHT_HISTORY_OUTBOX_STORE, records, error)
-  if (!marked.ok) {
-    return { pushed: 0, completedIDs: [], stale: true, halt: true }
-  }
-  const permanent = isPermanentPushFailure(error)
-  return {
-    pushed: 0,
-    completedIDs: permanent ? records.map((record) => record.opId) : [],
-    retryAt: marked.value,
-    error,
-    halt: !permanent,
-  }
-}
-
-async function pushDueHistoryOperations(
+function pushDueHistoryOperations(
   lease: IdentityLease,
   client: IdentityBoundReaderClient,
   records: readonly ThoughtHistoryOutboxRecord[],
   label: string,
 ): Promise<PushDueResult> {
-  if (records.length === 0) return { pushed: 0, completedIDs: [], halt: false }
-  const operation = lease.capture(label)
-  if (!lease.isCurrent(operation)) {
-    return { pushed: 0, completedIDs: [], stale: true, halt: true }
-  }
-  let result: Awaited<ReturnType<IdentityBoundReaderClient['pushThoughtOps']>>
-  try {
-    result = await client.pushThoughtOps(
-      { ops: records.map(toHistoryWireOperation) },
-      { signal: operation.signal },
-    )
-  } catch (error) {
-    if (!lease.isCurrent(operation)) {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    return recordHistoryPushFailure(lease, records, {
-      kind: 'network-unreachable',
-      message: error instanceof Error ? error.message : '历史想法推送失败',
-    })
-  }
-  if (!lease.isCurrent(operation)) {
-    return { pushed: 0, completedIDs: [], stale: true, halt: true }
-  }
-  if (!result.ok) {
-    if (result.error.kind === 'identity-mismatch') {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    if (isIsolatablePermanentPushFailure(result.error) && records.length > 1) {
-      const midpoint = Math.ceil(records.length / 2)
-      const left = await pushDueHistoryOperations(
-        lease,
-        client,
-        records.slice(0, midpoint),
-        `${label} left`,
-      )
-      if (left.stale || left.halt) return left
-      const right = await pushDueHistoryOperations(
-        lease,
-        client,
-        records.slice(midpoint),
-        `${label} right`,
-      )
-      return mergePushDueResults(left, right)
-    }
-    return recordHistoryPushFailure(lease, records, result.error)
-  }
-  const acknowledged = await acknowledge(
-    lease,
-    THOUGHT_HISTORY_OUTBOX_STORE,
-    records,
-    result.data,
-  )
-  if (!acknowledged.ok) {
-    if (!lease.isCurrent(lease.capture(`${label} after acknowledgement`))) {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    return recordHistoryPushFailure(lease, records, {
-      kind: 'other',
-      message: '无法保存历史想法同步确认',
-    })
-  }
-  return {
-    pushed: acknowledged.value.length,
-    // A superseded command is durably blocked rather than deleted, but it is
-    // complete for this round and must never be selected again immediately.
-    completedIDs: result.data.map((ack) => ack.op_id),
-    halt: false,
-  }
+  return pushDueOutboxOperations(lease, client, records, label, {
+    storeName: THOUGHT_HISTORY_OUTBOX_STORE,
+    toWireOperation: toHistoryWireOperation,
+    networkErrorMessage: '历史想法推送失败',
+    acknowledgementFailureMessage: '无法保存历史想法同步确认',
+  })
 }
 
 async function performSync(
