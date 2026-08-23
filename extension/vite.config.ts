@@ -6,7 +6,6 @@ import Vue from '@vitejs/plugin-vue'
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import Icons from 'unplugin-icons/vite'
 import IconsResolver from 'unplugin-icons/resolver'
-import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { NaiveUiResolver } from 'unplugin-vue-components/resolvers'
 import postcssPresetEnv from 'postcss-preset-env'
@@ -41,10 +40,6 @@ export const sharedConfig: UserConfig = {
     Vue(),
     VueI18nPlugin({
       include: resolve(__dirname, './src/locales/**'),
-    }),
-    AutoImport({
-      imports: ['vue', { 'webextension-polyfill': [['*', 'browser']] }],
-      dts: r('src/auto-imports.d.ts'),
     }),
     // https://github.com/antfu/unplugin-vue-components
     // 只保留按需解析：Naive UI 组件与图标。本地组件目录已随上游新标签页一起
@@ -88,7 +83,7 @@ export const sharedConfig: UserConfig = {
     },
   ],
   optimizeDeps: {
-    include: ['vue', 'webextension-polyfill', 'naive-ui', 'vue-i18n'],
+    include: ['vue', 'naive-ui', 'vue-i18n'],
   },
 }
 

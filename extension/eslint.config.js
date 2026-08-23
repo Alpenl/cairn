@@ -17,7 +17,6 @@ export default defineConfig(
       'lib',
       'test',
       '**/__tests__/**',
-      'src/auto-imports.d.ts',
       'src/components.d.ts',
     ],
   },
