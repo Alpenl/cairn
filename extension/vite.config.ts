@@ -1,9 +1,8 @@
 /// <reference types="vitest" />
 
-import { basename, dirname, resolve } from 'node:path'
+import { basename, dirname } from 'node:path'
 import { defineConfig, type UserConfig, type PluginOption } from 'vite'
 import Vue from '@vitejs/plugin-vue'
-import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import postcssPresetEnv from 'postcss-preset-env'
 import { isDev, port, r, BROWSER_DIR } from './scripts/utils'
 import packageJson from './package.json'
@@ -34,9 +33,6 @@ export const sharedConfig: UserConfig = {
   },
   plugins: [
     Vue(),
-    VueI18nPlugin({
-      include: resolve(__dirname, './src/locales/**'),
-    }),
 
     {
       name: 'extension-build-entry',
