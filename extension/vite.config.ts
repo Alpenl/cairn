@@ -5,9 +5,6 @@ import { defineConfig, type UserConfig, type PluginOption } from 'vite'
 import Vue from '@vitejs/plugin-vue'
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import Icons from 'unplugin-icons/vite'
-import IconsResolver from 'unplugin-icons/resolver'
-import Components from 'unplugin-vue-components/vite'
-import { NaiveUiResolver } from 'unplugin-vue-components/resolvers'
 import postcssPresetEnv from 'postcss-preset-env'
 import { isDev, port, r, BROWSER_DIR } from './scripts/utils'
 import packageJson from './package.json'
@@ -41,14 +38,8 @@ export const sharedConfig: UserConfig = {
     VueI18nPlugin({
       include: resolve(__dirname, './src/locales/**'),
     }),
-    // https://github.com/antfu/unplugin-vue-components
-    // 只保留按需解析：Naive UI 组件与图标。本地组件目录已随上游新标签页一起
-    // 删除，采集页面用到的三个组件都是显式 import。
-    Components({
-      dirs: [],
-      dts: r('src/components.d.ts'),
-      resolvers: [IconsResolver({ prefix: '' }), NaiveUiResolver()],
-    }),
+    // 本地组件目录已随上游新标签页一起删除；采集页面用到的 Naive UI
+    // 组件均在 SFC 中显式 import。
     Icons(), // https://github.com/antfu/unplugin-icons
 
     {

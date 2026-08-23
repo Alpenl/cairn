@@ -17,7 +17,6 @@ export default defineConfig(
       'lib',
       'test',
       '**/__tests__/**',
-      'src/components.d.ts',
     ],
   },
 

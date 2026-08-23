@@ -30,6 +30,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@iconify/vue'
+import { NButton, NInput, NRadioButton, NRadioGroup } from 'naive-ui'
 import { useCaptureBridge } from '@/popup/composables/useCaptureBridge'
 import { isForbiddenUrl } from '@/env'
 import type {
