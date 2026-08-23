@@ -58,6 +58,45 @@ test('dispatches native workflows for platform and shared contract changes', () 
   }
 })
 
+test('dispatches substantive workflows for critical delivery files', () => {
+  const cases = [
+    {
+      path: 'scripts/core-release-promote.sh',
+      surfaces: ['go', 'lint'],
+    },
+    {
+      path: 'scripts/cairn-install.sh',
+      surfaces: ['go', 'lint'],
+    },
+    {
+      path: 'scripts/migrate-dbintegration.sh',
+      surfaces: ['go', 'lint', 'database'],
+    },
+    {
+      path: 'legal/core/common/NOTICE',
+      surfaces: ['go', 'lint'],
+    },
+    {
+      path: '.dockerignore',
+      surfaces: ['go', 'lint'],
+    },
+    {
+      path: 'deploy/Caddyfile',
+      surfaces: ['go', 'lint'],
+    },
+  ]
+
+  for (const { path, surfaces: expectedSurfaces } of cases) {
+    const result = classifyChangedPaths([path])
+    assert.equal(
+      Object.values(result).some(Boolean),
+      true,
+      `${path} must not be treated as a documentation-only or dispatcher-only change`,
+    )
+    for (const surface of expectedSurfaces) assert.equal(result[surface], true, `${path} must trigger ${surface}`)
+  }
+})
+
 test('handles a large cross-platform pull request without losing early matches', () => {
   const paths = [
     'internal/service/reader_inbox.go',

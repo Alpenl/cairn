@@ -5,13 +5,13 @@ import { fileURLToPath } from 'node:url'
 export const surfaces = ['go', 'lint', 'reader', 'extension', 'android', 'ios', 'database']
 
 const patterns = {
-  go: /^(cmd|internal|test)\/|^go\.(mod|sum)$|^vendor\/|^Makefile$|^Dockerfile$|^\.env\.example$|^scripts\/(version(\.test)?|container_smoke|db_migrate_smoke|db-dump-schema)\.sh$|^\.github\/workflows\/go-verify\.yml$/,
-  lint: /^(cmd|internal|test)\/|^go\.(mod|sum)$|^vendor\/|^Makefile$|^\.golangci|^\.github\/workflows\//,
+  go: /^(cmd|internal|test)\/|^go\.(mod|sum)$|^vendor\/|^Makefile$|^Dockerfile$|^\.dockerignore$|^\.env\.example$|^deploy\/|^legal\/core\/|^scripts\/(version(\.test)?|container_smoke|db_migrate_smoke|db-dump-schema|migrate-dbintegration|cairn-install(\.test)?|core-(legal|release-(build|verify|manifest|promote))(\.test)?)\.(sh|mjs)$|^\.github\/workflows\/go-verify\.yml$/,
+  lint: /^(cmd|internal|test)\/|^go\.(mod|sum)$|^vendor\/|^Makefile$|^Dockerfile$|^\.dockerignore$|^deploy\/|^legal\/core\/|^scripts\/(cairn-install(\.test)?|core-(legal|release-(build|verify|manifest|promote))(\.test)?|migrate-dbintegration|verify-action-pins)\.(sh|mjs)$|^\.golangci|^\.github\/workflows\//,
   reader: /^(reader|packages)\/|^internal\/app\/assets\/openapi\.json$|^pnpm-|^package\.json$|^\.github\/workflows\/reader-ci\.yml$/,
   extension: /^(extension|packages)\/|^internal\/app\/assets\/openapi\.json$|^pnpm-|^package\.json$|^\.github\/workflows\/extension-ci\.yml$/,
   android: /^mobile\/(android|shared)\/|^scripts\/mobile-|^\.github\/workflows\/mobile-android\.yml$/,
   ios: /^mobile\/(ios|shared)\/|^scripts\/mobile-|^\.github\/workflows\/mobile-ios\.yml$/,
-  database: /^internal\/|^test\/dbintegration\/|\.sql$|^go\.(mod|sum)$|^scripts\/(db-dump-schema|db_migrate_smoke)\.sh$|^\.github\/workflows\/dbintegration\.yml$/,
+  database: /^internal\/|^test\/dbintegration\/|\.sql$|^go\.(mod|sum)$|^scripts\/(db-dump-schema|db_migrate_smoke|migrate-dbintegration)\.sh$|^\.github\/workflows\/dbintegration\.yml$/,
 }
 
 const dispatcherPattern =
