@@ -2,7 +2,10 @@ import { defineConfig } from 'vite'
 import { sharedConfig } from './vite.config'
 import { isDev, r, BROWSER_DIR } from './scripts/utils'
 import packageJson from './package.json'
-import { buildProfile } from './scripts/build-profile'
+import {
+  CONTENT_SCRIPT_ENTRY,
+  CONTENT_SCRIPT_PATH,
+} from './scripts/build-target'
 
 // bundling the content script using Vite
 export default defineConfig({
@@ -17,7 +20,6 @@ export default defineConfig({
     ),
   },
   build: {
-    write: Boolean(buildProfile.manifest.contentScriptPath),
     watch: isDev ? {} : undefined,
     outDir: r(`${BROWSER_DIR}/dist/contentScripts`),
     cssCodeSplit: false,
@@ -25,18 +27,13 @@ export default defineConfig({
     sourcemap: isDev ? 'inline' : false,
     minify: process.env.NO_MINIFY ? false : 'esbuild',
     lib: {
-      entry: r(
-        buildProfile.manifest.contentScriptEntry ??
-          'src/contentScripts/index.ts',
-      ),
+      entry: r(CONTENT_SCRIPT_ENTRY),
       name: packageJson.name,
       formats: ['iife'],
     },
     rollupOptions: {
       output: {
-        entryFileNames:
-          buildProfile.manifest.contentScriptPath?.split('/').at(-1) ??
-          'index.global.js',
+        entryFileNames: CONTENT_SCRIPT_PATH.split('/').at(-1),
         extend: true,
       },
     },

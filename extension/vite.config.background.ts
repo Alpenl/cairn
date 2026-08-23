@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import { sharedConfig } from './vite.config'
 import { isDev, r, BROWSER_DIR } from './scripts/utils'
 import packageJson from './package.json'
-import { buildProfile } from './scripts/build-profile'
+import { BACKGROUND_ENTRY } from './scripts/build-target'
 
 // bundling the content script using Vite
 export default defineConfig({
@@ -24,7 +24,7 @@ export default defineConfig({
     sourcemap: isDev ? 'inline' : false,
     minify: process.env.NO_MINIFY ? false : 'esbuild',
     lib: {
-      entry: r(buildProfile.backgroundEntry),
+      entry: r(BACKGROUND_ENTRY),
       formats: ['es'],
     },
     rollupOptions: {

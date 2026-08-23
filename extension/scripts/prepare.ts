@@ -4,27 +4,28 @@ import fs from 'fs-extra'
 import chokidar from 'chokidar'
 import { relative } from 'node:path'
 import { isDev, log, port, r, BROWSER_DIR } from './utils'
-import { buildProfile, getPreparedViews } from './build-profile'
+import {
+  BACKGROUND_ENTRY,
+  PREPARED_VIEWS,
+  shouldCopyExtensionAsset,
+  VIEW_ENTRIES,
+} from './build-target'
 import { LEGAL_FILES } from './release-artifacts'
 
 /**
  * Stub index.html to use Vite in development
  */
 async function stubIndexHtml() {
-  const views = getPreparedViews(buildProfile)
-
-  for (const view of views) {
+  for (const view of PREPARED_VIEWS) {
     await fs.ensureDir(r(`${BROWSER_DIR}/dist/${view}`))
     let data = await fs.readFile(r(`src/${view}/index.html`), 'utf-8')
 
     const sourceEntry =
       view === 'background'
-        ? buildProfile.backgroundEntry.replace(/^src\//, '')
-        : buildProfile.entries[view]
+        ? BACKGROUND_ENTRY.replace(/^src\//, '')
+        : VIEW_ENTRIES[view]
     if (!sourceEntry) {
-      throw new Error(
-        `Missing source entry for ${view} in ${buildProfile.name} profile`,
-      )
+      throw new Error(`Missing source entry for ${view}`)
     }
     data = data
       .replace('"./main.ts"', `"http://localhost:${port}/${sourceEntry}"`)
@@ -70,7 +71,7 @@ fs.copySync(r('assets'), r(`${BROWSER_DIR}/assets`), {
   filter: (src) => {
     if (src.endsWith('.DS_Store')) return false
     const assetPath = relative(assetsRoot, src).replaceAll('\\', '/')
-    return buildProfile.shouldCopyAsset(assetPath)
+    return shouldCopyExtensionAsset(assetPath)
   },
 })
 for (const name of LEGAL_FILES) {

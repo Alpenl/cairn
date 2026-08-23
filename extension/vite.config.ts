@@ -13,10 +13,10 @@ import postcssPresetEnv from 'postcss-preset-env'
 import { isDev, port, r, BROWSER_DIR } from './scripts/utils'
 import packageJson from './package.json'
 import {
-  buildProfile,
-  getWebViews,
+  VIEW_ENTRIES,
+  WEB_VIEWS,
   type WebView,
-} from './scripts/build-profile'
+} from './scripts/build-target'
 
 export const sharedConfig: UserConfig = {
   root: r('src'),
@@ -57,12 +57,12 @@ export const sharedConfig: UserConfig = {
     Icons(), // https://github.com/antfu/unplugin-icons
 
     {
-      name: 'extension-profile-entry',
+      name: 'extension-build-entry',
       transformIndexHtml: {
         order: 'pre',
         handler(html, context) {
           const view = basename(dirname(context.filename)) as WebView
-          const entry = buildProfile.entries[view]
+          const entry = VIEW_ENTRIES[view]
           if (!entry) return html
 
           return html.replace('./main.ts', `../${entry}`)
@@ -117,26 +117,23 @@ export default defineConfig(({ command }) => ({
     rollupOptions: {
       input: {
         ...Object.fromEntries(
-          getWebViews(buildProfile).map((view) => [
-            view,
-            r(`src/${view}/index.html`),
-          ]),
+          WEB_VIEWS.map((view) => [view, r(`src/${view}/index.html`)]),
         ),
       },
       output: {
         entryFileNames(chunk) {
           const view = chunk.name as WebView
-          const profileEntry = buildProfile.entries[view]
-          if (!profileEntry) return 'assets/[name]-[hash].js'
+          const viewEntry = VIEW_ENTRIES[view]
+          if (!viewEntry) return 'assets/[name]-[hash].js'
           // 页面 chunk 必须真的包含它声明的入口模块。历史上 popup/options 的
           // HTML 曾在改入口后仍指向旧 main.ts，产物照常构建、装上才发现是空壳。
-          const expectedEntry = r(`src/${profileEntry}`)
+          const expectedEntry = r(`src/${viewEntry}`)
           const hasExpectedEntry = chunk.moduleIds.some(
             (id) => id.split('?')[0] === expectedEntry,
           )
           if (!hasExpectedEntry) {
             throw new Error(
-              `${view} chunk does not contain its capture entry: ${profileEntry}`,
+              `${view} chunk does not contain its capture entry: ${viewEntry}`,
             )
           }
           return 'assets/[name].capture-[hash].js'

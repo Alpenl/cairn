@@ -2,9 +2,12 @@ import fs from 'fs-extra'
 import type { Manifest } from 'webextension-polyfill'
 import type PkgType from '../package.json'
 import { isDev, port, r } from '../scripts/utils'
-import { buildProfile, type BuildProfile } from '../scripts/build-profile'
+import {
+  CONTENT_SCRIPT_PATH,
+  EXTENSION_PERMISSIONS,
+} from '../scripts/build-target'
 
-export async function getManifest(profile: BuildProfile = buildProfile) {
+export async function getManifest() {
   const pkg = (await fs.readJSON(r('package.json'))) as typeof PkgType
 
   const manifest: Manifest.WebExtensionManifest = {
@@ -22,16 +25,9 @@ export async function getManifest(profile: BuildProfile = buildProfile) {
       48: '/assets/img/icon/icon-48x48.png',
       128: '/assets/img/icon/icon-128x128.png',
     },
-    permissions: [...profile.manifest.permissions] as Manifest.Permission[],
+    permissions: [...EXTENSION_PERMISSIONS] as Manifest.Permission[],
     // 采集脚本需注入任意当前页；后端地址由用户自填，因此仍保留全站 host 权限。
     host_permissions: ['*://*/*'],
-    ...(profile.manifest.optionalPermissions.length > 0
-      ? {
-          optional_permissions: [
-            ...profile.manifest.optionalPermissions,
-          ] as Manifest.OptionalPermission[],
-        }
-      : {}),
     // 不接管新标签页：那是上游 NaiveTab 的产品形态，Cairn 是采集扩展。
     options_ui: {
       page: '/dist/options/index.html',
@@ -49,18 +45,14 @@ export async function getManifest(profile: BuildProfile = buildProfile) {
     //     matches: ['<all_urls>'],
     //   },
     // ],
-    ...(profile.manifest.contentScriptPath
-      ? {
-          content_scripts: [
-            {
-              matches: ['<all_urls>'],
-              match_about_blank: true,
-              js: [profile.manifest.contentScriptPath],
-              run_at: 'document_start' as const,
-            },
-          ],
-        }
-      : {}),
+    content_scripts: [
+      {
+        matches: ['<all_urls>'],
+        match_about_blank: true,
+        js: [CONTENT_SCRIPT_PATH],
+        run_at: 'document_start' as const,
+      },
+    ],
     content_security_policy: {
       // this is required on dev for Vite script to load
       extension_pages: isDev
@@ -80,8 +72,6 @@ export async function getManifest(profile: BuildProfile = buildProfile) {
         strict_min_version: '130.0',
       },
     }
-  } else if (profile.manifest.includeChromeFavicon) {
-    manifest.permissions!.push('favicon')
   }
   return manifest
 }
