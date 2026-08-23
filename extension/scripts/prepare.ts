@@ -1,6 +1,6 @@
 // generate stub index.html files for dev entry
 import { execSync } from 'node:child_process'
-import fs from 'fs-extra'
+import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import chokidar from 'chokidar'
 import { relative } from 'node:path'
 import { isDev, log, port, r, BROWSER_DIR } from './utils'
@@ -17,8 +17,8 @@ import { LEGAL_FILES } from './release-artifacts'
  */
 async function stubIndexHtml() {
   for (const view of PREPARED_VIEWS) {
-    await fs.ensureDir(r(`${BROWSER_DIR}/dist/${view}`))
-    let data = await fs.readFile(r(`src/${view}/index.html`), 'utf-8')
+    await mkdir(r(`${BROWSER_DIR}/dist/${view}`), { recursive: true })
+    let data = await readFile(r(`src/${view}/index.html`), 'utf-8')
 
     const sourceEntry =
       view === 'background'
@@ -48,11 +48,7 @@ async function stubIndexHtml() {
           }
         }
       </style>`
-    await fs.writeFile(
-      r(`${BROWSER_DIR}/dist/${view}/index.html`),
-      data,
-      'utf-8',
-    )
+    await writeFile(r(`${BROWSER_DIR}/dist/${view}/index.html`), data, 'utf-8')
     log('PRE', `stub ${view}`)
   }
 }
@@ -65,9 +61,10 @@ function writeLocales() {
   execSync('esno ./scripts/locale.ts', { stdio: 'inherit' })
 }
 
-fs.ensureDirSync(r(BROWSER_DIR))
+await mkdir(r(BROWSER_DIR), { recursive: true })
 const assetsRoot = r('assets')
-fs.copySync(r('assets'), r(`${BROWSER_DIR}/assets`), {
+await cp(r('assets'), r(`${BROWSER_DIR}/assets`), {
+  recursive: true,
   filter: (src) => {
     if (src.endsWith('.DS_Store')) return false
     const assetPath = relative(assetsRoot, src).replaceAll('\\', '/')
@@ -75,7 +72,7 @@ fs.copySync(r('assets'), r(`${BROWSER_DIR}/assets`), {
   },
 })
 for (const name of LEGAL_FILES) {
-  fs.copyFileSync(r(name), r(`${BROWSER_DIR}/${name}`))
+  await copyFile(r(name), r(`${BROWSER_DIR}/${name}`))
 }
 
 writeManifest()

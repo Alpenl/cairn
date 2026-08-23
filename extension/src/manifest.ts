@@ -1,4 +1,4 @@
-import fs from 'fs-extra'
+import { readFile } from 'node:fs/promises'
 import type { Manifest } from 'webextension-polyfill'
 import type PkgType from '../package.json'
 import { isDev, port, r } from '../scripts/utils'
@@ -8,7 +8,9 @@ import {
 } from '../scripts/build-target'
 
 export async function getManifest() {
-  const pkg = (await fs.readJSON(r('package.json'))) as typeof PkgType
+  const pkg = JSON.parse(
+    await readFile(r('package.json'), 'utf8'),
+  ) as typeof PkgType
 
   const manifest: Manifest.WebExtensionManifest = {
     manifest_version: 3,
