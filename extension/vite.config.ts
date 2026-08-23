@@ -3,7 +3,6 @@
 import { basename, dirname } from 'node:path'
 import { defineConfig, type UserConfig, type PluginOption } from 'vite'
 import Vue from '@vitejs/plugin-vue'
-import postcssPresetEnv from 'postcss-preset-env'
 import { isDev, port, r, BROWSER_DIR } from './scripts/utils'
 import packageJson from './package.json'
 import {
@@ -23,13 +22,6 @@ export const sharedConfig: UserConfig = {
   define: {
     __DEV__: isDev,
     __NAME__: JSON.stringify(packageJson.name),
-  },
-  css: {
-    postcss: {
-      plugins: [
-        postcssPresetEnv({ stage: 3, features: { 'nesting-rules': true } }),
-      ],
-    },
   },
   plugins: [
     Vue(),
