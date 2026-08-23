@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { isReaderFeedItemResponse } from '@webtag/api'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderCapabilityFeature, ReaderCapabilityLease } from '../../lib/capabilities'
-import { isReaderFeedItemResponse } from '../../lib/api/guards'
 import type { ReaderFeedItemResponse, ReaderTodoResponse } from '../../lib/api/types'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { feedScrollAnchorKey } from '../../lib/feed-scroll-anchor'

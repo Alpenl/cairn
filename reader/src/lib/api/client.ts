@@ -13,6 +13,8 @@
 import {
   buildLinksQuery,
   buildQueryString,
+  isReaderFeedFeedbackResponse,
+  isReaderFeedResponse,
   normalizeHttpError as normalizeSharedHttpError,
   normalizeThrownError,
   parseRetryAfter as parseRetryAfterValue,
@@ -150,8 +152,6 @@ import {
   isReaderTodoResponse,
   isReaderTodosResponse,
   isReaderEngagementResponse,
-  isReaderFeedFeedbackResponse,
-  isReaderFeedResponse,
   isReaderHomeResponse,
   isReaderLinkMetadataResponse,
   hasCanonicalSafeLinkMetadataRevisionTokens,

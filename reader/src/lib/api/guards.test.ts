@@ -16,8 +16,6 @@ import {
   isReaderInboxResponse,
   isReaderInboxListItemResponse,
   isReaderInboxResponsePage,
-  isReaderFeedFeedbackResponse,
-  isReaderFeedResponse,
   isReaderHomeResponse,
   isReaderLinkMetadataResponse,
   hasCanonicalSafeLinkMetadataRevisionTokens,
@@ -32,7 +30,7 @@ import {
   normalizeCapabilitiesResponse,
 } from './guards'
 import { makeLink } from '../../test/fixtures'
-import type { ReaderFeedFeedbackResponse, ReaderFeedItemResponse, ReaderHomeResponse, ReaderTodoResponse } from './types'
+import type { ReaderFeedItemResponse, ReaderHomeResponse, ReaderTodoResponse } from './types'
 
 function makeReaderTodo(overrides: Partial<ReaderTodoResponse> = {}): ReaderTodoResponse {
   return {
@@ -277,61 +275,6 @@ describe('Reader TODO response guards', () => {
 
   it('拒绝错误的 next_after 类型', () => {
     expect(isReaderTodosResponse({ items: [makeReaderTodo()], next_after: 7 })).toBe(false)
-  })
-})
-
-describe('Reader Feed response guard', () => {
-  it('accepts feedback with an optional visible link', () => {
-    const response: ReaderFeedFeedbackResponse = {
-      item_key: 'subscription:feed-1',
-      action: 'save',
-      link_id: 'link-1',
-    }
-    expect(isReaderFeedFeedbackResponse(response)).toBe(true)
-    expect(isReaderFeedFeedbackResponse({ ...response, link_id: 7 })).toBe(false)
-  })
-
-  it('accepts live pages with an optional keyset cursor', () => {
-    expect(isReaderFeedResponse({
-      items: [makeReaderFeedItem()],
-      next_cursor: 'live-cursor',
-      mode: 'recommended',
-    })).toBe(true)
-    expect(isReaderFeedResponse({
-      items: [makeReaderFeedItem()],
-      mode: 'chronological',
-    })).toBe(true)
-  })
-
-  it('requires the resource identity and visible event time', () => {
-    for (const field of ['resource_key', 'event_at']) {
-      const item = { ...makeReaderFeedItem() } as Record<string, unknown>
-      delete item[field]
-      expect(isReaderFeedResponse({ items: [item], mode: 'recommended' }), field).toBe(false)
-    }
-  })
-
-  it('requires the union identity belonging to source', () => {
-    expect(isReaderFeedResponse({
-      items: [makeReaderFeedItem({ source: 'reading' })],
-      mode: 'recommended',
-    })).toBe(false)
-    expect(isReaderFeedResponse({
-      items: [makeReaderFeedItem({
-        key: 'inbox:inbox-1',
-        source: 'inbox',
-        resource_key: 'inbox:inbox-1',
-        link_id: undefined,
-        inbox_id: 'inbox-1',
-        feed_item_id: undefined,
-      })],
-      mode: 'recommended',
-    })).toBe(true)
-  })
-
-  it('rejects unknown modes and cursor types', () => {
-    expect(isReaderFeedResponse({ items: [], mode: 'ranking-v2' })).toBe(false)
-    expect(isReaderFeedResponse({ items: [], mode: 'recommended', next_cursor: 1 })).toBe(false)
   })
 })
 
