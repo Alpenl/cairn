@@ -780,7 +780,8 @@ describe('ReaderClient session exchange identity', () => {
       ),
     )
 
-    await expect(new ReaderClient({ baseURL: BASE }).login('secret')).resolves.toEqual({
+    const attempt = await new ReaderClient({ baseURL: BASE }).loginWithMutationStatus('secret')
+    expect(attempt.result).toEqual({
       ok: true,
       data: {
         expiresAt: '2030-01-01T00:00:00Z',
@@ -805,7 +806,8 @@ describe('ReaderClient session exchange identity', () => {
       ),
     )
 
-    await expect(new ReaderClient({ baseURL: BASE }).login('secret')).resolves.toMatchObject({
+    const attempt = await new ReaderClient({ baseURL: BASE }).loginWithMutationStatus('secret')
+    expect(attempt.result).toMatchObject({
       ok: false,
       error: { kind: 'identity-mismatch' },
     })
@@ -853,7 +855,8 @@ describe('ReaderClient session exchange identity', () => {
       }),
     )
 
-    await expect(new ReaderClient({ baseURL: BASE }).login('secret')).resolves.toMatchObject({
+    const attempt = await new ReaderClient({ baseURL: BASE }).loginWithMutationStatus('secret')
+    expect(attempt.result).toMatchObject({
       ok: false,
       error: { kind: 'other' },
     })
@@ -1666,22 +1669,6 @@ describe('ReaderClient.getContent', () => {
   })
 })
 
-describe('ReaderClient.refreshLink 成功', () => {
-  it('202 返回后端 SubmitResponse，而不是把提交结果伪装成 LinkResponse', async () => {
-    mockFetch(() =>
-      jsonResponse({ link_id: 'id1', status: 'pending' }, { status: 202 }),
-    )
-    const client = authenticatedClient()
-
-    const r = await client.refreshLink('id1')
-
-    expect(r).toEqual({
-      ok: true,
-      data: { link_id: 'id1', status: 'pending' },
-    })
-  })
-})
-
 describe('ReaderClient.saveContent', () => {
   it('完整 LinkContentResponse 原样返回', async () => {
     const response = {
@@ -2306,7 +2293,7 @@ describe('ReaderClient 错误归一化', () => {
         {
           error: {
             code: 429,
-            error_code: 'cooldown_active',
+            error_code: 'rate_limit_exceeded',
             message: '冷却中',
           },
         },
@@ -2317,12 +2304,12 @@ describe('ReaderClient 错误归一化', () => {
       ),
     )
     const client = authenticatedClient()
-    const r = await client.refreshLink('id1')
+    const r = await client.getTags()
     expect(r.ok).toBe(false)
     if (!r.ok) {
       expect(r.error.kind).toBe('rate-limited')
       expect(r.error.retryAfterSeconds).toBe(30)
-      expect(r.error.errorCode).toBe('cooldown_active')
+      expect(r.error.errorCode).toBe('rate_limit_exceeded')
     }
   })
 

@@ -10,7 +10,7 @@
 import { useCallback, useSyncExternalStore } from 'react'
 
 import type { ReaderClient } from '../api/client'
-import { ok, type ApiResult } from '../api/result'
+import { ok, type ApiResult } from '@webtag/api'
 import type { LinkContentResponse } from '../api/types'
 import { contentCacheKey } from './invalidate'
 import { resourceStore } from './store'

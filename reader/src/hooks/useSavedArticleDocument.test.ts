@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { ok, type ApiResult } from '../lib/api/result'
+import { ok, type ApiResult } from '@webtag/api'
 import type { LinkContentResponse, LinkResponse } from '../lib/api/types'
 import { IdentityLease } from '../lib/identity'
 import { useSavedArticleDocument } from './useSavedArticleDocument'

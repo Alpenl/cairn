@@ -5,13 +5,12 @@ import {
   type ReaderCapabilityPolicy,
 } from '../../lib/capabilities'
 import type { ReaderTodoResponse } from '../../lib/api/types'
-import { navigateReaderRoute, type ReaderRoute } from '../../lib/navigation/route'
+import { navigateReaderRoute, type ReaderNavigationRequest, type ReaderRoute } from '../../lib/navigation/route'
 import { useExclusiveAction } from '../../hooks/useExclusiveAction'
 import { useSurfaceRequestGate, type SurfaceRequestToken } from '../../hooks/useSurfaceRequestGate'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
 import { asRecord, isRecord } from '../../lib/records'
 import {
-  navigateReaderTarget,
   readerErrorMessage,
   SURFACE_IDENTITY_ERROR,
   formatRelativeDate,
@@ -24,7 +23,7 @@ import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 
 export interface TodoSurfaceProps {
   readonly client: IdentityBoundReaderClient
-  readonly onNavigate: (route: ReaderRoute) => void
+  readonly onNavigate: ReaderNavigationRequest
   readonly onOpenLink: (id: string) => void
   readonly capabilityPolicy: ReaderCapabilityPolicy
   readonly completedExpanded: boolean
@@ -566,9 +565,9 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
       return
     }
     if (target.kind === 'note') {
-      navigateReaderTarget({ kind: 'library', id: 'notes' }, onNavigate, { noteId: target.id })
+      void onNavigate({ kind: 'library', id: 'notes' }, { noteId: target.id })
     } else if (target.kind === 'inbox') {
-      navigateReaderTarget({ kind: 'library', id: 'pending', inboxId: target.id }, onNavigate)
+      void onNavigate({ kind: 'library', id: 'pending', inboxId: target.id })
     } else if (target.kind === 'thought') {
       navigate({ kind: 'tool', id: 'history' })
     }

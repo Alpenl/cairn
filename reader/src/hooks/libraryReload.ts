@@ -1,5 +1,5 @@
 import type { IdentityBoundReaderClient } from '../lib/api/client'
-import type { ApiResult } from '../lib/api/result'
+import type { ApiResult } from '@webtag/api'
 import { resourceStore, type FetchOptions } from '../lib/cache/store'
 
 export type LibraryReloadOptions = Pick<FetchOptions, 'signal' | 'silent'>

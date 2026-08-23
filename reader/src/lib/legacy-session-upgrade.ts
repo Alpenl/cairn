@@ -1,4 +1,4 @@
-import type { ApiError } from './api/result'
+import type { ApiError } from '@webtag/api'
 import type { SessionIdentity } from './api/types'
 import { negotiateSession } from './session-negotiation'
 import type { Connection } from './settings'

@@ -4,7 +4,7 @@ import type {
   ReaderActivityKind,
   ReaderActivityRequestOptions,
 } from '../lib/api/client'
-import { err, ok, type ApiError, type ApiResult } from '../lib/api/result'
+import { err, ok, type ApiError, type ApiResult } from '@webtag/api'
 import type { LinkResponse, ReaderActivityResponse } from '../lib/api/types'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { resourceStore } from '../lib/cache/store'

@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
 
-import { ok, type ApiResult } from '../api/result'
+import { ok, type ApiResult } from '@webtag/api'
 import type { LinkContentResponse } from '../api/types'
 import { readerIdentity } from '../identity'
 import { contentCacheKey, invalidateLinkContent } from './invalidate'

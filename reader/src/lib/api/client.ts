@@ -172,7 +172,7 @@ import {
   validateArchiveV2Bytes,
   type ArchiveV2Selection,
 } from './archive-v2'
-import { type ApiError, type ApiResult, err, ok } from './result'
+import { err, ok, type ApiError, type ApiResult } from '@webtag/api'
 import type { IdentityLease, IdentityOperationContext, IdentityOwnership } from '../identity'
 
 /** 默认请求超时（毫秒）。 */
@@ -614,19 +614,6 @@ export class ReaderClient {
     const r = await this.send('GET', '/api/capabilities', undefined, undefined, undefined, signal)
     if (!r.ok) return r
     return ok(normalizeCapabilitiesResponse(r.data))
-  }
-
-  /**
-   * 用安装令牌换一张 httpOnly 会话 cookie。
-   *
-   * 成功后前端不持有任何凭证——cookie 由浏览器保管且脚本读不到，因此 XSS
-   * 拿不走它。旧后端没有会话端点时返回 404，调用方据此回退到 token 模式。
-   */
-  async login(
-    installationToken: string,
-    signal?: AbortSignal,
-  ): Promise<ApiResult<{ expiresAt: string; clientDataNamespace: string }>> {
-    return (await this.loginWithMutationStatus(installationToken, signal)).result
   }
 
   /** Session negotiation uses this to clean up malformed successful exchanges. */
@@ -1300,14 +1287,6 @@ export class ReaderClient {
     if (scope && r.data.library_kind !== scope) {
       return shapeMismatch('scoped DomainTreeSummaryEnvelope')
     }
-    return ok(r.data)
-  }
-
-  /** POST /api/links/{id}/refresh —— 重新入队解析。 */
-  async refreshLink(id: string): Promise<ApiResult<SubmitResponse>> {
-    const r = await this.send('POST', `/api/links/${encodeURIComponent(id)}/refresh`)
-    if (!r.ok) return r
-    if (!isSubmitResponse(r.data)) return shapeMismatch('SubmitResponse')
     return ok(r.data)
   }
 

@@ -6,7 +6,7 @@ import { ownedStorageKey } from '../lib/storage-ownership'
 import { readerIdentity } from '../lib/identity'
 import { resourceStore } from '../lib/cache/store'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
-import { ok } from '../lib/api/result'
+import { ok } from '@webtag/api'
 import { enabledReaderCapabilityPolicy } from '../test/capabilities'
 
 function baseProps(over: Partial<SidebarProps> = {}): SidebarProps {

@@ -1,5 +1,5 @@
 import { ReaderClient } from './api/client'
-import type { ApiError } from './api/result'
+import type { ApiError } from '@webtag/api'
 import type { SessionIdentity } from './api/types'
 import { withBrowserLock } from './browser-lock'
 

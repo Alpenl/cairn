@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { FeedSurface } from './FeedSurface'
 import { feedScrollAnchorKey, readFeedScrollAnchor, writeFeedScrollAnchor } from '../../lib/feed-scroll-anchor'
-import { err, ok } from '../../lib/api/result'
+import { err, ok } from '@webtag/api'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type {
   ReaderFeedFeedbackRequest,

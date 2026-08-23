@@ -118,7 +118,7 @@ import type {
   ReaderLinkMetadataRequest,
   TranslationResponse,
 } from '../lib/api/types'
-import { err, type ApiError, type ApiResult } from '../lib/api/result'
+import { err, type ApiError, type ApiResult } from '@webtag/api'
 import type {
   DocumentCommandContext,
   SavedArticleDocumentController,

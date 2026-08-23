@@ -5,8 +5,8 @@ import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MainView } from './MainView'
-import { err, ok } from '../lib/api/result'
-import type { ApiError, ApiResult } from '../lib/api/result'
+import { err, ok } from '@webtag/api'
+import type { ApiError, ApiResult } from '@webtag/api'
 import type {
   IdentityBoundReaderClient,
   ListLinksParams,
@@ -400,7 +400,6 @@ function makeClient(
   client: ReaderClient
   getLink: ReturnType<typeof vi.fn>
   getContent: ReturnType<typeof vi.fn>
-  refreshLink: ReturnType<typeof vi.fn>
   saveContent: ReturnType<typeof vi.fn>
   replaceContent: ReturnType<typeof vi.fn>
   patchLinkMetadata: ReturnType<typeof vi.fn>
@@ -487,24 +486,6 @@ function makeClient(
       content_revision: 9,
     }),
   )
-  // 重新解析入队之后列表会如实报 pending，fake 必须照做：onRefresh 成功后会
-  // invalidateLibrary()，列表随即重取（失效契约是「删除条目并通知订阅者，下一次
-  // 读必然回源」），useLinks 拿到新数据就会 setPatches({}) 清掉乐观补丁。fake 若
-  // 恒回 failed，就是在断言「服务端把状态改回去之后界面还显示 pending」。
-  //
-	// 但**只能照做服务端真的会做的那部分**。`requeueLinkRefreshSQL`
-	// （link_repo_submit.go）写的是 `status = 'pending', error_msg = NULL`，
-	// 不会清 is_low_confidence。顺手把它抹掉曾经让这条用例变成恒真——它掩盖了
-	// 「低置信徽标会在自愈重取之后回来」这个真实回退。
-  const refreshed = new Set<string>()
-  const refreshLink = vi.fn(async (id: string) => {
-    refreshed.add(id)
-    return ok({ link_id: id, status: 'pending' as const })
-  })
-  const asServerSees = (item: LinkResponse): LinkResponse =>
-    refreshed.has(item.id)
-      ? { ...item, status: 'pending' as const, error_msg: null }
-      : item
   const getTranslations = vi.fn(async (id: string) => {
     const current = links.find((candidate) => candidate.id === id) ?? link
     return ok({
@@ -616,7 +597,7 @@ function makeClient(
         ))
         : links
       return ok({
-        items: visible.map(asServerSees),
+        items: visible,
         total: visible.length,
         page: 1,
         limit: params.limit ?? 30,
@@ -627,7 +608,6 @@ function makeClient(
     getTags: vi.fn(async () => ok([])),
     getDomainSummaries: vi.fn(async () => ok({ domains: [], total: 0 })),
     getReaderActivity,
-    refreshLink,
     saveContent,
     replaceContent,
     patchLinkMetadata,
@@ -666,7 +646,6 @@ function makeClient(
     client,
     getLink,
     getContent,
-    refreshLink,
     saveContent,
     replaceContent,
     patchLinkMetadata,
@@ -2110,7 +2089,6 @@ describe('MainView 保存原文', () => {
         }),
       ),
       createTranslation: vi.fn(),
-      refreshLink: vi.fn(),
       saveContent: vi.fn(),
       replaceContent,
       testConnection: vi.fn(),
@@ -2205,7 +2183,6 @@ describe('MainView 保存原文', () => {
         })
       }),
       createTranslation: vi.fn(),
-      refreshLink: vi.fn(),
       saveContent: vi.fn(),
       replaceContent: vi.fn(async (id: string) =>
         ok({
@@ -2299,7 +2276,6 @@ describe('MainView 保存原文', () => {
         }),
       ),
       createTranslation: vi.fn(),
-      refreshLink: vi.fn(),
       saveContent: vi.fn(),
       replaceContent: vi.fn(async (id: string) =>
         ok({
@@ -2385,7 +2361,6 @@ describe('MainView 保存原文', () => {
         }),
       ),
       createTranslation: vi.fn(),
-      refreshLink: vi.fn(),
       saveContent: vi.fn(),
       // 两点都要命：
       //   · 必须返回**真实结果形状**——返回 undefined 会在 res.ok 上抛出未处理的
@@ -2544,7 +2519,6 @@ describe('MainView 保存原文', () => {
       getLink: vi.fn(async (id: string) => ok(id === 'L1' ? first : second)),
       getTags: vi.fn(async () => ok([])),
       getDomainSummaries: vi.fn(async () => ok({ domains: [], total: 0 })),
-      refreshLink: vi.fn(),
       saveContent: vi.fn(),
       replaceContent: vi.fn(() => replaceRequest),
       getTranslations: vi.fn((id: string) =>
@@ -4111,7 +4085,6 @@ describe('MainView active 与 corpus ownership', () => {
       ),
       getTags: vi.fn(async () => ok([])),
       getDomainSummaries: vi.fn(async () => ok({ domains: [], total: 0 })),
-      refreshLink: vi.fn(),
       saveContent: vi.fn(),
       replaceContent: vi.fn(),
       getTranslations: vi.fn(async () => ok({

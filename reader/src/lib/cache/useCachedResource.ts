@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 
-import type { ApiError, ApiResult } from '../api/result'
+import type { ApiError, ApiResult } from '@webtag/api'
 import { resourceStore, type CacheEntry, type FetchContext, type FetchOptions } from './store'
 
 export interface CachedResource<T> {

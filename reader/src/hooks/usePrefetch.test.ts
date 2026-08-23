@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 
-import { ok } from '../lib/api/result'
+import { ok } from '@webtag/api'
 import { resourceStore } from '../lib/cache/store'
 import { usePrefetch, type PrefetchTarget } from './usePrefetch'
 

@@ -1,6 +1,6 @@
 import { createRoot } from 'react-dom/client'
 import type { IdentityBoundReaderClient } from '../src/lib/api/client'
-import { err, ok } from '../src/lib/api/result'
+import { err, ok } from '@webtag/api'
 import type { ReaderNoteHistoryResponse, ReaderNoteResponse } from '../src/lib/api/types'
 import { IdentityLease } from '../src/lib/identity'
 import { NotesSurface } from '../src/components/reader-vnext/NotesSurface'

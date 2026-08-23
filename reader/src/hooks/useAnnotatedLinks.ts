@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { IdentityBoundReaderClient } from '../lib/api/client'
-import type { ApiError, ApiResult } from '../lib/api/result'
+import type { ApiError, ApiResult } from '@webtag/api'
 import type { LinkResponse } from '../lib/api/types'
 import { isLinkResponse } from '../lib/api/guards'
 import {

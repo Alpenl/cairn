@@ -4,7 +4,7 @@
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ok } from '../api/result'
+import { ok } from '@webtag/api'
 import { resourceStore } from './store'
 import {
   CACHE_SCHEMA_VERSION,

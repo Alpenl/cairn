@@ -26,7 +26,7 @@ import {
   itemIsStarred,
   patchItemState,
 } from '../lib/feed'
-import { ok, type ApiResult } from '../lib/api/result'
+import { ok, type ApiResult } from '@webtag/api'
 import type { ReaderClient } from '../lib/api/client'
 import type {
   FeedFolder,

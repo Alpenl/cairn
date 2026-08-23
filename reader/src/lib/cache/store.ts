@@ -22,7 +22,7 @@
  * 这个约束是刻意维持的。所需语义（SWR + in-flight 去重 + 前缀失效 + LRU）
  * 加起来就是这个文件，不值得为它引入一棵依赖树。
  */
-import type { ApiError, ApiResult } from '../api/result'
+import type { ApiError, ApiResult } from '@webtag/api'
 import type { IdentityLease, IdentityOwnership } from '../identity'
 import { sameResource } from './equal'
 

@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
-import { err, ok, type ApiResult } from '../../lib/api/result'
+import { err, ok, type ApiResult } from '@webtag/api'
 import type { HealthResponse } from '../../lib/api/types'
 import type {
   DeployCandidate,

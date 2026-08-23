@@ -11,7 +11,7 @@ import {
   type Annotation,
   type AnnotationLocator,
 } from '../../lib/annotations'
-import type { ApiError } from '../../lib/api/result'
+import type { ApiError } from '@webtag/api'
 import type { LinkResponse, TranslationResponse } from '../../lib/api/types'
 import type { TocHeading } from '../../lib/toc'
 

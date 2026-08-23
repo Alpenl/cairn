@@ -4,7 +4,7 @@ import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import { LibraryModeNav } from '../LibraryModeNav'
 import { PendingInboxCountProvider, refreshPendingInboxCount } from './PendingInboxCount'
 import { SurfaceNav } from './SurfaceNav'
-import { ok } from '../../lib/api/result'
+import { ok } from '@webtag/api'
 import {
   enabledReaderCapabilityLease,
   enabledReaderCapabilityPolicy,

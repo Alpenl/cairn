@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
-import { err, ok } from '../lib/api/result'
+import { err, ok } from '@webtag/api'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ReaderActivityResponse } from '../lib/api/types'
 import { IdentityLease } from '../lib/identity'

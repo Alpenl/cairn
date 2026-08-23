@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 
-import { ok } from '../api/result'
+import { ok } from '@webtag/api'
 import type { IdentityBoundReaderClient, ReaderClient } from '../api/client'
 import type { LinkResponse, TranslationResponse } from '../api/types'
 import { makeLink } from '../../test/fixtures'

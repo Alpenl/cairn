@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { ReaderTodoResponse } from './api/types'
 import {
   formatRelativeDate,
   identityIsCurrent,
   isIdentityError,
-  navigateReaderTarget,
   readerErrorMessage,
   SURFACE_IDENTITY_ERROR,
   todoDesiredStatePatch,
@@ -150,25 +149,5 @@ describe('todoDesiredStatePatch', () => {
     expect(todoDesiredStatePatch(todo({ origin_kind: 'thought', host_revision: -1 }), true)).toBeNull()
     expect(todoDesiredStatePatch(todo({ origin_kind: 'thought', host_revision: 1.5 }), true)).toBeNull()
     expect(todoDesiredStatePatch(todo({ origin_kind: 'thought', host_revision: Number.NaN }), true)).toBeNull()
-  })
-})
-
-describe('navigateReaderTarget', () => {
-  it('omits the target argument when there is nothing to carry', () => {
-    const onNavigate = vi.fn(() => true)
-
-    navigateReaderTarget({ kind: 'library', id: 'notes' }, onNavigate)
-
-    expect(onNavigate).toHaveBeenCalledWith({ kind: 'library', id: 'notes' })
-  })
-
-  it('delegates the resource identity without touching history', () => {
-    const onNavigate = vi.fn(() => true)
-    window.history.replaceState({}, '', '/?view=reading&link_id=keep-me')
-
-    navigateReaderTarget({ kind: 'library', id: 'notes' }, onNavigate, { noteId: 'N9' })
-
-    expect(onNavigate).toHaveBeenCalledWith({ kind: 'library', id: 'notes' }, { noteId: 'N9' })
-    expect(window.location.search).toBe('?view=reading&link_id=keep-me')
   })
 })

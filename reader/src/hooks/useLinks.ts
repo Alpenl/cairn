@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import { buildLinksQuery, type ListLinksParams } from '../lib/api/client'
-import type { ApiError, ApiResult } from '../lib/api/result'
+import type { ApiError, ApiResult } from '@webtag/api'
 import type { LinkResponse, PaginatedLinksResponse } from '../lib/api/types'
 import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'

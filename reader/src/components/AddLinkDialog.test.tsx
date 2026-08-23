@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AddLinkDialog } from './AddLinkDialog'
 import type { ReaderClient } from '../lib/api/client'
-import { err, ok, type ApiResult } from '../lib/api/result'
+import { err, ok, type ApiResult } from '@webtag/api'
 import type { SubmitResponse } from '../lib/api/types'
 import {
   enabledReaderCapabilityLease,
