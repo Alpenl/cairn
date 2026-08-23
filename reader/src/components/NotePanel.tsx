@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon'
-import { relDate } from '../lib/meta'
+import { relDate } from '../lib/metadata'
 import {
   annotationLocator,
   annotationLocatorTargetKey,

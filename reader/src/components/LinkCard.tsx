@@ -5,7 +5,8 @@
 import { memo, useMemo } from 'react'
 import { Icon } from './Icon'
 import { ReaderPreviewCard } from './ui/ReaderPreviewCard'
-import { fetcherIcon, relDate } from '../lib/meta'
+import { fetcherIcon } from './fetcher-icons'
+import { relDate } from '../lib/metadata'
 import type { LinkResponse } from '../lib/api/types'
 
 export interface LinkCardProps {

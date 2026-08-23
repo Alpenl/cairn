@@ -11,7 +11,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from './Icon'
-import { relDate, type Pins, type PinKind } from '../lib/meta'
+import { relDate } from '../lib/metadata'
+import type { Pins, PinKind } from '../lib/meta'
 import type { TagStat, DomainStat } from '../lib/stats'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import {

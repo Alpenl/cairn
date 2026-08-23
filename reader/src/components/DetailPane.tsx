@@ -31,7 +31,8 @@ import {
 } from './detail/SelectionOverlays'
 import { ReadingProgressStrip } from './detail/ReadingProgress'
 import { ReadingTocControl } from './detail/ReadingTocControl'
-import { fetcherIcon, fetcherKey } from '../lib/meta'
+import { fetcherIcon } from './fetcher-icons'
+import { fetcherLabel } from '../lib/metadata'
 import { readingMinutes } from '../lib/reading-time'
 import { annotationLocator, annotationMatchesLocator, getSelectionInfo, isContentAnchored, NO_ANNOTATIONS, type Annotation, type AnnotationInput, type AnnotationLocator, type SelectionInfo } from '../lib/annotations'
 import { useReadingSurface } from '../hooks/useReadingSurface'
@@ -60,17 +61,6 @@ import type {
   SavedArticleDocument,
 } from '../lib/article/document'
 import type { TocHeading } from '../lib/toc'
-
-// 键为后端实际产出的 fetcher 主类型（查表前先经 fetcherKey 剥后缀）。
-const FETCHER_LABEL: Record<string, string> = {
-	basic: '网页',
-	github: 'GitHub',
-  arxiv: 'arXiv',
-  pdf: 'PDF',
-	jina: '渲染抓取',
-	grok: 'AI 直读',
-	wechat: '公众号',
-}
 
 const NO_TRANSLATION_HISTORY: TranslationResponse[] = []
 
@@ -1048,7 +1038,7 @@ function DetailPaneInner({
     )
 
   const fIcon = fetcherIcon(l.fetcher_type)
-  const fetcherLabel = l.fetcher_type ? FETCHER_LABEL[fetcherKey(l.fetcher_type)] : undefined
+  const fetcherLabelText = fetcherLabel(l.fetcher_type)
   const onCopy = () => {
     try {
       void navigator.clipboard?.writeText(l.url)
@@ -1362,7 +1352,7 @@ function DetailPaneInner({
           editTextareaRef={editTextareaRef}
           focusMode={focusMode}
           fetcherIcon={fIcon}
-          fetcherLabel={fetcherLabel}
+          fetcherLabel={fetcherLabelText}
           readMinutes={readMinutes}
           relatedTags={rel}
           currentTag={curTag}

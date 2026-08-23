@@ -5,7 +5,7 @@ import { ArticlePager, type ArticlePagerTarget } from '../ArticlePager'
 import { Icon, type IconName } from '../Icon'
 import { LazyMarkdownView as MarkdownView } from '../LazyMarkdownView'
 import { PlainTextView } from '../PlainTextView'
-import { CONTENT_TYPE_LABEL, relDate } from '../../lib/meta'
+import { contentTypeLabel, relDate } from '../../lib/metadata'
 import {
   NO_ANNOTATIONS,
   type Annotation,
@@ -201,7 +201,7 @@ export function ArticleBody({
         {article.content_type && (
           <Fragment>
             <span className="dotsep">·</span>
-            {CONTENT_TYPE_LABEL[article.content_type] || article.content_type}
+            {contentTypeLabel(article.content_type)}
           </Fragment>
         )}
         {fetcherLabel && (
