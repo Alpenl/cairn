@@ -308,15 +308,22 @@ function runMultiStoreTransaction<T>(
   storeNames: readonly string[],
   mode: IDBTransactionMode,
   operation: NamespaceStorageOperation | undefined,
-  work: (transaction: IDBTransaction, setResult: (result: T) => void) => void,
+  work: (
+    transaction: IDBTransaction,
+    setResult: (result: T) => void,
+    request: <TRequest>(
+      request: IDBRequest<TRequest>,
+      onSuccess: (result: TRequest) => void,
+    ) => void,
+  ) => void,
 ): Promise<T | null> {
   return database()
     .then((db) => runIDBTransaction<T | null>(
       db,
       storeNames,
       mode,
-      ({ transaction, setResult }) => {
-        work(transaction, setResult)
+      ({ transaction, setResult, request }) => {
+        work(transaction, setResult, request)
       },
       {
         signal: operation?.signal,
@@ -331,14 +338,13 @@ export function idbGetAll(operation?: NamespaceStorageOperation): Promise<Persis
     [PAYLOAD_STORE_NAME, META_STORE_NAME],
     'readonly',
     operation,
-    (transaction, setResult) => {
+    (transaction, setResult, request) => {
       const metadata = transaction.objectStore(META_STORE_NAME)
       const payloads = transaction.objectStore(PAYLOAD_STORE_NAME)
       const metaRequest = (operation
         ? metadata.getAll(namespaceRecordRange(operation.context.physicalNamespace))
         : metadata.getAll()) as IDBRequest<CacheMetadata[]>
-      metaRequest.onsuccess = () => {
-        const rows = metaRequest.result
+      request(metaRequest, (rows) => {
         if (rows.length === 0) {
           setResult([])
           return
@@ -347,14 +353,14 @@ export function idbGetAll(operation?: NamespaceStorageOperation): Promise<Persis
         let pending = rows.length
         for (const meta of rows) {
           const payloadRequest = payloads.get(meta.key) as IDBRequest<CachePayload | undefined>
-          payloadRequest.onsuccess = () => {
-            if (payloadRequest.result) {
+          request(payloadRequest, (payload) => {
+            if (payload) {
               records.push({
                 key: meta.key,
                 namespace: meta.namespace,
                 logicalKey: meta.logicalKey,
                 schema: meta.schema,
-                data: payloadRequest.result.data,
+                data: payload.data,
                 updatedAt: meta.lastAccess,
                 size: meta.size,
                 generation: meta.generation,
@@ -362,9 +368,9 @@ export function idbGetAll(operation?: NamespaceStorageOperation): Promise<Persis
             }
             pending -= 1
             if (pending === 0) setResult(records.sort((a, b) => a.key.localeCompare(b.key)))
-          }
+          })
         }
-      }
+      })
     },
   ).then((records) => records ?? [])
 }
@@ -404,19 +410,19 @@ export function idbAdvanceInvalidation(
     [PAYLOAD_STORE_NAME, META_STORE_NAME, CONTROL_STORE_NAME],
     'readwrite',
     operation,
-    (transaction, setResult) => {
+    (transaction, setResult, request) => {
       const payloads = transaction.objectStore(PAYLOAD_STORE_NAME)
       const metadata = transaction.objectStore(META_STORE_NAME)
       const controls = transaction.objectStore(CONTROL_STORE_NAME)
       const clockRequest = controls.get(clockKey(namespace)) as IDBRequest<
         DurableGenerationClock | undefined
       >
-      clockRequest.onsuccess = () => {
+      request(clockRequest, (clockRecord) => {
         if (!operation.isCurrent()) {
           transaction.abort()
           return
         }
-        const generation = (clockRequest.result?.generation ?? 0) + 1
+        const generation = (clockRecord?.generation ?? 0) + 1
         const clock: DurableGenerationClock = {
           key: clockKey(namespace),
           kind: 'clock',
@@ -437,7 +443,7 @@ export function idbAdvanceInvalidation(
         payloads.delete(range)
         metadata.delete(range)
         setResult(generation)
-      }
+      })
     },
   )
 }
@@ -509,7 +515,7 @@ export function idbPut(
     storeNames,
     'readwrite',
     operation,
-    (transaction, setResult) => {
+    (transaction, setResult, request) => {
       if (!operation) {
         storeRecord(transaction)
         setResult(true)
@@ -518,19 +524,19 @@ export function idbPut(
       const invalidations = transaction.objectStore(CONTROL_STORE_NAME).getAll(
         controlNamespaceRange(operation.context.physicalNamespace),
       ) as IDBRequest<DurableInvalidation[]>
-      invalidations.onsuccess = () => {
+      request(invalidations, (rows) => {
         if (!operation.isCurrent()) {
           transaction.abort()
           return
         }
-        const blocked = invalidations.result.some(
+        const blocked = rows.some(
           (invalidation) =>
             record.logicalKey.startsWith(invalidation.logicalPrefix) &&
             (record.generation ?? 0) < invalidation.generation,
         )
         if (!blocked) storeRecord(transaction)
         setResult(!blocked)
-      }
+      })
     },
   ).then((stored) => stored === true)
 }
@@ -563,7 +569,7 @@ export function idbPutWithinQuota(
     [PAYLOAD_STORE_NAME, META_STORE_NAME, CONTROL_STORE_NAME],
     'readwrite',
     operation,
-    (transaction, setResult) => {
+    (transaction, setResult, request) => {
       const payloads = transaction.objectStore(PAYLOAD_STORE_NAME)
       const metadata = transaction.objectStore(META_STORE_NAME)
       const controls = transaction.objectStore(CONTROL_STORE_NAME)
@@ -648,14 +654,14 @@ export function idbPutWithinQuota(
         }
       }
 
-      metadataRequest.onsuccess = () => {
-        metadataRows = metadataRequest.result
+      request(metadataRequest, (rows) => {
+        metadataRows = rows
         admit()
-      }
-      invalidationsRequest.onsuccess = () => {
-        invalidations = invalidationsRequest.result
+      })
+      request(invalidationsRequest, (rows) => {
+        invalidations = rows
         admit()
-      }
+      })
     },
   )
 }
@@ -696,7 +702,7 @@ export function idbRepairOrphans(): Promise<OrphanRepairResult> {
     [PAYLOAD_STORE_NAME, META_STORE_NAME],
     'readwrite',
     undefined,
-    (transaction, setResult) => {
+    (transaction, setResult, request) => {
       const payloads = transaction.objectStore(PAYLOAD_STORE_NAME)
       const metadata = transaction.objectStore(META_STORE_NAME)
       let payloadsRemoved = 0
@@ -704,41 +710,39 @@ export function idbRepairOrphans(): Promise<OrphanRepairResult> {
 
       const scanMetadata = () => {
         const cursorRequest = metadata.openKeyCursor()
-        cursorRequest.onsuccess = () => {
-          const cursor = cursorRequest.result
+        request(cursorRequest, (cursor) => {
           if (!cursor) {
             setResult({ payloadsRemoved, metadataRemoved })
             return
           }
           const key = cursor.primaryKey
           const payloadRequest = payloads.getKey(key)
-          payloadRequest.onsuccess = () => {
-            if (payloadRequest.result === undefined) {
+          request(payloadRequest, (payloadKey) => {
+            if (payloadKey === undefined) {
               metadata.delete(key)
               metadataRemoved += 1
             }
             cursor.continue()
-          }
-        }
+          })
+        })
       }
 
       const cursorRequest = payloads.openKeyCursor()
-      cursorRequest.onsuccess = () => {
-        const cursor = cursorRequest.result
+      request(cursorRequest, (cursor) => {
         if (!cursor) {
           scanMetadata()
           return
         }
         const key = cursor.primaryKey
         const metadataRequest = metadata.getKey(key)
-        metadataRequest.onsuccess = () => {
-          if (metadataRequest.result === undefined) {
+        request(metadataRequest, (metadataKey) => {
+          if (metadataKey === undefined) {
             payloads.delete(key)
             payloadsRemoved += 1
           }
           cursor.continue()
-        }
-      }
+        })
+      })
     },
   ).then((result) => result ?? { payloadsRemoved: 0, metadataRemoved: 0 })
 }
@@ -751,28 +755,18 @@ export function idbDeletePrefix(
 }
 
 export function idbClear(): Promise<void> {
-  return database().then(
-    (db) =>
-      new Promise<void>((resolve) => {
-        if (!db) {
-          resolve()
-          return
-        }
-        try {
-          const transaction = db.transaction(
-            [LEGACY_STORE_NAME, PAYLOAD_STORE_NAME, META_STORE_NAME, CONTROL_STORE_NAME],
-            'readwrite',
-          )
-          transaction.objectStore(LEGACY_STORE_NAME).clear()
-          transaction.objectStore(PAYLOAD_STORE_NAME).clear()
-          transaction.objectStore(META_STORE_NAME).clear()
-          transaction.objectStore(CONTROL_STORE_NAME).clear()
-          transaction.oncomplete = () => resolve()
-          transaction.onerror = () => resolve()
-          transaction.onabort = () => resolve()
-        } catch {
-          resolve()
-        }
-      }),
-  )
+  return database()
+    .then((db) => runIDBTransaction<void>(
+      db,
+      [LEGACY_STORE_NAME, PAYLOAD_STORE_NAME, META_STORE_NAME, CONTROL_STORE_NAME],
+      'readwrite',
+      ({ transaction }) => {
+        transaction.objectStore(LEGACY_STORE_NAME).clear()
+        transaction.objectStore(PAYLOAD_STORE_NAME).clear()
+        transaction.objectStore(META_STORE_NAME).clear()
+        transaction.objectStore(CONTROL_STORE_NAME).clear()
+      },
+      { requireResult: false },
+    ))
+    .then(() => undefined)
 }
