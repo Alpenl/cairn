@@ -4,7 +4,6 @@ import { basename, dirname, resolve } from 'node:path'
 import { defineConfig, type UserConfig, type PluginOption } from 'vite'
 import Vue from '@vitejs/plugin-vue'
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
-import Icons from 'unplugin-icons/vite'
 import postcssPresetEnv from 'postcss-preset-env'
 import { isDev, port, r, BROWSER_DIR } from './scripts/utils'
 import packageJson from './package.json'
@@ -38,9 +37,6 @@ export const sharedConfig: UserConfig = {
     VueI18nPlugin({
       include: resolve(__dirname, './src/locales/**'),
     }),
-    // 本地组件目录已随上游新标签页一起删除；采集页面用到的 Naive UI
-    // 组件均在 SFC 中显式 import。
-    Icons(), // https://github.com/antfu/unplugin-icons
 
     {
       name: 'extension-build-entry',

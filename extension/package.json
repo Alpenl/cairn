@@ -56,7 +56,6 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@ffflorian/jszip-cli": "^3.16.5",
-    "@iconify/json": "2.2.518",
     "@iconify/vue": "^5.0.1",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@types/chrome": "^0.2.6",
@@ -87,7 +86,6 @@
     "simple-git-hooks": "^2.13.1",
     "typescript": "5.9.3",
     "typescript-eslint": "8.67.0",
-    "unplugin-icons": "^23.0.1",
     "vite": "8.1.5",
     "vitest": "^4.1.10",
     "vue-eslint-parser": "^10.4.1",
