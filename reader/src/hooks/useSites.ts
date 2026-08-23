@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReaderClient } from '../lib/api/client'
+import type { IdentityBoundReaderClient, ReaderClient } from '../lib/api/client'
 import { err, type ApiError } from '@webtag/api'
 import type { ListSitesParams, PaginatedSitesResponse, SiteListItemResponse } from '../lib/api/types'
 import { resourceStore } from '../lib/cache/store'
-import { useCachedResource } from '../lib/cache/useCachedResource'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
+import {
+  isActiveReaderClient,
+  useIdentityCachedResource,
+} from './useIdentityCachedResource'
 
 export const SITES_CACHE_PREFIX = 'GET /api/sites'
 export const SITES_PAGE_SIZE = 30
@@ -49,6 +52,11 @@ function clientKey(client: ReaderClient): number {
   nextClientID += 1
   clientIDs.set(object, assigned)
   return assigned
+}
+
+function activeIdentityClient(client: ReaderClient): IdentityBoundReaderClient | null {
+  const candidate = client as IdentityBoundReaderClient
+  return isActiveReaderClient(candidate) ? candidate : null
 }
 
 function firstPageQuery(params: ListSitesParams): ListSitesParams {
@@ -106,35 +114,43 @@ export function useSites(
   const owner = useMemo(() => clientKey(client), [client])
   const readable = capabilityLease.isCurrent('siteRead')
   const baseKey = useMemo(() => sitesKey(firstQuery), [firstQuery])
-  const key = readable
+  const identityClient = activeIdentityClient(client)
+  const pageOneKey = readable
     ? `${baseKey}#capability=${capabilityLease.generation}`
     : null
-  const streamKey = useMemo(
-    () => `${baseKey}#capability=${capabilityLease.generation}#client=${owner}`,
-    [baseKey, capabilityLease.generation, owner],
-  )
-  const first = useCachedResource<PaginatedSitesResponse>(
-    key,
-    async () => {
+  const {
+    resource: first,
+    cacheKey,
+    canFetch,
+  } = useIdentityCachedResource<PaginatedSitesResponse>(
+    identityClient,
+    pageOneKey,
+    async ({ client, signal }) => {
       const operationLease = capabilityLease
       if (!operationLease.isCurrent('siteRead')) return err(CAPABILITY_REVOKED_ERROR)
-      const result = await client.getSites(firstQuery)
+      const result = signal
+        ? await client.getSites(firstQuery, { signal })
+        : await client.getSites(firstQuery)
       return client.isIdentityCurrent() && operationLease.isCurrent('siteRead')
         ? result
         : err(CAPABILITY_REVOKED_ERROR)
     },
     { enabled: readable },
   )
+  const streamKey = useMemo(
+    () => `${cacheKey ?? pageOneKey ?? baseKey}#client=${owner}`,
+    [baseKey, cacheKey, owner, pageOneKey],
+  )
   const firstOwnerRef = useRef(owner)
 
   useEffect(() => {
     if (firstOwnerRef.current === owner) return
     firstOwnerRef.current = owner
-    // The logical cache key stays stable across identities because ResourceStore
-    // owns the physical namespace. A retained hook still needs one forced fetch
-    // so the new client, rather than an old in-flight fetcher, owns page one.
+    if (!canFetch) return
+    // A retained hook with the same identity lease still needs one forced fetch
+    // when a different client object takes over, so the new fetcher owns page one.
     void first.reload()
-  }, [first, owner])
+  }, [canFetch, first, owner])
 
   const [pagination, setPagination] = useState<SitesPaginationState>(
     () => emptyPagination(streamKey),
@@ -162,24 +178,25 @@ export function useSites(
   const pageError = ownsPagination ? pagination.pageError : null
 
   const items = useMemo(
-    () => readable ? mergeUnique(first.data?.items ?? NO_SITES, extraPages) : NO_SITES,
-    [first.data, extraPages, readable],
+    () => canFetch ? mergeUnique(first.data?.items ?? NO_SITES, extraPages) : NO_SITES,
+    [canFetch, first.data, extraPages],
   )
-  const total = readable ? first.data?.total ?? 0 : 0
-  const recentCutoff = readable ? first.data?.recent_cutoff : undefined
+  const total = canFetch ? first.data?.total ?? 0 : 0
+  const recentCutoff = canFetch ? first.data?.recent_cutoff : undefined
   const hasStableSnapshot = firstQuery.view !== 'recent' || Boolean(recentCutoff)
-  const hasMore = readable && !first.loading && hasStableSnapshot && items.length < total
+  const hasMore = canFetch && !first.loading && hasStableSnapshot && items.length < total
 
   const reload = useCallback(async (): Promise<void> => {
-    if (!capabilityLease.isCurrent('siteRead')) return
+    if (!canFetch || !capabilityLease.isCurrent('siteRead')) return
     paginationEpochRef.current += 1
     pageRequestRef.current = null
     setPagination(emptyPagination(streamKey))
     await first.reload()
-  }, [capabilityLease, first, streamKey])
+  }, [canFetch, capabilityLease, first, streamKey])
 
   const loadMore = useCallback(async (): Promise<void> => {
     if (
+      !canFetch ||
       first.loading ||
       !capabilityLease.isCurrent('siteRead') ||
       pageRequestRef.current?.streamKey === streamKey ||
@@ -236,20 +253,20 @@ export function useSites(
         pageError: null,
       }
     })
-  }, [capabilityLease, client, first.loading, firstQuery, hasMore, loadingMore, page, recentCutoff, streamKey])
+  }, [canFetch, capabilityLease, client, first.loading, firstQuery, hasMore, loadingMore, page, recentCutoff, streamKey])
 
   return useMemo(() => ({
     items,
     total,
     recentCutoff,
-    loading: readable && first.loading,
+    loading: canFetch && first.loading,
     loadingMore,
-    error: readable ? first.error : null,
+    error: canFetch ? first.error : null,
     pageError,
     hasMore,
     reload,
     loadMore,
-  }), [first.error, first.loading, hasMore, items, loadMore, loadingMore, pageError, readable, recentCutoff, reload, total])
+  }), [canFetch, first.error, first.loading, hasMore, items, loadMore, loadingMore, pageError, recentCutoff, reload, total])
 }
 
 /** 让全部站点列表缓存失效（站点写操作之后调用）。 */

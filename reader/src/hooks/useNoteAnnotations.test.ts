@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 
 import { act, renderHook, waitFor } from '@testing-library/react'
+import { createElement, StrictMode, type ReactNode } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { IdentityLease } from '../lib/identity'
@@ -32,6 +33,25 @@ afterEach(async () => {
 })
 
 describe('useNoteAnnotations', () => {
+  it('loads and commits under root StrictMode without reporting a false stale command', async () => {
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(StrictMode, null, children)
+    const owner = lease()
+    const result = renderHook(() => useNoteAnnotations(owner, 'N1', 4), { wrapper })
+    await waitFor(() => expect(result.result.current.loading).toBe(false))
+
+    await act(async () => {
+      await expect(result.result.current.add({
+        blockKey: 'note',
+        start: 0,
+        end: 4,
+        text: 'body',
+        quote: { exact: 'body', prefix: '', suffix: '' },
+      })).resolves.toMatchObject({ status: 'committed' })
+    })
+
+    expect(result.result.current.anns).toHaveLength(1)
+  })
+
   it('binds annotations to note revision and commits through the durable store', async () => {
     const owner = lease()
     const result = renderHook(() => useNoteAnnotations(owner, 'N1', 4))

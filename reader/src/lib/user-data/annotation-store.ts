@@ -59,7 +59,6 @@ import {
   type AnnotationUpdatePatch,
 } from './annotation-types'
 import {
-  THOUGHT_CONTRACT_VERSION,
   isAnnotationThoughtTarget,
   isValidThoughtHistoryOutboxRecord,
   isValidThoughtMaterializedRecord,
@@ -73,6 +72,10 @@ import {
   type ThoughtSyncStateRecord,
   type ThoughtVersionKey,
 } from './thought-types'
+import {
+  planThoughtOutboxEnqueue,
+  type ThoughtOutboxRecoveryMetadata,
+} from './thought-sync-transitions'
 import {
   ThoughtClockError,
   maximumThoughtClock,
@@ -969,12 +972,6 @@ export function allocateThoughtClocks(
   })
 }
 
-interface ThoughtRecoveryOutboxMetadata {
-  readonly recoveryOf: ThoughtVersionKey
-  readonly expectedCurrentWinnerKey: ThoughtVersionKey
-  readonly hostKind: 'link' | 'note' | 'inbox'
-}
-
 function enqueueThoughtOutbox(
   transaction: IDBTransaction,
   namespace: string,
@@ -985,32 +982,22 @@ function enqueueThoughtOutbox(
   checksum: string | undefined,
   versionKey: ThoughtVersionKey,
   onQueued: () => void,
-  recovery?: ThoughtRecoveryOutboxMetadata,
+  recovery?: ThoughtOutboxRecoveryMetadata,
 ): void {
-  const record: ThoughtOutboxRecord = {
-    key: [namespace, sequence],
+  const record = planThoughtOutboxEnqueue({
     namespace,
     sequence,
-    opId: operation.opId,
-    deviceId: versionKey.deviceId,
-    contractVersion: THOUGHT_CONTRACT_VERSION,
-    logicalClock: versionKey.logicalClock,
-    operationKind: operation.kind,
-    annotationId: operation.annotationId,
-    hostKind: recovery?.hostKind ?? (operation.target.kind === 'note' ? 'note' : 'link'),
-    hostId: operation.linkId,
-    linkId: operation.linkId,
-    target: operation.target,
-    targetKey: operation.targetKey,
-    annotation: annotation ?? fallbackAnnotation,
-    ...(operation.kind === 'update' ? { patch: operation.patch } : {}),
-    createdAt: Date.now(),
-    attemptCount: 0,
+    operation,
+    annotation,
+    fallbackAnnotation,
     ...(checksum === undefined ? {} : { checksum }),
-    ...(recovery === undefined ? {} : {
-      recoveryOf: recovery.recoveryOf,
-      expectedCurrentWinnerKey: recovery.expectedCurrentWinnerKey,
-    }),
+    versionKey,
+    createdAt: Date.now(),
+    ...(recovery === undefined ? {} : { recovery }),
+  })
+  if (!record) {
+    abortTransaction(transaction)
+    return
   }
   handleIDBRequest(
     transaction,

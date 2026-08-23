@@ -13,6 +13,7 @@ import type {
 } from './thought-types'
 import {
   THOUGHT_CONTRACT_VERSION,
+  isValidThoughtOutboxRecord,
   isValidThoughtVersionKey,
 } from './thought-types'
 
@@ -28,6 +29,34 @@ export interface PushFailureTransition<T extends ThoughtSyncOutboxRecord> {
   readonly terminal: boolean
   readonly retryAt?: number
   readonly code: string
+}
+
+export interface ThoughtOutboxEnqueueOperation {
+  readonly kind: ThoughtOutboxRecord['operationKind']
+  readonly opId: string
+  readonly linkId: string
+  readonly target: ThoughtOutboxRecord['target']
+  readonly targetKey: string
+  readonly annotationId: string
+  readonly patch?: ThoughtOutboxRecord['patch']
+}
+
+export interface ThoughtOutboxRecoveryMetadata {
+  readonly recoveryOf: ThoughtVersionKey
+  readonly expectedCurrentWinnerKey: ThoughtVersionKey
+  readonly hostKind: 'link' | 'note' | 'inbox'
+}
+
+export interface ThoughtOutboxEnqueueInput {
+  readonly namespace: string
+  readonly sequence: number
+  readonly operation: ThoughtOutboxEnqueueOperation
+  readonly annotation: ThoughtOutboxRecord['annotation']
+  readonly fallbackAnnotation: ThoughtOutboxRecord['annotation']
+  readonly checksum?: string
+  readonly versionKey: ThoughtVersionKey
+  readonly createdAt: number
+  readonly recovery?: ThoughtOutboxRecoveryMetadata
 }
 
 export interface BaseAcknowledgementPlan {
@@ -84,6 +113,58 @@ export function storedFailureCode(value: unknown): string | undefined {
   return typeof value === 'string' && value.length <= 128 && STABLE_FAILURE_CODE.test(value)
     ? value
     : undefined
+}
+
+function hostKindForEnqueue(
+  operation: ThoughtOutboxEnqueueOperation,
+  recovery: ThoughtOutboxRecoveryMetadata | undefined,
+): ThoughtOutboxRecord['hostKind'] {
+  if (recovery) return recovery.hostKind
+  return operation.target.kind === 'note'
+    ? 'note'
+    : operation.target.kind === 'inbox'
+      ? 'inbox'
+      : 'link'
+}
+
+export function planThoughtOutboxEnqueue(input: ThoughtOutboxEnqueueInput): ThoughtOutboxRecord | null {
+  const { namespace, operation, recovery, sequence, versionKey } = input
+  if (
+    !isSafeNonNegativeInteger(sequence) ||
+    sequence === 0 ||
+    !isSafeNonNegativeInteger(input.createdAt) ||
+    !isValidThoughtVersionKey(versionKey) ||
+    versionKey.opId !== operation.opId
+  ) {
+    return null
+  }
+
+  const record: ThoughtOutboxRecord = {
+    key: [namespace, sequence],
+    namespace,
+    sequence,
+    opId: operation.opId,
+    deviceId: versionKey.deviceId,
+    contractVersion: THOUGHT_CONTRACT_VERSION,
+    logicalClock: versionKey.logicalClock,
+    operationKind: operation.kind,
+    annotationId: operation.annotationId,
+    hostKind: hostKindForEnqueue(operation, recovery),
+    hostId: operation.linkId,
+    linkId: operation.linkId,
+    target: operation.target,
+    targetKey: operation.targetKey,
+    annotation: input.annotation ?? input.fallbackAnnotation,
+    ...(operation.kind === 'update' ? { patch: operation.patch } : {}),
+    createdAt: input.createdAt,
+    attemptCount: 0,
+    ...(input.checksum === undefined ? {} : { checksum: input.checksum }),
+    ...(recovery === undefined ? {} : {
+      recoveryOf: recovery.recoveryOf,
+      expectedCurrentWinnerKey: recovery.expectedCurrentWinnerKey,
+    }),
+  }
+  return isValidThoughtOutboxRecord(record, namespace) ? record : null
 }
 
 /**

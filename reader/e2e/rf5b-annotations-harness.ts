@@ -575,6 +575,7 @@ async function commitAfterBarrier(
   const response = await fetch(`/__test__/annotation-barrier?${query}`, {
     cache: 'no-store',
   })
+  await response.arrayBuffer()
   if (!response.ok) {
     throw new Error(`annotation barrier failed: ${response.status}`)
   }

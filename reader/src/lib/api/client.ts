@@ -1157,7 +1157,10 @@ export class ReaderClient {
     return ok(r.data)
   }
 
-	async getSites(params: ListSitesParams = {}): Promise<ApiResult<PaginatedSitesResponse>> {
+	async getSites(
+		params: ListSitesParams = {},
+		options: ReaderReadOptions = {},
+	): Promise<ApiResult<PaginatedSitesResponse>> {
 		const query = new URLSearchParams()
 		if (params.view) query.set('view', params.view)
 		if (params.tags?.trim()) query.set('tags', params.tags.trim())
@@ -1165,7 +1168,7 @@ export class ReaderClient {
 		if (params.page && params.page > 1) query.set('page', String(params.page))
 		if (params.limit && params.limit > 0) query.set('limit', String(params.limit))
 		const suffix = query.size ? `?${query}` : ''
-		const r = await this.send('GET', `/api/sites${suffix}`)
+		const r = await this.send('GET', `/api/sites${suffix}`, undefined, undefined, undefined, options.signal)
 		if (!r.ok) return r
 		return isPaginatedSites(r.data) ? ok(r.data) : shapeMismatch('PaginatedSitesResponse')
 	}

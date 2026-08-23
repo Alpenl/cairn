@@ -292,25 +292,27 @@ export async function commitAnnotationCommand(
     return { status: 'stale' }
   }
 
-  const durableBefore = await readAnnotationSnapshot(input.lease, input.linkId, input.target)
-  if (!durableBefore.ok) {
-    return input.commandSignal.aborted ? { status: 'stale' } : { status: 'failed' }
-  }
-  if (input.commandSignal.aborted || input.isStale?.() === true) return { status: 'stale' }
-
   const cancellation = combineAnnotationCommandSignals([
     input.commandSignal,
     ...(input.externalSignals ?? []),
   ])
-  const result = await commitAnnotationOperation(input.lease, input.operation, {
-    signal: cancellation.signal,
-  })
-  const aborted = cancellation.signal.aborted || input.commandSignal.aborted
-  cancellation.dispose()
+  if (cancellation.signal.aborted || input.isStale?.() === true) {
+    cancellation.dispose()
+    return { status: 'stale' }
+  }
 
-  if (!result.ok) return aborted ? { status: 'stale' } : { status: 'failed' }
-  const outcome = annotationCommandResult(result.value, input.annotationId)
-  if (outcome.status === 'op-id-conflict') return outcome
-  await input.afterCommit?.(outcome)
-  return outcome
+  try {
+    const result = await commitAnnotationOperation(input.lease, input.operation, {
+      signal: cancellation.signal,
+    })
+    const aborted = cancellation.signal.aborted || input.commandSignal.aborted
+
+    if (!result.ok) return aborted ? { status: 'stale' } : { status: 'failed' }
+    const outcome = annotationCommandResult(result.value, input.annotationId)
+    if (outcome.status === 'op-id-conflict') return outcome
+    await input.afterCommit?.(outcome)
+    return outcome
+  } finally {
+    cancellation.dispose()
+  }
 }

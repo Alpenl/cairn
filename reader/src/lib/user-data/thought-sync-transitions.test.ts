@@ -2,6 +2,7 @@ import type { ApiError } from '@webtag/api'
 import { describe, expect, it } from 'vitest'
 
 import type { ReaderThoughtAckResponse } from '../api/types'
+import type { Annotation } from '../annotation-domain'
 import type {
   ThoughtHistoryOutboxRecord,
   ThoughtMaterializedRecord,
@@ -17,6 +18,7 @@ import {
   advanceThoughtPullPageState,
   completeThoughtPullState,
   failureCode,
+  planThoughtOutboxEnqueue,
   planThoughtHistoryAcknowledgements,
   planThoughtOutboxAcknowledgements,
   resetThoughtPullCursorState,
@@ -148,7 +150,134 @@ function materializedRecord(overrides: Partial<ThoughtMaterializedRecord> = {}):
   }
 }
 
+function annotation(overrides: Partial<Annotation> = {}): Annotation {
+  return {
+    id: 'thought-a',
+    blockKey: 'content',
+    start: 0,
+    end: 4,
+    text: 'text',
+    note: 'body',
+    source: 'self',
+    createdAt: 1,
+    updatedAt: 2,
+    sourceContentRevision: 7,
+    ...overrides,
+  }
+}
+
 describe('thought sync transition helpers', () => {
+  it('plans enqueue records for standard and recovery thought operations without IDB state', () => {
+    const add = planThoughtOutboxEnqueue({
+      namespace,
+      sequence: 7,
+      operation: {
+        kind: 'add',
+        opId: 'op-add',
+        linkId: 'link-a',
+        target,
+        targetKey,
+        annotationId: 'thought-a',
+      },
+      annotation: annotation(),
+      fallbackAnnotation: null,
+      checksum: 'a'.repeat(64),
+      versionKey: versionKey('op-add', 5),
+      createdAt: 1_000,
+    })
+    const recoveryOf = versionKey('loser-op', 2, 'remote-device')
+    const expectedCurrentWinnerKey = versionKey('winner-op', 9, 'remote-device')
+    const recovery = planThoughtOutboxEnqueue({
+      namespace,
+      sequence: 8,
+      operation: {
+        kind: 'update',
+        opId: 'op-recovery',
+        linkId: 'note-a',
+        target,
+        targetKey,
+        annotationId: 'thought-a',
+        patch: { note: 'recovered', updatedAt: 3 },
+      },
+      annotation: null,
+      fallbackAnnotation: annotation({ note: 'fallback' }),
+      versionKey: versionKey('op-recovery', 6),
+      createdAt: 2_000,
+      recovery: {
+        recoveryOf,
+        expectedCurrentWinnerKey,
+        hostKind: 'note',
+      },
+    })
+
+    expect(add).toMatchObject({
+      key: [namespace, 7],
+      namespace,
+      sequence: 7,
+      opId: 'op-add',
+      deviceId: 'device-A',
+      contractVersion: 1,
+      logicalClock: 5,
+      operationKind: 'add',
+      annotationId: 'thought-a',
+      hostKind: 'link',
+      hostId: 'link-a',
+      linkId: 'link-a',
+      target,
+      targetKey,
+      annotation: annotation(),
+      createdAt: 1_000,
+      attemptCount: 0,
+      checksum: 'a'.repeat(64),
+    })
+    expect(add).not.toHaveProperty('patch')
+    expect(recovery).toMatchObject({
+      key: [namespace, 8],
+      opId: 'op-recovery',
+      logicalClock: 6,
+      operationKind: 'update',
+      hostKind: 'note',
+      hostId: 'note-a',
+      annotation: annotation({ note: 'fallback' }),
+      patch: { note: 'recovered', updatedAt: 3 },
+      recoveryOf,
+      expectedCurrentWinnerKey,
+    })
+  })
+
+  it('rejects invalid enqueue inputs before an outbox row can be written', () => {
+    const base = {
+      namespace,
+      sequence: 1,
+      operation: {
+        kind: 'add' as const,
+        opId: 'op-add',
+        linkId: 'link-a',
+        target,
+        targetKey,
+        annotationId: 'thought-a',
+      },
+      annotation: annotation(),
+      fallbackAnnotation: null,
+      versionKey: versionKey('op-add', 5),
+      createdAt: 1_000,
+    }
+
+    expect(planThoughtOutboxEnqueue({ ...base, sequence: 0 })).toBeNull()
+    expect(planThoughtOutboxEnqueue({
+      ...base,
+      versionKey: versionKey('different-op', 5),
+    })).toBeNull()
+    expect(planThoughtOutboxEnqueue({
+      ...base,
+      annotation: annotation({ blockKey: 'summary' }),
+    })).toBeNull()
+    expect(planThoughtOutboxEnqueue({
+      ...base,
+      checksum: 'not-hex',
+    })).toBeNull()
+  })
+
   it('marks retryable, permanent, and recovery push failures without IDB state', () => {
     const retryable: ApiError = { kind: 'network-unreachable', message: 'offline' }
     const permanent: ApiError = {
