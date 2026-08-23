@@ -16,7 +16,7 @@ import {
   annotationLocatorTargetKey,
   type Annotation,
   type AnnotationLocator,
-} from '../lib/annotations'
+} from '../lib/annotation-domain'
 
 export interface NotePanelProps {
   ann: Annotation

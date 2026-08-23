@@ -3,7 +3,7 @@ import 'fake-indexeddb/auto'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { Annotation, AnnotationInput } from '../lib/annotations'
+import type { Annotation, AnnotationInput } from '../lib/annotation-domain'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import { SavedArticleDocumentController } from '../lib/article/document'
 import type { SourceBlockId } from '../lib/article/source-block'

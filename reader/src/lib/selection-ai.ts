@@ -1,4 +1,4 @@
-import type { AnnotationLocator } from './annotations'
+import type { AnnotationLocator } from './annotation-domain'
 import type { ChatMessage } from './ai'
 import type { LinkResponse, ReaderAIRequest } from './api/types'
 

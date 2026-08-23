@@ -33,8 +33,8 @@ import {
   listAnnotatedLinks,
   readAnnotationSnapshot,
 } from '../src/lib/user-data/annotation-store'
+import type { AnnotationTarget } from '../src/lib/annotation-domain'
 import type {
-  AnnotationTarget,
   SavedContentAnnotationAddDraft,
 } from '../src/lib/user-data/annotation-types'
 import {

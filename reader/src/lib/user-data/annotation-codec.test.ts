@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Annotation } from '../annotations'
+import type { Annotation } from '../annotation-domain'
 import {
   annotationFromAddDraft,
   annotationSignatureFields,

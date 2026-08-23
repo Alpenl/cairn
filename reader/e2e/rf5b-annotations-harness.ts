@@ -37,12 +37,12 @@ import {
   type SupersessionRecoveryResult,
 } from '../src/lib/user-data/annotation-store'
 import { listAnnotationOperationsForTest } from '../src/test/annotation-operations'
+import type { SavedContentAnnotationTarget } from '../src/lib/annotation-domain'
 import type {
   AnnotationCommitResult,
   AnnotationOperationInput,
   AnnotationSnapshot,
   SavedContentAnnotationAddDraft,
-  SavedContentAnnotationTarget,
 } from '../src/lib/user-data/annotation-types'
 import {
   THOUGHT_OUTBOX_NAMESPACE_INDEX,

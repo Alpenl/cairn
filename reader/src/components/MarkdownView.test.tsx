@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 
 import { MarkdownView } from './MarkdownView'
-import type { Annotation } from '../lib/annotations'
+import type { Annotation } from '../lib/annotation-domain'
 
 function ann(over: Partial<Annotation>): Annotation {
   return {

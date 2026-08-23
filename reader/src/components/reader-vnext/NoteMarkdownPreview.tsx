@@ -1,6 +1,6 @@
 import type { CSSProperties, MouseEventHandler, RefObject } from 'react'
 
-import type { Annotation, AnnotationLocator } from '../../lib/annotations'
+import type { Annotation, AnnotationLocator } from '../../lib/annotation-domain'
 import type { TocHeading } from '../../lib/toc'
 import { LazyMarkdownView as MarkdownView } from '../LazyMarkdownView'
 import { ReaderToc } from '../ReaderToc'

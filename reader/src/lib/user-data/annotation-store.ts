@@ -1,4 +1,9 @@
-import type { Annotation } from '../annotations'
+import {
+  annotationTargetKey,
+  canonicalAnnotationTarget,
+  type Annotation,
+  type AnnotationTarget,
+} from '../annotation-domain'
 import { isValidLinkId, isValidSourceHash } from '../article/source-block'
 import type { IdentityLease } from '../identity'
 import { asRecord } from '../records'
@@ -33,9 +38,7 @@ import {
 import {
   DEFAULT_ANNOTATION_COMPACTION_THRESHOLD,
   annotationMaterializedKey,
-  annotationTargetKey,
   annotationTargetStateKey,
-  canonicalAnnotationTarget,
   type AnnotatedLinkRecord,
   type AnnotationCommitResult,
   type AnnotationCommitOptions,
@@ -48,7 +51,6 @@ import {
   type AnnotationOperationRecord,
   type AnnotationReplaySnapshotItem,
   type AnnotationSnapshot,
-  type AnnotationTarget,
   type AnnotationUpdatePatch,
 } from './annotation-types'
 import {
@@ -2277,6 +2279,6 @@ export type {
   AnnotationOperationInput,
   AnnotationOperationRecord,
   AnnotationSnapshot,
-  AnnotationTarget,
   AnnotationUpdatePatch,
 } from './annotation-types'
+export type { AnnotationTarget } from '../annotation-domain'

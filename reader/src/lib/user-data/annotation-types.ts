@@ -1,25 +1,13 @@
-import type { Annotation, AnnotationSource } from '../annotations'
-import { isValidSourceHash } from '../article/source-block'
-
-export interface SavedContentAnnotationTarget {
-  readonly kind: 'saved-content'
-  readonly contentRevision: number
-}
-
-export interface SummaryAnnotationTarget {
-  readonly kind: 'summary'
-  readonly sourceHash: string
-}
-
-export interface NoteAnnotationTarget {
-  readonly kind: 'note'
-  readonly noteRevision: number
-}
-
-export type AnnotationTarget =
-  | SavedContentAnnotationTarget
-  | SummaryAnnotationTarget
-  | NoteAnnotationTarget
+import type {
+  Annotation,
+  AnnotationQuote,
+  AnnotationSource,
+  AnnotationTarget,
+  SavedContentAnnotationBlockKey,
+  SavedContentAnnotationTarget,
+  SummaryAnnotationTarget,
+  NoteAnnotationTarget,
+} from '../annotation-domain'
 
 export interface AnnotationUpdatePatch {
   readonly note?: string
@@ -43,14 +31,12 @@ interface AnnotationAddDraftBase {
   readonly createdAt: number
   readonly updatedAt: number
   /** TextQuoteSelector context retained for note re-anchoring. */
-  readonly quote?: import('../annotations').AnnotationQuote
+  readonly quote?: AnnotationQuote
   /** Source identity is derived from `target`, never supplied by a caller. */
   readonly sourceContentRevision?: never
   /** Source identity is derived from `target`, never supplied by a caller. */
   readonly sourceSummaryHash?: never
 }
-
-export type SavedContentAnnotationBlockKey = 'content' | `content-${string}`
 
 export interface SavedContentAnnotationAddDraft extends AnnotationAddDraftBase {
   readonly blockKey: SavedContentAnnotationBlockKey
@@ -242,41 +228,6 @@ export interface AnnotationCompactionResult {
 }
 
 export const DEFAULT_ANNOTATION_COMPACTION_THRESHOLD = 256
-
-function cloneTarget(target: AnnotationTarget): AnnotationTarget | null {
-  switch (target.kind) {
-    case 'saved-content':
-      if (!Number.isSafeInteger(target.contentRevision) || target.contentRevision <= 0) {
-        return null
-      }
-      return { kind: target.kind, contentRevision: target.contentRevision }
-    case 'summary':
-      if (!isValidSourceHash(target.sourceHash)) return null
-      return { kind: target.kind, sourceHash: target.sourceHash }
-    case 'note':
-      if (!Number.isSafeInteger(target.noteRevision) || target.noteRevision <= 0) {
-        return null
-      }
-      return { kind: target.kind, noteRevision: target.noteRevision }
-  }
-}
-
-export function canonicalAnnotationTarget(target: AnnotationTarget): AnnotationTarget | null {
-  return cloneTarget(target)
-}
-
-export function annotationTargetKey(target: AnnotationTarget): string | null {
-  const canonical = cloneTarget(target)
-  if (!canonical) return null
-  switch (canonical.kind) {
-    case 'saved-content':
-      return `saved-content:${canonical.contentRevision}`
-    case 'summary':
-      return `summary:${canonical.sourceHash}`
-    case 'note':
-      return `note:${canonical.noteRevision}`
-  }
-}
 
 export function annotationMaterializedKey(
   namespace: string,

@@ -13,6 +13,8 @@ import { listAnnotationOperationsForTest } from '../../test/annotation-operation
 import {
   annotationTargetKey,
   type AnnotationTarget,
+} from '../annotation-domain'
+import {
   type SavedContentAnnotationAddDraft,
 } from './annotation-types'
 import {

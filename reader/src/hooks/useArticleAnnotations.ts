@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { Annotation, AnnotationInput, AnnotationPatch } from '../lib/annotations'
+import {
+  annotationTargetKey,
+  canonicalAnnotationTarget,
+  type Annotation,
+  type AnnotationInput,
+  type AnnotationPatch,
+  type AnnotationTarget,
+  type SavedContentAnnotationBlockKey,
+} from '../lib/annotation-domain'
 import {
   AnnotationDocumentChannel,
   type AnnotationChangeHintInput,
@@ -27,17 +35,11 @@ import {
   readAnnotationSnapshot,
   type AnnotationCommitResult,
   type AnnotationSnapshot,
-  type AnnotationTarget,
 } from '../lib/user-data/annotation-store'
 import {
   cloneTargetAnnotation,
   isSavedContentAnnotationBlockKey,
 } from '../lib/user-data/annotation-codec'
-import {
-  annotationTargetKey,
-  canonicalAnnotationTarget,
-  type SavedContentAnnotationBlockKey,
-} from '../lib/user-data/annotation-types'
 
 export interface ArticleAnnotationRevisionChange {
   readonly previousRevision: number

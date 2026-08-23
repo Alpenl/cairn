@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  blockHighlights,
+} from './annotations'
+import {
   annOrder,
   annotationLocator,
   annotationMatchesLocator,
-  blockHighlights,
   type Annotation,
-} from './annotations'
+} from './annotation-domain'
 
 function annotation(overrides: Partial<Annotation> = {}): Annotation {
   return {

@@ -3,9 +3,9 @@ import type { IdentityLease } from '../lib/identity'
 import {
   annotationTargetKey,
   canonicalAnnotationTarget,
-  type AnnotationOperationRecord,
   type AnnotationTarget,
-} from '../lib/user-data/annotation-types'
+} from '../lib/annotation-domain'
+import type { AnnotationOperationRecord } from '../lib/user-data/annotation-types'
 import {
   ANNOTATION_OPS_STORE,
   ANNOTATION_OPS_TARGET_INDEX,

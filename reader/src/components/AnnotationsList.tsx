@@ -7,7 +7,7 @@
  */
 import { Icon } from './Icon'
 import { ThoughtMarkdown } from './ThoughtMarkdown'
-import { annOrder, type Annotation } from '../lib/annotations'
+import { annOrder, type Annotation } from '../lib/annotation-domain'
 
 export interface AnnotationsListProps {
   anns: readonly Annotation[]

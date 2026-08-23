@@ -59,8 +59,8 @@ import {
   type Annotation,
   type AnnotationInput,
   type AnnotationLocator,
-  type SelectionInfo,
-} from '../lib/annotations'
+} from '../lib/annotation-domain'
+import type { SelectionInfo } from '../lib/annotations'
 import {
   useArticleAnnotations,
   type ArticleAnnotationCommandResult,

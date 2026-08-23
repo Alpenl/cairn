@@ -11,7 +11,7 @@ import {
   annotationLocatorTargetKey,
   type Annotation,
   type AnnotationLocator,
-} from '../lib/annotations'
+} from '../lib/annotation-domain'
 import { ArticleOutline } from './detail/ArticleOutline'
 import { ReadingProgressSummary } from './detail/ReadingProgress'
 import type { TocHeading } from '../lib/toc'

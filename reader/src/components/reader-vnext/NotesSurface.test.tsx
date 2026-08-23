@@ -6,7 +6,7 @@ import type {
   ReaderNoteHistoryResponse,
   ReaderNoteResponse,
 } from '../../lib/api/types'
-import type { Annotation } from '../../lib/annotations'
+import type { Annotation } from '../../lib/annotation-domain'
 import { IdentityLease } from '../../lib/identity'
 import { err, ok } from '@webtag/api'
 import type { ReaderRoute } from '../../lib/navigation/route'

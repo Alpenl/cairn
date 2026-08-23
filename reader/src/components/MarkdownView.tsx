@@ -13,13 +13,13 @@ import type { MouseEvent, ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import { blockHighlights } from '../lib/annotations'
 import {
   annotationLocator,
   annotationLocatorTargetKey,
-  blockHighlights,
   type Annotation,
   type AnnotationLocator,
-} from '../lib/annotations'
+} from '../lib/annotation-domain'
 import { rehypeHeadingIds, type HeadingIdsOptions, type TocHeading } from '../lib/toc'
 import type { HastNode } from '../lib/hast'
 import { BlockedContentImage } from './BlockedContentImage'

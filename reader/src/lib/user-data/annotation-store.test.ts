@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { Annotation } from '../annotations'
+import type { Annotation, AnnotationTarget } from '../annotation-domain'
 import { IdentityLease } from '../identity'
 import { ownedDatabaseName } from '../storage-ownership'
 import {
@@ -14,7 +14,6 @@ import {
 import { listAnnotationOperationsForTest } from '../../test/annotation-operations'
 import type {
   AnnotationOperationInput,
-  AnnotationTarget,
   SavedContentAnnotationAddDraft,
   SummaryAnnotationAddDraft,
 } from './annotation-types'

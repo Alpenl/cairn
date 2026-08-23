@@ -36,16 +36,16 @@ import {
 } from '../lib/storage-ownership'
 import { makeLink } from '../test/fixtures'
 import { IdentityLease, readerIdentity } from '../lib/identity'
-import type { Annotation } from '../lib/annotations'
+import type {
+  Annotation,
+  AnnotationTarget,
+  SavedContentAnnotationBlockKey,
+} from '../lib/annotation-domain'
 import {
   commitAnnotationOperation,
   readAnnotationSnapshot,
-  type AnnotationTarget,
 } from '../lib/user-data/annotation-store'
-import type {
-  AnnotationAddOperationInput,
-  SavedContentAnnotationBlockKey,
-} from '../lib/user-data/annotation-types'
+import type { AnnotationAddOperationInput } from '../lib/user-data/annotation-types'
 import { resetUserDataDatabaseHandle } from '../lib/user-data/idb'
 import { SavedArticleDocumentController } from '../lib/article/document'
 import { resourceStore } from '../lib/cache/store'

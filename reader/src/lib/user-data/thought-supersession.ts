@@ -4,13 +4,13 @@ import type {
   ReaderThoughtSupersessionEventResponse,
   ReaderThoughtSupersessionOperationResponse,
 } from '../api/types'
-import type { IdentityLease } from '../identity'
-import { isRecord } from '../records'
 import {
   annotationTargetKey,
   canonicalAnnotationTarget,
   type AnnotationTarget,
-} from './annotation-types'
+} from '../annotation-domain'
+import type { IdentityLease } from '../identity'
+import { isRecord } from '../records'
 import { isSafeNonNegativeInteger } from './annotation-codec'
 import {
   THOUGHT_SUPERSESSION_EVENTS_STORE,

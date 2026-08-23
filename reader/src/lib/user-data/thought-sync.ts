@@ -4,6 +4,12 @@ import type {
 } from '../api/types'
 import type { IdentityBoundReaderClient } from '../api/client'
 import type { ApiError } from '@webtag/api'
+import {
+  annotationTargetKey,
+  canonicalAnnotationTarget,
+  type Annotation,
+  type AnnotationTarget,
+} from '../annotation-domain'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../reader-events'
 import { isRecord } from '../records'
 import {
@@ -11,13 +17,7 @@ import {
   decodeAnnotationWire,
   isSafeNonNegativeInteger,
 } from './annotation-codec'
-import {
-  annotationTargetKey,
-  canonicalAnnotationTarget,
-  type AnnotationTarget,
-} from './annotation-types'
 import type { IdentityLease } from '../identity'
-import type { Annotation } from '../annotations'
 import {
   ANNOTATION_MATERIALIZED_STORE,
   ANNOTATION_IMPORTS_STORE,

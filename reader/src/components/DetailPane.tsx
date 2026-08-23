@@ -34,7 +34,16 @@ import { ReadingTocControl } from './detail/ReadingTocControl'
 import { fetcherIcon } from './fetcher-icons'
 import { fetcherLabel } from '../lib/metadata'
 import { readingMinutes } from '../lib/reading-time'
-import { annotationLocator, annotationMatchesLocator, getSelectionInfo, isContentAnchored, NO_ANNOTATIONS, type Annotation, type AnnotationInput, type AnnotationLocator, type SelectionInfo } from '../lib/annotations'
+import { getSelectionInfo, type SelectionInfo } from '../lib/annotations'
+import {
+  annotationLocator,
+  annotationMatchesLocator,
+  isContentAnchored,
+  NO_ANNOTATIONS,
+  type Annotation,
+  type AnnotationInput,
+  type AnnotationLocator,
+} from '../lib/annotation-domain'
 import { useReadingSurface } from '../hooks/useReadingSurface'
 import { useReaderRelatedTags } from '../hooks/useReaderRelatedTags'
 import type { IdentityBoundReaderClient } from '../lib/api/client'

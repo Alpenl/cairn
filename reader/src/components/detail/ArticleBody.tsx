@@ -10,7 +10,7 @@ import {
   NO_ANNOTATIONS,
   type Annotation,
   type AnnotationLocator,
-} from '../../lib/annotations'
+} from '../../lib/annotation-domain'
 import type { ApiError } from '@webtag/api'
 import type { LinkResponse, TranslationResponse } from '../../lib/api/types'
 import type { TocHeading } from '../../lib/toc'

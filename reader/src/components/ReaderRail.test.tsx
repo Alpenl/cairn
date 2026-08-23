@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ReaderRail } from './ReaderRail'
-import { annotationLocator, type Annotation, type AnnotationLocator } from '../lib/annotations'
+import { annotationLocator, type Annotation, type AnnotationLocator } from '../lib/annotation-domain'
 import type { TocHeading } from '../lib/toc'
 
 function annotation(

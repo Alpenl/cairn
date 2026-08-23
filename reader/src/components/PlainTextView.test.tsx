@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { Annotation } from '../lib/annotations'
+import type { Annotation } from '../lib/annotation-domain'
 import { PlainTextView } from './PlainTextView'
 
 function annotation(contentRevision: number, start: number, end: number): Annotation {

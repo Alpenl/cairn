@@ -11,7 +11,7 @@ import type { LinkContentResponse, LinkResponse, TranslationResponse } from '../
 import type { DocumentCommandContext, SavedArticleDocument } from '../lib/article/document'
 import { IdentityLease } from '../lib/identity'
 import { useSavedArticleDocument } from '../hooks/useSavedArticleDocument'
-import { isContentAnchored, type Annotation } from '../lib/annotations'
+import { isContentAnchored, type Annotation } from '../lib/annotation-domain'
 
 function translation(over: Partial<TranslationResponse> = {}): TranslationResponse {
   return {

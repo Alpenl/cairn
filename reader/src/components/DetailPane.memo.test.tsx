@@ -17,7 +17,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 
 import { DetailPane, type DetailPaneProps } from './DetailPane'
 import { makeLink } from '../test/fixtures'
-import { isContentAnchored, NO_ANNOTATIONS } from '../lib/annotations'
+import { isContentAnchored, NO_ANNOTATIONS } from '../lib/annotation-domain'
 import type { SavedArticleDocument } from '../lib/article/document'
 
 const probe = vi.hoisted(() => ({ icons: 0 }))

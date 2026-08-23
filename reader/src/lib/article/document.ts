@@ -1,4 +1,4 @@
-import { isContentAnchored, type Annotation } from '../annotations'
+import { isContentAnchored, type Annotation } from '../annotation-domain'
 import type { ApiError, ApiResult } from '@webtag/api'
 import type {
   LinkContentResponse,

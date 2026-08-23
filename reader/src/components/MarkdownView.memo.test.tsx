@@ -14,7 +14,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 // LazyMarkdownView（懒加载边界），直接 import MarkdownView 会让这道闸守着
 // 一个生产已经不直接渲染的组件——去掉 LazyMarkdownView 上的 memo 也不会变红。
 import { LazyMarkdownView as MarkdownView } from './LazyMarkdownView'
-import { NO_ANNOTATIONS, type Annotation } from '../lib/annotations'
+import { NO_ANNOTATIONS, type Annotation } from '../lib/annotation-domain'
 
 // vi.mock 会被提升到 import 之上，因此计数器必须走 vi.hoisted。
 const probe = vi.hoisted(() => ({ parses: 0 }))

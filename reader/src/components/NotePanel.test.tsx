@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { NotePanel } from './NotePanel'
-import type { Annotation } from '../lib/annotations'
+import type { Annotation } from '../lib/annotation-domain'
 
 function mkAnn(over: Partial<Annotation> = {}): Annotation {
   return {

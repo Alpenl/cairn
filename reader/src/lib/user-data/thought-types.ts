@@ -1,11 +1,12 @@
-import type { Annotation } from '../annotations'
+import {
+  annotationTargetKey,
+  canonicalAnnotationTarget,
+  type Annotation,
+  type AnnotationTarget,
+} from '../annotation-domain'
 import { isRecord } from '../records'
-import type {
-  AnnotationTarget,
-  AnnotationUpdatePatch,
-} from './annotation-types'
+import type { AnnotationUpdatePatch } from './annotation-types'
 import { isSafeNonNegativeInteger, cloneTargetAnnotation } from './annotation-codec'
-import { annotationTargetKey, canonicalAnnotationTarget } from './annotation-types'
 
 export const THOUGHT_CONTRACT_VERSION = 1 as const
 export const MAX_THOUGHT_LOGICAL_CLOCK = Number.MAX_SAFE_INTEGER

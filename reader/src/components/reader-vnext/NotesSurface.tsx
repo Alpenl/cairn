@@ -13,14 +13,13 @@ import { ActionPopover, NOTE_SELECTION_ACTIONS, type PopoverAction } from '../Ac
 import { NotePanel } from '../NotePanel'
 import { ChatSidebar, type ChatDraft } from '../ChatSidebar'
 import { ReadingTocControl } from '../detail/ReadingTocControl'
+import { getSelectionInfo, type SelectionInfo } from '../../lib/annotations'
 import {
   annotationLocator,
   annotationMatchesLocator,
-  getSelectionInfo,
   type Annotation,
   type AnnotationLocator,
-  type SelectionInfo,
-} from '../../lib/annotations'
+} from '../../lib/annotation-domain'
 import { useNoteAnnotations } from '../../hooks/useNoteAnnotations'
 import { useReadingSurface } from '../../hooks/useReadingSurface'
 import {

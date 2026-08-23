@@ -19,7 +19,7 @@ import { ChatMsg } from './ChatMsg'
 import { aiAvailable, askAI, UNAVAILABLE_REPLY, type ChatMessage } from '../lib/ai'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { LinkResponse } from '../lib/api/types'
-import type { AnnotationLocator } from '../lib/annotations'
+import type { AnnotationLocator } from '../lib/annotation-domain'
 import {
   buildSelectionAIRequest,
   selectionAISourceKey,

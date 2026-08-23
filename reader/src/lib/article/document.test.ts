@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import type { Annotation } from '../annotations'
+import type { Annotation } from '../annotation-domain'
 import { err, ok, type ApiResult } from '@webtag/api'
 import type {
   LinkContentResponse,

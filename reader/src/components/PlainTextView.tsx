@@ -12,13 +12,13 @@
 import { useCallback, useMemo } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 
+import { blockHighlights } from '../lib/annotations'
 import {
   annotationLocator,
   annotationLocatorTargetKey,
-  blockHighlights,
   type Annotation,
   type AnnotationLocator,
-} from '../lib/annotations'
+} from '../lib/annotation-domain'
 
 export interface PlainTextViewProps {
   text: string

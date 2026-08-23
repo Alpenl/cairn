@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { Annotation, AnnotationInput, AnnotationPatch } from '../lib/annotations'
+import {
+  annotationTargetKey,
+  canonicalAnnotationTarget,
+  type Annotation,
+  type AnnotationInput,
+  type AnnotationPatch,
+  type NoteAnnotationTarget,
+} from '../lib/annotation-domain'
 import type { IdentityLease } from '../lib/identity'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../lib/reader-events'
 import {
@@ -10,11 +17,6 @@ import {
   type AnnotationCommitResult,
 } from '../lib/user-data/annotation-store'
 import { cloneTargetAnnotation } from '../lib/user-data/annotation-codec'
-import {
-  annotationTargetKey,
-  canonicalAnnotationTarget,
-  type NoteAnnotationTarget,
-} from '../lib/user-data/annotation-types'
 
 export type NoteAnnotationCommandResult =
   | {

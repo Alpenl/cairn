@@ -6,7 +6,8 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { MarkdownView } from '../components/MarkdownView'
 import { PlainTextView } from '../components/PlainTextView'
-import { getSelectionInfo, type Annotation } from './annotations'
+import type { Annotation } from './annotation-domain'
+import { getSelectionInfo } from './annotations'
 
 interface SelectionProjectionFixture {
   name: string
