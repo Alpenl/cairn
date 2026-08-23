@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import type { ReaderClient } from '../lib/api/client'
 import type { ApiError } from '@webtag/api'
 import type { FeedSubscription, SubscriptionsResponse } from '../lib/api/types'
@@ -6,6 +6,7 @@ import type { IdentityOwnership } from '../lib/identity'
 import { SUBSCRIPTIONS_CACHE_KEY } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'
+import { usePolling } from './usePolling'
 
 const EMPTY_SUBSCRIPTIONS: SubscriptionsResponse = {
   folders: [],
@@ -33,10 +34,7 @@ export function useSubscriptions(client: ReaderClient) {
     [resource],
   )
 
-  useEffect(() => {
-    const timer = window.setInterval(() => void reload(true), 60_000)
-    return () => window.clearInterval(timer)
-  }, [reload])
+  usePolling(() => { void reload(true) }, 60_000)
 
   const patchSubscription = useCallback((
     id: string,

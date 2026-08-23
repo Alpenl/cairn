@@ -5,6 +5,7 @@ import type { ApiError } from '@webtag/api'
 import type { FeedItem, ListFeedItemsParams, PaginatedFeedItemsResponse } from '../lib/api/types'
 import { feedItemsFirstPageCacheKey } from '../lib/cache/keys'
 import { useCachedResource } from '../lib/cache/useCachedResource'
+import { usePolling } from './usePolling'
 
 const PAGE_SIZE = 30
 
@@ -80,10 +81,7 @@ export function useFeedItems(client: ReaderClient, filters: ListFeedItemsParams)
     [first],
   )
 
-  useEffect(() => {
-    const timer = window.setInterval(() => void reload(true), 60_000)
-    return () => window.clearInterval(timer)
-  }, [reload])
+  usePolling(() => { void reload(true) }, 60_000)
 
   const loadMore = useCallback(async (): Promise<void> => {
     if (first.loading || loadingMore || items.length >= total) return
