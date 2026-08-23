@@ -30,10 +30,7 @@ func TestReaderInboxRoutesRejectPartialBatchRevisionsBeforeCommands(t *testing.T
 	t.Parallel()
 
 	store := &readerInboxApplicationStore{}
-	applications := service.NewReaderApplications(
-		readerServiceTestStores(store), nil,
-		service.ReaderApplicationOptions{InboxBulkConfirmCommands: store},
-	)
+	applications := readerServiceTestApplications(store, service.ReaderApplicationOptions{InboxBulkConfirmCommands: store})
 	routes := NewReaderInboxRoutes(applications.Inbox)
 	first, second := uuid.NewString(), uuid.NewString()
 
@@ -50,7 +47,7 @@ func TestReaderInboxRoutesRejectInvalidIDBeforeApplicationStore(t *testing.T) {
 	t.Parallel()
 
 	store := &readerInboxApplicationStore{}
-	applications := service.NewReaderApplications(readerServiceTestStores(store), nil)
+	applications := readerServiceTestApplications(store)
 	routes := NewReaderInboxRoutes(applications.Inbox)
 
 	if err := routes.RestoreInbox(context.Background(), "not-a-uuid"); err == nil {

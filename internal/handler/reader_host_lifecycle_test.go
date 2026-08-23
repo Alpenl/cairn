@@ -115,10 +115,7 @@ func TestReaderHostLifecycleHTTPStateAndMachineCodeMatrix(t *testing.T) {
 						router.DELETE("/api/links/:link_id", deleteLink(&readerHostLifecycleLinkHTTPService{err: err}))
 					} else {
 						store := &readerHostLifecycleHTTPStore{state: state}
-						reader := readerservice.NewReaderApplications(
-							readerServiceTestStores(store), nil,
-							readerservice.ReaderApplicationOptions{HostRestoreCommands: store},
-						)
+						reader := readerServiceTestApplications(store, readerservice.ReaderApplicationOptions{HostRestoreCommands: store})
 						RegisterReaderRoutes(router, readerTestRoutes(reader))
 					}
 

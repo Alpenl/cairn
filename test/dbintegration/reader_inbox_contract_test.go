@@ -9,7 +9,6 @@ import (
 
 	"webtag/internal/model"
 	"webtag/internal/repository"
-	"webtag/internal/service"
 )
 
 // TestReaderInboxOwnershipAndConfirmationContract is the real-PostgreSQL
@@ -145,7 +144,7 @@ func TestReaderInboxOwnershipAndConfirmationContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInbox blank: %v", err)
 	}
-	reader := service.NewReaderApplications(postgresReaderStores(repo), nil).Inbox
+	reader := postgresReaderApplications(t, pool, repo).Inbox
 	blankRevision := blank.MetadataRevision
 	if _, err := reader.ConfirmInbox(ctx, blank.ID, &blankRevision); err == nil {
 		t.Fatal("ConfirmInbox blank title succeeded")

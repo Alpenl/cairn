@@ -70,6 +70,108 @@ func completeThoughtReattachSnapshot(thoughtID string, snapshot []byte) []byte {
 	return completed
 }
 
+func TestClassifyReaderThoughtTransitionMatrix(t *testing.T) {
+	t.Parallel()
+
+	base := model.ReaderThoughtOp{
+		OpID: "op", DeviceID: "device", LogicalClock: 1,
+		OperationKind: "update", AnnotationID: "thought", HostKind: "link", HostID: uuid.NewString(),
+		Target:  json.RawMessage(`{"kind":"saved-content","host_id":"link","version":{"content_revision":1}}`),
+		Payload: json.RawMessage(`{"body":"body","quote":{"exact":"body"}}`),
+	}
+	recoveryOf := &model.ReaderThoughtVersionKey{LogicalClock: 1, DeviceID: "loser", OpID: "loser-op"}
+	expectedWinner := &model.ReaderThoughtVersionKey{LogicalClock: 2, DeviceID: "winner", OpID: "winner-op"}
+
+	cases := []struct {
+		name string
+		op   model.ReaderThoughtOp
+		want readerThoughtTransitionKind
+	}{
+		{name: "add", op: func() model.ReaderThoughtOp { op := base; op.OperationKind = "add"; return op }(), want: readerThoughtTransitionAdd},
+		{name: "update", op: base, want: readerThoughtTransitionUpdate},
+		{name: "delete", op: func() model.ReaderThoughtOp { op := base; op.OperationKind = "delete"; return op }(), want: readerThoughtTransitionDelete},
+		{name: "recovery", op: func() model.ReaderThoughtOp {
+			op := base
+			op.RecoveryOf = recoveryOf
+			op.ExpectedWinnerKey = expectedWinner
+			return op
+		}(), want: readerThoughtTransitionRecovery},
+		{name: "reattach", op: func() model.ReaderThoughtOp {
+			op := base
+			op.Reattach = &model.ReaderThoughtReattachOperation{ExpectedLastSequence: 3, ExpectedHostRevision: 4}
+			return op
+		}(), want: readerThoughtTransitionReattach},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := classifyReaderThoughtTransition(tc.op)
+			if err != nil || got != tc.want {
+				t.Fatalf("classifyReaderThoughtTransition() = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestClassifyReaderThoughtTransitionRejectsOverlaps(t *testing.T) {
+	t.Parallel()
+
+	base := model.ReaderThoughtOp{
+		OpID: "op", DeviceID: "device", LogicalClock: 1,
+		OperationKind: "update", AnnotationID: "thought", HostKind: "link", HostID: uuid.NewString(),
+		Target:  json.RawMessage(`{"kind":"saved-content","host_id":"link","version":{"content_revision":1}}`),
+		Payload: json.RawMessage(`{"body":"body","quote":{"exact":"body"}}`),
+	}
+	recoveryOf := &model.ReaderThoughtVersionKey{LogicalClock: 1, DeviceID: "loser", OpID: "loser-op"}
+	expectedWinner := &model.ReaderThoughtVersionKey{LogicalClock: 2, DeviceID: "winner", OpID: "winner-op"}
+
+	cases := []struct {
+		name string
+		op   model.ReaderThoughtOp
+	}{
+		{name: "recovery pair incomplete", op: func() model.ReaderThoughtOp {
+			op := base
+			op.RecoveryOf = recoveryOf
+			return op
+		}()},
+		{name: "recovery cannot be delete", op: func() model.ReaderThoughtOp {
+			op := base
+			op.OperationKind = "delete"
+			op.RecoveryOf = recoveryOf
+			op.ExpectedWinnerKey = expectedWinner
+			return op
+		}()},
+		{name: "reattach cannot carry recovery", op: func() model.ReaderThoughtOp {
+			op := base
+			op.Reattach = &model.ReaderThoughtReattachOperation{ExpectedLastSequence: 3, ExpectedHostRevision: 4}
+			op.RecoveryOf = recoveryOf
+			op.ExpectedWinnerKey = expectedWinner
+			return op
+		}()},
+		{name: "reattach must be update", op: func() model.ReaderThoughtOp {
+			op := base
+			op.OperationKind = "add"
+			op.Reattach = &model.ReaderThoughtReattachOperation{ExpectedLastSequence: 3, ExpectedHostRevision: 4}
+			return op
+		}()},
+		{name: "unsupported operation", op: func() model.ReaderThoughtOp {
+			op := base
+			op.OperationKind = "replace"
+			return op
+		}()},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := classifyReaderThoughtTransition(tc.op); !errors.Is(err, ErrInvalidReaderThought) {
+				t.Fatalf("classifyReaderThoughtTransition() error = %v, want ErrInvalidReaderThought", err)
+			}
+		})
+	}
+}
+
 func clientReattachOpForTest(
 	thoughtID string,
 	targetHostKind string,

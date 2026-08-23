@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"webtag/internal/database"
+	"webtag/internal/model"
 )
 
 const lockLinkForDeleteSQL = `SELECT id
@@ -66,6 +67,10 @@ func (r *PGXLinkRepository) DeleteLockedLinkTx(ctx context.Context, tx pgx.Tx, l
 }
 
 func terminalizeAndDeleteLockedLinkOn(ctx context.Context, db database.Querier, lockedID uuid.UUID) error {
+	reader := NewPGXReaderVNextRepository(db)
+	if err := reader.markThoughtHostTombstonesOn(ctx, db, string(model.ReaderHostLink), lockedID.String(), readerHostTombstoneReason(model.ReaderHostLink)); err != nil {
+		return err
+	}
 	if _, err := db.Exec(ctx, terminalizeDeletedTranslationAttemptsSQL, lockedID); err != nil {
 		return fmt.Errorf("terminalize deleted link translation attempts: %w", err)
 	}
@@ -76,8 +81,9 @@ func terminalizeAndDeleteLockedLinkOn(ctx context.Context, db database.Querier, 
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	// The delete above fires the trigger that tombstones this Link's Thoughts.
-	// Their TODO projections have to retire in the same transaction, otherwise
-	// they outlive their source with no read left to notice.
-	return NewPGXReaderVNextRepository(db).replaceLinkThoughtTodoProjectionsOn(ctx, db, lockedID)
+	// The lifecycle core above tombstones this Link's Thoughts before the Link
+	// row is hidden. Their TODO projections still have to refresh in the same
+	// transaction, otherwise they outlive their source with no read left to
+	// notice.
+	return reader.replaceLinkThoughtTodoProjectionsOn(ctx, db, lockedID)
 }

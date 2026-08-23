@@ -23,7 +23,7 @@ func TestReaderNoteRoutesRejectInvalidIDBeforeApplicationStore(t *testing.T) {
 	t.Parallel()
 
 	store := &readerNoteDraftApplicationStore{}
-	applications := service.NewReaderApplications(readerServiceTestStores(store), nil)
+	applications := readerServiceTestApplications(store)
 	routes := NewReaderNoteRoutes(applications.Notes)
 
 	_, err := routes.SaveNoteDraft(context.Background(), "not-a-uuid", dto.ReaderNoteDraftRequest{Content: "draft"})

@@ -2,9 +2,11 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 
 	"webtag/internal/dto"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/service"
 )
 
@@ -22,12 +24,20 @@ func NewReaderThoughtRoutes(application *service.ReaderThoughtApplication) Reade
 func (r *readerThoughtApplicationRoutes) PushThoughtOps(ctx context.Context, request dto.ReaderThoughtOpsRequest) ([]dto.ReaderThoughtAckResponse, error) {
 	command := service.ReaderThoughtOpsCommand{Ops: make([]service.ReaderThoughtOpCommand, 0, len(request.Ops))}
 	for _, input := range request.Ops {
+		var target service.ReaderThoughtTargetCommand
+		if err := json.Unmarshal(input.Target, &target); err != nil {
+			return nil, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "thought target must be an object")
+		}
+		var payload service.ReaderThoughtPayloadCommand
+		if err := json.Unmarshal(input.Payload, &payload); err != nil {
+			return nil, problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought payload must be an object")
+		}
 		command.Ops = append(command.Ops, service.ReaderThoughtOpCommand{
 			ContractVersion: input.ContractVersion,
 			OpID:            input.OpID, DeviceID: input.DeviceID, LogicalClock: input.LogicalClock,
 			OperationKind: input.OperationKind, AnnotationID: input.AnnotationID,
 			HostKind: input.HostKind, HostID: input.HostID,
-			Target: input.Target, Payload: input.Payload,
+			Target: target, Payload: payload,
 			RecoveryOf:               readerThoughtVersionKeyModel(input.RecoveryOf),
 			ExpectedCurrentWinnerKey: readerThoughtVersionKeyModel(input.ExpectedCurrentWinnerKey),
 		})
