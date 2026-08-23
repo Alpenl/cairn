@@ -19,6 +19,7 @@ import { isCompletedReadingLink } from '../lib/stats'
 import { listAnnotatedLinks } from '../lib/user-data/annotation-store'
 import type { AnnotatedLinkRecord } from '../lib/user-data/annotation-types'
 import type { LibraryReloadOptions } from './libraryReload'
+import { useVisibilityRefresh } from './useVisibilityRefresh'
 
 export interface AnnotatedLinksState {
   readonly links: readonly LinkResponse[]
@@ -396,11 +397,14 @@ export function useAnnotatedLinks(
     }
   }, [settleReload])
 
+  const requestReload = useCallback(() => {
+    void reload()
+  }, [reload])
+
+  useVisibilityRefresh(requestReload, enabled && sessionActive)
+
   useEffect(() => {
     if (!enabled || !sessionActive) return
-    const requestReload = () => {
-      void reload()
-    }
     const unsubscribeInvalidation = resourceStore.subscribe(
       ANNOTATED_LINKS_CACHE_KEY,
       requestReload,
@@ -408,21 +412,16 @@ export function useAnnotatedLinks(
     const channel = new AnnotationDocumentChannel(lease, (hint) => {
       if (acceptNewerHint(versionHighWater, hint)) requestReload()
     })
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') requestReload()
-    }
     const unsubscribeAnnotationsChanged = subscribeReaderEvents(
       [READER_EVENTS.annotationsChanged],
       requestReload,
     )
-    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       unsubscribeInvalidation()
       channel.dispose()
       unsubscribeAnnotationsChanged()
-      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [enabled, lease, reload, sessionActive, versionHighWater])
+  }, [enabled, lease, requestReload, sessionActive, versionHighWater])
 
   const visible = state.identityKey === identityKey
     ? state

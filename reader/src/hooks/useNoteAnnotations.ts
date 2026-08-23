@@ -23,6 +23,7 @@ import {
   compactAnnotationOperations,
 } from '../lib/user-data/annotation-store'
 import type { AnnotationOperationInput } from '../lib/user-data/annotation-types'
+import { useVisibilityRefresh } from './useVisibilityRefresh'
 
 export type NoteAnnotationCommandResult =
   | {
@@ -115,19 +116,18 @@ export function useNoteAnnotations(
     void refresh()
   }, [identityKey, refresh, updateState])
 
+  useVisibilityRefresh(() => {
+    void refresh()
+  })
+
   useEffect(() => {
     const onChange = () => void refresh()
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void refresh()
-    }
     const unsubscribe = subscribeReaderEvents(
       [READER_EVENTS.annotationsChanged, READER_EVENTS.thoughtsSynced],
       onChange,
     )
-    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       unsubscribe()
-      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [refresh])
 

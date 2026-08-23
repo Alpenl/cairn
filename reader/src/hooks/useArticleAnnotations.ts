@@ -44,6 +44,7 @@ import {
   readAnnotationSnapshot,
 } from '../lib/user-data/annotation-store'
 import type { AnnotationOperationInput } from '../lib/user-data/annotation-types'
+import { useVisibilityRefresh } from './useVisibilityRefresh'
 
 export interface ArticleAnnotationRevisionChange {
   readonly previousRevision: number
@@ -572,10 +573,11 @@ export function useArticleAnnotations(
     }
   }, [identityKey, lease, linkId, refresh, saved, summary])
 
+  useVisibilityRefresh(() => {
+    void refresh()
+  })
+
   useEffect(() => {
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void refresh()
-    }
     const onLocalAnnotationChange = () => void refresh()
     const onThoughtsSync = () => void refresh()
     const unsubscribeLocalChange = subscribeReaderEvents(
@@ -586,11 +588,9 @@ export function useArticleAnnotations(
       [READER_EVENTS.thoughtsSynced],
       onThoughtsSync,
     )
-    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       unsubscribeLocalChange()
       unsubscribeThoughtsSync()
-      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [refresh])
 

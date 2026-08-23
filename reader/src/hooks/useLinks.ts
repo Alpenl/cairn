@@ -30,6 +30,7 @@ import { useCachedResource } from '../lib/cache/useCachedResource'
 import { useAnnotatedLinks } from './useAnnotatedLinks'
 import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryReload'
 import { registerReaderClient } from './useReaderClient'
+import { useVisibilityRefresh } from './useVisibilityRefresh'
 
 /** 智能视图 id 枚举。 */
 export type SmartId = 'all' | 'today' | 'annotated'
@@ -120,28 +121,26 @@ function useTodayCreatedRange(active: boolean): LocalDayCreatedRange | undefined
   const range = active ? localDayCreatedRange() : undefined
   const createdFrom = range?.created_from
   const createdBefore = range?.created_before
+  const refreshIfChanged = useCallback(() => {
+    if (!createdFrom || !createdBefore) return
+    if (!sameCreatedRange(
+      { created_from: createdFrom, created_before: createdBefore },
+      localDayCreatedRange(),
+    )) {
+      refreshClock((current) => current + 1)
+    }
+  }, [createdFrom, createdBefore])
+
+  useVisibilityRefresh(refreshIfChanged, active && createdFrom !== undefined && createdBefore !== undefined)
 
   useEffect(() => {
     if (!active || !createdFrom || !createdBefore) return
-    const refreshIfChanged = () => {
-      if (!sameCreatedRange(
-        { created_from: createdFrom, created_before: createdBefore },
-        localDayCreatedRange(),
-      )) {
-        refreshClock((current) => current + 1)
-      }
-    }
     const delay = Math.max(0, Date.parse(createdBefore) - Date.now())
     const timer = window.setTimeout(refreshIfChanged, delay + 1)
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') refreshIfChanged()
-    }
-    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       window.clearTimeout(timer)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [active, createdFrom, createdBefore])
+  }, [active, createdFrom, createdBefore, refreshIfChanged])
 
   return range
 }
