@@ -28,8 +28,8 @@
     "verify:build:chrome": "esno scripts/verify-build-output.ts extension-chrome",
     "verify:build:firefox": "esno scripts/verify-build-output.ts extension-firefox",
     "pack": "run-p pack:chrome pack:firefox pack:source",
-    "pack:chrome": "jszip-cli add extension-chrome/* -o ./dist/webtag-chrome.zip --ignore '.DS_Store' -f",
-    "pack:firefox": "jszip-cli add extension-firefox/* -o ./dist/webtag-firefox.zip --ignore '.DS_Store' -f",
+    "pack:chrome": "esno scripts/package-install.ts chrome",
+    "pack:firefox": "esno scripts/package-install.ts firefox",
     "pack:source": "esno scripts/package-source.ts",
     "verify:artifacts": "run-s verify:install verify:source",
     "verify:install": "esno scripts/verify-install-archives.ts",
@@ -54,7 +54,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@ffflorian/jszip-cli": "^3.16.5",
     "@iconify/vue": "^5.0.1",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@types/chrome": "^0.2.6",

@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import JSZip from 'jszip'
+import { packageInstallArchive } from '../scripts/package-install'
 import {
   assertZipMembersEqual,
   authoritativeLegalFiles,
   EXTENSION_ROOT,
+  readZipFiles,
 } from '../scripts/release-artifacts'
 import { verifyInstallArchive } from '../scripts/verify-install-archives'
 
@@ -38,6 +40,35 @@ afterEach(async () => {
 })
 
 describe('verifyInstallArchive', () => {
+  it('用构建目录相对路径打安装包，并忽略 .DS_Store', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'webtag-install-package-'))
+    roots.push(root)
+    const inputRoot = resolve(root, 'extension-chrome')
+    const legalFiles = await authoritativeLegalFiles()
+    await mkdir(resolve(inputRoot, 'dist/popup'), { recursive: true })
+    await writeFile(resolve(inputRoot, 'manifest.json'), '{}')
+    await writeFile(resolve(inputRoot, 'LICENSE'), legalFiles.get('LICENSE')!)
+    await writeFile(resolve(inputRoot, 'NOTICE'), legalFiles.get('NOTICE')!)
+    await writeFile(resolve(inputRoot, '.DS_Store'), 'ignored')
+    await writeFile(resolve(inputRoot, 'dist/.DS_Store'), 'ignored')
+    await writeFile(
+      resolve(inputRoot, 'dist/popup/index.html'),
+      '<!doctype html>',
+    )
+
+    const report = await packageInstallArchive('chrome', root)
+    const members = await readZipFiles(report.output)
+
+    expect(members).toEqual(
+      new Map([
+        ['dist/popup/index.html', Buffer.from('<!doctype html>')],
+        ['LICENSE', legalFiles.get('LICENSE')!],
+        ['manifest.json', Buffer.from('{}')],
+        ['NOTICE', legalFiles.get('NOTICE')!],
+      ]),
+    )
+  })
+
   it('接受归档根逐字节一致的 LICENSE 和 NOTICE', async () => {
     const archive = await writeArchive(await validEntries())
 
