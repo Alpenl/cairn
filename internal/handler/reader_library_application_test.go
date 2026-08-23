@@ -51,7 +51,7 @@ func TestReaderLibraryRoutesMapHomeDomainResultToWire(t *testing.T) {
 		}},
 		Todos: []model.ReaderTodo{{ID: todoID, Text: "Review", OriginKind: "standalone", CreatedAt: when, UpdatedAt: when}},
 	}}
-	applications := service.NewReaderApplications(readerServiceTestStores(store), nil)
+	applications := readerTestApplications(store)
 	response, err := NewReaderLibraryRoutes(applications.Library).Home(context.Background())
 	if err != nil {
 		t.Fatalf("Home() error = %v", err)
@@ -87,7 +87,7 @@ func TestReaderLibraryRoutesPreserveMetadataFieldPresence(t *testing.T) {
 			t.Fatalf("decode %s: %v", raw, err)
 		}
 		store := &readerMetadataApplicationStore{}
-		applications := service.NewReaderApplications(readerServiceTestStores(store), nil)
+		applications := readerTestApplications(store)
 		_, err := NewReaderLibraryRoutes(applications.Library).PatchLinkMetadata(context.Background(), uuid.NewString(), request, 7)
 		carrier, ok := httperr.As(err)
 		if !ok || carrier.HTTPStatus() != http.StatusUnprocessableEntity {
@@ -112,7 +112,7 @@ func TestReaderLibraryRoutesForwardExplicitNullMetadataReplacement(t *testing.T)
 		t.Fatalf("decode complete replacement: %v", err)
 	}
 	store := &readerMetadataApplicationStore{result: model.ReaderLinkMetadataUpdate{MetadataRevision: 8}}
-	applications := service.NewReaderApplications(readerServiceTestStores(store), nil)
+	applications := readerTestApplications(store)
 	response, err := NewReaderLibraryRoutes(applications.Library).PatchLinkMetadata(context.Background(), linkID.String(), request, 7)
 	if err != nil {
 		t.Fatalf("PatchLinkMetadata() error = %v", err)

@@ -2,9 +2,11 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 
 	"webtag/internal/dto"
 	"webtag/internal/model"
+	"webtag/internal/problem"
 	"webtag/internal/service"
 )
 
@@ -22,15 +24,11 @@ func NewReaderThoughtRoutes(application *service.ReaderThoughtApplication) Reade
 func (r *readerThoughtApplicationRoutes) PushThoughtOps(ctx context.Context, request dto.ReaderThoughtOpsRequest) ([]dto.ReaderThoughtAckResponse, error) {
 	command := service.ReaderThoughtOpsCommand{Ops: make([]service.ReaderThoughtOpCommand, 0, len(request.Ops))}
 	for _, input := range request.Ops {
-		command.Ops = append(command.Ops, service.ReaderThoughtOpCommand{
-			ContractVersion: input.ContractVersion,
-			OpID:            input.OpID, DeviceID: input.DeviceID, LogicalClock: input.LogicalClock,
-			OperationKind: input.OperationKind, AnnotationID: input.AnnotationID,
-			HostKind: input.HostKind, HostID: input.HostID,
-			Target: input.Target, Payload: input.Payload,
-			RecoveryOf:               readerThoughtVersionKeyModel(input.RecoveryOf),
-			ExpectedCurrentWinnerKey: readerThoughtVersionKeyModel(input.ExpectedCurrentWinnerKey),
-		})
+		op, err := readerThoughtOpCommand(input)
+		if err != nil {
+			return nil, err
+		}
+		command.Ops = append(command.Ops, op)
 	}
 	acks, err := r.application.PushThoughtOps(ctx, command)
 	if err != nil {
@@ -46,6 +44,130 @@ func (r *readerThoughtApplicationRoutes) PushThoughtOps(ctx context.Context, req
 		})
 	}
 	return response, nil
+}
+
+func readerThoughtOpCommand(input dto.ReaderThoughtOpRequest) (service.ReaderThoughtOpCommand, error) {
+	command := service.ReaderThoughtOpCommand{
+		ContractVersion: input.ContractVersion,
+		OpID:            input.OpID, DeviceID: input.DeviceID, LogicalClock: input.LogicalClock,
+		OperationKind: input.OperationKind, AnnotationID: input.AnnotationID,
+		HostKind: input.HostKind, HostID: input.HostID,
+		TargetJSON: append([]byte(nil), input.Target...), PayloadJSON: append([]byte(nil), input.Payload...),
+		RecoveryOf:               readerThoughtVersionKeyModel(input.RecoveryOf),
+		ExpectedCurrentWinnerKey: readerThoughtVersionKeyModel(input.ExpectedCurrentWinnerKey),
+	}
+	if !json.Valid(input.Target) || !json.Valid(input.Payload) {
+		return service.ReaderThoughtOpCommand{}, problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought target and payload must be JSON")
+	}
+	target, err := readerThoughtTargetCommand(input)
+	if err != nil {
+		return service.ReaderThoughtOpCommand{}, err
+	}
+	payload, err := readerThoughtPayloadCommand(input, target)
+	if err != nil {
+		return service.ReaderThoughtOpCommand{}, err
+	}
+	command.Target, command.Payload = target, payload
+	return command, nil
+}
+
+type readerThoughtTargetPayload struct {
+	Kind    string `json:"kind"`
+	HostID  string `json:"host_id"`
+	Version struct {
+		ContentRevision  int64  `json:"content_revision"`
+		SourceHash       string `json:"source_hash"`
+		NoteRevision     int64  `json:"note_revision"`
+		MetadataRevision int64  `json:"metadata_revision"`
+	} `json:"version"`
+}
+
+func readerThoughtTargetCommand(input dto.ReaderThoughtOpRequest) (service.ReaderThoughtTarget, error) {
+	var target readerThoughtTargetPayload
+	if err := json.Unmarshal(input.Target, &target); err != nil {
+		return service.ReaderThoughtTarget{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "thought target must be an object")
+	}
+	return service.ReaderThoughtTarget{
+		Kind:             target.Kind,
+		HostID:           target.HostID,
+		ContentRevision:  target.Version.ContentRevision,
+		SourceHash:       target.Version.SourceHash,
+		NoteRevision:     target.Version.NoteRevision,
+		MetadataRevision: target.Version.MetadataRevision,
+	}, nil
+}
+
+func invalidThoughtReattachPayload() error {
+	return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "reattach operation payload is invalid")
+}
+
+func readerThoughtPayloadCommand(input dto.ReaderThoughtOpRequest, target service.ReaderThoughtTarget) (service.ReaderThoughtPayload, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(input.Payload, &fields); err != nil {
+		return service.ReaderThoughtPayload{}, invalidThoughtReattachPayload()
+	}
+	if raw, ok := fields["reattach"]; ok {
+		reattach, err := parseThoughtReattachCommand(raw)
+		if err != nil {
+			return service.ReaderThoughtPayload{}, err
+		}
+		if input.OperationKind != "update" || len(fields) != 1 ||
+			input.RecoveryOf != nil || input.ExpectedCurrentWinnerKey != nil {
+			return service.ReaderThoughtPayload{}, invalidThoughtReattachPayload()
+		}
+		if !thoughtReattachTargetMatches(input, target, reattach.ExpectedHostRevision) {
+			return service.ReaderThoughtPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "reattach target must match the destination host revision")
+		}
+		return service.ReaderThoughtPayload{Reattach: &reattach, ReattachOnly: true}, nil
+	}
+	var payload struct {
+		Quote json.RawMessage `json:"quote"`
+	}
+	if err := json.Unmarshal(input.Payload, &payload); err != nil {
+		return service.ReaderThoughtPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought payload must be an object")
+	}
+	if len(payload.Quote) == 0 {
+		if input.OperationKind == "delete" {
+			return service.ReaderThoughtPayload{}, nil
+		}
+		return service.ReaderThoughtPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought payload requires a JSON quote")
+	}
+	if !json.Valid(payload.Quote) {
+		return service.ReaderThoughtPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought payload quote must be valid JSON")
+	}
+	return service.ReaderThoughtPayload{HasQuote: true}, nil
+}
+
+func parseThoughtReattachCommand(raw json.RawMessage) (model.ReaderThoughtReattachOperation, error) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 2 {
+		return model.ReaderThoughtReattachOperation{}, invalidThoughtReattachPayload()
+	}
+	rawSequence, hasSequence := fields["expected_last_sequence"]
+	rawRevision, hasRevision := fields["expected_host_revision"]
+	if !hasSequence || !hasRevision {
+		return model.ReaderThoughtReattachOperation{}, invalidThoughtReattachPayload()
+	}
+	var command model.ReaderThoughtReattachOperation
+	if json.Unmarshal(rawSequence, &command.ExpectedLastSequence) != nil ||
+		json.Unmarshal(rawRevision, &command.ExpectedHostRevision) != nil ||
+		command.ExpectedLastSequence < 0 || command.ExpectedHostRevision <= 0 {
+		return model.ReaderThoughtReattachOperation{}, invalidThoughtReattachPayload()
+	}
+	return command, nil
+}
+
+func thoughtReattachTargetMatches(input dto.ReaderThoughtOpRequest, target service.ReaderThoughtTarget, revision int64) bool {
+	switch input.HostKind {
+	case "link":
+		return target.Kind == "saved-content" && target.ContentRevision == revision
+	case "note":
+		return target.Kind == "note" && target.NoteRevision == revision
+	case "inbox":
+		return target.Kind == "inbox" && target.MetadataRevision == revision
+	default:
+		return false
+	}
 }
 
 func (r *readerThoughtApplicationRoutes) ListThoughts(ctx context.Context, query, after string, limit int) (dto.ReaderThoughtsResponse, error) {

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
@@ -25,12 +24,18 @@ func validThoughtCommand(operationKind string) ReaderThoughtOpCommand {
 		AnnotationID:    "annotation-1",
 		HostKind:        "link",
 		HostID:          "link-1",
-		Target: json.RawMessage(`{
+		Target: ReaderThoughtTarget{
+			Kind:            "saved-content",
+			HostID:          "link-1",
+			ContentRevision: 3,
+		},
+		TargetJSON: []byte(`{
             "kind": "saved-content",
             "host_id": "link-1",
             "version": {"content_revision": 3}
         }`),
-		Payload: json.RawMessage(`{"quote":{"exact":"selected text"}}`),
+		Payload:     ReaderThoughtPayload{HasQuote: true},
+		PayloadJSON: []byte(`{"quote":{"exact":"selected text"}}`),
 	}
 }
 
@@ -39,23 +44,23 @@ func TestValidateThoughtCommandAcceptsSupportedTargets(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		target string
+		target ReaderThoughtTarget
 	}{
 		{
 			name:   "saved content",
-			target: `{"kind":"saved-content","host_id":"link-1","version":{"content_revision":3}}`,
+			target: ReaderThoughtTarget{Kind: "saved-content", HostID: "link-1", ContentRevision: 3},
 		},
 		{
 			name:   "summary",
-			target: `{"kind":"summary","host_id":"link-1","version":{"source_hash":"hash-1"}}`,
+			target: ReaderThoughtTarget{Kind: "summary", HostID: "link-1", SourceHash: "hash-1"},
 		},
 		{
 			name:   "note",
-			target: `{"kind":"note","host_id":"link-1","version":{"note_revision":4}}`,
+			target: ReaderThoughtTarget{Kind: "note", HostID: "link-1", NoteRevision: 4},
 		},
 		{
 			name:   "inbox",
-			target: `{"kind":"inbox","host_id":"link-1","version":{"metadata_revision":5}}`,
+			target: ReaderThoughtTarget{Kind: "inbox", HostID: "link-1", MetadataRevision: 5},
 		},
 	}
 
@@ -63,7 +68,7 @@ func TestValidateThoughtCommandAcceptsSupportedTargets(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			input := validThoughtCommand("add")
-			input.Target = json.RawMessage(tc.target)
+			input.Target = tc.target
 			if err := validateThoughtCommand(input); err != nil {
 				t.Fatalf("validateThoughtCommand() error = %v", err)
 			}
@@ -76,43 +81,39 @@ func TestValidateThoughtCommandRejectsInvalidTarget(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		target string
+		target ReaderThoughtTarget
 	}{
 		{
-			name:   "target is not an object",
-			target: `[]`,
-		},
-		{
 			name:   "missing host id",
-			target: `{"kind":"saved-content","version":{"content_revision":3}}`,
+			target: ReaderThoughtTarget{Kind: "saved-content", ContentRevision: 3},
 		},
 		{
 			name:   "host id does not match operation",
-			target: `{"kind":"saved-content","host_id":"other-link","version":{"content_revision":3}}`,
+			target: ReaderThoughtTarget{Kind: "saved-content", HostID: "other-link", ContentRevision: 3},
 		},
 		{
 			name:   "saved content missing revision",
-			target: `{"kind":"saved-content","host_id":"link-1","version":{}}`,
+			target: ReaderThoughtTarget{Kind: "saved-content", HostID: "link-1"},
 		},
 		{
 			name:   "summary missing source hash",
-			target: `{"kind":"summary","host_id":"link-1","version":{}}`,
+			target: ReaderThoughtTarget{Kind: "summary", HostID: "link-1"},
 		},
 		{
 			name:   "note missing revision",
-			target: `{"kind":"note","host_id":"link-1","version":{}}`,
+			target: ReaderThoughtTarget{Kind: "note", HostID: "link-1"},
 		},
 		{
 			name:   "inbox missing metadata revision",
-			target: `{"kind":"inbox","host_id":"link-1","version":{}}`,
+			target: ReaderThoughtTarget{Kind: "inbox", HostID: "link-1"},
 		},
 		{
 			name:   "retired legacy stale target",
-			target: `{"kind":"legacy-stale","host_id":"link-1","version":{"source_key":"legacy-1"}}`,
+			target: ReaderThoughtTarget{Kind: "legacy-stale", HostID: "link-1"},
 		},
 		{
 			name:   "unknown kind",
-			target: `{"kind":"future","host_id":"link-1","version":{}}`,
+			target: ReaderThoughtTarget{Kind: "future", HostID: "link-1"},
 		},
 	}
 
@@ -120,7 +121,7 @@ func TestValidateThoughtCommandRejectsInvalidTarget(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			input := validThoughtCommand("add")
-			input.Target = json.RawMessage(tc.target)
+			input.Target = tc.target
 			if err := validateThoughtCommand(input); err == nil {
 				t.Fatal("validateThoughtCommand() error = nil, want validation error")
 			}
@@ -132,14 +133,10 @@ func TestValidateThoughtCommandDeleteMayOmitQuote(t *testing.T) {
 	t.Parallel()
 
 	input := validThoughtCommand("delete")
-	input.Payload = json.RawMessage(`{"body":""}`)
+	input.Payload = ReaderThoughtPayload{}
+	input.PayloadJSON = []byte(`{"body":""}`)
 	if err := validateThoughtCommand(input); err != nil {
 		t.Fatalf("delete without quote should be accepted: %v", err)
-	}
-
-	input.Payload = json.RawMessage(`{"quote":}`)
-	if err := validateThoughtCommand(input); err == nil {
-		t.Fatal("malformed delete quote should be rejected")
 	}
 }
 
@@ -155,12 +152,10 @@ func TestValidateThoughtCommandAcceptsArchiveThoughtBoundaries(t *testing.T) {
 	deleteWithArchivedHost := validThoughtCommand("delete")
 	deleteWithArchivedHost.HostKind = "inbox"
 	deleteWithArchivedHost.HostID = "purged-inbox:legacy-42"
-	deleteWithArchivedHost.Target = json.RawMessage(`{
-        "kind": "inbox",
-        "host_id": "purged-inbox:legacy-42",
-        "version": {"metadata_revision": 1}
-    }`)
-	deleteWithArchivedHost.Payload = json.RawMessage(`{}`)
+	deleteWithArchivedHost.Target = ReaderThoughtTarget{Kind: "inbox", HostID: "purged-inbox:legacy-42", MetadataRevision: 1}
+	deleteWithArchivedHost.TargetJSON = []byte(`{"kind":"inbox","host_id":"purged-inbox:legacy-42","version":{"metadata_revision":1}}`)
+	deleteWithArchivedHost.Payload = ReaderThoughtPayload{}
+	deleteWithArchivedHost.PayloadJSON = []byte(`{}`)
 	if err := validateThoughtCommand(deleteWithArchivedHost); err != nil {
 		t.Fatalf("delete with non-UUID persisted host should be accepted: %v", err)
 	}
@@ -171,7 +166,8 @@ func TestValidateThoughtCommandRequiresQuoteForAddAndUpdate(t *testing.T) {
 
 	for _, operationKind := range []string{"add", "update"} {
 		input := validThoughtCommand(operationKind)
-		input.Payload = json.RawMessage(`{"body":"missing quote"}`)
+		input.Payload = ReaderThoughtPayload{}
+		input.PayloadJSON = []byte(`{"body":"missing quote"}`)
 		if err := validateThoughtCommand(input); err == nil {
 			t.Fatalf("%s without quote should be rejected", operationKind)
 		}
@@ -184,21 +180,16 @@ func TestValidateThoughtCommandAcceptsClientOwnedReattachCommand(t *testing.T) {
 	input := validThoughtCommand("update")
 	input.ContractVersion = model.ReaderThoughtContractVersion
 	input.LogicalClock = 17
-	input.Payload = json.RawMessage(`{
-        "reattach": {
-            "expected_last_sequence": 11,
-            "expected_host_revision": 3
-        }
-    }`)
+	input.Payload = ReaderThoughtPayload{
+		Reattach:     &model.ReaderThoughtReattachOperation{ExpectedLastSequence: 11, ExpectedHostRevision: 3},
+		ReattachOnly: true,
+	}
+	input.PayloadJSON = []byte(`{"reattach":{"expected_last_sequence":11,"expected_host_revision":3}}`)
 	if err := validateThoughtCommand(input); err != nil {
 		t.Fatalf("validateThoughtCommand() error = %v", err)
 	}
-	command, err := readerThoughtReattachOperation(input)
-	if err != nil {
-		t.Fatalf("readerThoughtReattachOperation() error = %v", err)
-	}
-	if command == nil || command.ExpectedLastSequence != 11 || command.ExpectedHostRevision != 3 {
-		t.Fatalf("readerThoughtReattachOperation() = %#v, want reattach CAS command", command)
+	if input.Payload.Reattach == nil || input.Payload.Reattach.ExpectedLastSequence != 11 || input.Payload.Reattach.ExpectedHostRevision != 3 {
+		t.Fatalf("reattach payload = %#v, want reattach CAS command", input.Payload.Reattach)
 	}
 }
 
@@ -212,19 +203,19 @@ func TestValidateThoughtCommandRejectsMalformedClientReattachCommand(t *testing.
 		{
 			name: "contains client body",
 			mutate: func(input *ReaderThoughtOpCommand) {
-				input.Payload = json.RawMessage(`{"body":"must not be sent","reattach":{"expected_last_sequence":11,"expected_host_revision":3}}`)
+				input.Payload.ReattachOnly = false
 			},
 		},
 		{
 			name: "wrong target kind",
 			mutate: func(input *ReaderThoughtOpCommand) {
-				input.Target = json.RawMessage(`{"kind":"summary","host_id":"link-1","version":{"source_hash":"hash"}}`)
+				input.Target = ReaderThoughtTarget{Kind: "summary", HostID: "link-1", SourceHash: "hash"}
 			},
 		},
 		{
 			name: "target revision differs from expected revision",
 			mutate: func(input *ReaderThoughtOpCommand) {
-				input.Target = json.RawMessage(`{"kind":"saved-content","host_id":"link-1","version":{"content_revision":4}}`)
+				input.Target = ReaderThoughtTarget{Kind: "saved-content", HostID: "link-1", ContentRevision: 4}
 			},
 		},
 		{
@@ -241,7 +232,11 @@ func TestValidateThoughtCommandRejectsMalformedClientReattachCommand(t *testing.
 			input := validThoughtCommand("update")
 			input.ContractVersion = model.ReaderThoughtContractVersion
 			input.LogicalClock = 17
-			input.Payload = json.RawMessage(`{"reattach":{"expected_last_sequence":11,"expected_host_revision":3}}`)
+			input.Payload = ReaderThoughtPayload{
+				Reattach:     &model.ReaderThoughtReattachOperation{ExpectedLastSequence: 11, ExpectedHostRevision: 3},
+				ReattachOnly: true,
+			}
+			input.PayloadJSON = []byte(`{"reattach":{"expected_last_sequence":11,"expected_host_revision":3}}`)
 			tc.mutate(&input)
 			if err := validateThoughtCommand(input); err == nil {
 				t.Fatal("validateThoughtCommand() error = nil, want malformed reattach rejection")
@@ -389,4 +384,15 @@ func TestReaderServiceRejectsInvalidDesiredStateCommandsBeforeStore(t *testing.T
 	if _, err := service.PatchEngagement(context.Background(), model.ReaderEngagementPatch{LinkID: linkID, Progress: &progress}); err == nil {
 		t.Fatal("PatchEngagement() error = nil for NaN progress")
 	}
+}
+
+func TestNewReaderApplicationsRejectsMissingCommandDependencies(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewReaderApplications() did not reject missing command dependencies")
+		}
+	}()
+	_ = NewReaderApplications(ReaderStores{}, nil, ReaderApplicationOptions{})
 }

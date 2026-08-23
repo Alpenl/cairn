@@ -49,6 +49,13 @@ type ReaderThoughtOp struct {
 	CreatedAt time.Time
 }
 
+func CloneReaderThoughtJSON(value []byte) json.RawMessage {
+	if len(value) == 0 {
+		return nil
+	}
+	return append(json.RawMessage(nil), value...)
+}
+
 // ReaderThoughtVersionKey is the total-order key for one operation on one
 // annotation. A larger logical clock wins; equal clocks use the stable device
 // and operation identifiers as tie-breakers. The operation kind is deliberately

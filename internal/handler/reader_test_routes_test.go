@@ -1,6 +1,14 @@
 package handler
 
-import "webtag/internal/service"
+import (
+	"context"
+	"errors"
+
+	"github.com/google/uuid"
+
+	"webtag/internal/model"
+	"webtag/internal/service"
+)
 
 func readerTestRoutes(candidate any) ReaderRoutes {
 	if applications, ok := candidate.(*service.ReaderApplications); ok {
@@ -28,4 +36,86 @@ func readerServiceTestStores(store any) service.ReaderStores {
 	stores.Library, _ = store.(service.ReaderLibraryStore)
 	stores.Hosts, _ = store.(service.ReaderHostStore)
 	return stores
+}
+
+func readerTestApplications(store any, options ...service.ReaderApplicationOptions) *service.ReaderApplications {
+	configured := service.ReaderApplicationOptions{}
+	if len(options) > 0 {
+		configured = options[0]
+	}
+	stores := readerServiceTestStores(store)
+	if configured.InboxProposalCommands == nil {
+		configured.InboxProposalCommands, _ = store.(service.InboxProposalCommands)
+	}
+	if configured.InboxConfirmCommands == nil {
+		configured.InboxConfirmCommands, _ = store.(service.ReaderInboxConfirmCommands)
+	}
+	if configured.InboxBulkConfirmCommands == nil {
+		configured.InboxBulkConfirmCommands, _ = store.(service.ReaderInboxBulkConfirmCommands)
+	}
+	if configured.InboxAIConfirmCommands == nil {
+		configured.InboxAIConfirmCommands, _ = store.(service.ReaderInboxAIConfirmCommands)
+	}
+	if configured.FeedFeedbackCommands == nil {
+		configured.FeedFeedbackCommands, _ = store.(service.ReaderFeedFeedbackCommands)
+	}
+	if configured.HostRestoreCommands == nil {
+		configured.HostRestoreCommands, _ = store.(service.ReaderHostRestoreCommands)
+	}
+	fillMissingReaderHandlerTestCommands(&configured)
+	return service.NewReaderApplications(stores, nil, configured)
+}
+
+func fillMissingReaderHandlerTestCommands(options *service.ReaderApplicationOptions) {
+	missing := readerHandlerTestMissingCommands{}
+	if options.InboxProposalCommands == nil {
+		options.InboxProposalCommands = missing
+	}
+	if options.InboxConfirmCommands == nil {
+		options.InboxConfirmCommands = missing
+	}
+	if options.InboxBulkConfirmCommands == nil {
+		options.InboxBulkConfirmCommands = missing
+	}
+	if options.InboxAIConfirmCommands == nil {
+		options.InboxAIConfirmCommands = missing
+	}
+	if options.FeedFeedbackCommands == nil {
+		options.FeedFeedbackCommands = missing
+	}
+	if options.HostRestoreCommands == nil {
+		options.HostRestoreCommands = missing
+	}
+}
+
+var errReaderHandlerTestCommandNotImplemented = errors.New("reader handler test command dependency not implemented")
+
+type readerHandlerTestMissingCommands struct{}
+
+func (readerHandlerTestMissingCommands) CreateInboxProposal(context.Context, service.CreateInboxProposalCommand) (service.InboxProposalResult, error) {
+	return service.InboxProposalResult{}, errReaderHandlerTestCommandNotImplemented
+}
+
+func (readerHandlerTestMissingCommands) EnsureInboxProposal(context.Context, service.EnsureInboxProposalCommand) (service.InboxProposalResult, error) {
+	return service.InboxProposalResult{}, errReaderHandlerTestCommandNotImplemented
+}
+
+func (readerHandlerTestMissingCommands) ConfirmInbox(context.Context, uuid.UUID, *int64) (uuid.UUID, error) {
+	return uuid.Nil, errReaderHandlerTestCommandNotImplemented
+}
+
+func (readerHandlerTestMissingCommands) BulkConfirmInbox(context.Context, []model.ReaderInboxBulkConfirmation) ([]model.ReaderInboxBulkResult, error) {
+	return nil, errReaderHandlerTestCommandNotImplemented
+}
+
+func (readerHandlerTestMissingCommands) ConfirmAIProposals(context.Context, model.ReaderInboxPartition) (model.ReaderInboxAIProposalConfirmation, error) {
+	return model.ReaderInboxAIProposalConfirmation{}, errReaderHandlerTestCommandNotImplemented
+}
+
+func (readerHandlerTestMissingCommands) FeedbackFeed(context.Context, string, string) (model.ReaderFeedFeedback, error) {
+	return model.ReaderFeedFeedback{}, errReaderHandlerTestCommandNotImplemented
+}
+
+func (readerHandlerTestMissingCommands) RestoreHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error) {
+	return model.ReaderHostLifecycleResult{}, errReaderHandlerTestCommandNotImplemented
 }

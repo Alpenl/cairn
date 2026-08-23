@@ -15,10 +15,15 @@ import (
 
 type PGXReaderVNextRepository struct {
 	db database.Querier
+	tx readerTxBeginner
 }
 
 func NewPGXReaderVNextRepository(db database.Querier) *PGXReaderVNextRepository {
-	return &PGXReaderVNextRepository{db: db}
+	beginner, ok := db.(readerTxBeginner)
+	if !ok {
+		panic("repository: ReaderVNext Querier must implement Begin for transactional writes")
+	}
+	return &PGXReaderVNextRepository{db: db, tx: beginner}
 }
 
 type readerTxBeginner interface {
@@ -26,11 +31,7 @@ type readerTxBeginner interface {
 }
 
 func (r *PGXReaderVNextRepository) withTx(ctx context.Context, fn func(database.Querier) error) error {
-	beginner, ok := r.db.(readerTxBeginner)
-	if !ok {
-		return fn(r.db)
-	}
-	tx, err := beginner.Begin(ctx)
+	tx, err := r.tx.Begin(ctx)
 	if err != nil {
 		return err
 	}

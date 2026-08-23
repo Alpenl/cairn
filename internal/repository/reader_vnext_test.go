@@ -988,11 +988,31 @@ func TestListInboxDerivesExpiryPartitionsFromServerTimeAndReturnsBothCounts(t *t
 }
 
 func TestListInboxRejectsInvalidPartition(t *testing.T) {
-	repo := NewPGXReaderVNextRepository(nil)
-	_, _, _, _, err := repo.ListInbox(context.Background(), model.ReaderInboxPartition("other"), "", 30)
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	repo := NewPGXReaderVNextRepository(mock)
+	_, _, _, _, err = repo.ListInbox(context.Background(), model.ReaderInboxPartition("other"), "", 30)
 	if !errors.Is(err, ErrReaderInboxStateConflict) {
 		t.Fatalf("ListInbox() error = %v, want ErrReaderInboxStateConflict", err)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("pgxmock expectations: %v", err)
+	}
+}
+
+func TestNewPGXReaderVNextRepositoryRequiresTransactions(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewPGXReaderVNextRepository() did not reject a non-transactional dependency")
+		}
+	}()
+	_ = NewPGXReaderVNextRepository(nil)
 }
 
 func TestRestoreInboxRenewsExpiredLiveRowOnlyOnce(t *testing.T) {

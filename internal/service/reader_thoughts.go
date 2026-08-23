@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"unicode/utf8"
 
@@ -19,10 +18,27 @@ type ReaderThoughtOpCommand struct {
 	AnnotationID             string
 	HostKind                 string
 	HostID                   string
-	Target                   json.RawMessage
-	Payload                  json.RawMessage
+	Target                   ReaderThoughtTarget
+	TargetJSON               []byte
+	Payload                  ReaderThoughtPayload
+	PayloadJSON              []byte
 	RecoveryOf               *model.ReaderThoughtVersionKey
 	ExpectedCurrentWinnerKey *model.ReaderThoughtVersionKey
+}
+
+type ReaderThoughtTarget struct {
+	Kind             string
+	HostID           string
+	ContentRevision  int64
+	SourceHash       string
+	NoteRevision     int64
+	MetadataRevision int64
+}
+
+type ReaderThoughtPayload struct {
+	HasQuote     bool
+	Reattach     *model.ReaderThoughtReattachOperation
+	ReattachOnly bool
 }
 
 type ReaderThoughtOpsCommand struct {
@@ -48,17 +64,14 @@ func (s *ReaderThoughtApplication) PushThoughtOps(ctx context.Context, command R
 		if err := validateThoughtCommand(input); err != nil {
 			return nil, err
 		}
-		reattach, err := readerThoughtReattachOperation(input)
-		if err != nil {
-			return nil, err
-		}
 		ops = append(ops, model.ReaderThoughtOp{
 			OpID: input.OpID, DeviceID: input.DeviceID, LogicalClock: input.LogicalClock,
 			OperationKind: input.OperationKind, AnnotationID: input.AnnotationID,
-			HostKind: input.HostKind, HostID: input.HostID, Target: input.Target,
-			Payload: input.Payload, RecoveryOf: cloneThoughtVersionKey(input.RecoveryOf),
+			HostKind: input.HostKind, HostID: input.HostID,
+			Target: model.CloneReaderThoughtJSON(input.TargetJSON), Payload: model.CloneReaderThoughtJSON(input.PayloadJSON),
+			RecoveryOf:        cloneThoughtVersionKey(input.RecoveryOf),
 			ExpectedWinnerKey: cloneThoughtVersionKey(input.ExpectedCurrentWinnerKey),
-			Reattach:          reattach,
+			Reattach:          cloneThoughtReattachOperation(input.Payload.Reattach),
 			CreatedAt:         s.now(),
 		})
 	}
@@ -104,7 +117,7 @@ func validateThoughtEnvelope(input ReaderThoughtOpCommand) error {
 	}); err != nil {
 		return err
 	}
-	if !json.Valid(input.Target) || !json.Valid(input.Payload) {
+	if len(input.TargetJSON) == 0 || len(input.PayloadJSON) == 0 {
 		return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought target and payload must be JSON")
 	}
 	return nil
@@ -146,144 +159,75 @@ func validateThoughtOperationKind(operationKind string) error {
 	return nil
 }
 
-// validateThoughtTarget requires the anchor to name a supported host revision,
-// so a thought can never be attached to an unversioned target.
-type readerThoughtTargetPayload struct {
-	Kind    string `json:"kind"`
-	HostID  string `json:"host_id"`
-	Version struct {
-		ContentRevision  int64  `json:"content_revision"`
-		SourceHash       string `json:"source_hash"`
-		NoteRevision     int64  `json:"note_revision"`
-		MetadataRevision int64  `json:"metadata_revision"`
-	} `json:"version"`
-}
-
-func readerThoughtTarget(input ReaderThoughtOpCommand) (readerThoughtTargetPayload, error) {
-	var target readerThoughtTargetPayload
-	if err := json.Unmarshal(input.Target, &target); err != nil {
-		return readerThoughtTargetPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "thought target must be an object")
-	}
+func validateThoughtTarget(input ReaderThoughtOpCommand) error {
+	target := input.Target
 	if strings.TrimSpace(target.HostID) == "" || target.HostID != input.HostID {
-		return readerThoughtTargetPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "thought target host_id must match host_id")
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_target", "thought target host_id must match host_id")
 	}
 	switch target.Kind {
 	case "saved-content":
-		if target.Version.ContentRevision <= 0 {
-			return readerThoughtTargetPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "saved-content target requires content_revision")
+		if target.ContentRevision <= 0 {
+			return problem.NewWithCode(problem.Invalid, "invalid_thought_target", "saved-content target requires content_revision")
 		}
 	case "summary":
-		if strings.TrimSpace(target.Version.SourceHash) == "" {
-			return readerThoughtTargetPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "summary target requires source_hash")
+		if strings.TrimSpace(target.SourceHash) == "" {
+			return problem.NewWithCode(problem.Invalid, "invalid_thought_target", "summary target requires source_hash")
 		}
 	case "note":
-		if target.Version.NoteRevision <= 0 {
-			return readerThoughtTargetPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "note target requires note_revision")
+		if target.NoteRevision <= 0 {
+			return problem.NewWithCode(problem.Invalid, "invalid_thought_target", "note target requires note_revision")
 		}
 	case "inbox":
-		if target.Version.MetadataRevision <= 0 {
-			return readerThoughtTargetPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "inbox target requires metadata_revision")
+		if target.MetadataRevision <= 0 {
+			return problem.NewWithCode(problem.Invalid, "invalid_thought_target", "inbox target requires metadata_revision")
 		}
 	default:
-		return readerThoughtTargetPayload{}, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "unsupported thought target kind")
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_target", "unsupported thought target kind")
 	}
-	return target, nil
-}
-
-func validateThoughtTarget(input ReaderThoughtOpCommand) error {
-	_, err := readerThoughtTarget(input)
-	return err
+	return nil
 }
 
 func invalidThoughtReattachPayload() error {
 	return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "reattach operation payload is invalid")
 }
 
-func thoughtReattachTargetMatches(input ReaderThoughtOpCommand, target readerThoughtTargetPayload, revision int64) bool {
+func thoughtReattachTargetMatches(input ReaderThoughtOpCommand, revision int64) bool {
 	switch input.HostKind {
 	case "link":
-		return target.Kind == "saved-content" && target.Version.ContentRevision == revision
+		return input.Target.Kind == "saved-content" && input.Target.ContentRevision == revision
 	case "note":
-		return target.Kind == "note" && target.Version.NoteRevision == revision
+		return input.Target.Kind == "note" && input.Target.NoteRevision == revision
 	case "inbox":
-		return target.Kind == "inbox" && target.Version.MetadataRevision == revision
+		return input.Target.Kind == "inbox" && input.Target.MetadataRevision == revision
 	default:
 		return false
 	}
 }
 
-func parseThoughtReattachCommand(raw json.RawMessage) (model.ReaderThoughtReattachOperation, error) {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || len(fields) != 2 {
-		return model.ReaderThoughtReattachOperation{}, invalidThoughtReattachPayload()
+func validateThoughtReattachOperation(input ReaderThoughtOpCommand) error {
+	if input.Payload.Reattach == nil {
+		return nil
 	}
-	rawSequence, hasSequence := fields["expected_last_sequence"]
-	rawRevision, hasRevision := fields["expected_host_revision"]
-	if !hasSequence || !hasRevision {
-		return model.ReaderThoughtReattachOperation{}, invalidThoughtReattachPayload()
+	if input.OperationKind != "update" || !input.Payload.ReattachOnly || input.RecoveryOf != nil || input.ExpectedCurrentWinnerKey != nil {
+		return invalidThoughtReattachPayload()
 	}
-	var command model.ReaderThoughtReattachOperation
-	if json.Unmarshal(rawSequence, &command.ExpectedLastSequence) != nil ||
-		json.Unmarshal(rawRevision, &command.ExpectedHostRevision) != nil ||
-		command.ExpectedLastSequence < 0 || command.ExpectedHostRevision <= 0 {
-		return model.ReaderThoughtReattachOperation{}, invalidThoughtReattachPayload()
+	if !thoughtReattachTargetMatches(input, input.Payload.Reattach.ExpectedHostRevision) {
+		return problem.NewWithCode(problem.Invalid, "invalid_thought_target", "reattach target must match the destination host revision")
 	}
-	return command, nil
-}
-
-// readerThoughtReattachOperation recognizes the narrow command written by the
-// durable history outbox. Frozen body, quote, and source remain server-owned.
-func readerThoughtReattachOperation(input ReaderThoughtOpCommand) (*model.ReaderThoughtReattachOperation, error) {
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(input.Payload, &payload); err != nil {
-		return nil, invalidThoughtReattachPayload()
-	}
-	raw, ok := payload["reattach"]
-	if !ok {
-		return nil, nil
-	}
-	if input.OperationKind != "update" || len(payload) != 1 || input.RecoveryOf != nil || input.ExpectedCurrentWinnerKey != nil {
-		return nil, invalidThoughtReattachPayload()
-	}
-	command, err := parseThoughtReattachCommand(raw)
-	if err != nil {
-		return nil, err
-	}
-	target, err := readerThoughtTarget(input)
-	if err != nil {
-		return nil, err
-	}
-	if !thoughtReattachTargetMatches(input, target, command.ExpectedHostRevision) {
-		return nil, problem.NewWithCode(problem.Invalid, "invalid_thought_target", "reattach target must match the destination host revision")
-	}
-	return &command, nil
+	return nil
 }
 
 // validateThoughtPayload requires a JSON quote except on delete, where there is
 // nothing left to anchor.
 func validateThoughtPayload(input ReaderThoughtOpCommand) error {
-	reattach, err := readerThoughtReattachOperation(input)
-	if err != nil {
+	if err := validateThoughtReattachOperation(input); err != nil {
 		return err
 	}
-	if reattach != nil {
+	if input.Payload.Reattach != nil {
 		return nil
 	}
-	var payload struct {
-		Body  string          `json:"body"`
-		Quote json.RawMessage `json:"quote"`
-	}
-	if err := json.Unmarshal(input.Payload, &payload); err != nil {
-		return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought payload must be an object")
-	}
-	if len(payload.Quote) == 0 {
-		if input.OperationKind == "delete" {
-			return nil
-		}
+	if !input.Payload.HasQuote && input.OperationKind != "delete" {
 		return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought payload requires a JSON quote")
-	}
-	if !json.Valid(payload.Quote) {
-		return problem.NewWithCode(problem.Invalid, "invalid_thought_payload", "thought payload quote must be valid JSON")
 	}
 	return nil
 }
@@ -302,6 +246,14 @@ func validateThoughtCommand(input ReaderThoughtOpCommand) error {
 }
 
 func cloneThoughtVersionKey(value *model.ReaderThoughtVersionKey) *model.ReaderThoughtVersionKey {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneThoughtReattachOperation(value *model.ReaderThoughtReattachOperation) *model.ReaderThoughtReattachOperation {
 	if value == nil {
 		return nil
 	}

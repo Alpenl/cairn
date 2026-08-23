@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 
 	"webtag/internal/dto"
 	"webtag/internal/model"
@@ -82,6 +83,9 @@ func (r *readerNoteApplicationRoutes) PublishNote(ctx context.Context, rawID str
 	if request.ExpectedDraftRevision == nil || request.ExpectedPublishedRevision == nil {
 		return dto.ReaderNoteResponse{}, problem.NewWithCode(problem.Invalid, "note_revision_required", "draft and published revisions are required")
 	}
+	if err := validateReaderReanchorOps(request.ReanchorOps); err != nil {
+		return dto.ReaderNoteResponse{}, err
+	}
 	note, err := r.application.PublishNote(ctx, model.ReaderNotePublishCommand{
 		NoteID: id, ExpectedDraftRevision: *request.ExpectedDraftRevision,
 		ExpectedPublishedRevision: *request.ExpectedPublishedRevision, ReanchorOps: request.ReanchorOps,
@@ -143,6 +147,9 @@ func (r *readerNoteApplicationRoutes) RestoreNoteRevision(ctx context.Context, r
 	if request.ExpectedDraftRevision == nil || request.ExpectedPublishedRevision == nil {
 		return dto.ReaderNoteResponse{}, problem.NewWithCode(problem.Invalid, "note_revision_required", "draft and published revisions are required")
 	}
+	if err := validateReaderReanchorOps(request.ReanchorOps); err != nil {
+		return dto.ReaderNoteResponse{}, err
+	}
 	note, err := r.application.RestoreNoteRevision(ctx, model.ReaderNoteRestoreCommand{
 		NoteID: id, Revision: revision, ExpectedDraftRevision: *request.ExpectedDraftRevision,
 		ExpectedPublishedRevision: *request.ExpectedPublishedRevision, ReanchorOps: request.ReanchorOps,
@@ -151,6 +158,22 @@ func (r *readerNoteApplicationRoutes) RestoreNoteRevision(ctx context.Context, r
 		return dto.ReaderNoteResponse{}, err
 	}
 	return readerNoteResponse(note), nil
+}
+
+func validateReaderReanchorOps(ops []json.RawMessage) error {
+	if len(ops) > 500 {
+		return problem.NewWithCode(problem.Invalid, "invalid_reanchor_ops", "too many reanchor operations")
+	}
+	for _, raw := range ops {
+		if len(raw) == 0 || len(raw) > 128*1024 || !json.Valid(raw) {
+			return problem.NewWithCode(problem.Invalid, "invalid_reanchor_ops", "reanchor operation must be valid bounded JSON")
+		}
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+			return problem.NewWithCode(problem.Invalid, "invalid_reanchor_ops", "reanchor operation must be a JSON object")
+		}
+	}
+	return nil
 }
 
 func readerNoteResponse(note model.ReaderNote) dto.ReaderNoteResponse {

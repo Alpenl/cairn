@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 
@@ -76,30 +75,11 @@ func (s *ReaderNoteApplication) DiscardNoteDraft(ctx context.Context, command mo
 }
 
 func (s *ReaderNoteApplication) PublishNote(ctx context.Context, command model.ReaderNotePublishCommand) (model.ReaderNote, error) {
-	if err := validateReaderReanchorOps(command.ReanchorOps); err != nil {
-		return model.ReaderNote{}, err
-	}
 	note, err := s.notes.PublishNote(ctx, command)
 	if err != nil {
 		return model.ReaderNote{}, mapReaderError(err)
 	}
 	return *note, nil
-}
-
-func validateReaderReanchorOps(ops []json.RawMessage) error {
-	if len(ops) > 500 {
-		return problem.NewWithCode(problem.Invalid, "invalid_reanchor_ops", "too many reanchor operations")
-	}
-	for _, raw := range ops {
-		if len(raw) == 0 || len(raw) > 128*1024 || !json.Valid(raw) {
-			return problem.NewWithCode(problem.Invalid, "invalid_reanchor_ops", "reanchor operation must be valid bounded JSON")
-		}
-		var object map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &object); err != nil || object == nil {
-			return problem.NewWithCode(problem.Invalid, "invalid_reanchor_ops", "reanchor operation must be a JSON object")
-		}
-	}
-	return nil
 }
 
 func (s *ReaderNoteApplication) DeleteNote(ctx context.Context, id uuid.UUID) (model.ReaderHostLifecycleResult, error) {
@@ -130,9 +110,6 @@ func (s *ReaderNoteApplication) ListNoteHistory(ctx context.Context, id uuid.UUI
 }
 
 func (s *ReaderNoteApplication) RestoreNoteRevision(ctx context.Context, command model.ReaderNoteRestoreCommand) (model.ReaderNote, error) {
-	if err := validateReaderReanchorOps(command.ReanchorOps); err != nil {
-		return model.ReaderNote{}, err
-	}
 	note, err := s.notes.RestoreNoteRevision(ctx, command)
 	if err != nil {
 		return model.ReaderNote{}, mapReaderError(err)

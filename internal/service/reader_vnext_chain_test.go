@@ -391,8 +391,10 @@ func TestReaderFeatureApplicationsCrossSurfaceChain(t *testing.T) {
 		ContractVersion: 1, OpID: "thought-op-1", DeviceID: "reader-device-1", LogicalClock: 2,
 		OperationKind: "add", AnnotationID: thoughtID,
 		HostKind: "link", HostID: store.linkID.String(),
-		Target:  json.RawMessage(`{"kind":"saved-content","host_id":"` + store.linkID.String() + `","version":{"content_revision":3}}`),
-		Payload: json.RawMessage(`{"body":"A synced idea becomes searchable.","quote":{"exact":"Captured body"}}`),
+		Target:      ReaderThoughtTarget{Kind: "saved-content", HostID: store.linkID.String(), ContentRevision: 3},
+		TargetJSON:  []byte(`{"kind":"saved-content","host_id":"` + store.linkID.String() + `","version":{"content_revision":3}}`),
+		Payload:     ReaderThoughtPayload{HasQuote: true},
+		PayloadJSON: []byte(`{"body":"A synced idea becomes searchable.","quote":{"exact":"Captured body"}}`),
 	}}}
 	acks, err := service.PushThoughtOps(ctx, thoughtRequest)
 	if err != nil || len(acks) != 1 || acks[0].Sequence != 2 ||

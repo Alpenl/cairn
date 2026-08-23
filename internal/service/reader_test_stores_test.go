@@ -1,7 +1,13 @@
 package service
 
 import (
+	"context"
+	"errors"
+
+	"github.com/google/uuid"
+
 	"webtag/internal/httperr"
+	"webtag/internal/model"
 	"webtag/internal/problem"
 )
 
@@ -51,6 +57,7 @@ func newReaderTestFeatureSet(stores ReaderStores, ai ReaderAIBackend, options ..
 	if configured.HostRestoreCommands == nil {
 		configured.HostRestoreCommands, _ = stores.Hosts.(ReaderHostRestoreCommands)
 	}
+	fillMissingReaderTestCommands(&configured)
 	applications := NewReaderApplications(stores, ai, configured)
 	return &readerTestFeatureSet{
 		ReaderThoughtApplication: applications.Thoughts,
@@ -60,6 +67,60 @@ func newReaderTestFeatureSet(stores ReaderStores, ai ReaderAIBackend, options ..
 		ReaderLibraryApplication: applications.Library,
 		ReaderHostApplication:    applications.Hosts,
 	}
+}
+
+func fillMissingReaderTestCommands(options *ReaderApplicationOptions) {
+	missing := readerTestMissingCommands{}
+	if options.InboxProposalCommands == nil {
+		options.InboxProposalCommands = missing
+	}
+	if options.InboxConfirmCommands == nil {
+		options.InboxConfirmCommands = missing
+	}
+	if options.InboxBulkConfirmCommands == nil {
+		options.InboxBulkConfirmCommands = missing
+	}
+	if options.InboxAIConfirmCommands == nil {
+		options.InboxAIConfirmCommands = missing
+	}
+	if options.FeedFeedbackCommands == nil {
+		options.FeedFeedbackCommands = missing
+	}
+	if options.HostRestoreCommands == nil {
+		options.HostRestoreCommands = missing
+	}
+}
+
+var errReaderTestCommandNotImplemented = errors.New("reader test command dependency not implemented")
+
+type readerTestMissingCommands struct{}
+
+func (readerTestMissingCommands) CreateInboxProposal(context.Context, CreateInboxProposalCommand) (InboxProposalResult, error) {
+	return InboxProposalResult{}, errReaderTestCommandNotImplemented
+}
+
+func (readerTestMissingCommands) EnsureInboxProposal(context.Context, EnsureInboxProposalCommand) (InboxProposalResult, error) {
+	return InboxProposalResult{}, errReaderTestCommandNotImplemented
+}
+
+func (readerTestMissingCommands) ConfirmInbox(context.Context, uuid.UUID, *int64) (uuid.UUID, error) {
+	return uuid.Nil, errReaderTestCommandNotImplemented
+}
+
+func (readerTestMissingCommands) BulkConfirmInbox(context.Context, []model.ReaderInboxBulkConfirmation) ([]model.ReaderInboxBulkResult, error) {
+	return nil, errReaderTestCommandNotImplemented
+}
+
+func (readerTestMissingCommands) ConfirmAIProposals(context.Context, model.ReaderInboxPartition) (model.ReaderInboxAIProposalConfirmation, error) {
+	return model.ReaderInboxAIProposalConfirmation{}, errReaderTestCommandNotImplemented
+}
+
+func (readerTestMissingCommands) FeedbackFeed(context.Context, string, string) (model.ReaderFeedFeedback, error) {
+	return model.ReaderFeedFeedback{}, errReaderTestCommandNotImplemented
+}
+
+func (readerTestMissingCommands) RestoreHost(context.Context, model.ReaderHostKind, uuid.UUID) (model.ReaderHostLifecycleResult, error) {
+	return model.ReaderHostLifecycleResult{}, errReaderTestCommandNotImplemented
 }
 
 func problemHTTPStatus(err *problem.Error) int {
