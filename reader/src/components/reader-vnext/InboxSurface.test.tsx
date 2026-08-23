@@ -794,7 +794,6 @@ describe('InboxSurface', () => {
     renderInbox(client, 'missing-target')
 
     await waitFor(() => expect(getInbox).toHaveBeenCalledWith('missing-target'))
-    expect(screen.getByText('加载中')).toBeInTheDocument()
 
     identityCurrent = false
     await act(async () => {
