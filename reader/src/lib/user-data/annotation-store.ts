@@ -6,6 +6,7 @@ import {
 } from '../annotation-domain'
 import { isValidLinkId, isValidSourceHash } from '../article/source-block'
 import {
+  attachIDBAbortSignal,
   abortIDBTransaction,
   handleIDBRequest,
 } from '../idb-core'
@@ -152,20 +153,6 @@ function operationIDKey(namespace: string, opId: string): string {
 
 function abortTransaction(transaction: IDBTransaction): void {
   abortIDBTransaction(transaction)
-}
-
-function attachTransactionAbortSignal(
-  transaction: IDBTransaction,
-  signal: AbortSignal | undefined,
-): void {
-  if (!signal) return
-  const abort = () => abortTransaction(transaction)
-  const detach = () => signal.removeEventListener('abort', abort)
-  signal.addEventListener('abort', abort, { once: true })
-  transaction.addEventListener('complete', detach, { once: true })
-  transaction.addEventListener('abort', detach, { once: true })
-  transaction.addEventListener('error', detach, { once: true })
-  if (signal.aborted) abort()
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -812,17 +799,6 @@ function writeAnnotationProjection(
     }
     const materializedWrite = stores.materialized.put(materialized)
     const stateWrite = stores.state.put(nextState)
-    const indexWrite = activeCount === 0
-      ? stores.annotatedLinks.delete(address.stateKey)
-      : stores.annotatedLinks.put({
-          key: address.stateKey,
-          namespace: address.namespace,
-          linkId: address.linkId,
-          target: address.target,
-          targetKey: address.targetKey,
-          annotationCount: activeCount,
-          annotationStoreVersion: sequence,
-        } satisfies AnnotatedLinkRecord)
 
     let completedWrites = 0
     const markWritten = () => {
@@ -838,9 +814,20 @@ function writeAnnotationProjection(
         abortTransaction(transaction)
       }
     }
-    for (const request of [materializedWrite, stateWrite, indexWrite]) {
-      request.onerror = () => abortTransaction(transaction)
-      request.onsuccess = markWritten
+    handleIDBRequest(transaction, materializedWrite, markWritten)
+    handleIDBRequest(transaction, stateWrite, markWritten)
+    if (activeCount === 0) {
+      handleIDBRequest(transaction, stores.annotatedLinks.delete(address.stateKey), markWritten)
+    } else {
+      handleIDBRequest(transaction, stores.annotatedLinks.put({
+        key: address.stateKey,
+        namespace: address.namespace,
+        linkId: address.linkId,
+        target: address.target,
+        targetKey: address.targetKey,
+        annotationCount: activeCount,
+        annotationStoreVersion: sequence,
+      } satisfies AnnotatedLinkRecord), markWritten)
     }
   } catch {
     abortTransaction(transaction)
@@ -970,14 +957,16 @@ export function allocateThoughtClocks(
       abortTransaction(transaction)
     }
   }
-  stateRequest.onerror = () => abortTransaction(transaction)
-  outboxRequest.onerror = () => abortTransaction(transaction)
-  historyOutboxRequest.onerror = () => abortTransaction(transaction)
-  materializedRequest.onerror = () => abortTransaction(transaction)
-  stateRequest.onsuccess = () => { stateDone = true; finish() }
-  outboxRequest.onsuccess = () => { outboxDone = true; finish() }
-  historyOutboxRequest.onsuccess = () => { historyOutboxDone = true; finish() }
-  materializedRequest.onsuccess = () => { materializedDone = true; finish() }
+  handleIDBRequest(transaction, stateRequest, () => { stateDone = true; finish() })
+  handleIDBRequest(transaction, outboxRequest, () => { outboxDone = true; finish() })
+  handleIDBRequest(transaction, historyOutboxRequest, () => {
+    historyOutboxDone = true
+    finish()
+  })
+  handleIDBRequest(transaction, materializedRequest, () => {
+    materializedDone = true
+    finish()
+  })
 }
 
 interface ThoughtRecoveryOutboxMetadata {
@@ -1023,9 +1012,11 @@ function enqueueThoughtOutbox(
       expectedCurrentWinnerKey: recovery.expectedCurrentWinnerKey,
     }),
   }
-  const request = transaction.objectStore(THOUGHT_OUTBOX_STORE).put(record)
-  request.onerror = () => abortTransaction(transaction)
-  request.onsuccess = () => onQueued()
+  handleIDBRequest(
+    transaction,
+    transaction.objectStore(THOUGHT_OUTBOX_STORE).put(record),
+    () => onQueued(),
+  )
 }
 
 function finishDuplicate(
@@ -1124,7 +1115,7 @@ export async function commitAnnotationOperation(
     ],
     'readwrite',
     (transaction, identity, setResult) => {
-      attachTransactionAbortSignal(transaction, options.signal)
+      attachIDBAbortSignal(transaction, options.signal)
       const operations = transaction.objectStore(ANNOTATION_OPS_STORE)
       const existingRequest = operations.index(ANNOTATION_OPS_ID_INDEX).get(
         operationIDKey(namespace, operation.opId),
@@ -1197,8 +1188,7 @@ export async function commitAnnotationOperation(
               }
               const draft = operationDraft(namespace, operation)
               const appendRequest = operations.add(draft)
-              appendRequest.onerror = () => abortTransaction(transaction)
-              appendRequest.onsuccess = () => {
+              handleIDBRequest(transaction, appendRequest, () => {
                 try {
                   const sequence = appendRequest.result
                   if (
@@ -1250,7 +1240,7 @@ export async function commitAnnotationOperation(
                 } catch {
                   abortTransaction(transaction)
                 }
-              }
+              })
             },
             () => abortTransaction(transaction),
           )
@@ -1258,16 +1248,14 @@ export async function commitAnnotationOperation(
           abortTransaction(transaction)
         }
       }
-      existingRequest.onerror = () => abortTransaction(transaction)
-      existingRequest.onsuccess = () => {
+      handleIDBRequest(transaction, existingRequest, () => {
         existingDone = true
         appendOrReturnExisting()
-      }
-      receiptsRequest.onerror = () => abortTransaction(transaction)
-      receiptsRequest.onsuccess = () => {
+      })
+      handleIDBRequest(transaction, receiptsRequest, () => {
         receiptsDone = true
         appendOrReturnExisting()
-      }
+      })
     },
   )
 }
@@ -1335,7 +1323,7 @@ export async function commitSupersessionRecovery(
     ],
     'readwrite',
     (transaction, identity, setResult) => {
-      attachTransactionAbortSignal(transaction, options.signal)
+      attachIDBAbortSignal(transaction, options.signal)
       const operations = transaction.objectStore(ANNOTATION_OPS_STORE)
       const existingRequest = operations.index(ANNOTATION_OPS_ID_INDEX).get(
         operationIDKey(namespace, operationID),
@@ -1453,8 +1441,7 @@ export async function commitSupersessionRecovery(
               }
               const versionKey: ThoughtVersionKey = { logicalClock, deviceId, opId: operationID }
               const appendRequest = operations.add(operationDraft(namespace, operation))
-              appendRequest.onerror = () => abortTransaction(transaction)
-              appendRequest.onsuccess = () => {
+              handleIDBRequest(transaction, appendRequest, () => {
                 const sequence = appendRequest.result
                 if (!lease.isCurrent(identity) || !isSafeNonNegativeInteger(sequence) || sequence === 0) {
                   abortTransaction(transaction)
@@ -1503,7 +1490,7 @@ export async function commitSupersessionRecovery(
                     )
                   },
                 )
-              }
+              })
             },
             () => abortTransaction(transaction),
             [
@@ -1516,13 +1503,10 @@ export async function commitSupersessionRecovery(
           abortTransaction(transaction)
         }
       }
-      for (const request of [existingRequest, receiptsRequest, eventRequest, winnerRequest]) {
-        request.onerror = () => abortTransaction(transaction)
-      }
-      existingRequest.onsuccess = () => { existingDone = true; finish() }
-      receiptsRequest.onsuccess = () => { receiptsDone = true; finish() }
-      eventRequest.onsuccess = () => { eventDone = true; finish() }
-      winnerRequest.onsuccess = () => { winnerDone = true; finish() }
+      handleIDBRequest(transaction, existingRequest, () => { existingDone = true; finish() })
+      handleIDBRequest(transaction, receiptsRequest, () => { receiptsDone = true; finish() })
+      handleIDBRequest(transaction, eventRequest, () => { eventDone = true; finish() })
+      handleIDBRequest(transaction, winnerRequest, () => { winnerDone = true; finish() })
     },
   )
 }
@@ -1637,8 +1621,7 @@ export function importAnnotationOperations(
       const markerRequest = imports.get(markerKey) as IDBRequest<
         AnnotationImportMarker | undefined
       >
-      markerRequest.onerror = () => abortTransaction(transaction)
-      markerRequest.onsuccess = () => {
+      handleIDBRequest(transaction, markerRequest, () => {
         try {
           if (!lease.isCurrent(identity)) {
             abortTransaction(transaction)
@@ -1689,8 +1672,7 @@ export function importAnnotationOperations(
               lastSequence,
             }
             const markerWrite = imports.add(marker)
-            markerWrite.onerror = () => abortTransaction(transaction)
-            markerWrite.onsuccess = () => {
+            handleIDBRequest(transaction, markerWrite, () => {
               if (!isCurrent()) {
                 abortTransaction(transaction)
                 return
@@ -1701,7 +1683,7 @@ export function importAnnotationOperations(
                 applied,
                 lastSequence,
               })
-            }
+            })
           }
 
           const applyAt = (index: number) => {
@@ -1749,8 +1731,7 @@ export function importAnnotationOperations(
                     const appendRequest = operationStore.add(
                       operationDraft(namespace, operation),
                     )
-                    appendRequest.onerror = () => abortTransaction(transaction)
-                    appendRequest.onsuccess = () => {
+                    handleIDBRequest(transaction, appendRequest, () => {
                       try {
                         const sequence = appendRequest.result
                         if (!isCurrent() || !isSafeNonNegativeInteger(sequence) || sequence === 0) {
@@ -1787,7 +1768,7 @@ export function importAnnotationOperations(
                       } catch {
                         abortTransaction(transaction)
                       }
-                    }
+                    })
                   },
                   () => abortTransaction(transaction),
                 )
@@ -1799,7 +1780,7 @@ export function importAnnotationOperations(
         } catch {
           abortTransaction(transaction)
         }
-      }
+      })
     },
   )
 }
@@ -1969,26 +1950,22 @@ export function readAnnotationSnapshot(
           abortTransaction(transaction)
         }
       }
-      operationsRequest.onerror = () => abortTransaction(transaction)
-      stateRequest.onerror = () => abortTransaction(transaction)
-      operationsRequest.onsuccess = () => {
+      handleIDBRequest(transaction, operationsRequest, () => {
         operationsDone = true
         finish()
-      }
-      stateRequest.onsuccess = () => {
+      })
+      handleIDBRequest(transaction, stateRequest, () => {
         stateDone = true
         finish()
-      }
-      remoteRequest.onerror = () => abortTransaction(transaction)
-      outboxRequest.onerror = () => abortTransaction(transaction)
-      remoteRequest.onsuccess = () => {
+      })
+      handleIDBRequest(transaction, remoteRequest, () => {
         remoteDone = true
         finish()
-      }
-      outboxRequest.onsuccess = () => {
+      })
+      handleIDBRequest(transaction, outboxRequest, () => {
         outboxDone = true
         finish()
-      }
+      })
     },
   )
 }
@@ -2069,8 +2046,7 @@ export function listAnnotatedLinks(
       const request = transaction.objectStore(ANNOTATED_LINKS_STORE)
         .index(ANNOTATED_LINKS_NAMESPACE_INDEX)
         .getAll(namespace) as IDBRequest<AnnotatedLinkRecord[]>
-      request.onerror = () => abortTransaction(transaction)
-      request.onsuccess = () => {
+      handleIDBRequest(transaction, request, () => {
         if (!request.result.every((record) => validAnnotatedLinkRecord(record, namespace))) {
           abortTransaction(transaction)
           return
@@ -2078,7 +2054,7 @@ export function listAnnotatedLinks(
         setResult([...request.result].sort((left, right) =>
           left.linkId.localeCompare(right.linkId) ||
           left.targetKey.localeCompare(right.targetKey)))
-      }
+      })
     },
   )
 }
@@ -2242,26 +2218,22 @@ export function compactAnnotationOperations(
           abortTransaction(transaction)
         }
       }
-      operationsRequest.onerror = () => abortTransaction(transaction)
-      materializedRequest.onerror = () => abortTransaction(transaction)
-      stateRequest.onerror = () => abortTransaction(transaction)
-      outboxRequest.onerror = () => abortTransaction(transaction)
-      operationsRequest.onsuccess = () => {
+      handleIDBRequest(transaction, operationsRequest, () => {
         operationsDone = true
         compact()
-      }
-      materializedRequest.onsuccess = () => {
+      })
+      handleIDBRequest(transaction, materializedRequest, () => {
         materializedDone = true
         compact()
-      }
-      stateRequest.onsuccess = () => {
+      })
+      handleIDBRequest(transaction, stateRequest, () => {
         stateDone = true
         compact()
-      }
-      outboxRequest.onsuccess = () => {
+      })
+      handleIDBRequest(transaction, outboxRequest, () => {
         outboxDone = true
         compact()
-      }
+      })
     },
   )
 }
