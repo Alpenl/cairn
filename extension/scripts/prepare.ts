@@ -1,8 +1,8 @@
 // generate stub index.html files for dev entry
-import { execSync } from 'node:child_process'
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import chokidar from 'chokidar'
 import { relative } from 'node:path'
+import { getManifest } from '../src/manifest'
 import { isDev, log, port, r, BROWSER_DIR } from './utils'
 import {
   BACKGROUND_ENTRY,
@@ -53,12 +53,19 @@ async function stubIndexHtml() {
   }
 }
 
-function writeManifest() {
-  execSync('esno ./scripts/manifest.ts', { stdio: 'inherit' })
+async function writeManifest() {
+  await writeFile(
+    r(`${BROWSER_DIR}/manifest.json`),
+    `${JSON.stringify(await getManifest(), null, 2)}\n`,
+  )
+  log('PRE', `write ${BROWSER_DIR}/manifest.json`)
 }
 
-function writeLocales() {
-  execSync('esno ./scripts/locale.ts', { stdio: 'inherit' })
+async function writeLocales() {
+  await cp(r('src/_locales'), r(`${BROWSER_DIR}/_locales`), {
+    recursive: true,
+  })
+  log('PRE', 'write _locales')
 }
 
 await mkdir(r(BROWSER_DIR), { recursive: true })
@@ -75,8 +82,8 @@ for (const name of LEGAL_FILES) {
   await copyFile(r(name), r(`${BROWSER_DIR}/${name}`))
 }
 
-writeManifest()
-writeLocales()
+await writeManifest()
+await writeLocales()
 
 if (isDev) {
   stubIndexHtml()
@@ -84,9 +91,9 @@ if (isDev) {
     stubIndexHtml()
   })
   chokidar.watch([r('src/manifest.ts'), r('package.json')]).on('change', () => {
-    writeManifest()
+    void writeManifest()
   })
   chokidar.watch(r('src/_locales')).on('change', () => {
-    writeLocales()
+    void writeLocales()
   })
 }
