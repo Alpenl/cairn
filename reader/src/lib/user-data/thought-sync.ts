@@ -59,10 +59,17 @@ import {
   thoughtTargetKey,
 } from './thought-types'
 import { syncThoughtSupersessions } from './thought-supersession'
+import {
+  MAX_THOUGHT_PULL_PAGES_PER_ROUND,
+  classifyThoughtAckTransition,
+  classifyThoughtSyncSnapshot,
+  fenceRevokedThoughtTransition,
+  reduceThoughtPullCursor,
+} from './thought-sync-transitions'
 
 const MAX_BATCH = 100
 /** Bound one foreground round without discarding the durable replay cursor. */
-const MAX_PULL_PAGES_PER_ROUND = 20
+const MAX_PULL_PAGES_PER_ROUND = MAX_THOUGHT_PULL_PAGES_PER_ROUND
 const MAX_PUSH_BATCHES = 5
 const BASE_RETRY_MS = 1000
 const MAX_RETRY_MS = 5 * 60 * 1000
@@ -850,24 +857,9 @@ async function acknowledge(
   records: readonly DispatchableSyncOutboxRecord[],
   acks: readonly ReaderThoughtAckResponse[],
 ): Promise<UserDataTransactionResult<readonly string[]>> {
-  if (acks.length !== records.length || !acks.every((ack) => {
-    const submitted = versionKeyFromWire(ack.submitted_key)
-    const winner = versionKeyFromWire(ack.current_winner_key)
-    const record = records.find((candidate) => candidate.opId === ack.op_id)
-    return ack.contract_version === THOUGHT_CONTRACT_VERSION &&
-      (ack.disposition === 'applied' || ack.disposition === 'superseded' ||
-        ack.disposition === 'duplicate') &&
-      isNonEmptyString(ack.op_id) && isSafeNonNegativeInteger(ack.sequence) && ack.sequence > 0 &&
-      submitted !== null && winner !== null && record !== undefined &&
-      submitted.logicalClock === record.logicalClock &&
-      submitted.deviceId === record.deviceId && submitted.opId === record.opId
-  })) {
-    return { ok: false }
-  }
+  const transition = classifyThoughtAckTransition(records, acks)
+  if (!transition.ok) return { ok: false }
   const ackByID = new Map(acks.map((ack) => [ack.op_id, ack]))
-  if (ackByID.size !== records.length || records.some((record) => !ackByID.has(record.opId))) {
-    return { ok: false }
-  }
   const acknowledged = records.filter((record) => ackByID.has(record.opId))
   if (acknowledged.length === 0) return { ok: true, value: [] }
   return runUserDataTransaction(
@@ -1784,13 +1776,23 @@ async function pullThoughts(
           }
         : { pulled, cursor, stale: true }
     }
-    cursor = stored.value.cursor
-    if (stored.value.advanced) pulled += stored.value.stored
-    // A different context won the cursor race. Its durable cursor is the only
-    // safe resume point; do not claim this round completed a stream it did not
-    // own.
-    if (!stored.value.advanced) return { pulled, cursor, incomplete: true }
-    if (hasMore) continue
+    const pullTransition = reduceThoughtPullCursor(
+      { pageIndex: page, cursor, pulled },
+      {
+        identityCurrent: true,
+        nextCursor: stored.value.cursor,
+        stored: stored.value.stored,
+        advanced: stored.value.advanced,
+        hasMore,
+      },
+    )
+    cursor = pullTransition.cursor
+    pulled = pullTransition.pulled
+    // A different context won the cursor race or the foreground page budget
+    // ended. Its durable cursor is the only safe resume point; do not claim
+    // this round completed a stream it did not own.
+    if (pullTransition.status === 'incomplete') return { pulled, cursor, incomplete: true }
+    if (pullTransition.status === 'continue') continue
 
     const replayed = await markPullComplete(lease, cursor)
     if (!replayed.ok) {
@@ -2322,7 +2324,21 @@ function parseThoughtSyncInvalidation(value: unknown): ThoughtSyncInvalidation |
 }
 
 function staleSyncResult(): ThoughtSyncResult {
-  return { status: 'stale', pushed: 0, pulled: 0, cursor: '', pending: 0 }
+  const transition = fenceRevokedThoughtTransition({
+    phase: 'pull',
+    identityCurrent: false,
+    pushed: 0,
+    pulled: 0,
+    cursor: '',
+    pending: 0,
+  })
+  return {
+    status: 'stale',
+    pushed: transition.pushed,
+    pulled: transition.pulled,
+    cursor: transition.cursor,
+    pending: transition.pending,
+  }
 }
 
 function idleSyncResult(prepared: PreparedState): ThoughtSyncResult {
@@ -2342,34 +2358,11 @@ function snapshotFromPrepared(
   syncing: boolean,
 ): ThoughtSyncSnapshot {
   const records = [...prepared.outbox, ...prepared.historyOutbox]
-  const pendingCount = records.length
-  const blockedCount = records.filter((record) => record.status === 'blocked').length
-  const retryAt = stateRetryAt(records, prepared.state)
-  // Older durable rows predate lastErrorCode. Treat legacy text only as a
-  // boolean signal. A blocked row remains a durable failure even after a
-  // later push/pull succeeds, so use its sanitized classification as fallback.
-  const errorCode = storedFailureCode(prepared.state.lastErrorCode) ??
-    blockedFailureCode(records) ??
-    (prepared.state.lastError || prepared.state.pullLastError ? 'sync-failed' : undefined)
-  let phase: ThoughtSyncPhase
-  if (isOffline()) phase = 'offline'
-  else if (syncing) phase = 'syncing'
-  else if (blockedCount > 0 || errorCode !== undefined) phase = 'failed'
-  else if (prepared.state.pullInProgress) phase = 'pending'
-  else if (pendingCount > 0) phase = 'pending'
-  else if (prepared.state.lastSuccessfulSyncAt !== undefined) phase = 'synced'
-  // A newly mounted namespace has not performed a genuine push/pull round
-  // yet. Do not claim it is synced before that first result arrives.
-  else phase = 'syncing'
-  return Object.freeze({
-    phase,
-    pendingCount,
-    blockedCount,
-    ...(retryAt === undefined ? {} : { retryAt }),
-    ...(prepared.state.lastSuccessfulSyncAt === undefined
-      ? {}
-      : { lastSuccessfulSyncAt: prepared.state.lastSuccessfulSyncAt }),
-    ...(errorCode === undefined ? {} : { errorCode }),
+  return classifyThoughtSyncSnapshot({
+    records,
+    state: prepared.state,
+    syncing,
+    offline: isOffline(),
   })
 }
 
