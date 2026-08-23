@@ -44,7 +44,6 @@ import type {
   ThoughtOutboxRecord,
   ThoughtSyncStateRecord,
   ThoughtTarget,
-  ThoughtVersionKey,
 } from './thought-types'
 import {
   THOUGHT_CONTRACT_VERSION,
@@ -55,9 +54,29 @@ import {
   isValidThoughtHistoryOutboxRecord,
   isValidThoughtMaterializedRecord,
   isValidThoughtOutboxRecord,
-  isValidThoughtVersionKey,
   thoughtTargetKey,
 } from './thought-types'
+import {
+  advanceThoughtPullPageState,
+  applyThoughtAcknowledgementState,
+  applyThoughtHistoryOutboxPushFailure,
+  applyThoughtOutboxPushFailure,
+  applyThoughtPullFailureState,
+  applyThoughtPushFailureState,
+  blockedFailureCode,
+  completeThoughtPullState,
+  earliestRetryTime,
+  failureCode,
+  isIsolatablePermanentPushFailure,
+  isPermanentPushFailure,
+  normalizeThoughtOutboxFailureMarkers,
+  planThoughtHistoryAcknowledgements,
+  planThoughtOutboxAcknowledgements,
+  resetThoughtPullCursorState,
+  stateRetryAt,
+  storedFailureCode,
+  versionKeyFromWire,
+} from './thought-sync-transitions'
 import { syncThoughtSupersessions } from './thought-supersession'
 
 const MAX_BATCH = 100
@@ -65,10 +84,8 @@ const MAX_BATCH = 100
 const MAX_PULL_PAGES_PER_ROUND = 20
 const MAX_PUSH_BATCHES = 5
 const BASE_RETRY_MS = 1000
-const MAX_RETRY_MS = 5 * 60 * 1000
 export const THOUGHT_SYNC_POLL_MS = 30_000
 const THOUGHT_SYNC_CHANNEL_NAME = 'webtag-reader-thought-sync-v1'
-const HISTORY_SUPERSEDED_ERROR = '历史想法操作已被较新的服务端版本覆盖。冻结候选已保留，请刷新后重试。'
 
 // Deduplicate calls for the same lease, while ensuring a newly installed
 // identity can never inherit a promise owned by an older lease with the same
@@ -427,7 +444,7 @@ async function prepareState(lease: IdentityLease): Promise<UserDataTransactionRe
           const normalizedOutbox: ThoughtOutboxRecord[] = []
           const outboxStore = transaction.objectStore(THOUGHT_OUTBOX_STORE)
           for (const record of outbox) {
-            const failureSafe = normalizedOutboxFailureMarkers(record)
+            const failureSafe = normalizeThoughtOutboxFailureMarkers(record)
             if (failureSafe !== record) outboxStore.put(failureSafe)
             normalizedOutbox.push(failureSafe)
           }
@@ -573,130 +590,8 @@ function toHistoryWireOperation(record: ThoughtHistoryOutboxRecord): ReaderThoug
   }
 }
 
-function retryDelay(error: ApiError, attemptCount: number): number {
-  if (
-    error.retryAfterSeconds !== undefined &&
-    Number.isFinite(error.retryAfterSeconds) &&
-    error.retryAfterSeconds >= 0
-  ) {
-    // Retry-After is a server contract. Local exponential backoff remains
-    // capped below, but never shortens an explicit service cooldown.
-    return Math.ceil(error.retryAfterSeconds * 1000)
-  }
-  return Math.min(
-    MAX_RETRY_MS,
-    BASE_RETRY_MS * (2 ** Math.min(Math.max(attemptCount - 1, 0), 8)),
-  )
-}
-
-function isPermanentPushFailure(error: ApiError): boolean {
-  if (error.kind === 'unauthorized') return true
-  if (error.kind !== 'other' || error.status === undefined) return false
-  return error.status >= 400 && error.status < 500 &&
-    error.status !== 408 && error.status !== 425 && error.status !== 429
-}
-
-function isRecoveryCASConflict(record: ThoughtOutboxRecord, error: ApiError): boolean {
-  return record.recoveryOf !== undefined && record.expectedCurrentWinnerKey !== undefined &&
-    error.kind === 'other' && error.status === 409 && error.errorCode === 'thought_recovery_conflict'
-}
-
-function durablePushError(record: ThoughtOutboxRecord, error: ApiError): string {
-  return record.recoveryOf === undefined
-    ? error.message.slice(0, 512)
-    : '恢复版本同步失败，请刷新后重试。'
-}
-
-/** Only request-validation 4xx responses can safely identify a single poison op by splitting. */
-function isIsolatablePermanentPushFailure(error: ApiError): boolean {
-  return error.kind === 'other' && error.status !== undefined &&
-    error.status >= 400 && error.status < 500 &&
-    error.status !== 408 && error.status !== 425 && error.status !== 429
-}
-
-const STABLE_ERROR_COMPONENT = /^[a-z0-9][a-z0-9._-]{0,63}$/
-const STABLE_FAILURE_CODE = /^[a-z0-9][a-z0-9._-]{0,63}(?::[a-z0-9][a-z0-9._-]{0,63}){0,2}$/
-
-function stableErrorComponent(value: unknown): string | undefined {
-  return typeof value === 'string' && STABLE_ERROR_COMPONENT.test(value) ? value : undefined
-}
-
-function storedFailureCode(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length <= 128 && STABLE_FAILURE_CODE.test(value)
-    ? value
-    : undefined
-}
-
-/**
- * The UI and cross-tab controller need a durable failure classification, but
- * must never surface transport messages as protocol state: messages can be
- * server supplied and may contain request context. Keep this deliberately
- * small and composed only from the typed API classification.
- */
-function failureCode(error: ApiError): string {
-  const serverCode = stableErrorComponent(error.errorCode)
-  const status = Number.isSafeInteger(error.status) && (error.status as number) >= 100 &&
-    (error.status as number) <= 599
-    ? String(error.status)
-    : undefined
-  return [
-    error.kind,
-    serverCode,
-    status,
-  ]
-    .filter((value): value is string => value !== undefined && value.length > 0)
-    .join(':')
-}
-
-type SyncOutboxRecord = ThoughtOutboxRecord | ThoughtHistoryOutboxRecord
 type DispatchableSyncOutboxRecord = ThoughtOutboxRecord | ThoughtHistoryOutboxRecord
 type SyncOutboxStore = typeof THOUGHT_OUTBOX_STORE | typeof THOUGHT_HISTORY_OUTBOX_STORE
-
-function blockedFailureCode(records: readonly SyncOutboxRecord[]): string | undefined {
-  const blocked = records.find((record) => record.status === 'blocked')
-  if (!blocked) return undefined
-  return storedFailureCode(blocked.blockedReason) ?? 'blocked-operation'
-}
-
-function normalizedOutboxFailureMarkers(record: ThoughtOutboxRecord): ThoughtOutboxRecord {
-  const lastError = record.lastError === undefined
-    ? undefined
-    : storedFailureCode(record.lastError) ?? 'sync-failed'
-  const blockedReason = record.status === 'blocked'
-    ? storedFailureCode(record.blockedReason) ?? 'blocked-operation'
-    : undefined
-  if (lastError === record.lastError && blockedReason === record.blockedReason) return record
-  const normalized = { ...record }
-  if (lastError === undefined) delete normalized.lastError
-  else normalized.lastError = lastError
-  if (blockedReason === undefined) delete normalized.blockedReason
-  else normalized.blockedReason = blockedReason
-  return normalized
-}
-
-function earliestRetryAt(records: readonly SyncOutboxRecord[]): number | undefined {
-  return records.reduce<number | undefined>((earliest, record) => {
-    if (record.status === 'blocked') return earliest
-    if (record.nextAttemptAt === undefined) return earliest
-    return earliest === undefined ? record.nextAttemptAt : Math.min(earliest, record.nextAttemptAt)
-  }, undefined)
-}
-
-function earliestRetryTime(
-  outboxRetryAt: number | undefined,
-  pullRetryAt: number | undefined,
-): number | undefined {
-  if (outboxRetryAt === undefined) return pullRetryAt
-  if (pullRetryAt === undefined) return outboxRetryAt
-  return Math.min(outboxRetryAt, pullRetryAt)
-}
-
-function stateRetryAt(
-  records: readonly SyncOutboxRecord[],
-  state: ThoughtSyncStateRecord,
-): number | undefined {
-  return earliestRetryTime(earliestRetryAt(records), state.pullRetryAt)
-}
 
 function isOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false
@@ -724,74 +619,17 @@ async function markPushFailure(
       const outbox = transaction.objectStore(THOUGHT_OUTBOX_STORE)
       const historyOutbox = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
       const stateStore = transaction.objectStore(THOUGHT_SYNC_STATE_STORE)
-      const permanent = isPermanentPushFailure(error)
-      const code = failureCode(error)
       for (const record of records) {
-        const attemptCount = record.attemptCount + 1
         if (outboxStoreName === THOUGHT_OUTBOX_STORE) {
-          const standardRecord = record as ThoughtOutboxRecord
-          if (isRecoveryCASConflict(standardRecord, error)) {
-            const withoutRetry = { ...standardRecord }
-            delete withoutRetry.nextAttemptAt
-            outbox.put({
-              ...withoutRetry,
-              attemptCount,
-              status: 'blocked',
-              blockedReason: 'thought_recovery_conflict',
-              recoveryConflict: true,
-              lastError: durablePushError(standardRecord, error),
-            } satisfies ThoughtOutboxRecord)
-            continue
-          }
-          if (permanent) {
-            const withoutRetry = { ...standardRecord }
-            delete withoutRetry.nextAttemptAt
-            outbox.put({
-              ...withoutRetry,
-              attemptCount,
-              status: 'blocked',
-              blockedReason: code,
-              lastError: code,
-            } satisfies ThoughtOutboxRecord)
-            continue
-          }
-          const retryAt = now + retryDelay(error, attemptCount)
-          const withoutBlock = { ...standardRecord }
-          delete withoutBlock.blockedReason
-          delete withoutBlock.recoveryConflict
-          outbox.put({
-            ...withoutBlock,
-            attemptCount,
-            status: 'pending',
-            nextAttemptAt: retryAt,
-            lastError: code,
-          } satisfies ThoughtOutboxRecord)
+          outbox.put(applyThoughtOutboxPushFailure(record as ThoughtOutboxRecord, error, now).record)
           continue
         }
 
-        const historyRecord = record as ThoughtHistoryOutboxRecord
-        if (permanent) {
-          const withoutRetry = { ...historyRecord }
-          delete withoutRetry.nextAttemptAt
-          historyOutbox.put({
-            ...withoutRetry,
-            attemptCount,
-            status: 'blocked',
-            blockedReason: code,
-            lastError: code,
-          } satisfies ThoughtHistoryOutboxRecord)
-          continue
-        }
-        const retryAt = now + retryDelay(error, attemptCount)
-        const withoutBlock = { ...historyRecord }
-        delete withoutBlock.blockedReason
-        historyOutbox.put({
-          ...withoutBlock,
-          attemptCount,
-          status: 'pending',
-          nextAttemptAt: retryAt,
-          lastError: code,
-        } satisfies ThoughtHistoryOutboxRecord)
+        historyOutbox.put(applyThoughtHistoryOutboxPushFailure(
+          record as ThoughtHistoryOutboxRecord,
+          error,
+          now,
+        ).record)
       }
       const stateRequest = stateStore.get(lease.context.physicalNamespace) as IDBRequest<ThoughtSyncStateRecord | undefined>
       const standardRequest = outbox.index(THOUGHT_OUTBOX_NAMESPACE_INDEX)
@@ -814,15 +652,9 @@ async function markPushFailure(
           transaction.abort()
           return
         }
-        const retryAt = stateRetryAt([...standard, ...history], state)
-        stateStore.put({
-          ...state,
-          ...(retryAt === undefined ? { retryAt: undefined } : { retryAt }),
-          lastError: code,
-          lastErrorCode: code,
-          updatedAt: now,
-        })
-        setResult(retryAt)
+        const nextState = applyThoughtPushFailureState(state, [...standard, ...history], error, now)
+        stateStore.put(nextState)
+        setResult(nextState.retryAt)
       }
       stateRequest.onsuccess = () => { stateDone = true; finish() }
       stateRequest.onerror = () => transaction.abort()
@@ -834,42 +666,17 @@ async function markPushFailure(
   )
 }
 
-function versionKeyFromWire(value: unknown): ThoughtVersionKey | null {
-  if (!isRecord(value)) return null
-  const key = {
-    logicalClock: value.logical_clock,
-    deviceId: value.device_id,
-    opId: value.op_id,
-  }
-  return isValidThoughtVersionKey(key) ? key : null
-}
-
 async function acknowledge(
   lease: IdentityLease,
   outboxStoreName: SyncOutboxStore,
   records: readonly DispatchableSyncOutboxRecord[],
   acks: readonly ReaderThoughtAckResponse[],
 ): Promise<UserDataTransactionResult<readonly string[]>> {
-  if (acks.length !== records.length || !acks.every((ack) => {
-    const submitted = versionKeyFromWire(ack.submitted_key)
-    const winner = versionKeyFromWire(ack.current_winner_key)
-    const record = records.find((candidate) => candidate.opId === ack.op_id)
-    return ack.contract_version === THOUGHT_CONTRACT_VERSION &&
-      (ack.disposition === 'applied' || ack.disposition === 'superseded' ||
-        ack.disposition === 'duplicate') &&
-      isNonEmptyString(ack.op_id) && isSafeNonNegativeInteger(ack.sequence) && ack.sequence > 0 &&
-      submitted !== null && winner !== null && record !== undefined &&
-      submitted.logicalClock === record.logicalClock &&
-      submitted.deviceId === record.deviceId && submitted.opId === record.opId
-  })) {
-    return { ok: false }
-  }
-  const ackByID = new Map(acks.map((ack) => [ack.op_id, ack]))
-  if (ackByID.size !== records.length || records.some((record) => !ackByID.has(record.opId))) {
-    return { ok: false }
-  }
-  const acknowledged = records.filter((record) => ackByID.has(record.opId))
-  if (acknowledged.length === 0) return { ok: true, value: [] }
+  const planned = outboxStoreName === THOUGHT_OUTBOX_STORE
+    ? planThoughtOutboxAcknowledgements(records as readonly ThoughtOutboxRecord[], acks)
+    : planThoughtHistoryAcknowledgements(records as readonly ThoughtHistoryOutboxRecord[], acks)
+  if (!planned.ok) return { ok: false }
+  if (planned.value.actions.length === 0) return { ok: true, value: [] }
   return runUserDataTransaction(
     lease,
     'ack thought sync',
@@ -883,39 +690,18 @@ async function acknowledge(
       if (!lease.isCurrent(identity)) { transaction.abort(); return }
       const outbox = transaction.objectStore(THOUGHT_OUTBOX_STORE)
       const historyOutbox = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
-      let lastAck = 0
-      const observedClocks: number[] = []
-      const removedOpIds: string[] = []
-      for (const record of acknowledged) {
-        const ack = ackByID.get(record.opId)
-        lastAck = Math.max(lastAck, ack?.sequence ?? 0)
-        const submitted = versionKeyFromWire(ack?.submitted_key)
-        const winner = versionKeyFromWire(ack?.current_winner_key)
-        if (!submitted || !winner) {
-          transaction.abort()
-          return
-        }
-        observedClocks.push(submitted.logicalClock, winner.logicalClock)
-        if (outboxStoreName === THOUGHT_HISTORY_OUTBOX_STORE) {
-          const historyRecord = record as ThoughtHistoryOutboxRecord
-          if (ack?.disposition !== 'superseded') {
-            historyOutbox.delete([historyRecord.key[0], historyRecord.key[1]])
-            removedOpIds.push(historyRecord.opId)
-            continue
-          }
-          const blocked = { ...historyRecord }
-          delete blocked.nextAttemptAt
-          historyOutbox.put({
-            ...blocked,
-            status: 'blocked',
-            blockedReason: 'superseded',
-            lastError: HISTORY_SUPERSEDED_ERROR,
-          } satisfies ThoughtHistoryOutboxRecord)
+      for (const action of planned.value.actions) {
+        if (action.kind === 'block-history-superseded') {
+          historyOutbox.put(action.nextRecord)
           continue
         }
-        const standardRecord = record as ThoughtOutboxRecord
+        if (outboxStoreName === THOUGHT_HISTORY_OUTBOX_STORE) {
+          const historyRecord = action.record as ThoughtHistoryOutboxRecord
+          historyOutbox.delete([historyRecord.key[0], historyRecord.key[1]])
+          continue
+        }
+        const standardRecord = action.record as ThoughtOutboxRecord
         outbox.delete([standardRecord.key[0], standardRecord.key[1]])
-        removedOpIds.push(standardRecord.opId)
       }
       const stateStore = transaction.objectStore(THOUGHT_SYNC_STATE_STORE)
       const stateRequest = stateStore.get(lease.context.physicalNamespace) as IDBRequest<ThoughtSyncStateRecord | undefined>
@@ -940,32 +726,8 @@ async function acknowledge(
           return
         }
         const remaining = [...remainingOutbox, ...history]
-        const retryAt = earliestRetryTime(earliestRetryAt(remaining), state.pullRetryAt)
-        const blockedCode = blockedFailureCode(remaining)
-        try {
-          const logicalClockFloor = maximumThoughtClock([
-            state.logicalClockFloor ?? 0,
-            ...observedClocks,
-          ])
-          stateStore.put({
-            ...state,
-            logicalClockFloor,
-            lastAckSequence: Math.max(state.lastAckSequence ?? 0, lastAck),
-            ...(retryAt === undefined
-              ? {
-                  retryAt: undefined,
-                  lastError: undefined,
-                  ...(blockedCode === undefined
-                    ? { lastErrorCode: undefined }
-                    : { lastErrorCode: blockedCode }),
-                }
-              : { retryAt }),
-            updatedAt: Date.now(),
-          })
-          setResult(removedOpIds)
-        } catch {
-          transaction.abort()
-        }
+        stateStore.put(applyThoughtAcknowledgementState(state, remaining, planned.value, Date.now()))
+        setResult(planned.value.removedOpIds)
       }
       stateRequest.onsuccess = () => {
         stateDone = true
@@ -1384,31 +1146,15 @@ async function writeRemotePage(
           transaction.abort()
           return
         }
-        const lastServerSequence = materializedRecords.reduce(
-          (highest, record) => Math.max(highest, record.serverSequence),
-          state.lastServerSequence ?? 0,
-        )
-        const nextRetentionCutoff = retentionCutoff === undefined
-          ? state.retentionCutoff
-          : Math.max(state.retentionCutoff ?? 0, retentionCutoff)
         try {
-          const logicalClockFloor = maximumThoughtClock([
-            state.logicalClockFloor ?? 0,
-            ...materializedRecords.map((record) => record.winnerKey.logicalClock),
-          ])
-          const stateWithoutPullInProgress = { ...state }
-          delete stateWithoutPullInProgress.pullInProgress
-          stateStore.put({
-            ...stateWithoutPullInProgress,
+          stateStore.put(advanceThoughtPullPageState(
+            state,
+            materializedRecords,
             cursor,
-            logicalClockFloor,
-            lastServerSequence,
-            ...(pullInProgress ? { pullInProgress: true } : {}),
-            ...(nextRetentionCutoff === undefined
-              ? {}
-              : { retentionCutoff: nextRetentionCutoff }),
-            updatedAt: Date.now(),
-          })
+            retentionCutoff,
+            pullInProgress,
+            Date.now(),
+          ))
           setResult({ stored: items.length, cursor, advanced: true })
         } catch {
           transaction.abort()
@@ -1466,20 +1212,9 @@ async function markPullFailure(
           return
         }
         const now = Date.now()
-        const pullAttemptCount = (state.pullAttemptCount ?? 0) + 1
-        const pullRetryAt = now + retryDelay(error, pullAttemptCount)
-        const retryAt = earliestRetryTime(earliestRetryAt([...outbox, ...history]), pullRetryAt)
-        const code = failureCode(error)
-        stateStore.put({
-          ...state,
-          pullAttemptCount,
-          pullRetryAt,
-          pullLastError: code,
-          retryAt,
-          lastErrorCode: code,
-          updatedAt: now,
-        })
-        setResult(retryAt)
+        const nextState = applyThoughtPullFailureState(state, [...outbox, ...history], error, now)
+        stateStore.put(nextState)
+        setResult(nextState.retryAt)
       }
       stateRequest.onerror = () => transaction.abort()
       outboxRequest.onerror = () => transaction.abort()
@@ -1523,19 +1258,7 @@ async function resetCursor(lease: IdentityLease): Promise<UserDataTransactionRes
           transaction.abort()
           return
         }
-        store.put({
-          ...state,
-          cursor: '',
-          pullInProgress: true,
-          resyncRequired: true,
-          pullAttemptCount: undefined,
-          pullRetryAt: undefined,
-          pullLastError: undefined,
-          retryAt: earliestRetryAt([...outbox, ...history]),
-          updatedAt: Date.now(),
-          lastError: undefined,
-          lastErrorCode: undefined,
-        })
+        store.put(resetThoughtPullCursorState(state, [...outbox, ...history], Date.now()))
         setResult(undefined)
       }
       request.onsuccess = () => {
@@ -1590,29 +1313,8 @@ async function markPullComplete(
           setResult(undefined)
           return
         }
-        const stateWithoutPullInProgress = { ...state }
-        delete stateWithoutPullInProgress.pullInProgress
-        const nextState = { ...stateWithoutPullInProgress, resyncRequired: false, updatedAt: Date.now() }
-        delete nextState.pullAttemptCount
-        delete nextState.pullRetryAt
-        delete nextState.pullLastError
         const remaining = [...outbox, ...history]
-        const retryAt = earliestRetryAt(remaining)
-        const blockedCode = blockedFailureCode(remaining)
-        const fullySynced = remaining.length === 0
-        store.put({
-          ...nextState,
-          ...(retryAt === undefined
-            ? {
-                retryAt: undefined,
-                lastError: undefined,
-                ...(blockedCode === undefined
-                  ? { lastErrorCode: undefined }
-                  : { lastErrorCode: blockedCode }),
-                ...(fullySynced ? { lastSuccessfulSyncAt: Date.now() } : {}),
-              }
-            : { retryAt }),
-        })
+        store.put(completeThoughtPullState(state, remaining, Date.now()))
         setResult(undefined)
       }
       request.onsuccess = () => {
