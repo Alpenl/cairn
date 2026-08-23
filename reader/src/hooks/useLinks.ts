@@ -425,22 +425,23 @@ export function useLinks(
   // 网络抖动会把用户正读着的列表换成红色错误块——用户什么都没做。
   // 成功但数据未变时 store 不通知订阅者，因此这条定时器在稳态下**不产生任何
   // 重渲染**。
+  const silentRefresh = useCallback(() => {
+    void reload({ silent: true })
+  }, [reload])
+  const silentRefreshEnabled = !annotatedSelected && cursor === undefined
+  useVisibilityRefresh(silentRefresh, silentRefreshEnabled)
+
   useEffect(() => {
-    if (annotatedSelected) return
-    // 只在停留在"流的开头"时静默刷新：已经翻过页的人不该被拽回顶部。
-    if (cursor !== undefined) return
+    if (!silentRefreshEnabled) return
     const tick = () => {
       if (document.visibilityState !== 'visible') return
-      void reload({ silent: true })
+      silentRefresh()
     }
     const timer = window.setInterval(tick, AUTO_REFRESH_MS)
-    // 从后台切回前台时立即补一次，而不是再等一个完整周期。
-    document.addEventListener('visibilitychange', tick)
     return () => {
       window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', tick)
     }
-  }, [annotatedSelected, cursor, reload])
+  }, [silentRefresh, silentRefreshEnabled])
 
   const loadMore = useCallback(() => {
     if (
