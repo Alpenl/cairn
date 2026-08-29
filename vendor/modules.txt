@@ -31,7 +31,7 @@ github.com/aymerick/douceur/parser
 # github.com/bytedance/gopkg v0.1.4
 ## explicit; go 1.18
 github.com/bytedance/gopkg/lang/dirtmake
-# github.com/bytedance/sonic v1.15.2
+# github.com/bytedance/sonic v1.15.3
 ## explicit; go 1.18
 github.com/bytedance/sonic
 github.com/bytedance/sonic/ast
@@ -192,7 +192,7 @@ github.com/mattn/go-isatty
 ## explicit; go 1.19
 github.com/microcosm-cc/bluemonday
 github.com/microcosm-cc/bluemonday/css
-# github.com/mmcdole/gofeed v1.4.1
+# github.com/mmcdole/gofeed v1.4.2
 ## explicit; go 1.25.0
 github.com/mmcdole/gofeed
 github.com/mmcdole/gofeed/atom
@@ -240,8 +240,8 @@ github.com/quic-go/quic-go/qlog
 github.com/quic-go/quic-go/qlogwriter
 github.com/quic-go/quic-go/qlogwriter/jsontext
 github.com/quic-go/quic-go/quicvarint
-# github.com/riverqueue/river v0.43.0
-## explicit; go 1.25.0
+# github.com/riverqueue/river v0.45.0
+## explicit; go 1.26.0
 github.com/riverqueue/river
 github.com/riverqueue/river/internal/dblist
 github.com/riverqueue/river/internal/dbunique
@@ -261,15 +261,15 @@ github.com/riverqueue/river/internal/riverplugin
 github.com/riverqueue/river/internal/util/chanutil
 github.com/riverqueue/river/internal/workunit
 github.com/riverqueue/river/rivermigrate
-# github.com/riverqueue/river/riverdriver v0.43.0
-## explicit; go 1.25.0
+# github.com/riverqueue/river/riverdriver v0.45.0
+## explicit; go 1.26.0
 github.com/riverqueue/river/riverdriver
-# github.com/riverqueue/river/riverdriver/riverpgxv5 v0.43.0
-## explicit; go 1.25.0
+# github.com/riverqueue/river/riverdriver/riverpgxv5 v0.45.0
+## explicit; go 1.26.0
 github.com/riverqueue/river/riverdriver/riverpgxv5
 github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc
-# github.com/riverqueue/river/rivershared v0.43.0
-## explicit; go 1.25.0
+# github.com/riverqueue/river/rivershared v0.45.0
+## explicit; go 1.26.0
 github.com/riverqueue/river/rivershared/baseservice
 github.com/riverqueue/river/rivershared/circuitbreaker
 github.com/riverqueue/river/rivershared/levenshtein
@@ -290,8 +290,8 @@ github.com/riverqueue/river/rivershared/util/testutil
 github.com/riverqueue/river/rivershared/util/timeoututil
 github.com/riverqueue/river/rivershared/util/timeutil
 github.com/riverqueue/river/rivershared/util/valutil
-# github.com/riverqueue/river/rivertype v0.43.0
-## explicit; go 1.25.0
+# github.com/riverqueue/river/rivertype v0.45.0
+## explicit; go 1.26.0
 github.com/riverqueue/river/rivertype
 # github.com/rogpeppe/go-internal v1.14.1
 ## explicit; go 1.23
@@ -350,14 +350,14 @@ go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore
 # golang.org/x/arch v0.29.0
 ## explicit; go 1.25.0
 golang.org/x/arch/x86/x86asm
-# golang.org/x/crypto v0.54.0
+# golang.org/x/crypto v0.55.0
 ## explicit; go 1.25.0
 golang.org/x/crypto/chacha20
 golang.org/x/crypto/chacha20poly1305
 golang.org/x/crypto/internal/alias
 golang.org/x/crypto/internal/poly1305
 golang.org/x/crypto/sha3
-# golang.org/x/net v0.57.0
+# golang.org/x/net v0.58.0
 ## explicit; go 1.25.0
 golang.org/x/net/bpf
 golang.org/x/net/html
