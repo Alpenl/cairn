@@ -5,6 +5,7 @@ import {
   isLinkResponse,
   isPaginatedLinksResponse,
   isReaderFeedResponse,
+  isReaderInboxResponsePage,
   isSubmitResponse,
   isTagCountResponse,
 } from './guards'
@@ -160,6 +161,50 @@ export function defineSharedApiContractTests(
         isReaderFeedResponse({
           items: [{ ...feedItem, event_at: undefined }],
           mode: 'chronological',
+        }),
+        false,
+      )
+      equal(
+        isReaderInboxResponsePage({
+          items: [{
+            id: 'inbox-1',
+            url: 'https://example.com/capture',
+            source_kind: 'browser_capture',
+            title: null,
+            preview: 'Captured summary',
+            tags: ['shared'],
+            status: 'pending',
+            metadata_revision: 1,
+            expired: false,
+            updated_at: '2026-08-08T00:00:00Z',
+          }],
+          active_count: 1,
+          expired_count: 0,
+        }),
+        true,
+      )
+      equal(
+        isReaderInboxResponsePage({
+          items: [{
+            id: 'inbox-1',
+            url: 'https://example.com/capture',
+            source_kind: 'browser_capture',
+            tags: ['shared'],
+            status: 'pending',
+            metadata_revision: 1,
+            expired: false,
+            updated_at: '2026-08-08T00:00:00Z',
+          }],
+          active_count: 1,
+          expired_count: 0,
+        }),
+        false,
+      )
+      equal(
+        isReaderInboxResponsePage({
+          items: [],
+          active_count: -1,
+          expired_count: 0,
         }),
         false,
       )

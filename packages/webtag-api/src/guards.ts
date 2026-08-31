@@ -8,6 +8,8 @@ import type {
   ReaderFeedItemResponse,
   ReaderFeedResponse,
   ReaderCapabilitiesResponse,
+  ReaderInboxListItemResponse,
+  ReaderInboxResponsePage,
   SubmitResponse,
   TagCountResponse,
   TranslationSourceIdentity,
@@ -33,6 +35,10 @@ function isNumber(value: unknown): value is number {
 
 function isInteger(value: unknown): value is number {
   return isNumber(value) && Number.isInteger(value)
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return isInteger(value) && value >= 0
 }
 
 function isPositiveSafeInteger(value: unknown): value is number {
@@ -158,6 +164,11 @@ const READER_FEED_ITEM_TYPES = {
   subscription: true,
 } satisfies Record<ReaderFeedItemResponse['source'], true>
 
+const READER_INBOX_STATUSES = {
+  pending: true,
+  confirmed: true,
+} satisfies Record<ReaderInboxListItemResponse['status'], true>
+
 const LINK_FIELD_VALIDATORS = {
   id: isString,
   url: isString,
@@ -192,6 +203,18 @@ const LINK_CONTENT_FIELD_VALIDATORS = {
   content_source: (value) => isEnumValue(CONTENT_SOURCES, value),
   content_revision: isInteger,
 } satisfies Record<RequiredKeys<LinkContentResponse>, Validator>
+
+const READER_INBOX_LIST_ITEM_FIELD_VALIDATORS = {
+  id: isString,
+  url: isString,
+  source_kind: isString,
+  preview: isString,
+  tags: isStringArray,
+  status: (value) => isEnumValue(READER_INBOX_STATUSES, value),
+  metadata_revision: isInteger,
+  expired: (value) => typeof value === 'boolean',
+  updated_at: isString,
+} satisfies Record<RequiredKeys<ReaderInboxListItemResponse>, Validator>
 
 function isTranslationSourceIdentity(
   value: unknown,
@@ -298,6 +321,29 @@ export function isPaginatedLinksResponse(
     isInteger(value.page) &&
     isInteger(value.limit) &&
     (value.next_cursor === undefined || isString(value.next_cursor))
+  )
+}
+
+export function isReaderInboxListItemResponse(
+  value: unknown,
+): value is ReaderInboxListItemResponse {
+  return (
+    isRecord(value) &&
+    validatesRequiredFields(value, READER_INBOX_LIST_ITEM_FIELD_VALIDATORS) &&
+    isOptionalNullableString(value.title)
+  )
+}
+
+export function isReaderInboxResponsePage(
+  value: unknown,
+): value is ReaderInboxResponsePage {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.items) &&
+    value.items.every(isReaderInboxListItemResponse) &&
+    (value.next_cursor === undefined || isString(value.next_cursor)) &&
+    isNonNegativeInteger(value.active_count) &&
+    isNonNegativeInteger(value.expired_count)
   )
 }
 

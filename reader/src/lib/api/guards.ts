@@ -11,6 +11,11 @@ import {
   isLinkContentResponse,
   isLinkResponse,
   isPaginatedLinksResponse as isPaginatedLinks,
+  isReaderFeedFeedbackResponse,
+  isReaderFeedItemResponse,
+  isReaderFeedResponse,
+  isReaderInboxListItemResponse,
+  isReaderInboxResponsePage,
   isSubmitResponse,
   isTagCountResponse,
 } from '@webtag/api'
@@ -56,8 +61,6 @@ import type {
   ReaderTrashItemResponse,
   ReaderTrashResponse,
   ReaderInboxResponse,
-  ReaderInboxListItemResponse,
-  ReaderInboxResponsePage,
   ReaderInboxBulkItemResponse,
   ReaderInboxBulkResponse,
   ReaderInboxConfirmAIProposalsResponse,
@@ -65,9 +68,6 @@ import type {
   ReaderTodoResponse,
   ReaderTodosResponse,
   ReaderEngagementResponse,
-  ReaderFeedFeedbackResponse,
-  ReaderFeedItemResponse,
-  ReaderFeedResponse,
   ReaderHomeResponse,
   ReaderLinkMetadataResponse,
   ReaderRelatedTagsResponse,
@@ -84,6 +84,11 @@ export {
   isLinkContentResponse,
   isLinkResponse,
   isPaginatedLinks,
+  isReaderFeedFeedbackResponse,
+  isReaderFeedItemResponse,
+  isReaderFeedResponse,
+  isReaderInboxListItemResponse,
+  isReaderInboxResponsePage,
   isSubmitResponse,
 }
 
@@ -107,18 +112,6 @@ const READER_RESPONSE_FRESHNESS_VALUES = {
   fresh: true,
   partial: true,
   stale: true,
-} as const
-
-const READER_FEED_FEEDBACK_ACTIONS = {
-  save: true,
-  unsave: true,
-  hide: true,
-} as const
-
-const READER_FEED_ITEM_TYPES = {
-  reading: true,
-  inbox: true,
-  subscription: true,
 } as const
 
 const DISABLED_READER_CAPABILITIES: ReaderCapabilitiesResponse = {
@@ -859,43 +852,6 @@ export function isReaderInboxResponse(v: unknown): v is ReaderInboxResponse {
   return isReaderInbox(v)
 }
 
-// The queue card contract is narrower than the detail record on purpose: a
-// capture may hold a 4 MiB body and a 1 MiB note, and the list is read on every
-// Inbox open. This guard therefore validates the card fields and nothing else —
-// it must not start requiring body/note back, or the projection is undone.
-function isReaderInboxListItem(value: unknown): value is ReaderInboxListItemResponse {
-  return (
-    isRecord(value) &&
-    isString(value.id) &&
-    isString(value.url) &&
-    isString(value.source_kind) &&
-    isOptionalNullableString(value.title) &&
-    isString(value.preview) &&
-    isStringArray(value.tags) &&
-		(value.status === 'pending' || value.status === 'confirmed') &&
-    isInteger(value.metadata_revision) &&
-    typeof value.expired === 'boolean' &&
-    isString(value.updated_at)
-  )
-}
-
-export function isReaderInboxListItemResponse(v: unknown): v is ReaderInboxListItemResponse {
-  return isReaderInboxListItem(v)
-}
-
-export function isReaderInboxResponsePage(v: unknown): v is ReaderInboxResponsePage {
-  return (
-    isRecord(v) &&
-    Array.isArray(v.items) &&
-    v.items.every(isReaderInboxListItem) &&
-    isOptionalString(v.next_cursor) &&
-    isInteger(v.active_count) &&
-    v.active_count >= 0 &&
-    isInteger(v.expired_count) &&
-    v.expired_count >= 0
-  )
-}
-
 function isReaderInboxBulkItem(value: unknown): value is ReaderInboxBulkItemResponse {
   return (
     isRecord(value) &&
@@ -982,60 +938,6 @@ export function isReaderEngagementResponse(v: unknown): v is ReaderEngagementRes
   )
 }
 
-function isReaderFeedFeedbackAction(value: unknown): boolean {
-  return isString(value) && Object.prototype.hasOwnProperty.call(READER_FEED_FEEDBACK_ACTIONS, value)
-}
-
-function isReaderFeedItem(value: unknown): value is ReaderFeedItemResponse {
-  if (
-    !isRecord(value) ||
-    !isString(value.key) ||
-    !isString(value.source) ||
-    !Object.prototype.hasOwnProperty.call(READER_FEED_ITEM_TYPES, value.source) ||
-    !isString(value.resource_key) ||
-    !isString(value.title) ||
-    !isString(value.summary) ||
-    !isString(value.url) ||
-    !isOptionalNullableString(value.link_id) ||
-    !isOptionalNullableString(value.inbox_id) ||
-    !isOptionalNullableString(value.feed_item_id) ||
-    typeof value.read !== 'boolean' ||
-    typeof value.read_later !== 'boolean' ||
-    typeof value.saved !== 'boolean' ||
-    !isString(value.event_at)
-  ) {
-    return false
-  }
-  switch (value.source) {
-    case 'reading':
-      return isString(value.link_id) && value.inbox_id == null && value.feed_item_id == null
-    case 'inbox':
-      return isString(value.inbox_id) && value.link_id == null && value.feed_item_id == null
-    case 'subscription':
-      return isString(value.feed_item_id) && value.inbox_id == null
-    default:
-      return false
-  }
-}
-
-export function isReaderFeedItemResponse(v: unknown): v is ReaderFeedItemResponse {
-  return isReaderFeedItem(v)
-}
-
-export function isReaderFeedFeedbackResponse(value: unknown): value is ReaderFeedFeedbackResponse {
-  return isRecord(value) && isString(value.item_key) && isReaderFeedFeedbackAction(value.action) && isOptionalString(value.link_id)
-}
-
-export function isReaderFeedResponse(v: unknown): v is ReaderFeedResponse {
-  return (
-    isRecord(v) &&
-    Array.isArray(v.items) &&
-    v.items.every(isReaderFeedItem) &&
-    isOptionalString(v.next_cursor) &&
-    (v.mode === 'recommended' || v.mode === 'chronological')
-  )
-}
-
 export function isReaderHomeResponse(v: unknown): v is ReaderHomeResponse {
   return (
     isRecord(v) &&
@@ -1045,7 +947,7 @@ export function isReaderHomeResponse(v: unknown): v is ReaderHomeResponse {
     isRecord(v.counts) &&
     Object.values(v.counts).every(isInteger) &&
     Array.isArray(v.continue_reading) &&
-    v.continue_reading.every(isReaderFeedItem) &&
+    v.continue_reading.every(isReaderFeedItemResponse) &&
     Array.isArray(v.recent_thoughts) &&
     v.recent_thoughts.every(isReaderThought) &&
     Array.isArray(v.todos) &&

@@ -24,6 +24,11 @@ export {
   isLinkContentResponse,
   isLinkResponse,
   isPaginatedLinksResponse,
+  isReaderFeedFeedbackResponse,
+  isReaderFeedItemResponse,
+  isReaderFeedResponse,
+  isReaderInboxListItemResponse,
+  isReaderInboxResponsePage,
   isSubmitResponse,
   isTagCountResponse,
 } from './guards'
