@@ -118,6 +118,32 @@ describe('annotation command builders', () => {
     })).toEqual({ ok: false, status: 'unsupported' })
   })
 
+  it('builds note selection commits through the shared target-neutral command', () => {
+    expect(createAnnotationSelectionCommit({
+      linkId: 'N1',
+      target: NOTE_TARGET,
+      selection: {
+        blockKey: 'note',
+        start: 0,
+        end: 4,
+        text: 'body',
+      },
+      annotationToken: 'note',
+      operationToken: 'op-note',
+      now: 102,
+    })).toMatchObject({
+      ok: true,
+      annotationId: 'an:note',
+      operation: {
+        kind: 'add',
+        opId: 'op:op-note',
+        linkId: 'N1',
+        target: NOTE_TARGET,
+        draft: { blockKey: 'note', updatedAt: 102 },
+      },
+    })
+  })
+
   it('builds update and delete commands only for the current target', () => {
     expect(createAnnotationUpdateCommand({
       linkId: 'L1',
@@ -154,6 +180,28 @@ describe('annotation command builders', () => {
       patch: { note: 'next' },
       operationToken: 'stale',
     })).toEqual({ ok: false, status: 'stale' })
+
+    expect(createAnnotationUpdateCommand({
+      linkId: 'N1',
+      target: NOTE_TARGET,
+      annotation: annotation({
+        blockKey: 'note',
+        sourceContentRevision: undefined,
+        sourceNoteRevision: 4,
+      }),
+      patch: { note: 'next note' },
+      operationToken: 'note-update',
+      now: 201,
+    })).toMatchObject({
+      ok: true,
+      annotationId: 'an:one',
+      operation: {
+        kind: 'update',
+        opId: 'op:note-update',
+        target: NOTE_TARGET,
+        patch: { note: 'next note', updatedAt: 201 },
+      },
+    })
   })
 })
 

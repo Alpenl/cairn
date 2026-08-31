@@ -1,19 +1,21 @@
 import { useCallback, useMemo } from 'react'
 
 import type { Annotation, AnnotationInput, AnnotationPatch } from '../lib/annotations'
+import {
+  annotationCommandTargetForBlock,
+  commitTargetAnnotationCommand,
+  createAnnotationDeleteCommand,
+  createAnnotationSelectionCommit,
+  createAnnotationUpdateCommand,
+  type AnnotationMutationResult,
+} from '../lib/annotation-commands'
 import type { IdentityLease } from '../lib/identity'
-import { cloneTargetAnnotation } from '../lib/user-data/annotation-codec'
 import {
   annotationTargetKey,
   canonicalAnnotationTarget,
   type NoteAnnotationTarget,
 } from '../lib/user-data/annotation-types'
-import {
-  commitAnnotationMutation,
-  randomAnnotationToken,
-  useAnnotationLifecycle,
-  type AnnotationMutationResult,
-} from './useAnnotationLifecycle'
+import { useAnnotationLifecycle } from './useAnnotationLifecycle'
 
 export type NoteAnnotationCommandResult =
   | {
@@ -86,11 +88,11 @@ export function useNoteAnnotations(
   })
 
   const commit = useCallback(async (
-    operation: Parameters<typeof commitAnnotationMutation>[0]['operation'],
+    operation: Parameters<typeof commitTargetAnnotationCommand>[0]['operation'],
     annotationId: string,
   ): Promise<NoteAnnotationCommandResult> => {
     if (!target) return { status: 'stale' }
-    return noteCommandResult(await commitAnnotationMutation({
+    return noteCommandResult(await commitTargetAnnotationCommand({
       lease,
       linkId: noteID,
       target,
@@ -102,62 +104,47 @@ export function useNoteAnnotations(
   }, [lease, noteID, refresh, signal, target])
 
   const add = useCallback(async (input: AnnotationInput): Promise<NoteAnnotationCommandResult> => {
-    if (!target || !noteID) return { status: 'stale' }
-    const annotationToken = randomAnnotationToken()
-    const operationToken = randomAnnotationToken()
-    if (!annotationToken || !operationToken) return { status: 'failed' }
-    const annotationId = `an:${annotationToken}`
-    const now = Date.now()
-    return commit({
-      kind: 'add',
-      opId: `op:${operationToken}`,
+    const targetForInput = annotationCommandTargetForBlock(input.blockKey, { note: target })
+    if (!targetForInput) return { status: 'stale' }
+    const built = createAnnotationSelectionCommit({
       linkId: noteID,
-      target,
-      draft: {
-        id: annotationId,
-        blockKey: input.blockKey || 'note',
-        start: input.start,
-        end: input.end,
-        text: input.text,
-        note: input.note ?? '',
-        source: input.source ?? 'self',
-        createdAt: now,
-        updatedAt: now,
-        quote: input.quote,
-      },
-    }, annotationId)
+      target: targetForInput,
+      selection: input,
+    })
+    if (!built.ok) return { status: built.status }
+    return commit(built.operation, built.annotationId)
   }, [commit, noteID, target])
 
   const update = useCallback(async (
     annotation: Annotation,
     patch: AnnotationPatch,
   ): Promise<NoteAnnotationCommandResult> => {
-    if (!target || !noteID || annotation.sourceNoteRevision !== target.noteRevision ||
-      !cloneTargetAnnotation(annotation, target)) return { status: 'stale' }
-    const operationToken = randomAnnotationToken()
-    if (!operationToken) return { status: 'failed' }
-    return commit({
-      kind: 'update',
-      opId: `op:${operationToken}`,
+    const targetForAnnotation = annotationCommandTargetForBlock(annotation.blockKey, {
+      note: target,
+    })
+    if (!targetForAnnotation) return { status: 'stale' }
+    const built = createAnnotationUpdateCommand({
       linkId: noteID,
-      target,
-      annotationId: annotation.id,
-      patch: { ...patch, updatedAt: Date.now() },
-    }, annotation.id)
+      target: targetForAnnotation,
+      annotation,
+      patch,
+    })
+    if (!built.ok) return { status: built.status }
+    return commit(built.operation, built.annotationId)
   }, [commit, noteID, target])
 
   const remove = useCallback(async (annotation: Annotation): Promise<NoteAnnotationCommandResult> => {
-    if (!target || !noteID || annotation.sourceNoteRevision !== target.noteRevision ||
-      !cloneTargetAnnotation(annotation, target)) return { status: 'stale' }
-    const operationToken = randomAnnotationToken()
-    if (!operationToken) return { status: 'failed' }
-    return commit({
-      kind: 'delete',
-      opId: `op:${operationToken}`,
+    const targetForAnnotation = annotationCommandTargetForBlock(annotation.blockKey, {
+      note: target,
+    })
+    if (!targetForAnnotation) return { status: 'stale' }
+    const built = createAnnotationDeleteCommand({
       linkId: noteID,
-      target,
-      annotationId: annotation.id,
-    }, annotation.id)
+      target: targetForAnnotation,
+      annotation,
+    })
+    if (!built.ok) return { status: built.status }
+    return commit(built.operation, built.annotationId)
   }, [commit, noteID, target])
 
   const visibleState = state.identityKey === identityKey ? state : null
