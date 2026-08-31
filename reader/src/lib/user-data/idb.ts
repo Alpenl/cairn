@@ -1,4 +1,10 @@
 import type { IdentityLease, IdentityOperationContext } from '../identity'
+import {
+  abortIDBTransaction,
+  attachIDBTransactionAbortSignal,
+  runIDBTransaction,
+  type IDBExecutionResult,
+} from '../idb-core'
 import { ownedDatabaseName } from '../storage-ownership'
 
 export const USER_DATA_DATABASE_VERSION = 10
@@ -55,9 +61,7 @@ export type UserDataStoreName =
   | typeof THOUGHT_SUPERSESSION_EVENTS_STORE
   | typeof THOUGHT_SUPERSESSION_STATE_STORE
 
-export type UserDataTransactionResult<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false }
+export type UserDataTransactionResult<T> = IDBExecutionResult<T>
 
 const OPEN_TIMEOUT_MS = 1000
 const LEGACY_RESOLUTION_ID = 'resolution'
@@ -72,7 +76,7 @@ function migrateResolvedV1Batch(transaction: IDBTransaction): void {
   const resolutionRequest = transaction.objectStore(MIGRATION_DECISION_STORE).get(
     LEGACY_RESOLUTION_ID,
   )
-  resolutionRequest.onerror = () => transaction.abort()
+  resolutionRequest.onerror = () => abortIDBTransaction(transaction)
   resolutionRequest.onsuccess = () => {
     const resolution = resolutionRequest.result as {
       kind?: unknown
@@ -88,7 +92,7 @@ function migrateResolvedV1Batch(transaction: IDBTransaction): void {
     }
 
     const recordsRequest = pending.getAll()
-    recordsRequest.onerror = () => transaction.abort()
+    recordsRequest.onerror = () => abortIDBTransaction(transaction)
     recordsRequest.onsuccess = () => {
       for (const record of recordsRequest.result as Array<Record<string, unknown>>) {
         archive.add({
@@ -275,7 +279,7 @@ function beginOpen(generation: number): Promise<IDBDatabase | null> {
           (event as IDBVersionChangeEvent).oldVersion,
         )
       } catch {
-        transaction.abort()
+        abortIDBTransaction(transaction)
       }
     }
     request.onsuccess = () => {
@@ -317,16 +321,7 @@ export function attachLeaseAbort(
   transaction: IDBTransaction,
   operation: IdentityOperationContext,
 ): () => void {
-  const abort = () => {
-    try {
-      transaction.abort()
-    } catch {
-      // The transaction may already have committed.
-    }
-  }
-  operation.signal.addEventListener('abort', abort, { once: true })
-  if (operation.signal.aborted) abort()
-  return () => operation.signal.removeEventListener('abort', abort)
+  return attachIDBTransactionAbortSignal(transaction, operation.signal)
 }
 
 export async function runUserDataTransaction<T>(
@@ -345,41 +340,14 @@ export async function runUserDataTransaction<T>(
   const database = await openUserDataDatabase()
   if (!database || !lease.isCurrent(operation)) return { ok: false }
 
-  return new Promise((resolve) => {
-    let settled = false
-    let value: T | undefined
-    let hasValue = false
-    const finish = (result: UserDataTransactionResult<T>) => {
-      if (settled) return
-      settled = true
-      detachAbort()
-      resolve(result)
-    }
-    let detachAbort: () => void = () => undefined
-    let transaction: IDBTransaction | null = null
-    try {
-      transaction = database.transaction([...storeNames], mode)
-      detachAbort = attachLeaseAbort(transaction, operation)
-      execute(transaction, operation, (next) => {
-        value = next
-        hasValue = true
-      })
-      transaction.oncomplete = () => {
-        if (!lease.isCurrent(operation) || !hasValue) {
-          finish({ ok: false })
-          return
-        }
-        finish({ ok: true, value: value as T })
-      }
-      transaction.onerror = () => finish({ ok: false })
-      transaction.onabort = () => finish({ ok: false })
-    } catch {
-      try {
-        transaction?.abort()
-      } catch {
-        // The transaction may already have aborted or committed.
-      }
-      finish({ ok: false })
-    }
-  })
+  return runIDBTransaction<T>(
+    database,
+    storeNames,
+    mode,
+    ({ transaction, setResult }) => execute(transaction, operation, setResult),
+    {
+      signal: operation.signal,
+      isCurrent: () => lease.isCurrent(operation),
+    },
+  )
 }

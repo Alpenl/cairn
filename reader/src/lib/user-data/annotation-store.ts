@@ -1,6 +1,10 @@
 import type { Annotation } from '../annotations-domain'
 import { isValidLinkId, isValidSourceHash } from '../article/source-block'
 import type { IdentityLease } from '../identity'
+import {
+  abortIDBTransaction as abortTransaction,
+  attachIDBTransactionAbortSignal as attachTransactionAbortSignal,
+} from '../idb-core'
 import { asRecord } from '../records'
 import {
   annotationFromAddDraft,
@@ -142,28 +146,6 @@ interface AnnotationImportMarker {
 
 function operationIDKey(namespace: string, opId: string): string {
   return `${namespace.length}:${namespace}:${opId}`
-}
-
-function abortTransaction(transaction: IDBTransaction): void {
-  try {
-    transaction.abort()
-  } catch {
-    // A request failure may already have aborted the transaction.
-  }
-}
-
-function attachTransactionAbortSignal(
-  transaction: IDBTransaction,
-  signal: AbortSignal | undefined,
-): void {
-  if (!signal) return
-  const abort = () => abortTransaction(transaction)
-  const detach = () => signal.removeEventListener('abort', abort)
-  signal.addEventListener('abort', abort, { once: true })
-  transaction.addEventListener('complete', detach, { once: true })
-  transaction.addEventListener('abort', detach, { once: true })
-  transaction.addEventListener('error', detach, { once: true })
-  if (signal.aborted) abort()
 }
 
 function isNonEmptyString(value: unknown): value is string {

@@ -386,6 +386,49 @@ describe('payload/metadata atomicity and repair', () => {
     }
   })
 
+  it('fails soft and rolls back quota eviction when the browser rejects the payload write', async () => {
+    const authority = new IdentityAuthority()
+    const queue = new NamespaceStorageQueue()
+    const lease = authority.install({
+      serverClientDataNamespace: 'server-A',
+      physicalNamespace: 'physical-A',
+    })
+    const oldRecord = createPersistedRecord('physical-A', 'GET /api/links?quota-old', {
+      schema: CACHE_SCHEMA_VERSION,
+      data: { body: 'old' },
+      updatedAt: 1,
+      size: 30,
+    })
+    const newRecord = createPersistedRecord('physical-A', 'GET /api/links?quota-new', {
+      schema: CACHE_SCHEMA_VERSION,
+      data: { body: 'new' },
+      updatedAt: 2,
+      size: 30,
+    })
+    await idbPut(oldRecord)
+    const originalPut = IDBObjectStore.prototype.put
+    IDBObjectStore.prototype.put = new Proxy(originalPut, {
+      apply(target, thisArgument, argumentsList) {
+        const store = thisArgument as IDBObjectStore
+        const value = argumentsList[0] as { key?: unknown }
+        if (store.name === PAYLOAD_STORE_NAME && value.key === newRecord.key) {
+          throw new DOMException('quota exceeded', 'QuotaExceededError')
+        }
+        return Reflect.apply(target, thisArgument, argumentsList) as IDBRequest<IDBValidKey>
+      },
+    })
+    try {
+      await expect(queue.enqueue(lease, 'quota payload failure', (operation) =>
+        idbPutWithinQuota(newRecord, 50, operation),
+      )).resolves.toBeNull()
+    } finally {
+      IDBObjectStore.prototype.put = originalPut
+    }
+
+    expect(await idbGetAll()).toEqual([oldRecord])
+    expect(await idbGetMetadata()).toHaveLength(1)
+  })
+
   it('repairs payload and metadata orphans idempotently without reading payload bodies', async () => {
     await rawCacheTransaction([PAYLOAD_STORE_NAME, META_STORE_NAME], (transaction) => {
       transaction.objectStore(PAYLOAD_STORE_NAME).put({

@@ -11,6 +11,7 @@
  */
 
 import { ownedDatabaseName } from '../storage-ownership'
+import { abortIDBTransaction, requestToResult, runIDBTransaction } from '../idb-core'
 import type { NamespaceStorageOperation } from './io-queue'
 
 const LEGACY_STORE_NAME = 'resources'
@@ -213,7 +214,7 @@ function openDatabase(): Promise<IDBDatabase | null> {
 
         const legacy = transaction.objectStore(LEGACY_STORE_NAME)
         const cursorRequest = legacy.openCursor()
-        cursorRequest.onerror = () => transaction.abort()
+        cursorRequest.onerror = () => abortIDBTransaction(transaction)
         cursorRequest.onsuccess = () => {
           try {
             const cursor = cursorRequest.result
@@ -242,11 +243,11 @@ function openDatabase(): Promise<IDBDatabase | null> {
             cursor.delete()
             cursor.continue()
           } catch {
-            transaction.abort()
+            abortIDBTransaction(transaction)
           }
         }
       } catch {
-        transaction.abort()
+        abortIDBTransaction(transaction)
       }
     }
     request.onsuccess = () => {
@@ -283,58 +284,24 @@ function runTransaction<T>(
   afterSuccess?: (result: T, store: IDBObjectStore) => void,
   storeName = META_STORE_NAME,
 ): Promise<T | null> {
-  return database().then(
-    (db) =>
-      new Promise<T | null>((resolve) => {
-        if (!db || (operation && !operation.isCurrent())) {
-          resolve(null)
-          return
-        }
-        let settled = false
-        let result: T | null = null
-        let transaction: IDBTransaction | null = null
-        const abort = () => {
-          try {
-            transaction?.abort()
-          } catch {
-            // The transaction may already be complete.
-          }
-        }
-        const finish = (value: T | null) => {
-          if (settled) return
-          settled = true
-          operation?.signal.removeEventListener('abort', abort)
-          resolve(value)
-        }
-        try {
-          transaction = db.transaction(storeName, mode)
-          operation?.signal.addEventListener('abort', abort, { once: true })
-          if (operation?.signal.aborted || (operation && !operation.isCurrent())) {
-            abort()
-            finish(null)
-            return
-          }
-          const store = transaction.objectStore(storeName)
-          const request = work(store)
-          request.onsuccess = () => {
-            result = request.result
-            try {
-              afterSuccess?.(request.result, store)
-            } catch {
-              abort()
-              finish(null)
-            }
-          }
-          request.onerror = () => finish(null)
-          transaction.oncomplete = () => finish(result)
-          transaction.onerror = () => finish(null)
-          transaction.onabort = () => finish(null)
-        } catch {
-          abort()
-          finish(null)
-        }
-      }),
-  )
+  return database()
+    .then((db) => runIDBTransaction<T>(
+      db,
+      [storeName],
+      mode,
+      ({ transaction, setResult }) => {
+        const store = transaction.objectStore(storeName)
+        requestToResult(transaction, work(store), (result) => {
+          afterSuccess?.(result, store)
+          setResult(result)
+        })
+      },
+      {
+        signal: operation?.signal,
+        isCurrent: operation ? () => operation.isCurrent() : undefined,
+      },
+    ))
+    .then((result) => result.ok ? result.value : null)
 }
 
 function runMultiStoreTransaction<T>(
@@ -343,49 +310,18 @@ function runMultiStoreTransaction<T>(
   operation: NamespaceStorageOperation | undefined,
   work: (transaction: IDBTransaction, setResult: (result: T) => void) => void,
 ): Promise<T | null> {
-  return database().then(
-    (db) =>
-      new Promise<T | null>((resolve) => {
-        if (!db || (operation && !operation.isCurrent())) {
-          resolve(null)
-          return
-        }
-        let settled = false
-        let result: T | null = null
-        let transaction: IDBTransaction | null = null
-        const abort = () => {
-          try {
-            transaction?.abort()
-          } catch {
-            // The transaction may already be complete.
-          }
-        }
-        const finish = (value: T | null) => {
-          if (settled) return
-          settled = true
-          operation?.signal.removeEventListener('abort', abort)
-          resolve(value)
-        }
-        try {
-          transaction = db.transaction([...storeNames], mode)
-          operation?.signal.addEventListener('abort', abort, { once: true })
-          if (operation?.signal.aborted || (operation && !operation.isCurrent())) {
-            abort()
-            finish(null)
-            return
-          }
-          work(transaction, (value) => {
-            result = value
-          })
-          transaction.oncomplete = () => finish(result)
-          transaction.onerror = () => finish(null)
-          transaction.onabort = () => finish(null)
-        } catch {
-          abort()
-          finish(null)
-        }
-      }),
-  )
+  return database()
+    .then((db) => runIDBTransaction<T>(
+      db,
+      storeNames,
+      mode,
+      ({ transaction, setResult }) => work(transaction, setResult),
+      {
+        signal: operation?.signal,
+        isCurrent: operation ? () => operation.isCurrent() : undefined,
+      },
+    ))
+    .then((result) => result.ok ? result.value : null)
 }
 
 export function idbGetAll(operation?: NamespaceStorageOperation): Promise<PersistedRecord[]> {
@@ -475,7 +411,7 @@ export function idbAdvanceInvalidation(
       >
       clockRequest.onsuccess = () => {
         if (!operation.isCurrent()) {
-          transaction.abort()
+          abortIDBTransaction(transaction)
           return
         }
         const generation = (clockRequest.result?.generation ?? 0) + 1
@@ -582,7 +518,7 @@ export function idbPut(
       ) as IDBRequest<DurableInvalidation[]>
       invalidations.onsuccess = () => {
         if (!operation.isCurrent()) {
-          transaction.abort()
+          abortIDBTransaction(transaction)
           return
         }
         const blocked = invalidations.result.some(
@@ -640,7 +576,7 @@ export function idbPutWithinQuota(
         if (!metadataRows || !invalidations) return
         try {
           if (!operation.isCurrent()) {
-            transaction.abort()
+            abortIDBTransaction(transaction)
             return
           }
           let totalBytes = metadataRows.reduce(
@@ -686,7 +622,7 @@ export function idbPutWithinQuota(
             projectedBytes -= item.size
           }
           if (projectedBytes > maxBytes) {
-            transaction.abort()
+            abortIDBTransaction(transaction)
             return
           }
 
@@ -706,7 +642,7 @@ export function idbPutWithinQuota(
             totalBytes: projectedBytes,
           })
         } catch {
-          transaction.abort()
+          abortIDBTransaction(transaction)
         }
       }
 
@@ -813,28 +749,16 @@ export function idbDeletePrefix(
 }
 
 export function idbClear(): Promise<void> {
-  return database().then(
-    (db) =>
-      new Promise<void>((resolve) => {
-        if (!db) {
-          resolve()
-          return
-        }
-        try {
-          const transaction = db.transaction(
-            [LEGACY_STORE_NAME, PAYLOAD_STORE_NAME, META_STORE_NAME, CONTROL_STORE_NAME],
-            'readwrite',
-          )
-          transaction.objectStore(LEGACY_STORE_NAME).clear()
-          transaction.objectStore(PAYLOAD_STORE_NAME).clear()
-          transaction.objectStore(META_STORE_NAME).clear()
-          transaction.objectStore(CONTROL_STORE_NAME).clear()
-          transaction.oncomplete = () => resolve()
-          transaction.onerror = () => resolve()
-          transaction.onabort = () => resolve()
-        } catch {
-          resolve()
-        }
-      }),
-  )
+  return runMultiStoreTransaction<boolean>(
+    [LEGACY_STORE_NAME, PAYLOAD_STORE_NAME, META_STORE_NAME, CONTROL_STORE_NAME],
+    'readwrite',
+    undefined,
+    (transaction, setResult) => {
+      transaction.objectStore(LEGACY_STORE_NAME).clear()
+      transaction.objectStore(PAYLOAD_STORE_NAME).clear()
+      transaction.objectStore(META_STORE_NAME).clear()
+      transaction.objectStore(CONTROL_STORE_NAME).clear()
+      setResult(true)
+    },
+  ).then(() => undefined)
 }

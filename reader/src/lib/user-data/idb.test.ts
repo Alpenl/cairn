@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IdentityLease } from '../identity'
 import { ownedDatabaseName } from '../storage-ownership'
 import {
+  ANNOTATION_OPS_STORE,
   ANNOTATION_LINK_STATE_STORE,
   ANNOTATION_MATERIALIZED_STORE,
   THOUGHT_HISTORY_OUTBOX_STORE,
@@ -208,6 +209,80 @@ describe('user-data IndexedDB owner', () => {
     )
 
     await expect(resultPromise).resolves.toEqual({ ok: false })
+    await expect(readStoreRecord(
+      ANNOTATION_LINK_STATE_STORE,
+      'physical-A\0L1',
+    )).resolves.toBeUndefined()
+  })
+
+  it('reports request errors as failed transactions and rolls back writes', async () => {
+    const lease = new IdentityLease({
+      serverClientDataNamespace: 'server-A',
+      physicalNamespace: 'physical-A',
+      localEpoch: 1,
+    })
+    const duplicateOp = {
+      opId: '10:physical-A:duplicate-op',
+      logicalOpId: 'duplicate-op',
+      namespace: 'physical-A',
+      linkId: 'L1',
+      target: { kind: 'saved-content', contentRevision: 7 },
+      targetKey: 'saved-content:7',
+      annotationId: 'a1',
+      kind: 'delete',
+    }
+
+    const result = await runUserDataTransaction(
+      lease,
+      'duplicate op-id request error',
+      [ANNOTATION_OPS_STORE],
+      'readwrite',
+      (transaction, _operation, setResult) => {
+        const operations = transaction.objectStore(ANNOTATION_OPS_STORE)
+        operations.add(duplicateOp)
+        operations.add({ ...duplicateOp, annotationId: 'a2' })
+        setResult(true)
+      },
+    )
+
+    expect(result).toEqual({ ok: false })
+    await expect(runUserDataTransaction(
+      lease,
+      'count rolled back operations',
+      [ANNOTATION_OPS_STORE],
+      'readonly',
+      (transaction, _operation, setResult) => {
+        const request = transaction.objectStore(ANNOTATION_OPS_STORE).count()
+        request.onsuccess = () => setResult(request.result)
+      },
+    )).resolves.toEqual({ ok: true, value: 0 })
+  })
+
+  it('reports an explicit transaction abort as failed and rolls back writes', async () => {
+    const lease = new IdentityLease({
+      serverClientDataNamespace: 'server-A',
+      physicalNamespace: 'physical-A',
+      localEpoch: 1,
+    })
+
+    const result = await runUserDataTransaction(
+      lease,
+      'explicit transaction abort',
+      [ANNOTATION_LINK_STATE_STORE],
+      'readwrite',
+      (transaction, _operation, setResult) => {
+        transaction.objectStore(ANNOTATION_LINK_STATE_STORE).put({
+          key: 'physical-A\0L1',
+          namespace: 'physical-A',
+          linkId: 'L1',
+          version: 1,
+        })
+        setResult(true)
+        transaction.abort()
+      },
+    )
+
+    expect(result).toEqual({ ok: false })
     await expect(readStoreRecord(
       ANNOTATION_LINK_STATE_STORE,
       'physical-A\0L1',
