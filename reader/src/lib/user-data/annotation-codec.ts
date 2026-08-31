@@ -1,11 +1,14 @@
-import type { Annotation, AnnotationQuote } from '../annotations'
-import { isRecord } from '../records'
 import {
   canonicalAnnotationTarget,
-  type AnnotationAddDraft,
+  isSavedContentAnnotationBlockKey,
+  type Annotation,
+  type AnnotationQuote,
   type AnnotationTarget,
-  type SavedContentAnnotationBlockKey,
-} from './annotation-types'
+} from '../annotations-domain'
+import { isRecord } from '../records'
+import type { AnnotationAddDraft } from './annotation-types'
+
+export { isSavedContentAnnotationBlockKey } from '../annotations-domain'
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
@@ -37,13 +40,6 @@ function cloneQuote(candidate: unknown): AnnotationQuote | null {
 
 export function isSafeNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-}
-
-export function isSavedContentAnnotationBlockKey(
-  candidate: unknown,
-): candidate is SavedContentAnnotationBlockKey {
-  return candidate === 'content' ||
-    (typeof candidate === 'string' && candidate.startsWith('content-'))
 }
 
 /** Decodes the persisted annotation shape without trusting its source binding. */

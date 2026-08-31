@@ -1,4 +1,4 @@
-import type { Annotation } from '../annotations'
+import type { Annotation } from '../annotations-domain'
 import { isValidLinkId, isValidSourceHash } from '../article/source-block'
 import type { IdentityLease } from '../identity'
 import { asRecord } from '../records'

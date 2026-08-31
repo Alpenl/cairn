@@ -1,4 +1,4 @@
-import type { Annotation } from '../annotations'
+import type { Annotation } from '../annotations-domain'
 import { isRecord } from '../records'
 import type {
   AnnotationTarget,

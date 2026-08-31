@@ -1,152 +1,37 @@
 /**
- * Annotation domain types and pure rendered-selection helpers.
+ * Rendered-selection helpers for annotation surfaces.
  *
- * Durable ownership and legacy import live under `lib/user-data`; this module
- * deliberately has no storage or React lifecycle responsibilities.
+ * Pure domain values live in `annotations-domain`; durable ownership and
+ * legacy import live under `lib/user-data`.
  */
 
-import {
+import type { Annotation, AnnotationQuote } from './annotations-domain'
+
+export {
+  annotationLocator,
+  annotationLocatorTargetKey,
+  annotationMatchesLocator,
   annotationTargetKey,
   canonicalAnnotationTarget,
-  type SavedContentAnnotationBlockKey,
-  type SavedContentAnnotationTarget,
-  type NoteAnnotationTarget,
-  type SummaryAnnotationTarget,
-} from './user-data/annotation-types'
-
-export type AnnotationSource = 'self' | 'ai' | 'user'
-
-export interface AnnotationQuote {
-  readonly exact: string
-  readonly prefix: string
-  readonly suffix: string
-}
-
-export interface Annotation {
-  id: string
-  blockKey: string
-  start: number
-  end: number
-  text: string
-  note: string
-  source: AnnotationSource
-  createdAt: number
-  updatedAt: number
-  /** TextQuoteSelector context used when a host revision changes. */
-  quote?: AnnotationQuote
-  /** Reader-owned binding for content/content-* offsets. */
-  sourceContentRevision?: number
-  /** Reader-owned binding for summary offsets. */
-  sourceSummaryHash?: string
-  /** Reader-owned binding for note offsets. */
-  sourceNoteRevision?: number
-}
-
-export type AnnotationLocator =
-  | {
-      readonly id: string
-      readonly blockKey: SavedContentAnnotationBlockKey
-      readonly target: SavedContentAnnotationTarget
-    }
-  | {
-      readonly id: string
-      readonly blockKey: 'summary'
-      readonly target: SummaryAnnotationTarget
-    }
-  | {
-      readonly id: string
-      readonly blockKey: string
-      readonly target: NoteAnnotationTarget
-    }
-
-/**
- * Builds the only source references that interactive Reader surfaces accept.
- * Legacy/unbound annotations remain renderable for recovery, but cannot be
- * edited through a current document target.
- */
-export function annotationLocator(annotation: Annotation): AnnotationLocator | null {
-  if (
-    isContentAnchored(annotation.blockKey) &&
-    annotation.sourceSummaryHash === undefined &&
-    annotation.sourceContentRevision !== undefined &&
-    annotation.sourceNoteRevision === undefined
-  ) {
-    const target = canonicalAnnotationTarget({
-      kind: 'saved-content',
-      contentRevision: annotation.sourceContentRevision,
-    })
-    return target?.kind === 'saved-content'
-      ? { id: annotation.id, blockKey: annotation.blockKey, target }
-      : null
-  }
-  if (
-    annotation.blockKey === 'summary' &&
-    annotation.sourceContentRevision === undefined &&
-    annotation.sourceSummaryHash !== undefined &&
-    annotation.sourceNoteRevision === undefined
-  ) {
-    const target = canonicalAnnotationTarget({
-      kind: 'summary',
-      sourceHash: annotation.sourceSummaryHash,
-    })
-    return target?.kind === 'summary'
-      ? { id: annotation.id, blockKey: annotation.blockKey, target }
-      : null
-  }
-  if (
-    annotation.sourceContentRevision === undefined &&
-    annotation.sourceSummaryHash === undefined &&
-    annotation.sourceNoteRevision !== undefined
-  ) {
-    const target = canonicalAnnotationTarget({
-      kind: 'note',
-      noteRevision: annotation.sourceNoteRevision,
-    })
-    return target?.kind === 'note'
-      ? { id: annotation.id, blockKey: annotation.blockKey, target }
-      : null
-  }
-  return null
-}
-
-/** Stable target identity for DOM delegation, React keys, and effect ownership. */
-export function annotationLocatorTargetKey(locator: AnnotationLocator): string | null {
-  return annotationTargetKey(locator.target)
-}
-
-export function annotationMatchesLocator(
-  annotation: Annotation,
-  locator: AnnotationLocator,
-): boolean {
-  const candidate = annotationLocator(annotation)
-  if (!candidate) return false
-  const candidateTargetKey = annotationLocatorTargetKey(candidate)
-  const locatorTargetKey = annotationLocatorTargetKey(locator)
-  return candidateTargetKey !== null &&
-    candidateTargetKey === locatorTargetKey &&
-    candidate.id === locator.id &&
-    candidate.blockKey === locator.blockKey
-}
-
-export interface AnnotationInput {
-  blockKey: string
-  start: number
-  end: number
-  text: string
-  note?: string
-  source?: AnnotationSource
-  quote?: AnnotationQuote
-}
-
-export type AnnotationPatch = Partial<Pick<Annotation, 'note' | 'source'>>
+  isContentAnchored,
+  isSavedContentAnnotationBlockKey,
+} from './annotations-domain'
+export type {
+  Annotation,
+  AnnotationInput,
+  AnnotationLocator,
+  AnnotationPatch,
+  AnnotationQuote,
+  AnnotationSource,
+  AnnotationTarget,
+  NoteAnnotationTarget,
+  SavedContentAnnotationBlockKey,
+  SavedContentAnnotationTarget,
+  SummaryAnnotationTarget,
+} from './annotations-domain'
 
 /** Stable empty value for memoized rendering consumers. */
 export const NO_ANNOTATIONS: Annotation[] = Object.freeze([]) as unknown as Annotation[]
-
-/** Saved-original and derivative blocks share the saved document revision. */
-export function isContentAnchored(blockKey: string): blockKey is SavedContentAnnotationBlockKey {
-  return blockKey === 'content' || blockKey.startsWith('content-')
-}
 
 /**
  * Filters one rendered block and greedily removes overlapping ranges.
