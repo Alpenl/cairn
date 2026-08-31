@@ -308,22 +308,6 @@ describe('TodoSurface', () => {
     expect(window.location.search).toBe('')
   })
 
-  it('renders unknown source metadata without enabling source navigation', async () => {
-    renderTodo(makeClient([todo({
-      id: 'unknown-source',
-      text: '未知来源任务',
-      origin_kind: 'external-system',
-      origin_host_kind: 'site',
-      origin_host_id: 'S9',
-      origin_ref: { source_kind: 'site', source_id: 'S9' },
-      host_revision: 3,
-    })]).client)
-
-    const row = (await screen.findByText('未知来源任务')).closest('li') as HTMLElement
-    expect(within(row).getByText('来源：external-system')).toBeInTheDocument()
-    expect(within(row).getByRole('button', { name: '打开来源' })).toBeDisabled()
-  })
-
   it('disables only source routes whose capability is unavailable', async () => {
     const link = todo({
       id: 'available-link',

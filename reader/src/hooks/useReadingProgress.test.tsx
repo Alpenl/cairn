@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
+import type { IdentityBoundReaderClient } from '../lib/api/client'
 import { err, ok } from '@webtag/api'
-import { IdentityLease } from '../../lib/identity'
-import { resourceStore } from '../../lib/cache/store'
-import type { ReaderEngagementResponse } from '../../lib/api/types'
-import { useReadingProgress } from '../../hooks/useReadingProgress'
+import { IdentityLease } from '../lib/identity'
+import { resourceStore } from '../lib/cache/store'
+import type { ReaderEngagementResponse } from '../lib/api/types'
+import { useReadingProgress } from './useReadingProgress'
 
 function response(over: Partial<ReaderEngagementResponse> = {}): ReaderEngagementResponse {
   return {

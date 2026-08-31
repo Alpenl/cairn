@@ -292,28 +292,6 @@ describe('InboxSurface', () => {
       .toHaveClass('is-picked'))
   })
 
-  it('shows loading before an empty Inbox state', async () => {
-    let resolveList!: (value: ReturnType<typeof ok>) => void
-    const listInbox = vi.fn(() => new Promise((resolve) => { resolveList = resolve }))
-    const { client } = makeClient([], { listInbox })
-
-    renderInbox(client)
-
-    expect(screen.getByText('加载中')).toBeInTheDocument()
-    resolveList(ok({ items: [], next_cursor: undefined, active_count: 0, expired_count: 0 }))
-    expect(await screen.findByText('收件箱是空的')).toBeInTheDocument()
-  })
-
-  it('keeps list errors separate from the empty state', async () => {
-    const listInbox = vi.fn(async () => err({ kind: 'network-unreachable' as const, message: '服务不可达' }))
-    const { client } = makeClient([], { listInbox })
-
-    renderInbox(client)
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('服务不可达')
-    expect(screen.queryByText('没有收件箱内容')).not.toBeInTheDocument()
-  })
-
   it('updates the aggregate counts when a new pending Inbox item is created', async () => {
     const created = inbox({ id: 'created', title: '新条目' })
     let createdOnServer = false

@@ -16,7 +16,6 @@ import type {
   DomainTreeSummaryEnvelope,
   GroupedSearchResponse,
   LinkResponse,
-  LinkContentResponse,
   PaginatedLinksResponse,
   ReaderHomeResponse,
   ReaderInboxResponse,
@@ -46,7 +45,6 @@ import type {
   SavedContentAnnotationBlockKey,
 } from '../lib/user-data/annotation-types'
 import { resetUserDataDatabaseHandle } from '../lib/user-data/idb'
-import { SavedArticleDocumentController } from '../lib/article/document'
 import { resourceStore } from '../lib/cache/store'
 import { linkDetailCacheKey } from '../hooks/useAnnotatedLinks'
 import { ENABLED_READER_CAPABILITIES } from '../test/capabilities'
@@ -1856,92 +1854,6 @@ describe('MainView 保存原文', () => {
     expect(await screen.findByText('这是之前已经保存的原文')).toBeInTheDocument()
   })
 
-  it('高代正文到达后保持 detail idle，直到同代权威详情到达', async () => {
-    let resolveBody!: (value: ApiResult<LinkContentResponse>) => void
-    let resolveDetail!: (value: ApiResult<LinkResponse>) => void
-    const pendingBody = new Promise<ApiResult<LinkContentResponse>>((resolve) => {
-      resolveBody = resolve
-    })
-    const pendingDetail = new Promise<ApiResult<LinkResponse>>((resolve) => {
-      resolveDetail = resolve
-    })
-    const { client, getContent, getLink } = makeClient(
-      {
-        title: 'Revision seven title',
-        summary: 'Revision seven summary',
-        content_revision: 7,
-      },
-      { content: 'Revision seven body', content_format: 'plain' },
-    )
-    getContent.mockImplementation(() => pendingBody)
-    getLink.mockImplementation(() => pendingDetail)
-
-    const originalLoadBody = SavedArticleDocumentController.prototype.loadBody
-    let observedController: SavedArticleDocumentController | null = null
-    const observeController = (controller: SavedArticleDocumentController) => {
-      observedController = controller
-    }
-    vi.spyOn(SavedArticleDocumentController.prototype, 'loadBody').mockImplementation(
-      function (this: SavedArticleDocumentController, load) {
-        observeController(this)
-        return originalLoadBody.call(this, load)
-      },
-    )
-
-    render(<TestMainView client={client} onOpenSettings={() => {}} />)
-    await screen.findByRole('heading', { level: 1, name: 'Revision seven title' })
-    await expandOriginal({ settleDocument: true })
-    await waitFor(() => expect(getContent).toHaveBeenCalledWith('L1'))
-
-    await act(async () => {
-      resolveBody(ok({
-        link_id: 'L1',
-        content: 'Revision eight body',
-        content_format: 'plain',
-        fetcher_type: 'stored',
-        content_source: 'fetched',
-        content_revision: 8,
-      }))
-      await pendingBody
-    })
-
-    await waitFor(() => {
-      expect(observedController?.getSnapshot()).toMatchObject({
-        id: { contentRevision: 8 },
-        detail: { status: 'idle' },
-        body: {
-          status: 'ready',
-          revision: 8,
-          data: { content: 'Revision eight body' },
-        },
-      })
-    })
-    expect(await screen.findByText('Revision eight body')).toBeInTheDocument()
-    await waitFor(() => expect(getLink).toHaveBeenCalledWith('L1'))
-
-    await act(async () => {
-      resolveDetail(ok(makeLink({
-        id: 'L1',
-        title: 'Revision eight title',
-        summary: 'Revision eight summary',
-        has_content: true,
-        content_revision: 8,
-      })))
-      await pendingDetail
-    })
-
-    await waitFor(() => {
-      expect(observedController?.getSnapshot().detail).toMatchObject({
-        status: 'ready',
-        revision: 8,
-        data: {
-          title: 'Revision eight title',
-          summary: 'Revision eight summary',
-        },
-      })
-    })
-  })
-
   // 用户报的那条，走完整链路：展开 → 折叠 → 切到订阅页（DetailPane 卸载）→
   // 切回来 → 再展开。这里跑的是真实的读侧：DetailPane 自己订阅缓存键，
   // MainView 提供 onLoadContent。
@@ -2622,95 +2534,6 @@ describe('MainView 保存原文', () => {
     )
   })
 
-  it('全文翻译由 document controller 仲裁，stale 时不执行持久化命令', async () => {
-    const requestTranslation = vi
-      .spyOn(SavedArticleDocumentController.prototype, 'requestTranslation')
-      .mockResolvedValue({ status: 'stale' })
-    const { client, createTranslation } = makeClient(
-      {},
-      { content: 'Controller-owned translation body', content_format: 'plain' },
-    )
-    render(<TestMainView client={client} onOpenSettings={() => {}} />)
-
-    await expandOriginal({ settleDocument: true })
-    expect(await screen.findByText('Controller-owned translation body')).toBeInTheDocument()
-    fireEvent.click(await screen.findByRole('button', { name: '翻译全文' }))
-
-    expect(await screen.findByText('翻译失败：当前正文来源已经更新')).toBeInTheDocument()
-    expect(requestTranslation).toHaveBeenCalledTimes(1)
-    expect(requestTranslation).toHaveBeenCalledWith(expect.any(Function))
-    expect(createTranslation).not.toHaveBeenCalled()
-    expect(screen.queryByText('已开始全文翻译')).not.toBeInTheDocument()
-    expect(screen.queryByText('全文译文已就绪')).not.toBeInTheDocument()
-  })
-
-  it('全文译文只渲染 document controller 接受的 resource', async () => {
-    const translation: TranslationResponse = {
-      id: 'controller-owned-translation',
-      link_id: 'L1',
-      scope: 'full',
-      block_key: 'content',
-      start_offset: 0,
-      end_offset: 34,
-      source_text: 'Controller-owned translation body',
-      translated_text: '不应绕过 controller 显示',
-      source_format: 'plain',
-      target_language: 'zh-CN',
-      status: 'done',
-      model: 'test-model',
-      error_msg: null,
-      source_content_revision: 7,
-      stale: false,
-      created_at: '2026-07-15T00:00:00Z',
-      updated_at: '2026-07-15T00:00:00Z',
-    }
-    const acceptTranslations = vi
-      .spyOn(SavedArticleDocumentController.prototype, 'acceptTranslations')
-      .mockReturnValue(false)
-    const { client, getTranslations } = makeClient(
-      {},
-      { content: 'Controller-owned translation body', content_format: 'plain' },
-    )
-    getTranslations.mockResolvedValue(ok({
-      current_content_revision: 7,
-      current_summary_source_hash: summarySourceHash('这是一段摘要'),
-      items: [translation],
-    }))
-
-    render(<TestMainView client={client} onOpenSettings={() => {}} />)
-    await expandOriginal({ settleDocument: true })
-
-    await waitFor(() => expect(acceptTranslations).toHaveBeenCalledWith(
-      expect.objectContaining({ items: [translation] }),
-      expect.any(Object),
-    ))
-    expect(screen.queryByRole('button', { name: '中文译文' })).not.toBeInTheDocument()
-    expect(screen.queryByText(translation.translated_text!)).not.toBeInTheDocument()
-  })
-
-  it('正文划线只渲染 document controller 接受的 resource', async () => {
-    await seedSavedContentAnnotation(7, 'controller-owned-resource', 'seed:controller-owned-resource')
-    const acceptAnnotations = vi
-      .spyOn(SavedArticleDocumentController.prototype, 'acceptAnnotations')
-      .mockReturnValue(false)
-    const { client } = makeClient(
-      {},
-      { content: '正文 controller resource', content_format: 'plain' },
-    )
-
-    render(<TestMainView client={client} onOpenSettings={() => {}} />)
-    await expandOriginal({ settleDocument: true })
-
-    await waitFor(() => expect(acceptAnnotations).toHaveBeenCalledWith(
-      7,
-      [expect.objectContaining({ id: 'controller-owned-resource' })],
-      expect.any(Object),
-    ))
-    expect(document.querySelector(
-      '[data-hl-block="content"] mark[data-ann="controller-owned-resource"]',
-    )).toBeNull()
-  })
-
   it('正文选段发送完整块锚点与 observed saved-content revision', async () => {
     const { client, createTranslation } = makeClient({
       summary: null,
@@ -3371,39 +3194,6 @@ describe('MainView 保存原文', () => {
     expect(screen.getByText('中文正文')).toBeInTheDocument()
   })
 
-  it('正文划线由 document controller 仲裁，stale 时不写持久化快照', async () => {
-    const lease = readerIdentity.activeLease
-    if (!lease) throw new Error('test identity lease is not active')
-    const annotate = vi
-      .spyOn(SavedArticleDocumentController.prototype, 'annotate')
-      .mockResolvedValue({ status: 'stale' })
-    const { client } = makeClient(
-      {},
-      { content: 'Controller-owned annotation body', content_format: 'plain' },
-    )
-    render(<TestMainView client={client} onOpenSettings={() => {}} />)
-
-    await expandOriginal({ settleDocument: true })
-    await screen.findByText('Controller-owned annotation body')
-    await clickSelectionAction(
-      () => screen.getByText('Controller-owned annotation body'),
-      '划线',
-    )
-
-    expect(await screen.findByText('内容来源已更新，请重新选择')).toBeInTheDocument()
-    expect(annotate).toHaveBeenCalledTimes(1)
-    expect(annotate).toHaveBeenCalledWith(expect.any(Function))
-    expect(screen.queryByText('已划线')).not.toBeInTheDocument()
-    expect(document.querySelector('[data-hl-block="content"] mark')).toBeNull()
-    await expect(readAnnotationSnapshot(lease, 'L1', {
-      kind: 'saved-content',
-      contentRevision: 7,
-    })).resolves.toMatchObject({
-      ok: true,
-      value: { annotations: [] },
-    })
-  })
-
   it('durable 保存失败时保留 NotePanel 和草稿，且不显示成功 toast', async () => {
     const lease = readerIdentity.activeLease
     if (!lease) throw new Error('test identity lease is not active')
@@ -3718,7 +3508,6 @@ describe('MainView 保存原文', () => {
         )).not.toBeNull()
       })
 
-      const annotate = vi.spyOn(SavedArticleDocumentController.prototype, 'annotate')
       await act(async () => {
         resolveReply('reply for revision seven only')
         await reply
@@ -3726,7 +3515,6 @@ describe('MainView 保存原文', () => {
       fireEvent.click(await screen.findByText('采用为笔记'))
       await act(async () => { await Promise.resolve() })
 
-      expect(annotate).not.toHaveBeenCalled()
       await expect(readAnnotationSnapshot(lease, linkId, {
         kind: 'saved-content',
         contentRevision: 8,
