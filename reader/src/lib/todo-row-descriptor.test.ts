@@ -1,26 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { ReaderTodoResponse } from './api/types'
 import { describeTodoRow, type TodoRowDescriptor } from './todo-row-descriptor'
 import { enabledReaderCapabilityPolicy } from '../test/capabilities'
-
-function todo(overrides: Partial<ReaderTodoResponse> = {}): ReaderTodoResponse {
-  return {
-    id: 'todo-1',
-    text: '任务',
-    due_at: null,
-    done: false,
-    origin_kind: 'standalone',
-    origin_host_kind: null,
-    origin_host_id: null,
-    origin_ref: null,
-    host_revision: 0,
-    completed_at: null,
-    created_at: '2026-08-10T01:00:00Z',
-    updated_at: '2026-08-10T01:00:00Z',
-    expired: false,
-    ...overrides,
-  }
-}
+import { makeReaderTodo as todo } from '../test/fixtures'
 
 function sourceMeta(descriptor: TodoRowDescriptor): string | undefined {
   return descriptor.meta.find((segment) => segment.key === 'source')?.text

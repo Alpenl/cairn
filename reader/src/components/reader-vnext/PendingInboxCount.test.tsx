@@ -9,34 +9,28 @@ import {
   enabledReaderCapabilityLease,
   enabledReaderCapabilityPolicy,
 } from '../../test/capabilities'
+import { makeReaderInbox } from '../../test/fixtures'
+import { makeReaderClient } from '../../test/reader-client'
 
 function pending(id: string) {
-  return {
+  return makeReaderInbox({
     id,
     url: `https://example.test/${id}`,
-    source_kind: 'manual',
     title: id,
     body: '',
-    note: '',
     summary: null,
-    suggested_tags: [],
-    proposal_status: 'completed' as const,
     tags: [],
-    status: 'pending' as const,
-    metadata_revision: 1,
     expires_at: '2026-09-09T00:00:00Z',
-    expired: false,
     created_at: '2026-08-10T00:00:00Z',
     updated_at: '2026-08-10T00:00:00Z',
-  }
+  })
 }
 
 function client(items: ReturnType<typeof pending>[], inbox = true, current = () => true): IdentityBoundReaderClient {
-  return {
+  return makeReaderClient({
     getCapabilities: vi.fn(async () => ok({ reader_vnext: true, reader: { inbox } })),
     listInbox: vi.fn(async () => ok({ items, next_cursor: undefined, active_count: items.length, expired_count: 0 })),
-    isIdentityCurrent: current,
-  } as unknown as IdentityBoundReaderClient
+  }, { isIdentityCurrent: current })
 }
 
 type BadgeHost = 'reading' | 'sites' | 'subs' | 'notes'
@@ -78,11 +72,10 @@ describe('PendingInboxCountProvider', () => {
       if (listInbox.mock.calls.length === 3) return new Promise<ReturnType<typeof ok>>((resolve) => { staleResolve = resolve })
       return Promise.resolve(ok({ items: [...items], next_cursor: undefined, active_count: items.length, expired_count: 0 }))
     })
-    const currentClient = {
+    const currentClient = makeReaderClient({
       getCapabilities: vi.fn(async () => ok({ reader_vnext: true, reader: { inbox: true } })),
       listInbox,
-      isIdentityCurrent: current,
-    } as unknown as IdentityBoundReaderClient
+    }, { isIdentityCurrent: current })
     renderNavigation(currentClient)
     await waitFor(() => expect(screen.getAllByLabelText('收件箱 1 项待处理')).toHaveLength(2))
 
@@ -104,11 +97,10 @@ describe('PendingInboxCountProvider', () => {
     const listInbox = vi.fn()
       .mockImplementationOnce(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveInitial = resolve }))
       .mockResolvedValueOnce(ok({ items: [pending('I1'), pending('I2')], next_cursor: undefined, active_count: 2, expired_count: 0 }))
-    const currentClient = {
+    const currentClient = makeReaderClient({
       getCapabilities: vi.fn(async () => ok({ reader_vnext: true, reader: { inbox: true } })),
       listInbox,
-      isIdentityCurrent: () => true,
-    } as unknown as IdentityBoundReaderClient
+    })
     renderNavigation(currentClient)
     await waitFor(() => expect(listInbox).toHaveBeenCalledTimes(1))
 
@@ -127,11 +119,10 @@ describe('PendingInboxCountProvider', () => {
     await waitFor(() => expect(screen.getAllByLabelText('收件箱 1 项待处理')).toHaveLength(2))
 
     let resolveNext!: (value: ReturnType<typeof ok>) => void
-    const next = {
+    const next = makeReaderClient({
       getCapabilities: vi.fn(async () => ok({ reader_vnext: true, reader: { inbox: true } })),
       listInbox: vi.fn(() => new Promise<ReturnType<typeof ok>>((resolve) => { resolveNext = resolve })),
-      isIdentityCurrent: () => true,
-    } as unknown as IdentityBoundReaderClient
+    })
     rendered.rerender(
       <PendingInboxCountProvider client={next} capabilityLease={enabledReaderCapabilityLease()}>
         <SurfaceNav active="reading" capabilityPolicy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />

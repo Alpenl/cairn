@@ -50,35 +50,24 @@ import type {
 import type { IdentityLease } from '../../lib/identity'
 import type { ReaderRoute, ReaderRouteTargets } from '../../lib/navigation/route'
 import { enabledReaderCapabilityLease } from '../../test/capabilities'
+import {
+  makeReaderNote,
+  makeReaderThought,
+  makeReaderTodo,
+} from '../../test/fixtures'
+import { makeReaderClient } from '../../test/reader-client'
 import type { ThoughtSupersessionEventRecord } from '../../lib/user-data/thought-types'
 import { ThoughtHistorySurface } from './ThoughtHistorySurface'
 
 function makeThought(overrides: Partial<ReaderThoughtResponse> = {}): ReaderThoughtResponse {
-  const id = overrides.id ?? 'thought-1'
-  return {
-    id,
-    host_kind: 'link',
-    host_id: `link-${id}`,
-    link_id: `link-${id}`,
-    target: {},
+  return makeReaderThought({
     quote: {},
-    body: `想法 ${id}`,
     source: 'reader',
-    deleted: false,
-    last_sequence: 1,
-    created_at: '2026-08-10T01:00:00Z',
-    updated_at: '2026-08-10T01:00:00Z',
     lifecycle_status: 'tombstone',
     lifecycle_reason: 'link_deleted',
     tombstoned_at: '2026-08-10T02:00:00Z',
     ...overrides,
-    contract_version: 1,
-    winner_key: overrides.winner_key ?? {
-      logical_clock: 1,
-      device_id: 'device-test',
-      op_id: `op-${id}`,
-    },
-  }
+  })
 }
 
 function actionSnapshot(thought: ReaderThoughtResponse) {
@@ -100,26 +89,18 @@ function actionSnapshot(thought: ReaderThoughtResponse) {
 }
 
 function makeTodo(overrides: Partial<ReaderTodoResponse> = {}): ReaderTodoResponse {
-  return {
-    id: 'todo-1',
+  return makeReaderTodo({
     text: '完成想法',
-    due_at: null,
-    done: false,
     origin_kind: 'thought',
     origin_host_kind: 'thought',
     origin_host_id: 'thought-live',
-    origin_ref: null,
     host_revision: 1,
-    completed_at: null,
-    created_at: '2026-08-10T01:00:00Z',
-    updated_at: '2026-08-10T01:00:00Z',
-    expired: false,
     ...overrides,
-  }
+  })
 }
 
 function makeNote(id: string, content: string): ReaderNoteResponse {
-  return {
+  return makeReaderNote({
     id,
     title: '生成的想法笔记',
     published_content: '',
@@ -127,11 +108,10 @@ function makeNote(id: string, content: string): ReaderNoteResponse {
     draft_content: content,
     draft_revision: 1,
     draft_updated_at: '2026-08-10T03:00:00Z',
-    deleted_at: null,
     created_at: '2026-08-10T03:00:00Z',
     updated_at: '2026-08-10T03:00:00Z',
     dirty: true,
-  }
+  })
 }
 
 function makeListResult(items: ReaderThoughtResponse[]): ApiResult<ReaderThoughtsResponse> {
@@ -181,7 +161,7 @@ function makeClient(items: ReaderThoughtResponse[]) {
   const listThoughtSupersessions = vi.fn()
   const pushThoughtOps = vi.fn(async () => ok([]))
   const isIdentityCurrent = vi.fn(() => true)
-  const client = {
+  const client = makeReaderClient({
     listThoughts,
     listThoughtHistory,
     listTodos,
@@ -191,7 +171,7 @@ function makeClient(items: ReaderThoughtResponse[]) {
     listThoughtSupersessions,
     pushThoughtOps,
     isIdentityCurrent,
-  } as unknown as IdentityBoundReaderClient
+  })
   return {
     client,
     listThoughts,

@@ -7,26 +7,9 @@ import { ok } from '@webtag/api'
 import type { ReaderTodoPatchRequest, ReaderTodoResponse } from '../../lib/api/types'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { enabledReaderCapabilityPolicy } from '../../test/capabilities'
+import { makeReaderTodo as todo } from '../../test/fixtures'
+import { makeReaderClient } from '../../test/reader-client'
 import { sortTodos, TodoSurface } from './TodoSurface'
-
-function todo(overrides: Partial<ReaderTodoResponse> = {}): ReaderTodoResponse {
-  return {
-    id: 'todo-1',
-    text: '任务',
-    due_at: null,
-    done: false,
-    origin_kind: 'standalone',
-    origin_host_kind: null,
-    origin_host_id: null,
-    origin_ref: null,
-    host_revision: 0,
-    completed_at: null,
-    created_at: '2026-08-10T01:00:00Z',
-    updated_at: '2026-08-10T01:00:00Z',
-    expired: false,
-    ...overrides,
-  }
-}
 
 function makeClient(items: ReaderTodoResponse[]) {
   const listTodos = vi.fn(async () => ok({ items }))
@@ -41,12 +24,11 @@ function makeClient(items: ReaderTodoResponse[]) {
     }))
   })
   const deleteTodo = vi.fn(async () => ok(true as const))
-  const client = {
+  const client = makeReaderClient({
     listTodos,
     patchTodo,
     deleteTodo,
-    isIdentityCurrent: vi.fn(() => true),
-  } as unknown as IdentityBoundReaderClient
+  })
   return { client, listTodos, patchTodo, deleteTodo }
 }
 
@@ -85,13 +67,12 @@ function makeStatefulClient(initialItems: ReaderTodoResponse[]) {
     state.delete(id)
     return ok(true as const)
   })
-  const client = {
+  const client = makeReaderClient({
     listTodos,
     createTodo,
     patchTodo,
     deleteTodo,
-    isIdentityCurrent: vi.fn(() => true),
-  } as unknown as IdentityBoundReaderClient
+  })
   return { client, listTodos, createTodo, patchTodo, deleteTodo }
 }
 
@@ -486,10 +467,9 @@ describe('TodoSurface', () => {
   it('clears private TODO state and exits loading when identity is lost during a refresh', async () => {
     let identityCurrent = true
     const listTodos = vi.fn(async () => ok({ items: [todo({ text: '身份隔离任务' })] }))
-    const client = {
+    const client = makeReaderClient({
       listTodos,
-      isIdentityCurrent: vi.fn(() => identityCurrent),
-    } as unknown as IdentityBoundReaderClient
+    }, { isIdentityCurrent: () => identityCurrent })
     renderTodo(client)
 
     expect(await screen.findByText('身份隔离任务')).toBeInTheDocument()
@@ -514,7 +494,7 @@ describe('TodoSurface', () => {
       updated_at: '2026-08-10T01:00:00Z',
     })
     const listTodos = vi.fn(async () => ok({ items: [arrayShaped] }))
-    const client = { listTodos, isIdentityCurrent: vi.fn(() => true) } as unknown as IdentityBoundReaderClient
+    const client = makeReaderClient({ listTodos })
 
     renderTodo(client)
 
@@ -526,7 +506,7 @@ describe('TodoSurface', () => {
   // 也要走宿主协议的 409 / 412 / 403 文案，而不是笼统的「请求失败」。
   it('translates a thrown host status into the shared conflict copy', async () => {
     const listTodos = vi.fn(async () => { throw { status: 409 } })
-    const client = { listTodos, isIdentityCurrent: vi.fn(() => true) } as unknown as IdentityBoundReaderClient
+    const client = makeReaderClient({ listTodos })
 
     renderTodo(client)
 
@@ -547,7 +527,7 @@ describe('TodoSurface', () => {
     }
     const listTodos = vi.fn(async () => ok({ todos: [legacy] }))
     const patchTodo = vi.fn(async () => ok({ id: 'legacy-todo', done: true }))
-    const client = { listTodos, patchTodo, isIdentityCurrent: vi.fn(() => true) } as unknown as IdentityBoundReaderClient
+    const client = makeReaderClient({ listTodos, patchTodo })
 
     renderTodo(client)
     expect(await screen.findByText('旧字段任务')).toBeInTheDocument()

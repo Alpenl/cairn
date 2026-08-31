@@ -2,76 +2,26 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSites } from './useSites'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
-import type { ListSitesParams, PaginatedSitesResponse, SiteListItemResponse } from '../lib/api/types'
+import type { ListSitesParams, PaginatedSitesResponse } from '../lib/api/types'
 import { identityScopedCacheKey, sitesPageCacheKey } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
-import { err, ok, type ApiResult } from '@webtag/api'
-import { IdentityLease } from '../lib/identity'
+import { err, type ApiResult } from '@webtag/api'
+import type { IdentityLease } from '../lib/identity'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
 import { enabledReaderCapabilityLease } from '../test/capabilities'
-
-function makeSite(index: number, prefix = 'site'): SiteListItemResponse {
-  const suffix = String(index).padStart(12, '0')
-  return {
-    id: `00000000-0000-4000-8000-${suffix}`,
-    name: `${prefix} ${index}`,
-    intro: '',
-    display_host: `${prefix}-${index}.example.test`,
-    homepage_url: `https://${prefix}-${index}.example.test`,
-    icon_url: null,
-    tags: [],
-    entry_count: 1,
-    pinned: false,
-    primary_entry: null,
-    revision: index,
-    first_collected_at: '2026-08-01T00:00:00Z',
-    last_collected_at: '2026-08-01T00:00:00Z',
-  }
-}
-
-function page(
-  items: SiteListItemResponse[],
-  total: number,
-  pageNumber: number,
-  recentCutoff?: string,
-): ApiResult<PaginatedSitesResponse> {
-  return ok({
-    items,
-    total,
-    page: pageNumber,
-    limit: 30,
-    ...(recentCutoff ? { recent_cutoff: recentCutoff } : {}),
-  })
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
-  return { promise, resolve }
-}
+import { deferred, makeSite, makeSitesPage } from '../test/fixtures'
+import { makeReaderClient, makeTestIdentityLease } from '../test/reader-client'
 
 function mockClient(
   getSites: (params?: ListSitesParams) => Promise<ApiResult<PaginatedSitesResponse>>,
   lease = identityLease,
 ): IdentityBoundReaderClient {
-  return {
-    identityLease: lease,
-    getSites: vi.fn(getSites),
-    isIdentityCurrent: vi.fn(() => true),
-  } as unknown as IdentityBoundReaderClient
+  return makeReaderClient({ getSites: vi.fn(getSites) }, { lease })
 }
 
 let testNumber = 0
 let identityLease: IdentityLease
 let capabilityLease: ReaderCapabilityLease
-
-function makeIdentityLease(prefix: string): IdentityLease {
-  return new IdentityLease({
-    serverClientDataNamespace: `${prefix}-server`,
-    physicalNamespace: `${prefix}-physical`,
-    localEpoch: testNumber,
-  })
-}
 
 function identityCacheKey(baseKey: string, lease = identityLease): string {
   return identityScopedCacheKey(baseKey, lease.context)
@@ -79,7 +29,7 @@ function identityCacheKey(baseKey: string, lease = identityLease): string {
 
 beforeEach(() => {
   testNumber += 1
-  identityLease = makeIdentityLease(`sites-${testNumber}`)
+  identityLease = makeTestIdentityLease(`sites-${testNumber}`, testNumber)
   resourceStore.clear()
   resourceStore.activateIdentity(identityLease)
   capabilityLease = enabledReaderCapabilityLease()
@@ -94,7 +44,7 @@ describe('useSites', () => {
     const first = Array.from({ length: 30 }, (_, index) => makeSite(index + 1))
     const second = [first[29], ...Array.from({ length: 29 }, (_, index) => makeSite(index + 31))]
     const client = mockClient(async (params = {}) => (
-      params.page === 2 ? page(second, 59, 2) : page(first, 59, 1)
+      params.page === 2 ? makeSitesPage(second, 59, 2) : makeSitesPage(first, 59, 1)
     ))
 
     const { result } = renderHook(() => useSites(client, capabilityLease, { view: 'all' }))
@@ -131,11 +81,11 @@ describe('useSites', () => {
         firstPageLoads += 1
         const source = firstPageLoads === 1 ? firstWindow : reloadedWindow
         const cutoff = firstPageLoads === 1 ? firstCutoff : reloadedCutoff
-        return page(source.slice(0, 30), source.length, 1, cutoff)
+        return makeSitesPage(source.slice(0, 30), source.length, 1, cutoff)
       }
       const source = params.recentCutoff === firstCutoff ? firstWindow : reloadedWindow
       const start = (pageNumber - 1) * 30
-      return page(source.slice(start, start + 30), source.length, pageNumber, params.recentCutoff)
+      return makeSitesPage(source.slice(start, start + 30), source.length, pageNumber, params.recentCutoff)
     })
     const { result } = renderHook(() => useSites(client, capabilityLease, { view: 'recent' }))
 
@@ -184,11 +134,11 @@ describe('useSites', () => {
     const first = Array.from({ length: 30 }, (_, index) => makeSite(index + 1))
     let attempts = 0
     const client = mockClient(async (params = {}) => {
-      if (params.page !== 2) return page(first, 31, 1)
+      if (params.page !== 2) return makeSitesPage(first, 31, 1)
       attempts += 1
       return attempts === 1
         ? err({ kind: 'other', message: 'page two failed', status: 503 })
-        : page([makeSite(31)], 31, 2)
+        : makeSitesPage([makeSite(31)], 31, 2)
     })
     const { result } = renderHook(() => useSites(client, capabilityLease, { view: 'all' }))
     await waitFor(() => expect(result.current.items).toHaveLength(30))
@@ -213,8 +163,8 @@ describe('useSites', () => {
       if (params.page === 2) return lateNext.promise
       firstPageLoads += 1
       return firstPageLoads === 1
-        ? page(oldFirst, 31, 1)
-        : page([makeSite(1, 'fresh')], 1, 1)
+        ? makeSitesPage(oldFirst, 31, 1)
+        : makeSitesPage([makeSite(1, 'fresh')], 1, 1)
     })
     const { result } = renderHook(() => useSites(client, capabilityLease, { view: 'all' }))
     await waitFor(() => expect(result.current.items).toHaveLength(30))
@@ -229,7 +179,7 @@ describe('useSites', () => {
     expect(result.current.items.map((item) => item.name)).toEqual(['fresh 1'])
 
     await act(async () => {
-      lateNext.resolve(page([makeSite(31, 'old')], 31, 2))
+      lateNext.resolve(makeSitesPage([makeSite(31, 'old')], 31, 2))
       await lateNext.promise
     })
     expect(result.current.items.map((item) => item.name)).toEqual(['fresh 1'])
@@ -240,9 +190,9 @@ describe('useSites', () => {
     const oldNext = deferred<ApiResult<PaginatedSitesResponse>>()
     const tagged = makeSite(1, 'tagged')
     const client = mockClient(async (params = {}) => {
-      if (params.tags === 'research') return page([tagged], 1, 1)
+      if (params.tags === 'research') return makeSitesPage([tagged], 1, 1)
       if (params.page === 2) return oldNext.promise
-      return page(allFirst, 31, 1)
+      return makeSitesPage(allFirst, 31, 1)
     })
     const { result, rerender } = renderHook(
       ({ tags }: { tags?: string }) => useSites(client, capabilityLease, { view: 'all', tags }),
@@ -261,7 +211,7 @@ describe('useSites', () => {
     await waitFor(() => expect(result.current.items.map((item) => item.name)).toEqual(['tagged 1']))
 
     await act(async () => {
-      oldNext.resolve(page([makeSite(31, 'all')], 31, 2))
+      oldNext.resolve(makeSitesPage([makeSite(31, 'all')], 31, 2))
       await oldNext.promise
     })
     expect(result.current.items.map((item) => item.name)).toEqual(['tagged 1'])
@@ -271,7 +221,7 @@ describe('useSites', () => {
     const delayedAll = deferred<ApiResult<PaginatedSitesResponse>>()
     const pinned = makeSite(1, 'pinned')
     const client = mockClient(async (params = {}) => (
-      params.view === 'pinned' ? page([pinned], 1, 1) : delayedAll.promise
+      params.view === 'pinned' ? makeSitesPage([pinned], 1, 1) : delayedAll.promise
     ))
     const { result, rerender } = renderHook(
       ({ view }: { view: 'all' | 'pinned' }) => useSites(client, capabilityLease, { view }),
@@ -282,19 +232,15 @@ describe('useSites', () => {
     rerender({ view: 'pinned' })
     await waitFor(() => expect(result.current.items.map((item) => item.name)).toEqual(['pinned 1']))
 
-    await act(async () => { delayedAll.resolve(page([makeSite(99, 'all')], 1, 1)) })
+    await act(async () => { delayedAll.resolve(makeSitesPage([makeSite(99, 'all')], 1, 1)) })
     expect(result.current.items.map((item) => item.name)).toEqual(['pinned 1'])
   })
 
   it('clears data when the identity-owned client changes and fences its late response', async () => {
     const delayedA = deferred<ApiResult<PaginatedSitesResponse>>()
     const clientA = mockClient(async () => delayedA.promise)
-    const leaseB = new IdentityLease({
-      serverClientDataNamespace: 'sites-identity-b-server',
-      physicalNamespace: 'sites-identity-b-physical',
-      localEpoch: testNumber + 100,
-    })
-    const clientB = mockClient(async () => page([makeSite(2, 'identity-b')], 1, 1), leaseB)
+    const leaseB = makeTestIdentityLease('sites-identity-b', testNumber + 100)
+    const clientB = mockClient(async () => makeSitesPage([makeSite(2, 'identity-b')], 1, 1), leaseB)
     const { result, rerender } = renderHook(
       ({ client }: { client: IdentityBoundReaderClient }) => useSites(client, capabilityLease, { view: 'all' }),
       { initialProps: { client: clientA } },
@@ -307,7 +253,7 @@ describe('useSites', () => {
     })
     await waitFor(() => expect(result.current.items.map((item) => item.name)).toEqual(['identity-b 2']))
 
-    await act(async () => { delayedA.resolve(page([makeSite(1, 'identity-a')], 1, 1)) })
+    await act(async () => { delayedA.resolve(makeSitesPage([makeSite(1, 'identity-a')], 1, 1)) })
     expect(result.current.items.map((item) => item.name)).toEqual(['identity-b 2'])
   })
 
@@ -316,14 +262,10 @@ describe('useSites', () => {
     const delayedB = deferred<ApiResult<PaginatedSitesResponse>>()
     const clientA = mockClient(async (params = {}) => (
       params.page === 2
-        ? page([makeSite(31, 'identity-a')], 31, 2)
-        : page(firstA, 31, 1)
+        ? makeSitesPage([makeSite(31, 'identity-a')], 31, 2)
+        : makeSitesPage(firstA, 31, 1)
     ))
-    const leaseB = new IdentityLease({
-      serverClientDataNamespace: 'sites-render-b-server',
-      physicalNamespace: 'sites-render-b-physical',
-      localEpoch: testNumber + 100,
-    })
+    const leaseB = makeTestIdentityLease('sites-render-b', testNumber + 100)
     const clientB = mockClient(async () => delayedB.promise, leaseB)
     const renderSnapshots: Array<{ owner: 'a' | 'b'; names: string[] }> = []
     const { result, rerender } = renderHook(
@@ -354,24 +296,22 @@ describe('useSites', () => {
     ).toBe(false)
 
     await act(async () => {
-      delayedB.resolve(page([makeSite(1, 'identity-b')], 1, 1))
+      delayedB.resolve(makeSitesPage([makeSite(1, 'identity-b')], 1, 1))
       await delayedB.promise
     })
     await waitFor(() => expect(result.current.items.map((item) => item.name)).toEqual(['identity-b 1']))
   })
 
   it('does not request or render active cache through an inactive explicit client', async () => {
-    const activeClient = mockClient(async () => page([makeSite(1, 'active')], 1, 1))
+    const activeClient = mockClient(async () => makeSitesPage([makeSite(1, 'active')], 1, 1))
     const active = renderHook(() => useSites(activeClient, capabilityLease, { view: 'all' }))
     await waitFor(() => expect(active.result.current.items.map((item) => item.name)).toEqual(['active 1']))
     active.unmount()
 
-    const staleLease = new IdentityLease({
-      serverClientDataNamespace: 'sites-stale-server',
+    const staleLease = makeTestIdentityLease('sites-stale', identityLease.context.localEpoch + 100, {
       physicalNamespace: identityLease.context.physicalNamespace,
-      localEpoch: identityLease.context.localEpoch + 100,
     })
-    const getStaleSites = vi.fn(async () => page([makeSite(1, 'stale')], 1, 1))
+    const getStaleSites = vi.fn(async () => makeSitesPage([makeSite(1, 'stale')], 1, 1))
     const staleClient = mockClient(getStaleSites, staleLease)
     const stale = renderHook(() => useSites(staleClient, capabilityLease, { view: 'all' }))
 
@@ -386,7 +326,7 @@ describe('useSites', () => {
       siteWrite: false,
       siteAdvanced: false,
     })
-    const client = mockClient(async () => page([makeSite(1)], 1, 1))
+    const client = mockClient(async () => makeSitesPage([makeSite(1)], 1, 1))
     const { result } = renderHook(() => useSites(client, deniedLease, { view: 'all' }))
 
     await act(async () => {})
@@ -426,7 +366,7 @@ describe('useSites', () => {
     expect(result.current.loading).toBe(false)
 
     await act(async () => {
-      delayed.resolve(page([makeSite(1, 'stale-capability')], 1, 1))
+      delayed.resolve(makeSitesPage([makeSite(1, 'stale-capability')], 1, 1))
       await delayed.promise
     })
 

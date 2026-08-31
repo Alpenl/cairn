@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ReaderTodoResponse } from './api/types'
+import { makeReaderTodo as todo } from '../test/fixtures'
 import {
   formatRelativeDate,
   identityIsCurrent,
@@ -8,25 +8,6 @@ import {
   SURFACE_IDENTITY_ERROR,
   todoDesiredStatePatch,
 } from './reader-surface'
-
-function todo(overrides: Partial<ReaderTodoResponse> = {}): ReaderTodoResponse {
-  return {
-    id: 'todo-1',
-    text: '任务',
-    due_at: null,
-    done: false,
-    origin_kind: 'standalone',
-    origin_host_kind: null,
-    origin_host_id: null,
-    origin_ref: null,
-    host_revision: 0,
-    completed_at: null,
-    created_at: '2026-08-10T01:00:00Z',
-    updated_at: '2026-08-10T01:00:00Z',
-    expired: false,
-    ...overrides,
-  }
-}
 
 describe('SURFACE_IDENTITY_ERROR', () => {
   it('keeps the user-visible identity copy', () => {

@@ -4,71 +4,29 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { localDayCreatedRange, useLinks, type Selection } from './useLinks'
 import { linkDetailCacheKey } from './useAnnotatedLinks'
-import type { IdentityBoundReaderClient, ReaderClient } from '../lib/api/client'
+import type { ReaderClient } from '../lib/api/client'
 import type { ListLinksParams } from '../lib/api/client'
 import { err, type ApiResult } from '@webtag/api'
 import type { LinkResponse, PaginatedLinksResponse } from '../lib/api/types'
 import { ownedDatabaseName } from '../lib/storage-ownership'
 import { invalidateLibrary } from '../lib/cache/invalidate'
 import { resourceStore } from '../lib/cache/store'
-import { makeLink } from '../test/fixtures'
-import { IdentityLease, readerIdentity } from '../lib/identity'
+import {
+  makeLegacyLinksPage,
+  makeLink,
+  makeLinksPage,
+  makeReadingLink,
+} from '../test/fixtures'
+import { bindLegacyReaderClient, bindReaderClient, makeTestIdentityLease } from '../test/reader-client'
+import { readerIdentity } from '../lib/identity'
 import { commitAnnotationOperation } from '../lib/user-data/annotation-store'
 import type { SavedContentAnnotationAddDraft } from '../lib/user-data/annotation-types'
 import { resetUserDataDatabaseHandle } from '../lib/user-data/idb'
 
-function bindClient(
-  client: ReaderClient,
-  lease = readerIdentity.activeLease!,
-): IdentityBoundReaderClient {
-  const current = (client as { isIdentityCurrent?: () => boolean }).isIdentityCurrent
-  Object.defineProperty(client, 'identityLease', {
-    configurable: true,
-    value: lease,
-  })
-  if (!current) {
-    Object.defineProperty(client, 'isIdentityCurrent', {
-      configurable: true,
-      value: () => true,
-    })
-  }
-  Object.defineProperty(client, 'captureIdentity', {
-    configurable: true,
-    value: (logicalKey: string) => {
-      if (current && !current.call(client)) return null
-      const ownership = lease.captureOwnership(logicalKey)
-      return lease.isOwnershipCurrent(ownership) ? ownership : null
-    },
-  })
-  return client as IdentityBoundReaderClient
-}
-
 function useTestLinks(client: ReaderClient, selection: Selection) {
   const lease = readerIdentity.activeLease
   if (!lease) throw new Error('test identity lease is not active')
-  return useLinks(bindClient(client, lease), selection)
-}
-
-function makeReadingLink(over: Partial<LinkResponse> = {}): LinkResponse {
-  return makeLink({ library_kind: 'reading', ...over })
-}
-
-/**
- * 构造一页响应。
- *
- * 后端契约（dto.PaginatedLinksResponse）：游标模式下满页**必发** next_cursor，
- * 短于 limit 则省略；total / page 恒为 0（游标模式刻意不算 COUNT）。
- * fixture 必须照这个来——否则「还有没有下一页」在测试里永远是 false，
- * 一整类翻页用例会在"什么都没发生"的前提下通过。
- */
-function page(items = [makeLink()], limit = 30): ApiResult<PaginatedLinksResponse> {
-  const data: PaginatedLinksResponse = { items, total: 0, page: 0, limit }
-  if (items.length >= limit) data.next_cursor = 'cursor-' + items.length
-  return { ok: true, data }
-}
-
-function legacyPage(items: LinkResponse[], total: number, limit = 30): ApiResult<PaginatedLinksResponse> {
-  return { ok: true, data: { items, total, page: 1, limit } }
+  return useLinks(bindReaderClient(client, { lease }), selection)
 }
 
 /** 构造仅实现 getLinks 的假客户端，记录调用参数。 */
@@ -77,13 +35,12 @@ function fakeClient(
   isIdentityCurrent: () => boolean = () => true,
 ) {
   const calls: ListLinksParams[] = []
-  const client = {
+  const client = bindLegacyReaderClient({
     getLinks: vi.fn(async (p: ListLinksParams = {}) => {
       calls.push(p)
       return impl(p)
     }),
-    isIdentityCurrent: vi.fn(isIdentityCurrent),
-  } as unknown as ReaderClient
+  }, { isIdentityCurrent })
   return { client, calls }
 }
 
@@ -183,7 +140,7 @@ describe('localDayCreatedRange', () => {
 
 describe('useLinks 视图→参数映射', () => {
   it('all 视图显式限定已完成的 reading 链接', async () => {
-    const { client, calls } = fakeClient(async () => page())
+    const { client, calls } = fakeClient(async () => makeLinksPage())
     renderHook(() => useTestLinks(client, { type: 'smart', id: 'all', name: '全部' }))
     await waitFor(() => expect(calls.length).toBeGreaterThan(0))
 
@@ -196,7 +153,7 @@ describe('useLinks 视图→参数映射', () => {
   })
 
   it('tag 视图带 tags 参数', async () => {
-    const { client, calls } = fakeClient(async () => page())
+    const { client, calls } = fakeClient(async () => makeLinksPage())
     const sel: Selection = { type: 'tag', id: 'LLM', name: '#LLM' }
     renderHook(() => useTestLinks(client, sel))
     await waitFor(() => expect(calls.length).toBeGreaterThan(0))
@@ -210,7 +167,7 @@ describe('useLinks 视图→参数映射', () => {
   })
 
   it('domain 视图带 domain 参数', async () => {
-    const { client, calls } = fakeClient(async () => page())
+    const { client, calls } = fakeClient(async () => makeLinksPage())
     renderHook(() => useTestLinks(client, { type: 'domain', id: 'x.com', name: 'x.com' }))
     await waitFor(() => expect(calls.length).toBeGreaterThan(0))
     expect(calls[0]).toEqual({
@@ -232,7 +189,7 @@ describe('useLinks 视图→参数映射', () => {
         makeLink({ id: 'server-authoritative-1' }),
         makeLink({ id: 'server-authoritative-2' }),
       ]
-      const { client, calls } = fakeClient(async () => page(serverItems))
+      const { client, calls } = fakeClient(async () => makeLinksPage(serverItems))
       const { result } = renderHook(() =>
         useTestLinks(client, { type: 'smart', id: 'today', name: '今天' }),
       )
@@ -262,7 +219,7 @@ describe('useLinks 视图→参数映射', () => {
     const site = makeLink({ id: 'indexed-site-link', library_kind: 'site' })
     const pending = makeReadingLink({ id: 'indexed-pending-link', status: 'pending' })
     for (const link of [indexed, site, pending]) await indexAnnotatedLink(link.id)
-    const getLinks = vi.fn(async () => page([makeLink({ id: 'latest-but-unannotated' })]))
+    const getLinks = vi.fn(async () => makeLinksPage([makeLink({ id: 'latest-but-unannotated' })]))
     const byID = new Map([indexed, site, pending].map((link) => [link.id, link]))
     const getLink = vi.fn(async (id: string) => ({ ok: true as const, data: byID.get(id)! }))
     const client = { getLinks, getLink } as unknown as ReaderClient
@@ -289,7 +246,7 @@ describe('useLinks 视图→参数映射', () => {
 describe('useLinks Reading corpus authority', () => {
   it('保留旧后端 scoped links 的权威 total，但部分 corpus 不标为完整', async () => {
     const { client } = fakeClient(async () =>
-      legacyPage([makeLink({ id: 'loaded-1' })], 2),
+      makeLegacyLinksPage([makeLink({ id: 'loaded-1' })], 2),
     )
     const { result } = renderHook(() =>
       useTestLinks(client, { type: 'smart', id: 'all', name: '全部' }),
@@ -302,7 +259,7 @@ describe('useLinks Reading corpus authority', () => {
 
   it('只有分页结束且去重条数等于权威 total 才标记完整', async () => {
     const items = [makeLink({ id: 'reading-1' }), makeLink({ id: 'reading-2' })]
-    const { client } = fakeClient(async () => legacyPage(items, 2))
+    const { client } = fakeClient(async () => makeLegacyLinksPage(items, 2))
     const { result } = renderHook(() =>
       useTestLinks(client, { type: 'smart', id: 'all', name: '全部' }),
     )
@@ -313,7 +270,7 @@ describe('useLinks Reading corpus authority', () => {
   })
 
   it('cursor 响应的占位 total=0 不冒充权威总数', async () => {
-    const { client } = fakeClient(async () => page([makeLink({ id: 'cursor-item' })]))
+    const { client } = fakeClient(async () => makeLinksPage([makeLink({ id: 'cursor-item' })]))
     const { result } = renderHook(() =>
       useTestLinks(client, { type: 'smart', id: 'all', name: '全部' }),
     )
@@ -327,13 +284,9 @@ describe('useLinks Reading corpus authority', () => {
 describe('useLinks 竞态守卫', () => {
   it('A client 在 B cache partition 激活时不请求也不写入', async () => {
     const leaseB = readerIdentity.activeLease!
-    const leaseA = new IdentityLease({
-      serverClientDataNamespace: 'server-A',
-      physicalNamespace: 'physical-A',
-      localEpoch: leaseB.context.localEpoch + 1,
-    })
-    const getLinks = vi.fn(async () => page([makeLink({ id: 'A-private-link' })]))
-    const clientA = bindClient({ getLinks } as unknown as ReaderClient, leaseA)
+    const leaseA = makeTestIdentityLease('A', leaseB.context.localEpoch + 1)
+    const getLinks = vi.fn(async () => makeLinksPage([makeLink({ id: 'A-private-link' })]))
+    const clientA = bindReaderClient({ getLinks }, { lease: leaseA })
     const writes: string[] = []
     const stopObserving = resourceStore.onChange((key) => writes.push(key))
 
@@ -366,7 +319,7 @@ describe('useLinks 竞态守卫', () => {
         })
       }
       // 第二次（tag）：快
-      return Promise.resolve(page([makeLink({ id: 'fast', tags: [p.tags || 'x'] })]))
+      return Promise.resolve(makeLinksPage([makeLink({ id: 'fast', tags: [p.tags || 'x'] })]))
     })
 
     const { result, rerender } = renderHook(({ sel }: { sel: Selection }) => useTestLinks(client, sel), {
@@ -378,7 +331,7 @@ describe('useLinks 竞态守卫', () => {
     await waitFor(() => expect(result.current.links.some((l) => l.id === 'fast')).toBe(true))
 
     // 现在让第一次慢请求迟到 resolve —— 不应覆盖
-    act(() => resolveSlow(page([makeLink({ id: 'stale' })])))
+    act(() => resolveSlow(makeLinksPage([makeLink({ id: 'stale' })])))
     await Promise.resolve()
     expect(result.current.links.some((l) => l.id === 'stale')).toBe(false)
     expect(result.current.links.some((l) => l.id === 'fast')).toBe(true)
@@ -396,7 +349,7 @@ describe('useLinks 竞态守卫', () => {
     const { client } = fakeClient(
       () => {
         requestCount += 1
-        return requestCount === 1 ? Promise.resolve(page(full)) : delayedPage
+        return requestCount === 1 ? Promise.resolve(makeLinksPage(full)) : delayedPage
       },
       () => leaseA.isCurrent(ownershipA),
     )
@@ -412,7 +365,7 @@ describe('useLinks 竞态守卫', () => {
       physicalNamespace: 'physical-B',
     })
     await act(async () => {
-      resolvePage(page([makeLink({ id: 'A-late-page' })]))
+      resolvePage(makeLinksPage([makeLink({ id: 'A-late-page' })]))
       await delayedPage
     })
 
@@ -505,7 +458,7 @@ describe('useLinks 竞态守卫', () => {
     expect(result.current.hasMore).toBe(false)
 
     await act(async () => {
-      resolveOldPage(page([makeLink({ id: 'old-late' })]))
+      resolveOldPage(makeLinksPage([makeLink({ id: 'old-late' })]))
       await oldPage
     })
     act(() => result.current.loadMore())
@@ -522,7 +475,7 @@ describe('useLinks 自动刷新', () => {
   it('停留在第 1 页时按间隔静默重拉', async () => {
     vi.useFakeTimers()
     try {
-      const { client, calls } = fakeClient(async () => page())
+      const { client, calls } = fakeClient(async () => makeLinksPage())
       renderHook(() => useTestLinks(client, { type: 'smart', id: 'all', name: '全部' }))
       await act(async () => {
         await Promise.resolve()
@@ -547,7 +500,7 @@ describe('useLinks 自动刷新', () => {
       // 满页才会有 hasMore，loadMore 才真的推进到第 2 页——否则这条测试
       // 会在「page 始终是 1」的前提下通过，什么也没验到。
       const full = Array.from({ length: 30 }, (_, i) => makeLink({ id: `l${i}` }))
-      const { client, calls } = fakeClient(async () => page(full))
+      const { client, calls } = fakeClient(async () => makeLinksPage(full))
       const { result } = renderHook(() => useTestLinks(client, { type: 'smart', id: 'all', name: '全部' }))
       await act(async () => {
         await Promise.resolve()
@@ -573,7 +526,7 @@ describe('useLinks 自动刷新', () => {
     vi.useFakeTimers()
     const spy = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
     try {
-      const { client, calls } = fakeClient(async () => page())
+      const { client, calls } = fakeClient(async () => makeLinksPage())
       renderHook(() => useTestLinks(client, { type: 'smart', id: 'all', name: '全部' }))
       await act(async () => {
         await Promise.resolve()
@@ -603,7 +556,7 @@ describe('useLinks 自动刷新不打断阅读', () => {
       const client = {
         getLinks: vi.fn(async () => {
           calls += 1
-          if (calls === 1) return page()
+          if (calls === 1) return makeLinksPage()
           // 第二次（定时器触发的那次）挂住，好在「在途」这一刻检查 loading。
           return new Promise<ApiResult<PaginatedLinksResponse>>((r) => {
             release = r
@@ -628,7 +581,7 @@ describe('useLinks 自动刷新不打断阅读', () => {
       expect(result.current.loading).toBe(false)
 
       await act(async () => {
-        release?.(page())
+        release?.(makeLinksPage())
         await Promise.resolve()
       })
     } finally {
@@ -643,7 +596,7 @@ describe('useLinks 自动刷新不打断阅读', () => {
       const client = {
         getLinks: vi.fn(async () => {
           calls += 1
-          if (calls === 1) return page([makeLink({ id: 'kept' })])
+          if (calls === 1) return makeLinksPage([makeLink({ id: 'kept' })])
           return {
             ok: false as const,
             error: { kind: 'network-unreachable' as const, message: 'offline' },
@@ -676,7 +629,7 @@ describe('useLinks 自动刷新不打断阅读', () => {
     const client = {
       getLinks: vi.fn(async () => {
         calls += 1
-        if (calls === 1) return page([makeLink({ id: 'kept' })])
+        if (calls === 1) return makeLinksPage([makeLink({ id: 'kept' })])
         return {
           ok: false as const,
           error: { kind: 'network-unreachable' as const, message: 'offline' },
@@ -712,14 +665,14 @@ describe('useLinks silent 请求不得泄漏 loading', () => {
     const client = {
       getLinks: vi.fn(async () => {
         calls += 1
-        if (calls === 1) return page([makeLink({ id: 'initial' })])
+        if (calls === 1) return makeLinksPage([makeLink({ id: 'initial' })])
         if (calls === 2) {
           return {
             ok: false as const,
             error: { kind: 'network-unreachable' as const, message: 'offline' },
           }
         }
-        return page([makeLink({ id: 'initial' })])
+        return makeLinksPage([makeLink({ id: 'initial' })])
       }),
     } as unknown as ReaderClient
 
@@ -752,7 +705,7 @@ describe('useLinks silent 请求不得泄漏 loading', () => {
     const client = {
       getLinks: vi.fn(async () => {
         calls += 1
-        if (calls === 1) return page([makeLink({ id: 'cached' })])
+        if (calls === 1) return makeLinksPage([makeLink({ id: 'cached' })])
         return new Promise<ApiResult<PaginatedLinksResponse>>((r) => {
           release = r
         })
@@ -774,7 +727,7 @@ describe('useLinks silent 请求不得泄漏 loading', () => {
     expect(result.current.links.map((l) => l.id)).toEqual(['cached'])
 
     await act(async () => {
-      release?.(page([makeLink({ id: 'cached' })]))
+      release?.(makeLinksPage([makeLink({ id: 'cached' })]))
       await Promise.resolve()
     })
     expect(result.current.loading).toBe(false)
@@ -788,14 +741,14 @@ it('后台刷新成功后清掉上一次的错误，新数据得以显示', asyn
   const client = {
     getLinks: vi.fn(async () => {
       calls += 1
-      if (calls === 1) return page([makeLink({ id: 'first' })])
+      if (calls === 1) return makeLinksPage([makeLink({ id: 'first' })])
       if (calls === 2) {
         return {
           ok: false as const,
           error: { kind: 'network-unreachable' as const, message: 'offline' },
         }
       }
-      return page([makeLink({ id: 'fresh' })])
+      return makeLinksPage([makeLink({ id: 'fresh' })])
     }),
   } as unknown as ReaderClient
 
@@ -822,7 +775,7 @@ it('后台刷新成功后清掉上一次的错误，新数据得以显示', asyn
 // PF8：列表改走游标分页（?after=），后端据此跳过 COUNT(*) OVER() 与 OFFSET 扫描。
 describe('useLinks 游标分页', () => {
   it('首屏发 ?after= 进入游标模式，不再发 page=', async () => {
-    const { client, calls } = fakeClient(async () => page())
+    const { client, calls } = fakeClient(async () => makeLinksPage())
     renderHook(() => useTestLinks(client, { type: 'smart', id: 'all', name: '全部' }))
     await waitFor(() => expect(calls.length).toBeGreaterThan(0))
 
@@ -833,7 +786,7 @@ describe('useLinks 游标分页', () => {
 
   it('loadMore 带上一次响应的 next_cursor 续读', async () => {
     const full = Array.from({ length: 30 }, (_, i) => makeLink({ id: `l${i}` }))
-    const { client, calls } = fakeClient(async () => page(full))
+    const { client, calls } = fakeClient(async () => makeLinksPage(full))
     const { result } = renderHook(() => useTestLinks(client, { type: 'smart', id: 'all', name: '全部' }))
     await waitFor(() => expect(result.current.links).toHaveLength(30))
     expect(result.current.hasMore).toBe(true)
@@ -851,7 +804,7 @@ describe('useLinks 游标分页', () => {
 
   it('响应不带 next_cursor 即读到末尾，hasMore 归 false', async () => {
     const short = Array.from({ length: 5 }, (_, i) => makeLink({ id: `s${i}` }))
-    const { client } = fakeClient(async () => page(short))
+    const { client } = fakeClient(async () => makeLinksPage(short))
     const { result } = renderHook(() => useTestLinks(client, { type: 'smart', id: 'all', name: '全部' }))
     await waitFor(() => expect(result.current.links).toHaveLength(5))
 
@@ -916,7 +869,7 @@ describe('useLinks 游标分页', () => {
       let request = 0
       const { client, calls } = fakeClient(async () => {
         request += 1
-        return page([makeLink({ id: `day-${request}` })])
+        return makeLinksPage([makeLink({ id: `day-${request}` })])
       })
       const { result } = renderHook(() =>
         useTestLinks(client, { type: 'smart', id: 'today', name: '今天' }),
@@ -958,7 +911,7 @@ describe('useLinks 缓存键与乐观补丁的回归防线', () => {
     })
     const plain = makeLink({ id: 'plain', created_at: new Date().toISOString() })
     await indexAnnotatedLink(annotated.id)
-    const getLinks = vi.fn(async () => page([annotated, plain]))
+    const getLinks = vi.fn(async () => makeLinksPage([annotated, plain]))
     const getLink = vi.fn(async (): Promise<ApiResult<LinkResponse>> => ({
       ok: true,
       data: makeLink({ ...annotated, title: 'Unexpected point-read title' }),
@@ -985,7 +938,7 @@ describe('useLinks 缓存键与乐观补丁的回归防线', () => {
     const client = {
       getLinks: vi.fn(async () => {
         phase += 1
-        return page([makeLink({ id: 'L1', status: phase === 1 ? 'pending' : 'done' })])
+        return makeLinksPage([makeLink({ id: 'L1', status: phase === 1 ? 'pending' : 'done' })])
       }),
     } as unknown as ReaderClient
 

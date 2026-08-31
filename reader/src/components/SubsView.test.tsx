@@ -10,6 +10,7 @@ import { resourceStore } from '../lib/cache/store'
 import { idbClear, idbGetAll, resetDatabaseHandle } from '../lib/cache/idb'
 import { startPersistence } from '../lib/cache/persist'
 import { enabledReaderCapabilityPolicy } from '../test/capabilities'
+import { bindReaderClient } from '../test/reader-client'
 
 const subscription: FeedSubscription = {
   id: 'feed-1',
@@ -57,13 +58,8 @@ function makeClient(
     ok({ imported: 1, folders: 0, skipped: 0, errors: [] }),
   )
   const isIdentityCurrent = vi.fn(() => true)
-  const identityLease = readerIdentity.activeLease
-  const captureIdentity = vi.fn((logicalKey: string) => {
-    if (!identityLease) return null
-    const ownership = identityLease.captureOwnership(logicalKey)
-    return identityLease.isOwnershipCurrent(ownership) ? ownership : null
-  })
-  const client = {
+  const lease = readerIdentity.activeLease ?? undefined
+  const client = bindReaderClient({
     getSubscriptions: vi.fn(async () =>
       ok({
         folders: [{ id: 'folder-1', name: '技术' }],
@@ -87,10 +83,8 @@ function makeClient(
     deleteFeedFolder: vi.fn(async () => ok(true)),
     importSubscriptionsOPML,
     exportSubscriptionsOPML: vi.fn(async () => ok('<opml version="2.0"/>')),
-    identityLease,
     isIdentityCurrent,
-    captureIdentity,
-  } as unknown as SubsViewProps['client']
+  }, lease ? { lease } : {}) as unknown as SubsViewProps['client']
   return {
     client,
     getFeedItem,

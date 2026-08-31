@@ -11,9 +11,13 @@ import type {
 import type { ApiResult } from '@webtag/api'
 import type { LinkResponse, PaginatedLinksResponse } from '../lib/api/types'
 import { resourceStore } from '../lib/cache/store'
-import { IdentityLease, readerIdentity } from '../lib/identity'
+import { readerIdentity, type IdentityLease } from '../lib/identity'
 import { ownedDatabaseName, ownedStorageKeyForLease } from '../lib/storage-ownership'
-import { makeLink as makeLinkFixture } from '../test/fixtures'
+import {
+  makeLegacyLinksPage,
+  makeReadingLink as makeLink,
+} from '../test/fixtures'
+import { bindReaderClient, makeTestIdentityLease } from '../test/reader-client'
 import {
   commitAnnotationOperation,
   listAnnotatedLinks,
@@ -26,16 +30,8 @@ import {
   useAnnotatedLinks,
 } from './useAnnotatedLinks'
 
-function makeLink(over: Partial<LinkResponse> = {}): LinkResponse {
-  return makeLinkFixture({ library_kind: 'reading', ...over })
-}
-
-function bindClient(client: ReaderClient, lease: IdentityLease): IdentityBoundReaderClient {
-  Object.defineProperty(client, 'identityLease', {
-    configurable: true,
-    value: lease,
-  })
-  return client as IdentityBoundReaderClient
+function bindClient<T extends object>(client: T, lease: IdentityLease): T & IdentityBoundReaderClient {
+  return bindReaderClient(client, { lease })
 }
 
 function dispatchAnnotationHint(
@@ -106,13 +102,11 @@ function fakeClient(links: readonly LinkResponse[]) {
       ? { ok: true, data: link }
       : { ok: false, error: { kind: 'other', message: `missing ${id}` } }
   })
-  const getLinks = vi.fn(async (): Promise<ApiResult<PaginatedLinksResponse>> => ({
-    ok: true,
-    data: { items: links.slice(0, 100), total: 150, page: 1, limit: 100 },
-  }))
+  const getLinks = vi.fn(async (): Promise<ApiResult<PaginatedLinksResponse>> =>
+    makeLegacyLinksPage(links.slice(0, 100), 150, 100))
   return {
     client: bindClient(
-      { getLink, getLinks } as unknown as ReaderClient,
+      { getLink, getLinks },
       readerIdentity.activeLease!,
     ),
     getLink,
@@ -139,11 +133,7 @@ afterEach(async () => {
 describe('useAnnotatedLinks complete durable view', () => {
   it('fails closed when the bound client lease does not own the active cache partition', async () => {
     const leaseB = readerIdentity.activeLease!
-    const leaseA = new IdentityLease({
-      serverClientDataNamespace: 'server-A',
-      physicalNamespace: 'physical-A',
-      localEpoch: leaseB.context.localEpoch + 1,
-    })
+    const leaseA = makeTestIdentityLease('server-A', leaseB.context.localEpoch + 1)
     await addAnnotation(leaseA, 'A-private-link')
     const getLink = vi.fn(async () => ({
       ok: true as const,
@@ -165,11 +155,7 @@ describe('useAnnotatedLinks complete durable view', () => {
 
   it('derives the sidebar count from resolved done Reading links in the durable index', async () => {
     const leaseA = readerIdentity.activeLease!
-    const leaseB = new IdentityLease({
-      serverClientDataNamespace: 'server-B',
-      physicalNamespace: 'physical-B',
-      localEpoch: 2,
-    })
+    const leaseB = makeTestIdentityLease('server-B', 2)
     const states = new Map([
       ['A-one', makeLink({ id: 'A-one' })],
       ['A-site', makeLink({ id: 'A-site', library_kind: 'site' })],
@@ -582,16 +568,8 @@ describe('useAnnotatedLinks complete durable view', () => {
   })
 
   it('switches namespace atomically and aborts the previous IdentityLease work', async () => {
-    const leaseA = new IdentityLease({
-      serverClientDataNamespace: 'server-A',
-      physicalNamespace: 'physical-A',
-      localEpoch: 1,
-    })
-    const leaseB = new IdentityLease({
-      serverClientDataNamespace: 'server-B',
-      physicalNamespace: 'physical-B',
-      localEpoch: 2,
-    })
+    const leaseA = makeTestIdentityLease('server-A', 1)
+    const leaseB = makeTestIdentityLease('server-B', 2)
     const linksA = Array.from({ length: 7 }, (_, index) => makeLink({ id: `A-${index}` }))
     const linkB = makeLink({ id: 'B-only' })
     for (const link of linksA) await addAnnotation(leaseA, link.id)

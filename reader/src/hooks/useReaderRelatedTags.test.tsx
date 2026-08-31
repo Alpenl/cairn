@@ -3,9 +3,10 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { err, ok } from '@webtag/api'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ReaderRelatedTagsResponse } from '../lib/api/types'
-import { IdentityLease } from '../lib/identity'
+import type { IdentityLease } from '../lib/identity'
 import { resourceStore } from '../lib/cache/store'
 import { makeLink } from '../test/fixtures'
+import { makeReaderClient, makeTestIdentityLease } from '../test/reader-client'
 import { useReaderRelatedTags } from './useReaderRelatedTags'
 
 let lease: IdentityLease
@@ -14,11 +15,9 @@ let testNumber = 0
 function makeClient(
   getRelatedTags?: IdentityBoundReaderClient['getRelatedTags'],
 ): IdentityBoundReaderClient {
-  return {
-    identityLease: lease,
-    isIdentityCurrent: vi.fn(() => true),
+  return makeReaderClient({
     ...(getRelatedTags ? { getRelatedTags } : {}),
-  } as unknown as IdentityBoundReaderClient
+  }, { lease })
 }
 
 function localLink() {
@@ -27,11 +26,7 @@ function localLink() {
 
 beforeEach(() => {
   testNumber += 1
-  lease = new IdentityLease({
-    serverClientDataNamespace: `related-server-${testNumber}`,
-    physicalNamespace: `related-physical-${testNumber}`,
-    localEpoch: testNumber,
-  })
+  lease = makeTestIdentityLease(`related-${testNumber}`, testNumber)
   resourceStore.activateIdentity(lease)
 })
 
@@ -109,11 +104,7 @@ describe('useReaderRelatedTags', () => {
       makeClient(getRelatedTags),
     ))
 
-    const nextLease = new IdentityLease({
-      serverClientDataNamespace: 'related-server-B',
-      physicalNamespace: 'related-physical-B',
-      localEpoch: testNumber + 100,
-    })
+    const nextLease = makeTestIdentityLease('related-B', testNumber + 100)
     resourceStore.activateIdentity(nextLease)
     resolve(ok({ items: ['late-result'] }))
     await delayed
@@ -124,19 +115,13 @@ describe('useReaderRelatedTags', () => {
   })
 
   it('does not use an inactive explicit client', () => {
-    const staleLease = new IdentityLease({
-      serverClientDataNamespace: 'stale-client',
+    const staleLease = makeTestIdentityLease('stale-client', lease.context.localEpoch + 100, {
       physicalNamespace: lease.context.physicalNamespace,
-      localEpoch: lease.context.localEpoch + 100,
     })
     const getRelatedTags = vi.fn(async () => ok<ReaderRelatedTagsResponse>({
       items: ['stale-only'],
     }))
-    const staleClient = {
-      identityLease: staleLease,
-      isIdentityCurrent: vi.fn(() => true),
-      getRelatedTags,
-    } as unknown as IdentityBoundReaderClient
+    const staleClient = makeReaderClient({ getRelatedTags }, { lease: staleLease })
     const stale = renderHook(() => useReaderRelatedTags(localLink(), [], staleClient))
 
     expect(stale.result.current.source).toBe('local')

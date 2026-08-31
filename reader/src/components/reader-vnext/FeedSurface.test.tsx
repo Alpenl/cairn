@@ -13,13 +13,17 @@ import type {
   ReaderTodoResponse,
 } from '../../lib/api/types'
 import type { ReaderRoute } from '../../lib/navigation/route'
-import { readerIdentity } from '../../lib/identity'
 import { enabledReaderCapabilityLease } from '../../test/capabilities'
+import {
+  makeReaderFeedItem,
+  makeReaderTodo,
+} from '../../test/fixtures'
+import { makeReaderClient } from '../../test/reader-client'
 
 function feedItem(overrides: Partial<ReaderFeedItemResponse> = {}): ReaderFeedItemResponse {
   const source = overrides.source ?? 'reading'
   const key = overrides.key ?? 'link:L1'
-  return {
+  return makeReaderFeedItem({
     key,
     source,
     resource_key: overrides.resource_key ?? key,
@@ -32,9 +36,8 @@ function feedItem(overrides: Partial<ReaderFeedItemResponse> = {}): ReaderFeedIt
     read: false,
     read_later: false,
     saved: false,
-    event_at: '2026-08-10T01:00:00Z',
     ...overrides,
-  }
+  })
 }
 
 function renderedResourceKeys(container: HTMLElement): string[] {
@@ -54,22 +57,11 @@ function feedResponse(
 }
 
 function todo(overrides: Partial<ReaderTodoResponse> = {}): ReaderTodoResponse {
-  return {
-    id: 'todo-1',
+  return makeReaderTodo({
     text: '完成阅读整理',
-    due_at: null,
-    done: false,
-    origin_kind: 'standalone',
-    origin_host_kind: null,
-    origin_host_id: null,
-    origin_ref: null,
     host_revision: 1,
-    completed_at: null,
-    created_at: '2026-08-10T01:00:00Z',
-    updated_at: '2026-08-10T01:00:00Z',
-    expired: false,
     ...overrides,
-  }
+  })
 }
 
 function makeClient(
@@ -137,7 +129,7 @@ function makeClient(
   const listTodos = vi.fn(async () => ok({
     items: todoResponses[Math.min(todoResponseIndex++, todoResponses.length - 1)] ?? [],
   }))
-  const client = {
+  const client = makeReaderClient({
     getReaderFeed,
     patchEngagement,
     updateFeedItem,
@@ -146,9 +138,7 @@ function makeClient(
     confirmAIProposals,
     discardInbox,
     listTodos,
-    isIdentityCurrent: vi.fn(() => true),
-    identityLease: readerIdentity.activeLease,
-  } as unknown as IdentityBoundReaderClient
+  })
   return {
     client,
     getReaderFeed,
@@ -534,10 +524,9 @@ describe('FeedSurface', () => {
 
   it('clears private Feed state when identity is unavailable', async () => {
     const getReaderFeed = vi.fn()
-    const client = {
+    const client = makeReaderClient({
       getReaderFeed,
-      isIdentityCurrent: vi.fn(() => false),
-    } as unknown as IdentityBoundReaderClient
+    }, { isIdentityCurrent: () => false })
 
     renderFeed(client)
 
@@ -591,12 +580,10 @@ describe('FeedSurface scroll position', () => {
       await new Promise<void>((resolve) => { releaseRequest = resolve })
       return ok(response)
     })
-    const client = {
+    const client = makeReaderClient({
       getReaderFeed,
       listTodos: vi.fn(async () => ok({ items: [] as ReaderTodoResponse[] })),
-      isIdentityCurrent: vi.fn(() => identityCurrent),
-      identityLease: readerIdentity.activeLease,
-    } as unknown as IdentityBoundReaderClient
+    }, { isIdentityCurrent: () => identityCurrent })
     return {
       client,
       revokeIdentity: () => { identityCurrent = false },

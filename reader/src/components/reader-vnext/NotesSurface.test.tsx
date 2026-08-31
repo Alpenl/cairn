@@ -3,14 +3,19 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type {
   ReaderAIRequest,
-  ReaderNoteHistoryResponse,
   ReaderNoteResponse,
 } from '../../lib/api/types'
 import type { Annotation } from '../../lib/annotations'
-import { IdentityLease } from '../../lib/identity'
 import { err, ok } from '@webtag/api'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { enabledReaderCapabilityLease } from '../../test/capabilities'
+import {
+  deferred,
+  makeReaderNote as note,
+  makeReaderNoteHistory as historyEntry,
+  makeReaderNoteWithID as noteWithID,
+} from '../../test/fixtures'
+import { makeReaderClient, makeTestIdentityLease } from '../../test/reader-client'
 import { NotesSurface, type NotesLeaveResult } from './NotesSurface'
 
 vi.mock('../../lib/user-data/thought-sync', () => ({
@@ -36,49 +41,6 @@ vi.mock('../../hooks/useNoteAnnotations', () => ({
   }),
 }))
 
-function note(overrides: Partial<ReaderNoteResponse> = {}): ReaderNoteResponse {
-  return {
-    id: 'N1',
-    title: '测试笔记',
-    published_content: 'published body',
-    published_revision: 7,
-    draft_content: null,
-    draft_revision: 3,
-    draft_updated_at: null,
-    deleted_at: null,
-    created_at: '2026-08-10T01:00:00Z',
-    updated_at: '2026-08-10T01:00:00Z',
-    dirty: false,
-    ...overrides,
-  }
-}
-
-function noteWithID(id: string, overrides: Partial<ReaderNoteResponse> = {}): ReaderNoteResponse {
-  return note({ id, title: `笔记 ${id}`, ...overrides })
-}
-
-function historyEntry(overrides: Partial<ReaderNoteHistoryResponse> = {}): ReaderNoteHistoryResponse {
-  return {
-    id: 1,
-    revision: 6,
-    title: '历史标题',
-    content: 'historical body',
-		reanchor_ops: [],
-    created_at: '2026-08-09T01:00:00Z',
-    ...overrides,
-  }
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (reason?: unknown) => void
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise
-    reject = rejectPromise
-  })
-  return { promise, resolve, reject }
-}
-
 function makeClient(initial: ReaderNoteResponse = note(), listItems: ReaderNoteResponse[] = [initial], count = listItems.length) {
   const listNotes = vi.fn(async () => ok({ items: listItems, count }))
   const getNote = vi.fn(async () => ok(initial))
@@ -100,7 +62,7 @@ function makeClient(initial: ReaderNoteResponse = note(), listItems: ReaderNoteR
     ok: true as const,
     data: { enabled: true, answer: '笔记选区解读' },
   }))
-  const client = {
+  const client = makeReaderClient({
     listNotes,
     getNote,
     saveNoteDraft,
@@ -114,8 +76,7 @@ function makeClient(initial: ReaderNoteResponse = note(), listItems: ReaderNoteR
     listTrash: vi.fn(async () => ok({ items: [], count: 0 })),
     purgeHost: vi.fn(async () => ok(true)),
     completeReaderAI,
-    isIdentityCurrent: vi.fn(() => true),
-  } as unknown as IdentityBoundReaderClient
+  })
   return {
     client,
     listNotes,
@@ -130,11 +91,7 @@ function makeClient(initial: ReaderNoteResponse = note(), listItems: ReaderNoteR
 }
 
 function renderNotes(client: IdentityBoundReaderClient, onPrepareToLeaveChange?: (prepare: (() => Promise<NotesLeaveResult>) | null) => void) {
-  const lease = new IdentityLease({
-    serverClientDataNamespace: 'server-test',
-    physicalNamespace: 'physical-test',
-    localEpoch: 1,
-  })
+  const lease = makeTestIdentityLease()
   const onNavigate = vi.fn<(route: ReaderRoute) => void>()
   return render(<NotesSurface client={client} capabilityLease={enabledReaderCapabilityLease()} lease={lease} onNavigate={onNavigate} onPrepareToLeaveChange={onPrepareToLeaveChange} annotationsEnabled aiEnabled trashEnabled />)
 }
@@ -179,7 +136,7 @@ describe('NotesSurface draft barriers', () => {
     render(<NotesSurface
       client={fixture.client}
       capabilityLease={enabledReaderCapabilityLease()}
-      lease={new IdentityLease({ serverClientDataNamespace: 'server-test', physicalNamespace: 'physical-test', localEpoch: 1 })}
+      lease={makeTestIdentityLease()}
       onNavigate={() => {}}
       onCreateNote={onCreateNote}
       creatingNote
@@ -207,7 +164,7 @@ describe('NotesSurface draft barriers', () => {
       <NotesSurface
         client={fixture.client}
         capabilityLease={enabledReaderCapabilityLease({ trash: false })}
-        lease={new IdentityLease({ serverClientDataNamespace: 'server-test', physicalNamespace: 'physical-test', localEpoch: 1 })}
+        lease={makeTestIdentityLease()}
         onNavigate={() => {}}
         annotationsEnabled
         aiEnabled

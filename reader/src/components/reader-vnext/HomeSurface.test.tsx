@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import { err, ok, type ApiResult } from '@webtag/api'
 import type {
-  ReaderFeedItemResponse,
   ReaderHomeResponse,
   ReaderThoughtResponse,
   ReaderTodoResponse,
@@ -11,109 +10,25 @@ import type {
 import type { ReaderRoute, ReaderRouteTargets } from '../../lib/navigation/route'
 import { formatRelativeDate } from '../../lib/reader-surface'
 import { enabledReaderCapabilityLease } from '../../test/capabilities'
+import {
+  deferred,
+  makeReaderFeedItem as feedItem,
+  makeReaderHome as home,
+  makeReaderThought as thought,
+  makeReaderTodo as todo,
+} from '../../test/fixtures'
+import { makeReaderClient } from '../../test/reader-client'
 import { HomeSurface } from './HomeSurface'
-
-function todo(overrides: Partial<ReaderTodoResponse> = {}): ReaderTodoResponse {
-  return {
-    id: 'todo-1',
-    text: '整理文章',
-    due_at: null,
-    done: false,
-    origin_kind: 'standalone',
-    origin_host_kind: null,
-    origin_host_id: null,
-    origin_ref: null,
-    host_revision: 0,
-    completed_at: null,
-    created_at: '2026-08-10T01:00:00Z',
-    updated_at: '2026-08-10T01:00:00Z',
-    expired: false,
-    ...overrides,
-  }
-}
-
-function feedItem(overrides: Partial<ReaderFeedItemResponse> = {}): ReaderFeedItemResponse {
-  return {
-    key: 'inbox:I1',
-    source: 'inbox',
-    resource_key: 'inbox:I1',
-    title: '收件箱文章',
-    summary: '需要整理',
-    url: 'https://example.com/inbox',
-    link_id: null,
-    inbox_id: 'I1',
-    feed_item_id: null,
-    read: false,
-    read_later: false,
-    saved: false,
-    event_at: '2026-08-10T01:00:00Z',
-    ...overrides,
-  }
-}
-
-function thought(overrides: Partial<ReaderThoughtResponse> = {}): ReaderThoughtResponse {
-  return {
-    contract_version: 1,
-    id: 'thought-1',
-    host_kind: 'link',
-    host_id: 'L1',
-    link_id: 'L1',
-    target: {},
-    quote: null,
-    body: '最近记录的想法',
-    source: 'self',
-    deleted: false,
-    last_sequence: 1,
-    winner_key: { logical_clock: 1, device_id: 'device-1', op_id: 'op-1' },
-    created_at: '2026-08-10T01:00:00Z',
-    updated_at: '2026-08-10T01:00:00Z',
-    lifecycle_status: 'active',
-    lifecycle_reason: null,
-    tombstoned_at: null,
-    ...overrides,
-  }
-}
-
-type HomeStatusOverrides = {
-  readonly freshness?: unknown
-  readonly partial?: unknown
-}
-
-function home(overrides: Partial<ReaderHomeResponse> & HomeStatusOverrides = {}): ReaderHomeResponse {
-  return {
-    today: '2026-08-10',
-    summary: '今天继续整理',
-    counts: {
-      pending_count: 2,
-      reading_count: 3,
-      sites_count: 4,
-      subscriptions_count: 5,
-      notes_count: 6,
-    },
-    continue_reading: [feedItem()],
-    recent_thoughts: [],
-    todos: [todo()],
-    stale: false,
-    ...overrides,
-  }
-}
 
 function makeClient(responses: ReaderHomeResponse[]) {
   let index = 0
   const getHome = vi.fn(async () => ok(responses[Math.min(index++, responses.length - 1)]))
   const patchTodo = vi.fn(async (_id: string, _patch: unknown) => ok(todo({ done: true, completed_at: '2026-08-10T02:00:00Z' })))
-  const client = {
+  const client = makeReaderClient({
     getHome,
     patchTodo,
-    isIdentityCurrent: vi.fn(() => true),
-  } as unknown as IdentityBoundReaderClient
+  })
   return { client, getHome, patchTodo }
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((release) => { resolve = release })
-  return { promise, resolve }
 }
 
 function renderHome(
@@ -145,11 +60,10 @@ describe('HomeSurface', () => {
   it('stays in loading state until the first authoritative aggregate arrives', async () => {
     const pending = deferred<ApiResult<ReaderHomeResponse>>()
     const getHome = vi.fn(() => pending.promise)
-    const client = {
+    const client = makeReaderClient({
       getHome,
       patchTodo: vi.fn(),
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
+    })
 
     renderHome(client)
 
@@ -168,11 +82,10 @@ describe('HomeSurface', () => {
     const getHome = vi.fn()
       .mockResolvedValueOnce(err<ReaderHomeResponse>({ kind: 'other', message: 'Home 暂时不可用' }))
       .mockResolvedValueOnce(ok(home()))
-    const client = {
+    const client = makeReaderClient({
       getHome,
       patchTodo: vi.fn(),
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
+    })
 
     renderHome(client)
 
@@ -189,11 +102,10 @@ describe('HomeSurface', () => {
     const getHome = vi.fn()
       .mockResolvedValueOnce(ok(home({ freshness: 'fresh', partial: false, stale: false })))
       .mockResolvedValueOnce(err<ReaderHomeResponse>({ kind: 'other', message: '刷新失败' }))
-    const client = {
+    const client = makeReaderClient({
       getHome,
       patchTodo: vi.fn(),
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
+    })
 
     renderHome(client)
 
@@ -291,11 +203,10 @@ describe('HomeSurface', () => {
       done: true,
       completed_at: '2026-08-10T02:00:00Z',
     })))
-    const client = {
+    const client = makeReaderClient({
       getHome,
       patchTodo,
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
+    })
 
     renderHome(client)
 
@@ -330,11 +241,10 @@ describe('HomeSurface', () => {
     const item = todo({ due_at: '2026-08-11T02:00:00Z' })
     const getHome = vi.fn(async () => ok(home({ todos: [item] })))
     const patchTodo = vi.fn(async () => err<ReaderTodoResponse>({ kind: 'other', message: 'TODO 写入失败' }))
-    const client = {
+    const client = makeReaderClient({
       getHome,
       patchTodo,
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
+    })
 
     renderHome(client)
 
@@ -354,11 +264,10 @@ describe('HomeSurface', () => {
       host_revision: undefined as unknown as number,
     }
     const patchTodo = vi.fn()
-    const client = {
+    const client = makeReaderClient({
       getHome: vi.fn(async () => ok(home({ todos: [projection] }))),
       patchTodo,
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
+    })
 
     renderHome(client)
 
@@ -374,11 +283,10 @@ describe('HomeSurface', () => {
       kind: 'identity-mismatch',
       message: '身份已失效',
     }))
-    const client = {
+    const client = makeReaderClient({
       getHome,
       patchTodo: vi.fn(),
-      isIdentityCurrent: vi.fn(() => false),
-    } as unknown as IdentityBoundReaderClient
+    }, { isIdentityCurrent: () => false })
 
     renderHome(client)
 
@@ -446,11 +354,10 @@ describe('HomeSurface', () => {
     const getHome = vi.fn()
       .mockReturnValueOnce(initial.promise)
       .mockReturnValueOnce(refresh.promise)
-    const client = {
+    const client = makeReaderClient({
       getHome,
       patchTodo: vi.fn(async (_id: string, _patch: unknown) => ok(todo({ done: true }))),
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
+    })
     const { unmount } = renderHome(client)
 
     expect(getHome).toHaveBeenCalledTimes(1)

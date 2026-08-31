@@ -2,50 +2,15 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import { err, ok } from '@webtag/api'
-import type { ReaderInboxListItemResponse, ReaderInboxResponse } from '../../lib/api/types'
+import type { ReaderInboxResponse } from '../../lib/api/types'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { enabledReaderCapabilityPolicy } from '../../test/capabilities'
+import {
+  makeReaderInbox as inbox,
+  makeReaderInboxCard as inboxCard,
+} from '../../test/fixtures'
+import { makeReaderClient } from '../../test/reader-client'
 import { InboxSurface } from './InboxSurface'
-
-function inbox(overrides: Partial<ReaderInboxResponse> = {}): ReaderInboxResponse {
-  return {
-    id: 'inbox-1',
-    url: 'https://example.com/article',
-    source_kind: 'manual',
-    title: '第一篇',
-	body: '正文',
-    note: '',
-    summary: '摘要',
-    suggested_tags: ['阅读'],
-    proposal_status: 'completed',
-    tags: ['阅读'],
-    status: 'pending',
-    metadata_revision: 1,
-    expires_at: '2026-09-09T01:00:00Z',
-    expired: false,
-    created_at: '2026-08-10T01:00:00Z',
-    updated_at: '2026-08-10T01:00:00Z',
-    ...overrides,
-  }
-}
-
-// GET /api/inbox returns the narrow queue card; the editor reads
-// GET /api/inbox/{id} on demand. The stub projects the same way the server
-// does, so a test that wants body/note has to go through getInbox.
-export function inboxCard(item: ReaderInboxResponse): ReaderInboxListItemResponse {
-  return {
-    id: item.id,
-    url: item.url,
-    source_kind: item.source_kind,
-    title: item.title,
-    preview: ((item.summary ?? '').trim() || item.note.trim() || item.body).slice(0, 280),
-    tags: item.tags,
-    status: item.status,
-    metadata_revision: item.metadata_revision,
-    expired: item.expired,
-    updated_at: item.updated_at,
-  }
-}
 
 function makeClient(
   items: ReaderInboxResponse[],
@@ -157,7 +122,7 @@ function makeClient(
       }),
     })
   }) as typeof stub.listInbox
-  const client = stub as unknown as IdentityBoundReaderClient
+  const client = makeReaderClient(stub)
   return {
     client,
     listInbox,

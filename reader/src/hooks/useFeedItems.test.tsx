@@ -5,6 +5,8 @@ import { ok, type ApiResult } from '@webtag/api'
 import type { FeedItem, ListFeedItemsParams, PaginatedFeedItemsResponse } from '../lib/api/types'
 import { readerIdentity } from '../lib/identity'
 import { resourceStore } from '../lib/cache/store'
+import { deferred } from '../test/fixtures'
+import { bindReaderClient } from '../test/reader-client'
 
 type FeedItemsClient = Parameters<typeof useFeedItems>[0]
 
@@ -12,27 +14,16 @@ function makeItem(id: string, title: string): FeedItem {
   return { id, subscription_id: 'feed', title, url: `https://example.com/${id}` }
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
-  return { promise, resolve }
-}
-
 function bindClient(
   methods: Partial<FeedItemsClient>,
   current: () => boolean = () => true,
 ): FeedItemsClient {
   const lease = readerIdentity.activeLease!
-  return {
+  const client = bindReaderClient({
     ...methods,
-    identityLease: lease,
     isIdentityCurrent: vi.fn(() => current()),
-    captureIdentity: vi.fn((logicalKey: string) => {
-      if (!current()) return null
-      const ownership = lease.captureOwnership(logicalKey)
-      return lease.isOwnershipCurrent(ownership) ? ownership : null
-    }),
-  } as FeedItemsClient
+  }, { lease })
+  return client as FeedItemsClient
 }
 
 function Harness({ client, q }: { client: FeedItemsClient; q: string }) {

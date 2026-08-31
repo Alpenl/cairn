@@ -1,53 +1,22 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { IdentityBoundReaderClient, ReaderClient } from '../lib/api/client'
+import type { IdentityBoundReaderClient } from '../lib/api/client'
 import { err, ok, type ApiResult } from '@webtag/api'
 import type { PaginatedLinksResponse } from '../lib/api/types'
 import { LINKS_CACHE_PREFIX } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
 import { readerIdentity } from '../lib/identity'
-import { makeLink } from '../test/fixtures'
+import { deferred, makeLink, makeLinksPage } from '../test/fixtures'
+import { bindReaderClient } from '../test/reader-client'
 import { useDomainSummaries } from './useDomainSummaries'
 import { useLinks } from './useLinks'
 import { useTags } from './useTags'
 
-function bindClient(client: ReaderClient): IdentityBoundReaderClient {
+function bindClient<T extends object>(client: T): T & IdentityBoundReaderClient {
   const lease = readerIdentity.activeLease
   if (!lease) throw new Error('test identity lease is not active')
-  Object.defineProperty(client, 'identityLease', {
-    configurable: true,
-    value: lease,
-  })
-  Object.defineProperty(client, 'isIdentityCurrent', {
-    configurable: true,
-    value: () => true,
-  })
-  Object.defineProperty(client, 'captureIdentity', {
-    configurable: true,
-    value: (logicalKey: string) => {
-      const ownership = lease.captureOwnership(logicalKey)
-      return lease.isOwnershipCurrent(ownership) ? ownership : null
-    },
-  })
-  return client as IdentityBoundReaderClient
-}
-
-function page(id: string): ApiResult<PaginatedLinksResponse> {
-  return ok({
-    items: [makeLink({ id })],
-    total: 1,
-    page: 0,
-    limit: 30,
-  })
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((settle) => {
-    resolve = settle
-  })
-  return { promise, resolve }
+  return bindReaderClient(client, { lease })
 }
 
 describe('library collection reload contract', () => {
@@ -61,7 +30,7 @@ describe('library collection reload contract', () => {
       getDomainSummaries: vi.fn()
         .mockResolvedValueOnce(ok({ domains: [], total: 0 }))
         .mockResolvedValueOnce(domainsFailure),
-    } as unknown as ReaderClient)
+    })
 
     const tags = renderHook(() => useTags(client))
     const domains = renderHook(() => useDomainSummaries(client))
@@ -88,9 +57,9 @@ describe('library collection reload contract', () => {
   it('cancels a reload result and refuses its late response', async () => {
     const late = deferred<ApiResult<PaginatedLinksResponse>>()
     const getLinks = vi.fn()
-      .mockResolvedValueOnce(page('initial'))
+      .mockResolvedValueOnce(makeLinksPage([makeLink({ id: 'initial' })]))
       .mockReturnValueOnce(late.promise)
-    const client = bindClient({ getLinks } as unknown as ReaderClient)
+    const client = bindClient({ getLinks })
     const { result } = renderHook(() => useLinks(
       client,
       { type: 'smart', id: 'all', name: '全部' },
@@ -110,7 +79,7 @@ describe('library collection reload contract', () => {
     })
 
     await act(async () => {
-      late.resolve(page('late-cancelled'))
+      late.resolve(makeLinksPage([makeLink({ id: 'late-cancelled' })]))
       await late.promise
     })
     expect(result.current.links.map((link) => link.id)).toEqual(['initial'])
@@ -119,9 +88,9 @@ describe('library collection reload contract', () => {
   it('reports identity loss and refuses an old identity late response', async () => {
     const late = deferred<ApiResult<PaginatedLinksResponse>>()
     const getLinks = vi.fn()
-      .mockResolvedValueOnce(page('identity-a'))
+      .mockResolvedValueOnce(makeLinksPage([makeLink({ id: 'identity-a' })]))
       .mockReturnValueOnce(late.promise)
-    const client = bindClient({ getLinks } as unknown as ReaderClient)
+    const client = bindClient({ getLinks })
     const { result } = renderHook(() => useLinks(
       client,
       { type: 'smart', id: 'all', name: '全部' },
@@ -141,7 +110,7 @@ describe('library collection reload contract', () => {
     })
 
     await act(async () => {
-      late.resolve(page('identity-a-late'))
+      late.resolve(makeLinksPage([makeLink({ id: 'identity-a-late' })]))
       await late.promise
     })
     await expect(reload).resolves.toMatchObject({

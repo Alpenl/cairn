@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { localFilterLinks, useCommandSearch } from './useCommandSearch'
-import type { ReaderClient } from '../lib/api/client'
 import type { ApiResult } from '@webtag/api'
 import type { GroupedSearchResponse } from '../lib/api/types'
 import { makeLink } from '../test/fixtures'
+import { bindLegacyReaderClient } from '../test/reader-client'
 import { readerIdentity } from '../lib/identity'
 
 function grouped(items = [makeLink()]): ApiResult<GroupedSearchResponse> {
@@ -17,10 +17,9 @@ function fakeClient(
 ) {
   const searchLibrary = vi.fn(impl)
   return {
-    client: {
+    client: bindLegacyReaderClient({
       searchLibrary,
-      isIdentityCurrent: vi.fn(isIdentityCurrent),
-    } as unknown as ReaderClient,
+    }, { isIdentityCurrent }),
     searchLibrary,
   }
 }
@@ -140,10 +139,9 @@ describe('useCommandSearch：防抖 + 降级', () => {
     }
     const searchLibrary = vi.fn()
     searchLibrary.mockResolvedValueOnce(first).mockResolvedValueOnce(second)
-    const client = {
+    const client = bindLegacyReaderClient({
       searchLibrary,
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as ReaderClient
+    })
     const { result } = renderHook(() => useCommandSearch(client, '分页', corpus))
 
     await act(async () => { await vi.advanceTimersByTimeAsync(300) })
@@ -160,9 +158,7 @@ describe('useCommandSearch：防抖 + 降级', () => {
   })
 
   it('旧 client 缺少 grouped search 时只降级到本地链接，不伪装完整 union', async () => {
-    const client = {
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as ReaderClient
+    const client = bindLegacyReaderClient({})
     const { result } = renderHook(() => useCommandSearch(client, '关键词', corpus))
 
     expect(result.current.results.map((item) => item.id)).toEqual(['c1'])

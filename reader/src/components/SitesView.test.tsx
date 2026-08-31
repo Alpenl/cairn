@@ -13,9 +13,11 @@ import { resourceStore } from '../lib/cache/store'
 import { err, ok } from '@webtag/api'
 import { enabledReaderCapabilityLease } from '../test/capabilities'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
-import { IdentityLease } from '../lib/identity'
+import type { IdentityLease } from '../lib/identity'
+import { makeSite, makeSitesPage } from '../test/fixtures'
+import { bindReaderClient, makeTestIdentityLease } from '../test/reader-client'
 
-const site: SiteListItemResponse = {
+const site: SiteListItemResponse = makeSite(1, 'acme', {
   id: '11111111-1111-1111-1111-111111111111',
   name: 'Acme Docs',
   intro: 'Reference material for the Acme platform.',
@@ -32,7 +34,7 @@ const site: SiteListItemResponse = {
   revision: 3,
   first_collected_at: '2026-07-20T00:00:00Z',
   last_collected_at: '2026-07-21T00:00:00Z',
-}
+})
 
 const detail: SiteDetailResponse = {
   ...site,
@@ -52,17 +54,13 @@ const detail: SiteDetailResponse = {
 }
 
 function numberedSite(index: number): SiteListItemResponse {
-  const suffix = String(index).padStart(12, '0')
   const label = String(index).padStart(3, '0')
-  return {
-    ...site,
-    id: `00000000-0000-4000-8000-${suffix}`,
+  return makeSite(index, 'site', {
     name: `Website ${label}`,
     display_host: `site-${label}.example.test`,
     homepage_url: `https://site-${label}.example.test`,
     primary_entry: null,
-    revision: index,
-  }
+  })
 }
 
 function numberedDetail(item: SiteListItemResponse): SiteDetailResponse {
@@ -78,30 +76,19 @@ function sitePage(items: SiteListItemResponse[], params: ListSitesParams = {}) {
   const page = params.page ?? 1
   const limit = params.limit ?? 30
   const start = (page - 1) * limit
-  return ok({ items: items.slice(start, start + limit), total: items.length, page, limit })
+  return makeSitesPage(items.slice(start, start + limit), items.length, page)
 }
 
 let testNumber = 0
 let identityLease: IdentityLease
 
-function makeIdentityLease(prefix: string): IdentityLease {
-  return new IdentityLease({
-    serverClientDataNamespace: `${prefix}-server`,
-    physicalNamespace: `${prefix}-physical`,
-    localEpoch: testNumber,
-  })
-}
-
 function bindClient<T extends object>(client: T): T & IdentityBoundReaderClient {
-  return {
-    identityLease,
-    ...client,
-  } as unknown as T & IdentityBoundReaderClient
+  return bindReaderClient(client, { lease: identityLease })
 }
 
 beforeEach(() => {
   testNumber += 1
-  identityLease = makeIdentityLease(`sites-view-${testNumber}`)
+  identityLease = makeTestIdentityLease(`sites-view-${testNumber}`, testNumber)
   resourceStore.clear()
   resourceStore.activateIdentity(identityLease)
 })

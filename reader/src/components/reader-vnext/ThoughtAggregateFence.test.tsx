@@ -1,10 +1,15 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import { ok } from '@webtag/api'
 import type { ReaderHomeResponse, ReaderThoughtResponse } from '../../lib/api/types'
-import { IdentityLease } from '../../lib/identity'
+import type { IdentityLease } from '../../lib/identity'
 import { enabledReaderCapabilityLease } from '../../test/capabilities'
+import {
+  deferred,
+  makeReaderHome,
+  makeReaderThought,
+} from '../../test/fixtures'
+import { makeReaderClient, makeTestIdentityLease } from '../../test/reader-client'
 
 const thoughtReadModel = vi.hoisted(() => ({
   cacheServerThoughtPage: vi.fn(),
@@ -21,16 +26,14 @@ import { HomeSurface } from './HomeSurface'
 import { ThoughtHistorySurface } from './ThoughtHistorySurface'
 
 function makeLease(identity: string, epoch: number): IdentityLease {
-  return new IdentityLease({
+  return makeTestIdentityLease(identity, epoch, {
     serverClientDataNamespace: `server-${identity}`,
     physicalNamespace: `physical-${identity}`,
-    localEpoch: epoch,
   })
 }
 
 function thought(id: string, body: string): ReaderThoughtResponse {
-  return {
-    contract_version: 1,
+  return makeReaderThought({
     id,
     host_kind: 'link',
     host_id: 'L1',
@@ -44,31 +47,18 @@ function thought(id: string, body: string): ReaderThoughtResponse {
     },
     quote: { exact: 'text', start: 0, end: 4, prefix: '', suffix: '', block_key: 'content-document' },
     body,
-    source: 'self',
-    deleted: false,
-    last_sequence: 1,
-    winner_key: { logical_clock: 1, device_id: 'device', op_id: `op-${id}` },
     created_at: '2026-08-10T00:00:00.000Z',
     updated_at: '2026-08-10T00:00:00.000Z',
-  } as unknown as ReaderThoughtResponse
+  })
 }
 
 function homeFixture(item: ReaderThoughtResponse): ReaderHomeResponse {
-  return {
-    today: '2026-08-10',
+  return makeReaderHome({
     summary: 'fixture',
-    counts: {},
     continue_reading: [],
     recent_thoughts: [item],
     todos: [],
-    stale: false,
-  }
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((release) => { resolve = release })
-  return { promise, resolve }
+  })
 }
 
 afterEach(() => {
@@ -89,14 +79,12 @@ describe('Thought aggregate lease fences', () => {
       .mockImplementationOnce(() => lateSelector.promise)
       .mockResolvedValue({ ok: true, value: [newThought] })
 
-    const clientA = {
+    const clientA = makeReaderClient({
       getHome: vi.fn(async () => ok(homeFixture(oldThought))),
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
-    const clientB = {
+    })
+    const clientB = makeReaderClient({
       getHome: vi.fn(async () => ok(homeFixture(newThought))),
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
+    })
 
     const home = render(<HomeSurface capabilityLease={enabledReaderCapabilityLease()} client={clientA} lease={makeLease('A', 1)} onNavigate={vi.fn()} onOpenLink={vi.fn()} />)
     await screen.findByText('旧身份想法')
@@ -125,16 +113,14 @@ describe('Thought aggregate lease fences', () => {
       .mockImplementationOnce(() => lateSelector.promise)
       .mockResolvedValue({ ok: true, value: [newThought] })
 
-    const clientA = {
+    const clientA = makeReaderClient({
       listThoughts: vi.fn(async () => ok({ contract_version: 1 as const, items: [oldThought] })),
       listTodos: vi.fn(async () => ok({ items: [] })),
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
-    const clientB = {
+    })
+    const clientB = makeReaderClient({
       listThoughts: vi.fn(async () => ok({ contract_version: 1 as const, items: [newThought] })),
       listTodos: vi.fn(async () => ok({ items: [] })),
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as IdentityBoundReaderClient
+    })
 
     window.history.replaceState({}, '', '/?tool=history&thought_view=live')
     const aggregate = render(<ThoughtHistorySurface capabilityLease={enabledReaderCapabilityLease()} client={clientA} lease={makeLease('A', 1)} onNavigate={vi.fn()} />)
