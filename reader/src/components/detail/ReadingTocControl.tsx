@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
-import { MIN_TOC_HEADINGS } from '../../hooks/useReaderToc'
 import type { TocHeading } from '../../lib/toc'
+import { hasRenderableOutline } from '../../lib/outline-tree'
 import { Icon } from '../Icon'
+import { OutlineTree } from './OutlineTree'
 
 interface ReadingTocControlProps {
   items: TocHeading[]
@@ -35,7 +36,7 @@ export function ReadingTocControl({ items, activeId, onJump }: ReadingTocControl
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<CSSProperties>({})
   const buttonRef = useRef<HTMLButtonElement>(null)
-  const hasToc = items.length >= MIN_TOC_HEADINGS
+  const hasToc = hasRenderableOutline(items)
 
   useEffect(() => {
     const update = () => {
@@ -111,35 +112,13 @@ export function ReadingTocControl({ items, activeId, onJump }: ReadingTocControl
           >
             目录
           </div>
-          {items.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              aria-current={activeId === item.id ? 'true' : undefined}
-              title={item.text}
-              onClick={() => {
-                onJump(item.id)
-                setOpen(false)
-              }}
-              style={{
-                display: 'block',
-                width: '100%',
-                padding: '7px 2px',
-                border: 0,
-                background: 'transparent',
-                color: activeId === item.id ? 'var(--accent)' : 'var(--text-secondary)',
-                font: `${activeId === item.id ? 600 : 400} 12px/1.45 var(--font-ui)`,
-                textAlign: 'left',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                paddingInlineStart: (item.level - 1) * 11 + 2,
-                cursor: 'pointer',
-              }}
-            >
-              {item.text}
-            </button>
-          ))}
+          <OutlineTree
+            items={items}
+            activeId={activeId}
+            onJump={onJump}
+            variant="menu"
+            onAfterJump={() => setOpen(false)}
+          />
         </nav>
       )}
     </div>
