@@ -2,11 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import { err, type ApiError } from '@webtag/api'
 import type { ListSitesParams, PaginatedSitesResponse, SiteListItemResponse } from '../lib/api/types'
+import {
+  SITES_CACHE_PREFIX,
+  sitesCacheKey,
+  sitesPageCacheKey,
+} from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
 import { useIdentityCachedResource } from './useIdentityCachedResource'
 
-export const SITES_CACHE_PREFIX = 'GET /api/sites'
+export { SITES_CACHE_PREFIX } from '../lib/cache/keys'
 export const SITES_PAGE_SIZE = 30
 
 const NO_SITES: SiteListItemResponse[] = []
@@ -28,17 +33,6 @@ interface SitesPaginationState {
 interface PageRequest {
   streamKey: string
   epoch: number
-}
-
-/** 站点列表的缓存键。参数直接拼进键——不同筛选是不同的资源。 */
-function sitesKey(params: ListSitesParams): string {
-  const query = new URLSearchParams()
-  if (params.view) query.set('view', params.view)
-  if (params.tags?.trim()) query.set('tags', params.tags.trim())
-  if (params.recentCutoff?.trim()) query.set('recent_cutoff', params.recentCutoff.trim())
-  if (params.page && params.page > 1) query.set('page', String(params.page))
-  if (params.limit && params.limit > 0) query.set('limit', String(params.limit))
-  return SITES_CACHE_PREFIX + (query.size ? `?${query}` : '')
 }
 
 function clientKey(client: IdentityBoundReaderClient): number {
@@ -105,9 +99,9 @@ export function useSites(
   )
   const owner = useMemo(() => clientKey(client), [client])
   const readable = capabilityLease.isCurrent('siteRead')
-  const baseKey = useMemo(() => sitesKey(firstQuery), [firstQuery])
+  const baseKey = useMemo(() => sitesCacheKey(firstQuery), [firstQuery])
   const pageOneKey = readable
-    ? `${baseKey}#capability=${capabilityLease.generation}`
+    ? sitesPageCacheKey(firstQuery, capabilityLease.generation)
     : null
   const {
     resource: first,

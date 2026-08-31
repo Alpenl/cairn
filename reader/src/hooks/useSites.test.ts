@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSites } from './useSites'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ListSitesParams, PaginatedSitesResponse, SiteListItemResponse } from '../lib/api/types'
+import { identityScopedCacheKey, sitesPageCacheKey } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
 import { err, ok, type ApiResult } from '@webtag/api'
 import { IdentityLease } from '../lib/identity'
@@ -73,11 +74,7 @@ function makeIdentityLease(prefix: string): IdentityLease {
 }
 
 function identityCacheKey(baseKey: string, lease = identityLease): string {
-  return `${baseKey}#${[
-    lease.context.serverClientDataNamespace,
-    lease.context.physicalNamespace,
-    String(lease.context.localEpoch),
-  ].map((part) => encodeURIComponent(part)).join(':')}`
+  return identityScopedCacheKey(baseKey, lease.context)
 }
 
 beforeEach(() => {
@@ -108,7 +105,7 @@ describe('useSites', () => {
     expect(client.getSites).toHaveBeenCalledWith({ view: 'all', page: 1, limit: 30 })
     expect(
       resourceStore.peek<PaginatedSitesResponse>(
-        identityCacheKey(`GET /api/sites?view=all&limit=30#capability=${capabilityLease.generation}`),
+        identityCacheKey(sitesPageCacheKey({ view: 'all', page: 1, limit: 30 }, capabilityLease.generation)),
       ).data?.total,
     ).toBe(59)
 
@@ -414,7 +411,7 @@ describe('useSites', () => {
       siteWrite: false,
       siteAdvanced: false,
     })
-    const staleKey = identityCacheKey(`GET /api/sites?view=all&limit=30#capability=${activeLease.generation}`)
+    const staleKey = identityCacheKey(sitesPageCacheKey({ view: 'all', page: 1, limit: 30 }, activeLease.generation))
     const { result, rerender } = renderHook(
       ({ lease }: { lease: ReaderCapabilityLease }) => useSites(client, lease, { view: 'all' }),
       { initialProps: { lease: activeLease } },

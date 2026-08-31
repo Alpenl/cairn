@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { IdentityBoundReaderClient, ReaderClient } from '../lib/api/client'
 import { err, ok, type ApiResult } from '@webtag/api'
 import type { PaginatedLinksResponse } from '../lib/api/types'
+import { LINKS_CACHE_PREFIX } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
 import { readerIdentity } from '../lib/identity'
 import { makeLink } from '../test/fixtures'
@@ -136,6 +137,6 @@ describe('library collection reload contract', () => {
       ok: false,
       error: { kind: 'identity-mismatch' },
     })
-    expect(resourceStore.peek('GET /api/links').data).toBeUndefined()
+    expect(resourceStore.peek(LINKS_CACHE_PREFIX).data).toBeUndefined()
   })
 })

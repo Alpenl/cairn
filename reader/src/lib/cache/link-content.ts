@@ -5,14 +5,14 @@
  * 不变量原先只能靠组件测试间接观察——组件测试里的回调是测试自己写的闭包，钉不住
  * 真实实现。放在一起、直接对它们写用例，键算歪了当场就红。
  *
- * 键的形状、以及「为什么它不该被库级失效连坐」，见 ./invalidate.ts。
+ * 键的形状、以及「为什么它不该被库级失效连坐」，见 ./keys.ts。
  */
 import { useCallback, useSyncExternalStore } from 'react'
 
 import type { ReaderClient } from '../api/client'
 import { ok, type ApiResult } from '@webtag/api'
 import type { LinkContentResponse } from '../api/types'
-import { contentCacheKey } from './invalidate'
+import { contentCacheKey } from './keys'
 import { resourceStore } from './store'
 
 type LinkContentClient = Pick<ReaderClient, 'captureIdentity' | 'getContent'>

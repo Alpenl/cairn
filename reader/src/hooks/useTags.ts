@@ -8,6 +8,7 @@ import { useCallback, useMemo } from 'react'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ApiError, ApiResult } from '@webtag/api'
 import type { TagCountResponse } from '../lib/api/types'
+import { TAGS_CACHE_KEY } from '../lib/cache/keys'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryReload'
 
@@ -18,8 +19,10 @@ export interface TagsState {
   reload: (options?: LibraryReloadOptions) => Promise<ApiResult<TagCountResponse[]> | null>
 }
 
-export const TAGS_CACHE_PREFIX = 'GET /api/tags'
-export const TAGS_CACHE_KEY = `${TAGS_CACHE_PREFIX}?library_kind=reading`
+export {
+  TAGS_CACHE_KEY,
+  TAGS_CACHE_PREFIX,
+} from '../lib/cache/keys'
 
 export function useTags(client: IdentityBoundReaderClient): TagsState {
   const resource = useCachedResource<TagCountResponse[]>(TAGS_CACHE_KEY, (conditional) =>

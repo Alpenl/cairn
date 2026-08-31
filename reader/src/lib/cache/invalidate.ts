@@ -9,17 +9,20 @@
  * 是下一次读多一次网络往返（还有 in-flight 合并兜着），而漏失效的代价是用户
  * 明明操作成功了却看不到变化。
  */
-import { DOMAIN_SUMMARIES_CACHE_PREFIX } from '../../hooks/useDomainSummaries'
-import { FEED_ITEMS_CACHE_PREFIX } from '../../hooks/useFeedItems'
-import { SUBSCRIPTIONS_CACHE_KEY } from '../../hooks/useSubscriptions'
 import {
   ANNOTATED_LINKS_CACHE_KEY,
+  DOMAIN_SUMMARIES_CACHE_PREFIX,
+  FEED_ITEMS_CACHE_PREFIX,
+  LINKS_CACHE_PREFIX,
+  SUBSCRIPTIONS_CACHE_KEY,
+  TAGS_CACHE_PREFIX,
+  linkContentInvalidationPrefix,
   linkDetailCacheKey,
-} from '../../hooks/useAnnotatedLinks'
-import { LINKS_CACHE_PREFIX } from '../../hooks/useLinks'
-import { TAGS_CACHE_PREFIX } from '../../hooks/useTags'
-import { TRANSLATIONS_CACHE_PREFIX } from '../../hooks/useTranslations'
+  linkTranslationsInvalidationPrefix,
+} from './keys'
 import { resourceStore } from './store'
+
+export { CONTENT_CACHE_PREFIX, contentCacheKey } from './keys'
 
 /**
  * 失效阅读库的全部聚合视图（链接列表 + 标签 + 域名摘要）。
@@ -58,7 +61,7 @@ export function invalidateLibrary(): void {
  * 自然加载，不能先失效旧 key，否则 React 提交新 revision 前会多请求旧 generation。
  */
 export function invalidateLinkContent(linkId: string): void {
-  resourceStore.invalidate(`${CONTENT_CACHE_PREFIX}/${encodeURIComponent(linkId)}?`)
+  resourceStore.invalidate(linkContentInvalidationPrefix(linkId))
 }
 
 /** 清除一条链接的 point projection，并让 mounted annotated 视图重新枚举/点读。 */
@@ -78,7 +81,7 @@ export function invalidateLink(linkId: string): void {
   // 会顺带打掉 L12、L1a——线上 id 是定长 UUID 互不为前缀所以打不中，但那是靠
   // 调用方数据形状兜底的正确性。
   invalidateLinkProjection(linkId)
-  resourceStore.invalidate(`${TRANSLATIONS_CACHE_PREFIX}/${encodeURIComponent(linkId)}/`)
+  resourceStore.invalidate(linkTranslationsInvalidationPrefix(linkId))
   invalidateLinkContent(linkId)
 }
 
@@ -93,44 +96,4 @@ export function invalidateLink(linkId: string): void {
 export function invalidateFeeds(): void {
   resourceStore.invalidate(SUBSCRIPTIONS_CACHE_KEY)
   resourceStore.invalidate(FEED_ITEMS_CACHE_PREFIX)
-}
-
-/**
- * 已保存原文缓存键的前缀。
- *
- * 它**刻意不落在 `GET /api/links` 之下**。曾经是 `GET /api/links/{id}/content`，
- * 于是 invalidateLibrary 的前缀 `GET /api/links` 会连带把**全库每一篇的正文**
- * 一起打掉——而 invalidateLibrary 在「添加链接」这种日常动作上就会触发。用户
- * 感受到的是：读过的文章过一会儿又要重新下载一遍。
- *
- * 列表 / 详情该被写操作失效，正文不该：见下。
- */
-export const CONTENT_CACHE_PREFIX = 'GET content:/api/links'
-
-/**
- * 已保存原文的缓存键。
- *
- * 键里带 content_revision，而后端会在同一 SQL/transaction 中为每次可见正文
- * 变化推进它：保存、替换 / 重新抓取、requeue/site-complete clear、转换与历史
- * 迁移都在此列。所以正文内容或存在性一变就是另一个键，旧内容不会被当成新代次
- * 命中——这是 `loadLinkContent` 敢命中即返回、不发校验的地基。
- *
- * `has_content` 闸门仍不能据此删除：revision 负责缓存身份，has_content 负责当前
- * 正文存在性；而 MainView 的 link/content state 在 RF5B 原子 document reducer
- * 落地前仍可能短暂来自不同响应。DetailPane 必须优先服从服务端的 false，不能让
- * link-scoped 的旧 `content` / `loadedContent` 穿过。
- *
- * ⚠ 这条不变量是**后端保证**的，不是前端能自证的。它由
- * `TestContentWritesBumpContentRevision` 与 RF5A 的
- * `TestSavedContentGenerationMatrix` 钉住。前者捕获保存/替换 CAS 的漏递增、错误步长、
- * 无关 updated_at 变化、**把递增从 CAS 语句里拆出去**以及 RETURNING 漂移；后者
- * 覆盖 clear、conversion、historical migration、失败回滚与幂等路径。谁要改这些
- * SQL，先看这两个真实 PostgreSQL 测试。
- *
- * 历史：这句话曾经是**假的**，而当时的注释照样这么写。后端那时只在置空 content 时
- * 才递增，于是「重新抓取」之后键不变、缓存不校验，另一台设备会永久停在替换前的
- * 正文上。别把这段历史删掉——它解释了为什么这里要指名一个后端测试。
- */
-export function contentCacheKey(linkId: string, revision: number | undefined): string {
-  return `${CONTENT_CACHE_PREFIX}/${encodeURIComponent(linkId)}?rev=${revision ?? 0}`
 }

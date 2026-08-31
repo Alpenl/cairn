@@ -6,6 +6,7 @@ import type {
   TranslationResponse,
 } from '../lib/api/types'
 import { err, type ApiError, type ApiResult } from '@webtag/api'
+import { translationsKey } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { isSavedContentTranslationSource } from '../lib/article/document'
@@ -27,10 +28,13 @@ const TRANSLATION_POLL_MS = 1200
  * 自动重取」兜住，见那边；但独立命名空间仍然要留着——被打掉再自愈是一次白白的
  * 全库重取。）
  *
- * 命名空间的写法与 `CONTENT_CACHE_PREFIX` 对齐（`cache/invalidate.ts`），两者
+ * 命名空间的写法与 `CONTENT_CACHE_PREFIX` 对齐（`cache/keys.ts`），两者
  * 是同一条教训的两次应用。
  */
-export const TRANSLATIONS_CACHE_PREFIX = 'GET translations:/api/links'
+export {
+  TRANSLATIONS_CACHE_PREFIX,
+  translationsKey,
+} from '../lib/cache/keys'
 
 const NO_TRANSLATIONS: TranslationResponse[] = []
 
@@ -107,15 +111,6 @@ function projectTranslations(
     }
   }
   return { current, stale, currentContentRevision }
-}
-
-/** 某条 saved-content generation 的译文列表缓存键。 */
-export function translationsKey(
-  linkId: string,
-  contentRevision?: number | null,
-): string {
-  const revision = contentRevisionOrNull(contentRevision)
-  return `${TRANSLATIONS_CACHE_PREFIX}/${encodeURIComponent(linkId)}/translations?rev=${revision ?? 'unverified'}`
 }
 
 function mergeTranslation(

@@ -6,11 +6,14 @@ import type {
 } from '../lib/api/client'
 import { err, ok, type ApiError, type ApiResult } from '@webtag/api'
 import type { LinkResponse, ReaderActivityResponse } from '../lib/api/types'
+import {
+  READER_ACTIVITY_CACHE_PREFIX,
+  readerActivityCacheKey,
+} from '../lib/cache/keys'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { resourceStore } from '../lib/cache/store'
 import { useReaderClient } from './useReaderClient'
 
-const ACTIVITY_CACHE_PREFIX = 'GET /api/reader/activity'
 const ACTIVITY_PAGE_LIMIT = 100
 
 export interface ReaderActivityState {
@@ -41,20 +44,6 @@ interface CachedReaderActivity {
   readonly continuationError: ApiError | null
 }
 
-function identityNamespace(client: IdentityBoundReaderClient | null): string {
-  try {
-    const context = client?.identityLease?.context
-    if (!context) return 'unscoped'
-    return [
-      context.serverClientDataNamespace,
-      context.physicalNamespace,
-      String(context.localEpoch),
-    ].map((part) => encodeURIComponent(part)).join(':')
-  } catch {
-    return 'unscoped'
-  }
-}
-
 function isActiveClient(client: IdentityBoundReaderClient | null): boolean {
   if (!client) return false
   try {
@@ -66,6 +55,17 @@ function isActiveClient(client: IdentityBoundReaderClient | null): boolean {
     )
   } catch {
     return false
+  }
+}
+
+function activityCacheKey(
+  kind: ReaderActivityKind,
+  client: IdentityBoundReaderClient | null,
+): string {
+  try {
+    return readerActivityCacheKey(kind, client?.identityLease.context, ACTIVITY_PAGE_LIMIT)
+  } catch {
+    return readerActivityCacheKey(kind, null, ACTIVITY_PAGE_LIMIT)
   }
 }
 
@@ -241,7 +241,7 @@ export function useReaderActivity(
   const allPages = options.allPages ?? false
   const canFetch = options.enabled !== false && isActiveClient(client)
   const cacheKey = canFetch
-    ? `${ACTIVITY_CACHE_PREFIX}?kind=${kind}&limit=${ACTIVITY_PAGE_LIMIT}#${identityNamespace(client)}`
+    ? activityCacheKey(kind, client)
     : null
   const resource = useCachedResource<CachedReaderActivity>(
     cacheKey,
@@ -295,5 +295,5 @@ export function useReaderActivity(
 
 /** Invalidate activity after a collection event is known locally. */
 export function invalidateReaderActivity(): void {
-  resourceStore.invalidate(ACTIVITY_CACHE_PREFIX)
+  resourceStore.invalidate(READER_ACTIVITY_CACHE_PREFIX)
 }

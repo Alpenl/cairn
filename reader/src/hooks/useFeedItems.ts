@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReaderClient } from '../lib/api/client'
-import { buildFeedItemsQuery } from '../lib/api/client'
 import type { ApiError } from '@webtag/api'
 import type { FeedItem, ListFeedItemsParams, PaginatedFeedItemsResponse } from '../lib/api/types'
+import { feedItemsCacheKey } from '../lib/cache/keys'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 
 const PAGE_SIZE = 30
 
-export const FEED_ITEMS_CACHE_PREFIX = 'GET /api/feed-items'
+export { FEED_ITEMS_CACHE_PREFIX } from '../lib/cache/keys'
 
 const NO_ITEMS: FeedItem[] = []
 
@@ -34,7 +34,7 @@ export function useFeedItems(client: ReaderClient, filters: ListFeedItemsParams)
     }),
     [filters.view, filters.subscription_id, filters.folder_id, filters.q],
   )
-  const key = FEED_ITEMS_CACHE_PREFIX + buildFeedItemsQuery({ ...stableFilters, page: 1 })
+  const key = feedItemsCacheKey({ ...stableFilters, page: 1 })
 
   const first = useCachedResource<PaginatedFeedItemsResponse>(key, (conditional) =>
     client.getFeedItems({ ...stableFilters, page: 1 }, conditional),

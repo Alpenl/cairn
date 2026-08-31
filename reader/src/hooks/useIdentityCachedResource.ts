@@ -5,6 +5,7 @@ import {
   type FetchContext,
   type FetchOptions,
 } from '../lib/cache/store'
+import { identityScopedCacheKey } from '../lib/cache/keys'
 import {
   useCachedResource,
   type CachedResource,
@@ -24,20 +25,6 @@ export interface IdentityCachedResource<T> {
 interface IdentityCachedResourceOptions<T> {
   readonly enabled?: boolean
   readonly equal?: FetchOptions<T>['equal']
-}
-
-function readerIdentitySuffix(client: IdentityBoundReaderClient | null): string {
-  try {
-    const context = client?.identityLease?.context
-    if (!context) return 'unscoped'
-    return [
-      context.serverClientDataNamespace,
-      context.physicalNamespace,
-      String(context.localEpoch),
-    ].map((part) => encodeURIComponent(part)).join(':')
-  } catch {
-    return 'unscoped'
-  }
 }
 
 export function isActiveReaderClient(
@@ -61,7 +48,11 @@ function scopedCacheKey(
   client: IdentityBoundReaderClient | null,
 ): string | null {
   if (!baseKey || !isActiveReaderClient(client)) return null
-  return `${baseKey}#${readerIdentitySuffix(client)}`
+  try {
+    return identityScopedCacheKey(baseKey, client.identityLease.context)
+  } catch {
+    return identityScopedCacheKey(baseKey, null)
+  }
 }
 
 export function useIdentityCachedResource<T>(

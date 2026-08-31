@@ -22,27 +22,13 @@ import {
   persistedRecordKey,
   type PersistedRecord,
 } from './idb'
-import { TRANSLATIONS_CACHE_PREFIX } from '../../hooks/useTranslations'
-import { CONTENT_CACHE_PREFIX } from './invalidate'
+import { PERSISTED_CACHE_PREFIXES } from './keys'
 import { resourceStore } from './store'
 import { type IdentityLease, readerIdentity } from '../identity'
 import { cacheStorageQueue, type NamespaceStorageOperation } from './io-queue'
 
 /** 参与持久化的键前缀。 */
-const PERSISTED_PREFIXES = [
-  // 链接列表与 annotated 视图复用的单条 point projection。两者都在写后通过
-  // invalidateLibrary / invalidateLinkProjection 明确失效，刷新后可直接恢复。
-  'GET /api/links',
-  CONTENT_CACHE_PREFIX, // 已保存原文（独立命名空间，见 invalidate.ts）
-  // 译文。它此前是靠 `GET /api/links` 顺带落盘的；搬进独立命名空间躲开库级失效
-  // 之后，必须在这里显式列出——漏了这一条，译文会从「刷新后仍在」静默退化成
-  // 纯内存缓存，而且退化得毫无症状（只是每次刷新都重取一遍）。
-  TRANSLATIONS_CACHE_PREFIX,
-  'GET /api/tags',
-  'GET /api/tree?view=domains',
-  'GET /api/subscriptions',
-  'GET /api/sites',
-] as const
+const PERSISTED_PREFIXES = PERSISTED_CACHE_PREFIXES
 
 /**
  * 磁盘总量上限（字节）。超出按最久未更新淘汰。

@@ -118,7 +118,7 @@ interface DesiredGenerationFence {
  * 解析它。约定是以 `<方法> <路径>` 开头，绝大多数键就是 method + 完整 URL；但
  * 「必须长得像真实 URL」不是约束，也不该是——失效是按前缀做的，键的形状因此
  * 决定了谁会被谁连坐。已保存原文就刻意用了 `GET content:/api/links/...` 这个
- * 合成命名空间，好让它躲开库级失效（见 invalidate.ts 的 CONTENT_CACHE_PREFIX）。
+ * 合成命名空间，好让它躲开库级失效（见 keys.ts 的 CONTENT_CACHE_PREFIX）。
  */
 export class ResourceStore {
   private readonly entries = new Map<string, ResourceSnapshot>()
