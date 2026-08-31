@@ -14,12 +14,16 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import {
-  annotationLocator,
-  annotationLocatorTargetKey,
-  blockHighlights,
   type Annotation,
   type AnnotationLocator,
 } from '../lib/annotations'
+import {
+  readingBlockHighlights,
+  readingHighlightSignature,
+  resolveReadingHighlightClick,
+  splitReadingSelectionText,
+  type ReadingHighlight,
+} from '../lib/reading-selection'
 import { rehypeHeadingIds, type HeadingIdsOptions, type TocHeading } from '../lib/toc'
 import type { HastNode } from '../lib/hast'
 import { BlockedContentImage } from './BlockedContentImage'
@@ -29,40 +33,32 @@ const REMARK_PLUGINS = [remarkGfm]
 
 /**
  * rehypeAnnotations —— hast 转换插件：按「整棵树文本节点拼接」的字符偏移，把命中
- * 划线区间的文本切出来包进 <mark>。highlights 已按 start 排序且不重叠（blockHighlights
- * 保证）。在文档顺序里单调累加 offset，与 DOM textContent / Range 偏移一致。
+ * 划线区间的文本切出来包进 <mark>。highlights 已按 start 排序且不重叠（由
+ * reading-selection 模块保证）。在文档顺序里单调累加 offset，与 DOM textContent /
+ * Range 偏移一致。
  */
-function rehypeAnnotations(highlights: Annotation[]) {
+function rehypeAnnotations(highlights: ReadingHighlight[]) {
   return (tree: HastNode) => {
     if (highlights.length === 0) return
     let offset = 0
 
     const splitText = (value: string, base: number): HastNode[] => {
-      const segEnd = base + value.length
-      const overlaps = highlights.filter((h) => h.start < segEnd && h.end > base)
-      if (overlaps.length === 0) return [{ type: 'text', value }]
-      const pieces: HastNode[] = []
-      let cursor = base
-      for (const h of overlaps) {
-        const hs = Math.max(h.start, base)
-        const he = Math.min(h.end, segEnd)
-        const locator = annotationLocator(h)
-        const targetKey = locator ? annotationLocatorTargetKey(locator) : null
-        if (hs > cursor) pieces.push({ type: 'text', value: value.slice(cursor - base, hs - base) })
-        pieces.push({
-          type: 'element',
-          tagName: 'mark',
-          properties: {
-            className: ['hl', ...(h.note ? ['has-note'] : []), ...(h.source === 'ai' ? ['ai'] : [])],
-            dataAnn: h.id,
-            ...(targetKey === null ? {} : { dataAnnTarget: targetKey }),
-          },
-          children: [{ type: 'text', value: value.slice(hs - base, he - base) }],
-        })
-        cursor = he
-      }
-      if (cursor < segEnd) pieces.push({ type: 'text', value: value.slice(cursor - base) })
-      return pieces
+      return splitReadingSelectionText(value, base, highlights).map((segment) =>
+        segment.kind === 'text'
+          ? { type: 'text', value: segment.text }
+          : {
+              type: 'element',
+              tagName: 'mark',
+              properties: {
+                className: [...segment.highlight.classNames],
+                dataAnn: segment.highlight.annotation.id,
+                ...(segment.highlight.targetKey === null
+                  ? {}
+                  : { dataAnnTarget: segment.highlight.targetKey }),
+              },
+              children: [{ type: 'text', value: segment.text }],
+            }
+      )
     }
 
     const walk = (node: HastNode) => {
@@ -128,24 +124,17 @@ function MarkdownViewInner({
   onHeadings,
 }: MarkdownViewProps) {
   const contentRef = useRef<HTMLDivElement>(null)
-  const highlights = useMemo(() => blockHighlights(anns, blockKey), [anns, blockKey])
+  const highlights = useMemo(() => readingBlockHighlights(anns, blockKey), [anns, blockKey])
   // 划线内容签名：react-markdown 在 rehypePlugins 引用变化时会重跑整条 remark→hast
   // 管线（含整篇 markdown 重新 parse）。blockHighlights 每次 anns 变化都返回新数组，
   // 哪怕本块划线没变（如在*另一个* block 划线）——会无谓触发本块重 parse。用内容签名
   // 把 rehypePlugins 的身份稳定下来：仅当本块划线集合真正变化时才重建，跨块的 anns
   // 变动不再波及本块。
-  const hlSig = useMemo(
-    () => highlights.map((h) => {
-      const locator = annotationLocator(h)
-      const targetKey = locator ? annotationLocatorTargetKey(locator) : null
-      return `${h.id}:${targetKey ?? 'invalid'}:${h.start}:${h.end}:${h.note ? 1 : 0}:${h.source}`
-    }).join('|'),
-    [highlights],
-  )
+  const hlSig = useMemo(() => readingHighlightSignature(highlights), [highlights])
   // tuple 形式 [attacher, options]：rehypeAnnotations 是 attacher（接 highlights 返回
   // transformer），交给 unified 调用——不能在这里就调用它（那会变成把 transformer
   // 当 attacher 传，unified 二次调用导致树错乱）。
-  type AnnotationPlugin = [typeof rehypeAnnotations, Annotation[]]
+  type AnnotationPlugin = [typeof rehypeAnnotations, ReadingHighlight[]]
   type HeadingPlugin = [typeof rehypeHeadingIds, HeadingIdsOptions]
   // 标题大纲随渲染产出：插件把结果写进 ref，渲染完成后再由 effect 回传，
   // 避免在 render 期间 setState。
@@ -195,21 +184,12 @@ function MarkdownViewInner({
   // 挂监听，也绕开自定义 mark 组件在 react-markdown 下的渲染问题。
   const onClick = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
-      const mark = (e.target as HTMLElement).closest('mark[data-ann]') as HTMLElement | null
-      if (!mark) return
-      const annotation = highlights.find((item) => {
-        const locator = annotationLocator(item)
-        if (!locator) return false
-        return locator.id === mark.dataset.ann &&
-          annotationLocatorTargetKey(locator) === mark.dataset.annTarget
-      })
-      if (!annotation) return
-      const locator = annotationLocator(annotation)
-      if (!locator) return
+      const click = resolveReadingHighlightClick(e.target, highlights)
+      if (!click) return
       e.stopPropagation()
       onClickHL(
-        locator,
-        mark.getBoundingClientRect(),
+        click.locator,
+        click.mark.getBoundingClientRect(),
       )
     },
     [highlights, onClickHL],

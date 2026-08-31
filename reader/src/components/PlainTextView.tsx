@@ -13,12 +13,15 @@ import { useCallback, useMemo } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 
 import {
-  annotationLocator,
-  annotationLocatorTargetKey,
-  blockHighlights,
   type Annotation,
   type AnnotationLocator,
 } from '../lib/annotations'
+import {
+  readingBlockHighlights,
+  readingHighlightClassName,
+  resolveReadingHighlightClick,
+  splitReadingSelectionText,
+} from '../lib/reading-selection'
 
 export interface PlainTextViewProps {
   text: string
@@ -30,53 +33,37 @@ export interface PlainTextViewProps {
 }
 
 export function PlainTextView({ text, blockKey, anns, onClickHL, className }: PlainTextViewProps) {
-  const highlights = useMemo(() => blockHighlights(anns, blockKey), [anns, blockKey])
+  const highlights = useMemo(() => readingBlockHighlights(anns, blockKey), [anns, blockKey])
 
-  // 纯文本是一个连续字符串：按已排序、不重叠的划线区间切成 文本 / <mark> 片段。
+  // 纯文本是一个连续字符串：按共享 selection 模块的 plan 切成 文本 / <mark> 片段。
   const segments = useMemo<ReactNode[]>(() => {
     if (highlights.length === 0) return [text]
-    const out: ReactNode[] = []
-    let cursor = 0
-    for (const h of highlights) {
-      const hs = Math.max(0, Math.min(h.start, text.length))
-      const he = Math.max(hs, Math.min(h.end, text.length))
-      const locator = annotationLocator(h)
-      const targetKey = locator ? annotationLocatorTargetKey(locator) : null
-      if (hs > cursor) out.push(text.slice(cursor, hs))
-      out.push(
+    return splitReadingSelectionText(text, 0, highlights).map((segment) => {
+      if (segment.kind === 'text') return segment.text
+      return (
         <mark
-          key={`${h.id}\0${targetKey ?? 'invalid'}\0${h.start}`}
-          className={'hl' + (h.note ? ' has-note' : '') + (h.source === 'ai' ? ' ai' : '')}
-          data-ann={h.id}
-          {...(targetKey === null ? {} : { 'data-ann-target': targetKey })}
+          key={segment.key}
+          className={readingHighlightClassName(segment.highlight)}
+          data-ann={segment.highlight.annotation.id}
+          {...(segment.highlight.targetKey === null
+            ? {}
+            : { 'data-ann-target': segment.highlight.targetKey })}
         >
-          {text.slice(hs, he)}
-        </mark>,
+          {segment.text}
+        </mark>
       )
-      cursor = he
-    }
-    if (cursor < text.length) out.push(text.slice(cursor))
-    return out
+    })
   }, [text, highlights])
 
   // 事件委托：点击落在某条划线 <mark data-ann> 上 → 打开对应笔记。
   const onClick = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
-      const mark = (e.target as HTMLElement).closest('mark[data-ann]') as HTMLElement | null
-      if (!mark) return
-      const annotation = highlights.find((item) => {
-        const locator = annotationLocator(item)
-        if (!locator) return false
-        return locator.id === mark.dataset.ann &&
-          annotationLocatorTargetKey(locator) === mark.dataset.annTarget
-      })
-      if (!annotation) return
-      const locator = annotationLocator(annotation)
-      if (!locator) return
+      const click = resolveReadingHighlightClick(e.target, highlights)
+      if (!click) return
       e.stopPropagation()
       onClickHL(
-        locator,
-        mark.getBoundingClientRect(),
+        click.locator,
+        click.mark.getBoundingClientRect(),
       )
     },
     [highlights, onClickHL],
