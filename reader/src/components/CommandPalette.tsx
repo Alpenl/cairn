@@ -10,7 +10,7 @@
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Icon, type IconName } from './Icon'
-import { fetcherIcon } from '../lib/meta'
+import { fetcherIcon } from './fetcher-icons'
 import { useCommandSearch } from '../hooks/useCommandSearch'
 import type { ReaderClient } from '../lib/api/client'
 import type {

@@ -14,14 +14,16 @@ import { useReaderToc } from '../../hooks/useReaderToc'
 import { useExclusiveAction } from '../../hooks/useExclusiveAction'
 import { useSurfaceRequestGate, type SurfaceRequestToken } from '../../hooks/useSurfaceRequestGate'
 import { NO_ANNOTATIONS } from '../../lib/annotations'
+import { inboxSourceLabel } from '../../lib/metadata'
 import { formatRelativeDate, readerErrorMessage } from '../../lib/reader-surface'
-import { Icon, type IconName } from '../Icon'
+import { Icon } from '../Icon'
 import { PlainTextView } from '../PlainTextView'
 import { ArticleOutline } from '../detail/ArticleOutline'
 import { ReaderDialog } from '../ui/ReaderDialog'
 import { ReaderPreviewCard } from '../ui/ReaderPreviewCard'
 import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 import { refreshPendingInboxCount } from './PendingInboxCount'
+import { inboxSourceIcon } from './inbox-source-icons'
 
 export interface InboxSurfaceProps {
   readonly client: IdentityBoundReaderClient
@@ -53,30 +55,6 @@ function parseTags(value: string): string[] {
 function statusLabel(status: ReaderInboxListItemResponse['status']): string {
 	if (status === 'pending') return '待处理'
 	return '已入库'
-}
-
-const SOURCE_ICONS: Partial<Record<string, IconName>> = {
-  browser_capture: 'link',
-  extension: 'link',
-  rss: 'rss',
-  subscription: 'rss',
-  manual: 'pencil',
-}
-
-const SOURCE_LABELS: Partial<Record<string, string>> = {
-  browser_capture: '网页捕获',
-  extension: '扩展捕获',
-  rss: '订阅',
-  subscription: '订阅',
-  manual: '手动添加',
-}
-
-function sourceIcon(kind: string): IconName {
-  return SOURCE_ICONS[kind] ?? 'inbox'
-}
-
-function sourceLabel(kind: string): string {
-  return SOURCE_LABELS[kind] ?? kind
 }
 
 /**
@@ -1432,8 +1410,8 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
                         </label>
                       )}
                       source={(
-                        <span className="inbox-row-source" title={sourceLabel(item.source_kind)}>
-                          <Icon name={sourceIcon(item.source_kind)} size={12} />
+                        <span className="inbox-row-source" title={inboxSourceLabel(item.source_kind)}>
+                          <Icon name={inboxSourceIcon(item.source_kind)} size={12} />
                           {hostLabel(item.url)}
                         </span>
                       )}
@@ -1468,8 +1446,8 @@ export function InboxSurface({ client, onNavigate, onOpenLink, capabilityPolicy,
               <header className="inbox-detail-toolbar">
                 <div className="inbox-detail-state">
                   <span className="rvx-source-chip">
-                    <Icon name={sourceIcon(selected.source_kind)} size={12} />
-                    {sourceLabel(selected.source_kind)}
+                    <Icon name={inboxSourceIcon(selected.source_kind)} size={12} />
+                    {inboxSourceLabel(selected.source_kind)}
                   </span>
                   <span className="rvx-status-chip">{selected.expired ? '已过期' : statusLabel(selected.status)}</span>
                   {dirty && <span className="inbox-unsaved">未保存</span>}
