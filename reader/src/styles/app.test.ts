@@ -1,14 +1,43 @@
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(resolve(process.cwd(), 'src/styles/app.css'), 'utf8')
+const styleOwnerFiles = [
+  'tokens.css',
+  'shared-primitives.css',
+  'shell-navigation.css',
+  'library-detail.css',
+  'sites.css',
+  'subscriptions.css',
+  'reader-vnext.css',
+  'responsive.css',
+] as const
+
+const stylesDir = resolve(process.cwd(), 'src/styles')
+const appCssPath = resolve(stylesDir, 'app.css')
+const appCss = readFileSync(appCssPath, 'utf8')
+
+function readCssWithImports(filePath: string, seen = new Set<string>()): string {
+  if (seen.has(filePath)) throw new Error(`circular CSS import: ${filePath}`)
+  seen.add(filePath)
+
+  const source = readFileSync(filePath, 'utf8')
+  return source.replace(/^@import\s+['"]([^'"]+)['"];\s*$/gm, (_rule, spec: string) =>
+    readCssWithImports(resolve(dirname(filePath), spec), seen),
+  )
+}
+
+function readOwnerCss(fileName: typeof styleOwnerFiles[number]): string {
+  return readFileSync(resolve(stylesDir, fileName), 'utf8')
+}
+
+const css = readCssWithImports(appCssPath)
 
 function firstRule(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))
+  const match = css.match(new RegExp(`(^|[}\\n])\\s*${escaped}\\s*\\{([^}]*)\\}`, 'm'))
   if (!match) throw new Error(`missing CSS rule for ${selector}`)
-  return match[1]
+  return match[2]
 }
 
 function mediaBlocks(condition: string): string {
@@ -32,6 +61,38 @@ function mediaBlocks(condition: string): string {
   }
   return blocks.join('\n')
 }
+
+describe('Reader style owner partitions', () => {
+  it('keeps app.css as the explicit cascade manifest', () => {
+    const importLines = appCss.split('\n').filter((line) => line.startsWith('@import'))
+
+    expect(importLines).toEqual(styleOwnerFiles.map((fileName) => `@import './${fileName}';`))
+  })
+
+  it('places shared primitives and feature rules behind clear owner files', () => {
+    expect(readOwnerCss('tokens.css')).toMatch(/:root\s*\{[\s\S]*--reader-content-width:\s*800px\s*;/)
+    expect(readOwnerCss('tokens.css')).toMatch(/:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--accent-line\)/)
+    expect(readOwnerCss('shared-primitives.css')).toMatch(/\.reader-dialog\s*\{/)
+    expect(readOwnerCss('shared-primitives.css')).toMatch(/\.reader-preview-card\s*\{/)
+    expect(readOwnerCss('shared-primitives.css')).toMatch(/\.reader-list-row\s*\{/)
+    expect(readOwnerCss('library-detail.css')).toMatch(/\.reader-flow > :where/)
+    expect(readOwnerCss('sites.css')).toMatch(/\.sites-view\s*\{/)
+    expect(readOwnerCss('subscriptions.css')).toMatch(/\.rss-workspace\s*\{/)
+    expect(readOwnerCss('reader-vnext.css')).toMatch(/\.rvx-workspace\s*\{/)
+  })
+
+  it('keeps top-level media queries in the responsive owner', () => {
+    for (const fileName of styleOwnerFiles) {
+      if (fileName === 'responsive.css') continue
+      expect(readOwnerCss(fileName), fileName).not.toMatch(/^@media\s/m)
+    }
+
+    const responsive = readOwnerCss('responsive.css')
+    expect(responsive).toMatch(/@media\s*\(max-width:\s*1439px\)/)
+    expect(responsive).toMatch(/@media\s*\(max-width:\s*1024px\)/)
+    expect(responsive).toMatch(/@media\s*\(max-width:\s*720px\)/)
+  })
+})
 
 describe('Reader responsive content width', () => {
   it('uses one reading canvas without a second prose width cap', () => {

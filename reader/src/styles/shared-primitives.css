@@ -1,0 +1,243 @@
+/* Shared Reader primitives: dialog, preview card, list row, low-level badges and text actions. */
+.rss-sidebar button,
+.rss-list-pane button,
+.rss-detail-pane button,
+.reader-dialog button {
+  font-family: var(--font-ui);
+}
+/* 焦点环归 ReaderPreviewCard 里的真实 button（.reader-preview-card-main）所有，
+   卡片外壳自身不再可聚焦。来源行在订阅列表里比阅读列表窄一档。 */
+.rss-item-card .reader-preview-card-source { max-width: 190px; }
+/* 信号与操作在订阅列表里一直是卡片底部的一行。共享卡片把 actions 放在打开区的
+   兄弟位置，而卡片是 align-items: flex-start，所以默认会贴着顶部——压回底部，
+   卡片的重心才和迁移前一致。 */
+.rss-item-card .reader-preview-card-actions { align-self: flex-end; }
+.legacy-user-data-body { display: flex; flex-direction: column; gap: 12px; }
+.legacy-import-target {
+  display: grid; gap: 5px; min-width: 0; padding: 11px 12px;
+  border: .5px solid var(--border); border-radius: 6px; background: var(--bg-list);
+}
+.legacy-import-target span { color: var(--text-tertiary); font-size: 11px; }
+.legacy-import-target strong, .legacy-import-target code { overflow-wrap: anywhere; }
+.legacy-import-target strong { color: var(--text-primary); font-size: 13px; }
+.legacy-import-target code { color: var(--text-tertiary); font-size: 10.5px; }
+.spinning { display: inline-flex; animation: rss-spin 0.85s linear infinite; }
+.kbd {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  padding: 2px 5px; border-radius: 5px;
+  background: var(--bg-chip); color: var(--text-tertiary);
+  border: 0.5px solid var(--border);
+  line-height: 1;
+}
+:where(.reader-dialog input),
+:where(.reader-dialog textarea) { width: 100%; box-sizing: border-box; border: .5px solid var(--border-strong); border-radius: 5px; padding: 8px 9px; background: var(--bg-list); color: var(--text-primary); font: 13px var(--font-ui); }
+:where(.reader-dialog textarea) { min-height: 72px; resize: vertical; }
+:where(.reader-dialog footer) { display: flex; justify-content: flex-end; gap: 8px; margin-top: 17px; }
+:where(.reader-dialog footer button) { border: .5px solid var(--border); border-radius: 5px; padding: 7px 12px; background: var(--bg-list); color: var(--text-primary); cursor: pointer; }
+:where(.reader-dialog footer button[type="submit"]) { border-color: var(--accent); background: var(--accent); color: #fff; }
+:where(.reader-dialog footer button:disabled) { opacity: .55; cursor: default; }
+.archive-download-options {
+  display: grid;
+  gap: 7px;
+}
+.reader-dialog .archive-download-option {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-top: 0;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.reader-dialog .archive-download-option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+/* 卡片外壳（padding / 圆角 / hover / 选中态 / 标题 / 摘要）已经归
+   .reader-preview-card；`.card` 只作为 LinkCard 与订阅卡片的 e2e 定位钩子留在
+   元素上。下面两条是卡片里的领域装饰，公共组件不该知道它们。 */
+.src-ic { width: 13px; height: 13px; flex-shrink: 0; }
+/* inline state lines — 不占盒子,贴着排版 */
+.inline-state {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 7px;
+  font-size: 13px; line-height: 1.5; color: var(--text-secondary);
+  margin-bottom: 24px;
+}
+.inline-state svg { flex-shrink: 0; }
+.inline-state.err { color: var(--err); }
+.translation-pop-failed .link-btn { flex: 0 0 auto; }
+/* section eyebrow shared（原文 / 划线与想法等区块共用） */
+.sec-eyebrow {
+  display: flex; align-items: center; gap: 7px; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-tertiary);
+}
+.sec-eyebrow svg { color: var(--accent); }
+.link-btn {
+  border: none; background: none; padding: 0; margin-left: 7px;
+  font-family: var(--font-ui); font-size: 12.5px; font-weight: 560;
+  color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+/* 添加链接的外壳（overlay / panel / header / 关闭按钮）已经归 .reader-dialog，
+   这里只剩输入行本身。 */
+.add-link-row { display: flex; align-items: stretch; gap: 8px; }
+.reader-dialog .sites-load-more { width: 100%; }
+.reader-dialog .sites-page-error { box-sizing: border-box; width: 100%; }
+/* Inbox workbench. Keep the same library chrome as Reading, then hand the
+   remaining width to a queue pane and a reader-shaped review surface. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.reader-dialog {
+  width: min(520px, 100%); max-height: calc(100vh - 36px); overflow-y: auto;
+  box-sizing: border-box; padding: 18px;
+  border: .5px solid var(--border-strong); border-radius: 8px;
+  background: var(--bg-elevated); color: var(--text-primary);
+  box-shadow: var(--shadow-pop);
+  animation: pop .16s ease;
+}
+/* panel 自身带 tabIndex={-1}，只为「没有可聚焦控件时也别把焦点漏到页面」兜底，
+   不该显示成一个被点中的输入框。 */
+.reader-dialog:focus { outline: none; }
+.reader-dialog-compact { width: min(420px, 100%); }
+.reader-dialog-wide { width: min(680px, 100%); }
+.reader-dialog-header {
+  display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px;
+}
+.reader-dialog-header h2 {
+  flex: 1; min-width: 0; margin: 0;
+  font-family: var(--font-display); font-size: 17px; font-weight: 620; line-height: 1.3;
+  color: var(--text-primary); overflow-wrap: anywhere;
+}
+.reader-dialog-close {
+  flex: 0 0 auto; width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: transparent;
+  color: var(--text-tertiary); cursor: pointer;
+}
+.reader-dialog-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+.reader-dialog-close:disabled { opacity: .55; cursor: default; }
+.reader-dialog-close:disabled:hover { background: transparent; color: var(--text-tertiary); }
+/* --- ReaderPreviewCard ----------------------------------------------------- */
+.reader-preview-card {
+  position: relative; display: flex; align-items: flex-start; gap: 8px;
+  padding: 14px 15px; border: .5px solid transparent; border-radius: var(--r-md);
+  transition: background .1s;
+}
+.reader-preview-card:hover { background: var(--bg-hover); }
+.reader-preview-card.is-selected {
+  background: var(--bg-elevated); border-color: var(--border); box-shadow: var(--shadow-card);
+}
+.reader-preview-card.is-selected::before {
+  content: ""; position: absolute; left: -6px; top: 14px; bottom: 14px;
+  width: 3px; border-radius: 3px; background: var(--accent);
+}
+.reader-preview-card.is-picked { background: var(--accent-soft); }
+.reader-preview-card-leading { flex: 0 0 auto; display: inline-flex; align-items: center; padding-top: 2px; }
+.reader-preview-card-main {
+  flex: 1 1 auto; min-width: 0; display: block; width: 100%;
+  margin: 0; padding: 0; border: 0; border-radius: var(--r-md);
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.reader-preview-card-main:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-line); }
+.reader-preview-card-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; min-width: 0; }
+.reader-preview-card-source {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 200px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.reader-preview-card-time {
+  margin-left: auto; font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--text-faint); white-space: nowrap;
+}
+.reader-preview-card-title {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  margin-bottom: 5px;
+  font-family: var(--font-display); font-size: 15px; font-weight: 600; line-height: 1.35;
+  letter-spacing: 0; color: var(--text-primary);
+}
+.reader-preview-card.is-read .reader-preview-card-title { color: var(--text-secondary); font-weight: 560; }
+.reader-preview-card-summary {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 12.5px; line-height: 1.54; color: var(--text-secondary);
+}
+.reader-preview-card-details {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px;
+  color: var(--text-tertiary); font-size: 10.5px;
+}
+.reader-preview-card-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; }
+/* --- ReaderListRow --------------------------------------------------------- */
+.reader-list-row { list-style: none; min-width: 0; }
+.reader-list-row-title {
+  display: block; max-width: 100%; margin: 0; padding: 0;
+  border: 0; background: transparent; color: var(--text-primary);
+  font-family: inherit; font-weight: 650; text-align: left; overflow-wrap: anywhere;
+}
+button.reader-list-row-title { cursor: pointer; }
+button.reader-list-row-title:hover:not(:disabled) { color: var(--accent); }
+button.reader-list-row-title:disabled { cursor: default; opacity: .6; }
+.reader-list-row-summary { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.reader-list-row-meta { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-tertiary); }
+.reader-list-row-source { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.reader-list-row-actions {
+  display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 3px;
+}
+.reader-list-row-footer { min-width: 0; color: var(--text-faint); font: 10px var(--font-mono); }
+/* feed：Feed 卡片式，纵向堆叠，footer 与 actions 分列两端。 */
+.reader-list-row-feed { padding: 16px 0 15px; border-top: .5px solid var(--divider); }
+.reader-list-row-feed > .reader-list-row-meta { margin-bottom: 8px; }
+.reader-list-row-feed > .reader-list-row-title { font-size: 16px; }
+.reader-list-row-feed > .reader-list-row-summary { margin: 7px 0 11px; }
+.reader-list-row-feed > .reader-list-row-details { margin-bottom: 7px; }
+.reader-list-row-feed > .reader-list-row-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  color: var(--text-faint); font: 10px var(--font-mono);
+}
+/* dense / compact：元信息 | 主体 | footer+actions 三列。主体列里的标题、摘要、
+   补充信息各占一行，空行自动塌缩，所以不需要给中间列再包一层 div。 */
+.reader-list-row-dense,
+.reader-list-row-compact {
+  display: grid; align-items: center;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "meta title foot"
+    "meta summary foot"
+    "meta details foot";
+  column-gap: 14px;
+}
+.reader-list-row-dense > .reader-list-row-meta,
+.reader-list-row-compact > .reader-list-row-meta { grid-area: meta; }
+.reader-list-row-dense > .reader-list-row-title,
+.reader-list-row-compact > .reader-list-row-title { grid-area: title; }
+.reader-list-row-dense > .reader-list-row-summary,
+.reader-list-row-compact > .reader-list-row-summary { grid-area: summary; margin-top: 3px; }
+.reader-list-row-dense > .reader-list-row-details,
+.reader-list-row-compact > .reader-list-row-details { grid-area: details; margin-top: 3px; }
+.reader-list-row-dense > .reader-list-row-foot,
+.reader-list-row-compact > .reader-list-row-foot {
+  grid-area: foot; display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+}
+.reader-list-row-dense {
+  padding: 12px 14px; border: .5px solid var(--border-strong); border-radius: 10px;
+  background: var(--bg-elevated);
+}
+.reader-list-row-dense > .reader-list-row-meta { min-width: 76px; font-size: 12px; color: var(--text-secondary); }
+.reader-list-row-dense > .reader-list-row-title { font-size: 14px; font-weight: 500; }
+.reader-list-row-compact {
+  min-height: 76px; padding: 10px 0; border-top: .5px solid var(--divider);
+  column-gap: 10px;
+}
+.reader-list-row-compact > .reader-list-row-meta { font: 10px var(--font-mono); }
+.reader-list-row-compact > .reader-list-row-title { font-size: 13px; }
+.reader-list-row-compact > .reader-list-row-summary { font-size: 11.5px; }

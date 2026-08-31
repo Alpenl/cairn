@@ -1,0 +1,113 @@
+/* Reader design tokens, theme variables, resets, global focus and animation keyframes. */
+:root {
+  --accent: #D97757;
+  --accent-soft: rgba(217, 119, 87, 0.12);
+  --accent-line: rgba(217, 119, 87, 0.28);
+
+  --reader-content-width: 800px;
+  --reader-content-half-width: 400px;
+  --reader-gutter: clamp(17px, 3vw, 48px);
+  --sidebar-width: clamp(196px, 10.5vw, 212px);
+  --list-pane-width: clamp(288px, calc(50vw - var(--sidebar-width) - var(--reader-content-half-width) - var(--reading-gap-min)), 380px);
+  --reading-gap-min: 26px;
+  --reader-rail-width: 288px;
+  --sidebar-effective-width: var(--sidebar-width);
+  --chrome-width: calc(var(--sidebar-effective-width) + var(--list-pane-width));
+  --feed-list-pane-width: clamp(340px, 25.5vw, 380px);
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-reading: "Newsreader", "Noto Serif SC", "Songti SC", Georgia, serif;
+  --font-display: "Newsreader", "Noto Serif SC", "Songti SC", Georgia, serif;
+
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 13px;
+}
+@keyframes rss-spin { to { transform: rotate(360deg); } }
+[data-theme="light"] {
+  --bg-base: #e8e4dc;
+  --bg-sidebar: rgba(244, 240, 233, 0.8);
+  --bg-list: #faf7f1;
+  --bg-reader: #fdfaf4;
+  --bg-elevated: #fffefb;
+  --bg-hover: rgba(0, 0, 0, 0.045);
+  --bg-active: rgba(0, 0, 0, 0.065);
+  --bg-chip: rgba(0, 0, 0, 0.05);
+  --surface: #fffefb;
+  --surface-2: rgba(0, 0, 0, 0.035);
+
+  --text-primary: #221e18;
+  --text-secondary: #6d6a64;
+  --text-tertiary: #9a968e;
+  --text-faint: #b8b4ab;
+
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.13);
+  --divider: rgba(0, 0, 0, 0.06);
+
+  --shadow-pop: 0 18px 50px rgba(56, 38, 22, 0.16), 0 2px 8px rgba(56, 38, 22, 0.07);
+  --shadow-card: 0 1px 2px rgba(56, 38, 22, 0.05), 0 7px 20px rgba(56, 38, 22, 0.045);
+  --titlebar: rgba(240, 236, 228, 0.88);
+  --halo: rgba(217, 119, 87, 0.055);
+}
+[data-theme="dark"] {
+  --bg-base: #171512;
+  --bg-sidebar: rgba(33, 30, 27, 0.74);
+  --bg-list: #1e1b18;
+  --bg-reader: #1b1815;
+  --bg-elevated: #272320;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.08);
+  --bg-chip: rgba(255, 255, 255, 0.07);
+  --surface: #272320;
+  --surface-2: rgba(255, 255, 255, 0.05);
+
+  --text-primary: #ece9e4;
+  --text-secondary: #a39f98;
+  --text-tertiary: #75716a;
+  --text-faint: #57534d;
+
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --divider: rgba(255, 255, 255, 0.06);
+
+  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.5), 0 2px 10px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --titlebar: rgba(38, 36, 33, 0.86);
+  --accent: #e2876b;
+  --accent-soft: rgba(226, 135, 107, 0.16);
+  --accent-line: rgba(226, 135, 107, 0.34);
+  --halo: rgba(226, 135, 107, 0.07);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+body {
+  background: var(--bg-reader);
+  overflow: hidden;
+  transition: background 0.4s ease;
+}
+#root { width: 100%; height: 100%; }
+.stage { width: 100%; height: 100%; }
+@keyframes pop { from { opacity: 0; transform: translateY(4px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes slideIn { from { transform: translateX(28px); } to { transform: none; } }
+@keyframes blink { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+/* ───────────────────────────────────────────────────────────
+   Cairn 对齐新增 — 阅读元数据与内容布局
+   ─────────────────────────────────────────────────────────── */
+[data-theme="light"] { --ok: #2e8c6a; --err: #c0492f; --ok-soft: rgba(46,140,106,0.1); --err-soft: rgba(192,73,47,0.09); }
+[data-theme="dark"] { --ok: #55b08d; --err: #e06a4f; --ok-soft: rgba(85,176,141,0.12); --err-soft: rgba(224,106,79,0.12); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes sheetUp { from { transform: translateY(14px); } to { transform: none; } }
+/* ───────────────────────────────────────────────────────────
+   Design reference alignment
+   ─────────────────────────────────────────────────────────── */
+::selection { background: var(--accent-soft); color: inherit; }
+:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }

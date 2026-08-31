@@ -1,0 +1,450 @@
+/* Subscription management and RSS reading workspace styles. */
+/* ── RSS subscriptions workspace ───────────────────────── */
+.rss-workspace {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  position: relative;
+  background: var(--bg-reader);
+}
+.sidebar.rss-sidebar { overflow-y: hidden; }
+.rss-library-link {
+  width: 100%; height: 32px; flex-shrink: 0;
+  border: 0; border-radius: var(--r-sm); background: transparent;
+  display: flex; align-items: center; gap: 7px; padding: 0 8px;
+  color: var(--text-tertiary); cursor: pointer; font-size: 12.5px;
+}
+.rss-library-link:hover { color: var(--text-primary); background: var(--bg-hover); }
+.rss-library-link svg { transform: rotate(180deg); }
+.rss-sidebar-title {
+  height: 42px; flex-shrink: 0; padding: 6px 7px 2px;
+  display: flex; align-items: center; justify-content: space-between;
+  color: var(--text-primary); font-size: 17px; font-weight: 680;
+}
+.rss-sidebar-title button,
+.rss-folder-heading button {
+  width: 26px; height: 26px; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text-tertiary); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.rss-sidebar-title button:hover,
+.rss-folder-heading button:hover { background: var(--bg-hover); color: var(--text-primary); }
+button.rss-nav-row { width: 100%; border: 0; background: transparent; text-align: left; }
+button.rss-nav-row.active { background: var(--accent-soft); }
+.rss-smart-group { margin-top: 4px; }
+.rss-folder-heading {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 17px; padding: 4px 7px;
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+  color: var(--text-faint); text-transform: uppercase;
+}
+.rss-folder-list {
+  flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto;
+  padding-right: 2px; scrollbar-gutter: stable;
+}
+.rss-folder-group { border-radius: var(--r-sm); }
+.rss-folder-group + .rss-folder-group { margin-top: 4px; }
+.rss-folder-group:has(.rss-source-row[draggable]:active) { background: var(--bg-hover); }
+.rss-folder-row {
+  min-height: 29px; display: grid; grid-template-columns: 22px minmax(0, 1fr) 25px;
+  align-items: center; gap: 1px;
+}
+.rss-folder-row > button,
+.rss-ungrouped-row {
+  min-width: 0; height: 29px; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  display: flex; align-items: center; gap: 8px; padding: 0 8px;
+  font-size: 12.5px; text-align: left;
+}
+.rss-folder-row > button { width: 100%; }
+.rss-folder-row > .rss-folder-toggle {
+  width: 22px; padding: 0; gap: 0; justify-content: center;
+}
+.rss-folder-row > .rss-folder-toggle svg { transition: transform 120ms ease; }
+.rss-folder-row > .rss-folder-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.rss-folder-row > .rss-folder-main { padding-left: 3px; }
+.rss-folder-row > button span:not(.sb-count) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rss-folder-row > button .sb-count { margin-left: auto; }
+.rss-folder-row > button:hover,
+.rss-folder-row > button.active,
+.rss-ungrouped-row:hover,
+.rss-ungrouped-row.active { background: var(--bg-hover); color: var(--text-primary); }
+.rss-folder-row > button.active,
+.rss-ungrouped-row.active { color: var(--accent); background: var(--accent-soft); }
+.rss-ungrouped-row { width: calc(100% - 26px); }
+.rss-source-row {
+  height: 30px; display: grid; grid-template-columns: minmax(0, 1fr) 25px;
+  align-items: center; margin-left: 14px; border-radius: var(--r-sm);
+}
+.rss-source-row.batch { grid-template-columns: 22px minmax(0, 1fr); }
+.rss-source-check {
+  width: 14px; height: 14px; margin: 0 0 0 4px; accent-color: var(--accent);
+}
+.rss-source-row:hover { background: var(--bg-hover); }
+.rss-source-row.active { background: var(--accent-soft); color: var(--accent); }
+.rss-source-main {
+  height: 30px; min-width: 0; border: 0; background: transparent; color: var(--text-secondary);
+  display: flex; align-items: center; gap: 7px; padding: 0 4px 0 7px;
+  cursor: pointer; font-size: 12.5px; text-align: left;
+}
+.rss-source-row.active .rss-source-main { color: var(--accent); }
+.rss-feed-mark {
+  width: 19px; height: 19px; flex: 0 0 19px; border-radius: 5px;
+  background: var(--accent-soft); color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.rss-feed-mark.error { background: var(--err-soft); color: var(--err); }
+.rss-menu { position: relative; min-width: 0; }
+.rss-menu > summary {
+  list-style: none; width: 24px; height: 24px; border-radius: 5px;
+  color: var(--text-faint); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.rss-menu > summary::-webkit-details-marker { display: none; }
+.rss-menu > summary:hover { color: var(--text-primary); background: var(--bg-hover); }
+.rss-menu > summary[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.rss-menu-pop {
+  position: absolute; z-index: 75; top: 26px; right: 0; width: 194px;
+  padding: 5px; background: var(--bg-elevated); border: 0.5px solid var(--border-strong);
+  border-radius: 8px; box-shadow: var(--shadow-pop);
+}
+.rss-menu-pop > button {
+  width: 100%; min-height: 30px; padding: 6px 8px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  display: flex; align-items: center; gap: 7px; font-size: 12.5px; text-align: left;
+}
+.rss-menu-pop > button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.rss-menu-pop > button.danger { color: var(--err); }
+.rss-menu-select { display: block; padding: 6px 8px; color: var(--text-tertiary); font-size: 11.5px; }
+.rss-menu-select span { display: block; margin-bottom: 5px; }
+.rss-menu-select select {
+  width: 100%; min-width: 0; height: 28px; color: var(--text-primary);
+  background: var(--bg-list); border: 0.5px solid var(--border); border-radius: 5px;
+}
+.rss-sidebar-empty {
+  width: 100%; min-height: 48px; margin-top: 8px; border: 0.5px dashed var(--border-strong);
+  border-radius: 7px; background: transparent; color: var(--text-tertiary); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12px;
+}
+.rss-sidebar-empty:hover { color: var(--accent); border-color: var(--accent-line); }
+.rss-sidebar-footer {
+  flex-shrink: 0; margin-top: 12px; padding-top: 8px; border-top: 0.5px solid var(--divider);
+  background: var(--bg-sidebar);
+}
+.rss-sidebar-manage,
+.rss-sidebar-portability {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 3px;
+}
+.rss-sidebar-manage { margin-bottom: 3px; }
+.rss-sidebar-footer button,
+.rss-batch-toolbar summary {
+  height: 29px; min-width: 0; border: 0; border-radius: var(--r-sm); background: transparent;
+  color: var(--text-tertiary); cursor: pointer; display: flex; align-items: center;
+  justify-content: center; gap: 5px; font-size: 11.5px; white-space: nowrap;
+}
+.rss-sidebar-footer button:hover,
+.rss-batch-toolbar summary:hover { background: var(--bg-hover); color: var(--text-primary); }
+.rss-sidebar-footer button.danger { color: var(--err); }
+.rss-sidebar-footer button:disabled,
+.rss-batch-toolbar summary[aria-disabled="true"] { opacity: 0.42; cursor: default; }
+.rss-batch-toolbar {
+  display: grid; grid-template-columns: minmax(28px, 1fr) repeat(5, 29px);
+  align-items: center; gap: 2px; margin-bottom: 4px;
+}
+.rss-batch-count {
+  min-width: 0; color: var(--text-secondary); font-family: var(--font-mono);
+  font-size: 11px; text-align: center;
+}
+.rss-batch-move .rss-menu-pop { top: auto; right: -62px; bottom: 32px; max-height: 240px; overflow-y: auto; }
+.rss-list-pane { width: var(--feed-list-pane-width); flex: 0 0 var(--feed-list-pane-width); }
+.rss-list-head { flex-shrink: 0; border-bottom: 0.5px solid var(--divider); padding: 15px 14px 10px; }
+.rss-list-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rss-list-title-row > div:first-child { min-width: 0; }
+.rss-list-title-row h1 {
+  color: var(--text-primary); font-size: 18px; line-height: 1.25; font-weight: 680;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rss-list-title-row > div:first-child > span {
+  display: block; margin-top: 3px; color: var(--text-tertiary);
+  font-family: var(--font-mono); font-size: 10.5px;
+}
+.rss-list-actions { display: flex; flex-shrink: 0; gap: 2px; }
+.rss-list-actions button,
+.rss-search-box button,
+.rss-card-foot > button {
+  border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.rss-list-actions button { width: 29px; height: 29px; border-radius: var(--r-sm); }
+.rss-list-actions button:hover,
+.rss-search-box button:hover,
+.rss-card-foot > button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.rss-list-actions button:disabled { opacity: 0.5; cursor: default; }
+.rss-search-box {
+  height: 32px; margin-top: 11px; padding: 0 8px;
+  display: flex; align-items: center; gap: 7px;
+  border: 0.5px solid var(--border); border-radius: 7px; background: var(--bg-chip);
+  color: var(--text-tertiary);
+}
+.rss-search-box:focus-within { border-color: var(--accent-line); background: var(--bg-elevated); }
+.rss-search-box input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+  color: var(--text-primary); font-family: var(--font-ui); font-size: 12.5px;
+}
+.rss-search-box input::placeholder { color: var(--text-faint); }
+.rss-search-box button { width: 22px; height: 22px; border-radius: 4px; }
+.rss-source-status {
+  min-height: 26px; margin-top: 8px; padding: 5px 7px; border-radius: 6px;
+  background: var(--bg-chip); color: var(--text-tertiary);
+  display: flex; align-items: flex-start; gap: 6px; font-size: 10.5px; line-height: 1.45;
+}
+.rss-source-status svg { margin-top: 1px; flex-shrink: 0; }
+.rss-source-status span { min-width: 0; overflow-wrap: anywhere; }
+.rss-source-status.error { color: var(--err); background: var(--err-soft); }
+.rss-items-scroll { padding: 6px; }
+.rss-item-card { min-height: 118px; }
+.rss-card-foot { height: 25px; display: flex; align-items: center; justify-content: flex-end; gap: 1px; }
+.rss-card-signals { margin-right: auto; min-width: 20px; display: flex; align-items: center; gap: 4px; color: var(--accent); }
+.rss-card-signals .error { color: var(--err); }
+.rss-card-foot > button { width: 25px; height: 25px; border-radius: 5px; opacity: 0; }
+.rss-item-card:hover .rss-card-foot > button,
+.rss-card-foot > button.on,
+.rss-card-foot > button:focus-visible { opacity: 1; }
+.rss-card-foot > button.on { color: var(--accent); }
+.rss-list-message {
+  min-height: 210px; padding: 36px 20px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 10px;
+  color: var(--text-faint); font-size: 12.5px; text-align: center;
+}
+.rss-list-message.error { color: var(--text-tertiary); }
+.rss-list-message.error > svg { color: var(--err); }
+.rss-loading-more { padding: 17px; text-align: center; color: var(--text-faint); font-size: 11.5px; }
+.rss-load-more {
+  width: calc(100% - 12px); height: 32px; margin: 6px; border: 0.5px solid var(--border);
+  border-radius: 6px; background: transparent; color: var(--text-tertiary); cursor: pointer;
+}
+.rss-load-more:hover { background: var(--bg-hover); color: var(--text-primary); }
+.rss-detail-toolbar .rss-ai-button { white-space: nowrap; }
+.rss-detail-toolbar button:disabled { opacity: 0.55; cursor: default; }
+.rss-reader-inner { width: 100%; max-width: var(--reader-content-width); margin: 0 auto; padding: 42px 0 100px; }
+.rss-article-source {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 16px;
+  color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11.5px;
+}
+.rss-unread-label {
+  padding: 1px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent);
+  font-size: 10px;
+}
+.rss-reader-inner > h1 {
+  color: var(--text-primary); font-size: 31px; line-height: 1.22;
+  font-weight: 720; overflow-wrap: anywhere; text-wrap: balance;
+}
+.rss-article-meta {
+  min-height: 42px; margin-top: 13px; padding-bottom: 21px; border-bottom: 0.5px solid var(--divider);
+  display: flex; align-items: center; flex-wrap: wrap; gap: 7px;
+  color: var(--text-tertiary); font-size: 12px;
+}
+.rss-detail-loading { display: inline-flex; align-items: center; gap: 5px; margin-left: 5px; color: var(--text-faint); }
+.rss-feed-summary {
+  margin: 24px 0 28px; padding-left: 15px; border-left: 2px solid var(--accent-line);
+  color: var(--text-secondary); font-size: 15px; line-height: 1.65; overflow-wrap: anywhere;
+}
+.rss-feed-content {
+  margin-top: 28px; color: var(--text-primary);
+  font-size: 16px; line-height: 1.78; overflow-wrap: anywhere;
+}
+.rss-feed-content.plain { white-space: pre-wrap; }
+.rss-feed-content.summary-only { color: var(--text-secondary); }
+.rss-feed-content p,
+.rss-feed-content ul,
+.rss-feed-content ol,
+.rss-feed-content pre,
+.rss-feed-content blockquote,
+.rss-feed-content table { margin: 0 0 19px; }
+.rss-feed-content h1,
+.rss-feed-content h2,
+.rss-feed-content h3,
+.rss-feed-content h4 { margin: 29px 0 12px; line-height: 1.3; font-weight: 680; }
+.rss-feed-content h1 { font-size: 24px; }
+.rss-feed-content h2 { font-size: 21px; }
+.rss-feed-content h3 { font-size: 18px; }
+.rss-feed-content ul,
+.rss-feed-content ol { padding-left: 24px; }
+.rss-feed-content li { margin-bottom: 7px; }
+.rss-feed-content a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.rss-feed-content img { display: block; max-width: 100%; height: auto; margin: 22px auto; border-radius: 6px; }
+.rss-feed-content pre {
+  max-width: 100%; overflow-x: auto; padding: 13px; border-radius: 7px;
+  background: var(--bg-chip); font: 12.5px/1.6 var(--font-mono);
+}
+.rss-feed-content code { font-family: var(--font-mono); font-size: 0.88em; }
+.rss-feed-content blockquote { padding-left: 14px; border-left: 2px solid var(--border-strong); color: var(--text-secondary); }
+.rss-feed-content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 13px; }
+.rss-feed-content th,
+.rss-feed-content td { padding: 7px 9px; border: 0.5px solid var(--border); text-align: left; }
+.rss-content-empty {
+  min-height: 180px; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 9px; color: var(--text-faint); font-size: 12.5px;
+}
+.rss-article-footer { margin-top: 46px; padding-top: 18px; border-top: 0.5px solid var(--divider); }
+.rss-article-footer a { display: inline-flex; align-items: center; gap: 6px; color: var(--text-tertiary); font-size: 12.5px; text-decoration: none; }
+.rss-article-footer a:hover { color: var(--accent); }
+.article-pager.rss-article-pager { margin-top: 20px; padding-top: 0; border-top: 0; }
+.rss-dialog-overlay {
+  position: fixed; inset: 0; z-index: 120; padding: 12px;
+  background: rgba(0, 0, 0, 0.32); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center;
+}
+.rss-dialog {
+  width: min(620px, 100%); max-height: min(720px, calc(100vh - 24px)); overflow-y: auto;
+  background: var(--bg-elevated); color: var(--text-primary);
+  border: 0.5px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow-pop);
+}
+.rss-dialog.compact { width: min(430px, 100%); }
+.rss-dialog > header {
+  min-height: 68px; padding: 15px 17px; border-bottom: 0.5px solid var(--divider);
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+}
+.rss-dialog > header h2 { font-size: 17px; line-height: 1.3; font-weight: 680; }
+.rss-dialog > header p { margin-top: 4px; color: var(--text-tertiary); font-size: 12px; }
+/* 只有 App.tsx 的 legacy「未归属的本地数据」Dialog 还在用 .rss-dialog 外壳，
+   它的 panel 自己不带 padding，所以内边距挂在这一层；订阅的两个 Dialog 已经
+   换成 ReaderDialog，panel 自带 18px，body 再补一层就成了 35px。 */
+.rss-dialog > .rss-dialog-body { padding: 17px; }
+/* 订阅 Dialog 的副标题：外壳 header 已经留了 14px，这里收回来贴住标题。 */
+.rss-dialog-lede { margin: -10px 0 14px; color: var(--text-tertiary); font-size: 12px; }
+.rss-field { display: block; margin-bottom: 14px; }
+.rss-field > span { display: block; margin-bottom: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 570; }
+.rss-field > input,
+.rss-field > select,
+.rss-url-input {
+  width: 100%; height: 36px; border: 0.5px solid var(--border-strong); border-radius: 7px;
+  background: var(--bg-list); color: var(--text-primary); outline: 0;
+  font-family: var(--font-ui); font-size: 13px;
+}
+.rss-field > input { padding: 0 10px; }
+.rss-field > select { padding: 0 8px; }
+.rss-url-input { display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--text-tertiary); }
+.rss-url-input input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; }
+.rss-field > input:focus,
+.rss-field > select:focus,
+.rss-url-input:focus-within { border-color: var(--accent-line); }
+.rss-dialog-error {
+  min-height: 34px; margin: 8px 0; padding: 8px 10px; border-radius: 6px;
+  background: var(--err-soft); color: var(--err); display: flex; align-items: flex-start; gap: 7px;
+  font-size: 12px; line-height: 1.45; overflow-wrap: anywhere;
+}
+.rss-discovery-results { margin-top: 14px; border-top: 0.5px solid var(--divider); }
+.rss-discovery-row {
+  min-height: 61px; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 0.5px solid var(--divider);
+}
+.rss-discovery-row > div { min-width: 0; }
+.rss-discovery-row strong,
+.rss-discovery-row span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rss-discovery-row strong { font-size: 13px; font-weight: 620; }
+.rss-discovery-row > div > span { margin-top: 3px; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10.5px; }
+.rss-dialog-body > footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.rss-dialog-body > footer.legacy-migration-actions { flex-wrap: wrap; }
+.rss-primary-button,
+.rss-secondary-button {
+  min-height: 32px; padding: 0 13px; border-radius: 7px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  font-size: 12.5px; font-weight: 570;
+}
+.rss-primary-button { border: 0.5px solid var(--accent); background: var(--accent); color: #fff; }
+[data-theme="dark"] .rss-primary-button { color: #1a1917; }
+.rss-secondary-button { border: 0.5px solid var(--border); background: transparent; color: var(--text-secondary); }
+.rss-primary-button:disabled { opacity: 0.5; cursor: default; }
+.rss-secondary-button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.rss-nav-backdrop { display: none; }
+/* ── Subscriptions view ─────────────────────────────────── */
+.subs-inner { max-width: 760px; margin: 0 auto; padding: 30px 40px 80px; }
+.sub-add { display: flex; align-items: center; gap: 10px; padding: 11px 14px; background: var(--bg-elevated); border: 0.5px solid var(--border-strong); border-radius: 11px; margin-bottom: 14px; box-shadow: var(--shadow-card); }
+.sub-add input { flex: 1; border: none; background: transparent; outline: none; font-family: var(--font-ui); font-size: 14px; color: var(--text-primary); }
+.sub-add input::placeholder { color: var(--text-tertiary); }
+.add-btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 13px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 560; cursor: pointer; white-space: nowrap; }
+[data-theme="dark"] .add-btn { color: #1a1917; }
+.sub-types { display: flex; gap: 8px; margin-bottom: 30px; }
+.sub-type-chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11.5px; color: var(--text-secondary); padding: 5px 10px; border-radius: 7px; background: var(--bg-chip); border: 0.5px solid var(--border); }
+.sub-group { margin-bottom: 30px; }
+.sub-group-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.sub-ic { display: inline-flex; }
+.sub-gt { font-size: 16px; font-weight: 660; color: var(--text-primary); }
+.sub-gcount { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary); margin-left: auto; white-space: nowrap; }
+.sub-cards { display: flex; flex-direction: column; gap: 8px; }
+.sub-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--bg-elevated); border: 0.5px solid var(--border); border-radius: 11px; transition: border 0.12s; }
+.sub-card:hover { border-color: var(--border-strong); }
+.sub-info { flex: 1; min-width: 0; }
+.sub-name { font-size: 14px; font-weight: 580; color: var(--text-primary); }
+.sub-handle { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary); margin-top: 2px; }
+.sub-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; white-space: nowrap; }
+.sub-ok { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.sub-freq { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-faint); }
+/* scrollbars */
+.sidebar::-webkit-scrollbar, .rss-folder-list::-webkit-scrollbar, .list-scroll::-webkit-scrollbar, .reader-scroll::-webkit-scrollbar, .chat-scroll::-webkit-scrollbar { width: 9px; }
+.sidebar:hover::-webkit-scrollbar-thumb, .rss-folder-list:hover::-webkit-scrollbar-thumb, .list-scroll:hover::-webkit-scrollbar-thumb, .reader-scroll:hover::-webkit-scrollbar-thumb, .chat-scroll:hover::-webkit-scrollbar-thumb { background: var(--border-strong); background-clip: padding-box; }
+/* Keep the element-specific Markdown/RSS shorthands on the same left edge. */
+.reader-flow:is(.md, .rss-feed-content) > :where(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, dl, address) {
+  margin-inline: 0;
+}
+/* planned banner (subs view) */
+.planned-banner {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 15px 17px; border-radius: var(--r-md); margin-bottom: 22px;
+  background: var(--bg-chip); border: 0.5px dashed var(--border-strong);
+  color: var(--text-secondary);
+}
+.planned-banner svg { color: var(--text-tertiary); flex-shrink: 0; margin-top: 2px; }
+.planned-banner .pb-t { font-size: 14px; font-weight: 620; color: var(--text-primary); margin-bottom: 4px; }
+.planned-banner .pb-d { font-size: 12.5px; line-height: 1.6; }
+.list-title,
+.rss-list-title-row h1 {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+/* Subscription workspace */
+.rss-sidebar-title {
+  height: 30px;
+  padding: 0 7px;
+  color: var(--text-faint);
+  font: 600 10.5px var(--font-mono);
+  text-transform: uppercase;
+}
+.rss-smart-group { margin-top: 0; }
+.rss-list-title-row h1 { font-size: 19px; }
+.rss-reader-inner > h1 {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.rss-feed-summary,
+.rss-feed-content {
+  font-family: var(--font-reading);
+}
+.rss-feed-summary { font-size: 16.5px; line-height: 1.75; }
+.rss-feed-content { font-size: 16px; line-height: 1.92; }
+/* Feed reading uses the same typography controls as saved-link reading. */
+.rss-detail-pane .rss-feed-summary,
+.rss-detail-pane .rss-feed-content,
+.rss-detail-pane .rss-article-footer {
+  font-family: var(--font-reading);
+  font-size: var(--reading-font-size, 16px);
+  line-height: var(--reading-line-height, 1.92);
+}
+.rss-detail-pane .rss-feed-content h1,
+.rss-detail-pane .rss-feed-content h2,
+.rss-detail-pane .rss-feed-content h3,
+.rss-detail-pane .rss-feed-content h4 { line-height: 1.3; }
+.rss-workspace:has(.feed-focus-mode) > .rss-sidebar,
+.rss-workspace:has(.feed-focus-mode) > .rss-list-pane { display: none; }
+.rss-workspace:has(.feed-focus-mode) > .rss-detail-pane {
+  flex: 1 1 auto;
+}
+.rss-detail-pane.feed-focus-mode .rss-reader-inner {
+  max-width: 880px;
+}

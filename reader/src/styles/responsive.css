@@ -1,0 +1,462 @@
+/* Top-level responsive rules collected after owner styles to preserve final breakpoint precedence. */
+@media (max-width: 1439px) {
+  .rss-workspace { width: 100%; flex: 1 1 100%; overflow: hidden; }
+  .rss-workspace .rss-sidebar {
+    position: absolute; inset: 0 auto 0 0; z-index: 55;
+    width: min(84vw, 320px); max-width: 100%;
+    transform: translateX(-102%); visibility: hidden;
+    transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), visibility 0s linear 0.2s;
+    box-shadow: var(--shadow-pop);
+  }
+  .body.mobile-nav-open .rss-sidebar {
+    transform: translateX(0); visibility: visible; transition-delay: 0s;
+  }
+  .rss-nav-backdrop {
+    display: block; position: absolute; inset: 0; z-index: 50; border: 0;
+    background: rgba(0, 0, 0, 0.28); opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity 0.18s ease, visibility 0s linear 0.18s;
+  }
+  .rss-nav-backdrop.open { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+  .rss-card-foot > button { opacity: 1; }
+  .rss-menu-pop { position: fixed; top: auto; right: 10px; width: min(240px, calc(100vw - 20px)); }
+}
+@media (max-width: 1024px) {
+  .rss-workspace .rss-list-pane,
+  .rss-workspace .rss-detail-pane { width: 100%; flex: 1 1 100%; display: flex; }
+  .rss-workspace:not(.rss-mobile-detail) .rss-detail-pane { display: none; }
+  .rss-workspace.rss-mobile-detail .rss-list-pane { display: none; }
+  .rss-reader-inner { max-width: none; padding: 28px 0 84px; }
+  .rss-reader-inner > h1 { font-size: 26px; }
+}
+@media (max-width: 560px) {
+  .rss-list-pane { width: 100%; flex-basis: 100%; }
+  .rss-detail-toolbar { padding: 0 5px; }
+  .rss-detail-toolbar .tb-btn { min-width: 30px; padding: 0 7px; }
+  .rss-detail-toolbar .rss-ai-button { padding: 0 8px; font-size: 11.5px; }
+  .rss-action-label { display: none; }
+  .rss-reader-inner { padding: 24px 0 72px; }
+  .rss-reader-inner > h1 { font-size: 23px; }
+  .rss-feed-content { font-size: 15.5px; }
+  .rss-discovery-row { grid-template-columns: 20px minmax(0, 1fr); }
+  .rss-discovery-row .rss-primary-button { grid-column: 2; justify-self: start; }
+}
+@media (max-width: 520px) {
+  .orig-content-head { gap: 8px; }
+  .orig-content-actions { flex-wrap: nowrap; gap: 5px; }
+  .replace-content-btn { width: 28px; padding: 0; }
+  .replace-content-btn span { display: none; }
+  .translate-content-btn { width: auto; padding: 0 8px; }
+  .translate-content-btn span { display: inline; }
+}
+@media (max-width: 359px) {
+  .orig-content-head { align-items: flex-start; flex-direction: column; }
+  .orig-content-actions { width: 100%; flex-wrap: wrap; justify-content: flex-start; }
+}
+@media (max-width: 1599px) {
+  .body.mobile-tool-open > .list-pane { display: none; }
+}
+/* ── Compact desktop: list + reader, navigation becomes a drawer. ── */
+@media (max-width: 1439px) {
+  .mobile-nav-toggle { display: inline-flex; }
+
+  .body {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 50;
+    width: min(84vw, 320px);
+    max-width: 100%;
+    transform: translateX(-102%);
+    visibility: hidden;
+    transition:
+      transform 0.2s cubic-bezier(0.32, 0.72, 0, 1),
+      visibility 0s linear 0.2s;
+    box-shadow: var(--shadow-pop);
+  }
+  .body.mobile-nav-open > .sidebar {
+    transform: translateX(0);
+    visibility: visible;
+    transition-delay: 0s;
+  }
+  .mobile-nav-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 45;
+    border: 0;
+    background: rgba(0, 0, 0, 0.28);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.18s ease, visibility 0s linear 0.18s;
+  }
+  .body.mobile-nav-open > .mobile-nav-backdrop {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
+  }
+}
+/* At very wide widths the list pane absorbs the available space through the
+   layout variables above; this track places the prose center on 50vw. Tool
+   panes opt out because they intentionally reclaim the right side. */
+@media (min-width: 1820px) {
+  .body:not(.focus-mode):not(:has(.chat)):not(:has(.note-panel)) > .reader-pane:not(.rss-detail-pane) .reader-scroll {
+    grid-template-columns:
+      max(0px, calc(50vw - var(--chrome-width) - var(--reader-content-half-width)))
+      minmax(0, var(--reader-content-width))
+      var(--reading-gap-min)
+      var(--reader-rail-width)
+      minmax(var(--reading-gap-min), 1fr);
+  }
+}
+@media (min-width: 1440px) {
+  .sidebar.collapsed,
+  .sites-sidebar.collapsed {
+    width: 54px;
+    flex-basis: 54px;
+    padding: 8px 7px 14px;
+  }
+  .sidebar.collapsed .library-mode-row,
+  .sites-sidebar.collapsed .library-mode-row,
+  .sidebar.collapsed .smart-group .sb-row {
+    justify-content: center;
+    padding-inline: 0;
+  }
+  .sidebar.collapsed .wt-primary-nav .rvx-nav-action,
+  .sites-sidebar.collapsed .wt-primary-nav .rvx-nav-action {
+    justify-content: center;
+    padding-inline: 0;
+  }
+  .sidebar.collapsed .library-mode-row .sb-name,
+  .sites-sidebar.collapsed .library-mode-row .sb-name,
+  .sidebar.collapsed .wt-primary-nav .rvx-nav-action .sb-name,
+  .sites-sidebar.collapsed .wt-primary-nav .rvx-nav-action .sb-name,
+  .sidebar.collapsed .smart-group .sb-name,
+  .sidebar.collapsed .smart-group .sb-count { display: none; }
+  .sidebar.collapsed > .sb-group:not(.smart-group),
+  .sidebar.collapsed > .rss-sidebar-title,
+  .sidebar.collapsed > .rss-folder-heading,
+  .sidebar.collapsed > .rss-folder-list,
+  .sidebar.collapsed > .rss-sidebar-footer,
+  .sites-sidebar.collapsed .sites-filter-group { display: none; }
+}
+@media (max-width: 1439px) {
+  .sites-sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 55;
+    width: min(84vw, 320px);
+    max-width: 100%;
+    flex-basis: auto;
+    transform: translateX(-102%);
+    visibility: hidden;
+    box-shadow: var(--shadow-pop);
+    transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), visibility 0s linear 0.2s;
+  }
+  .body.mobile-nav-open .sites-sidebar { transform: translateX(0); visibility: visible; transition-delay: 0s; }
+  .sites-nav-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    border: 0;
+    background: rgba(0, 0, 0, 0.28);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.18s ease, visibility 0s linear 0.18s;
+  }
+  .sites-nav-backdrop.open { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+/* ── Narrow: one application pane; tools become full overlays. ── */
+@media (max-width: 1024px) {
+	.sites-view { display: block; overflow-y: auto; }
+	.sites-sidebar { display: none; }
+	.sites-main { min-height: 100%; padding: 18px 14px 64px; }
+	.site-detail { display: none; }
+	.sites-main.mobile-hidden { display: none; }
+	.site-detail.mobile-active { display: block; min-height: 100%; border-left: 0; }
+	.site-mobile-back { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; transform: rotate(180deg); }
+	.site-mobile-back:hover { color: var(--accent); background: var(--accent-soft); }
+	.site-detail-inner { padding: 16px; }
+	.site-detail-inner header { flex-wrap: wrap; gap: 6px; }
+	.site-detail-inner header > .site-mobile-back,
+	.site-detail-inner header > .site-avatar { order: 1; }
+	.site-detail-inner header > div { order: 2; flex: 1 1 calc(100% - 42px); }
+	.site-detail-inner header > .tb-btn { order: 3; flex: 0 0 auto; }
+	.site-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 9px; border-top: 0; }
+	.site-list-head { display: none; }
+	.site-card { min-height: 132px; border: .5px solid var(--border); border-radius: 7px; background: var(--bg-list); }
+	.site-card:hover { border-color: var(--border-strong); box-shadow: 0 2px 8px rgba(0, 0, 0, .045); }
+	.site-card-main { min-height: 132px; grid-template-columns: 34px minmax(0, 1fr); grid-template-rows: auto minmax(34px, 1fr) auto; column-gap: 10px; row-gap: 9px; padding: 11px 40px 10px 11px; }
+	.site-intro { grid-column: 1 / -1; }
+	.site-card-foot { grid-column: 1 / -1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+	.site-card-foot em { margin-left: auto; }
+	.site-open { right: 9px; top: 10px; transform: none; }
+
+  .mobile-back { display: inline-flex; flex-shrink: 0; }
+
+  .list-pane {
+    width: 100%;
+    flex: 1 1 100%;
+    border-right: 0;
+  }
+  .reader-pane {
+    display: none;
+    width: 100%;
+    flex: 1 1 100%;
+  }
+  .body.mobile-detail-active > .list-pane { display: none; }
+  .body.mobile-detail-active > .reader-pane { display: flex; }
+  .body.mobile-tool-open > .list-pane,
+  .body.mobile-tool-open > .reader-pane { visibility: hidden; }
+
+  .reader-toolbar {
+    gap: 2px;
+    padding: 0 8px;
+    overflow-x: auto;
+  }
+  .reader-toolbar::-webkit-scrollbar { display: none; }
+  .mobile-back svg { transform: rotate(180deg); }
+  .reader-inner {
+    max-width: none;
+    padding: 28px 0 84px;
+  }
+  .art-source {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    word-break: break-word;
+  }
+  .art-title {
+    font-size: 26px;
+    line-height: 1.22;
+  }
+  .art-title.url-title { font-size: 19px; }
+  .summary-lead { font-size: 17px; }
+  .chat, .note-panel {
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    width: 100%;
+    border-left: 0;
+  }
+
+  .cmdk-overlay { padding: 9vh 12px 12px; }
+  .cmdk { width: 100%; max-width: 100%; }
+  .cmdk-hint { display: none; }
+  .browse-tabs { flex-wrap: wrap; }
+  .browse-sorts { margin-left: 0 !important; }
+
+  .subs-inner { padding: 24px 18px 64px; }
+  .sub-types { flex-wrap: wrap; }
+  .sub-card { align-items: flex-start; }
+
+  .toast {
+    right: 12px;
+    bottom: 14px;
+    left: 12px;
+    transform: none;
+    justify-content: center;
+    text-align: center;
+  }
+  .sel-pop {
+    max-width: calc(100vw - 16px);
+    overflow-x: auto;
+  }
+}
+/* Final mobile precedence for the design-aligned website and reader states. */
+@media (max-width: 1024px) {
+  .sites-view { display: flex; overflow: hidden; }
+  .sites-sidebar { display: flex; }
+  .sites-main { width: 100%; min-height: 0; padding: 28px var(--reader-gutter) 72px; }
+  .sites-main.mobile-hidden { display: none; }
+  .site-detail { display: none; }
+  .site-detail.mobile-active {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    display: block;
+    width: 100%;
+    min-height: 0;
+    border-left: 0;
+  }
+  .site-detail-inner header > .site-avatar { width: 38px; height: 38px; order: 1; }
+  .site-detail-inner header > div { order: 2; flex: 1 1 calc(100% - 50px); }
+  .site-detail-inner header > .tb-btn { order: 3; }
+  .site-detail-inner header > .site-detail-close { order: 2; }
+  .reader-inner.focused { max-width: none; padding: 36px 0 96px; }
+}
+@media (max-width: 639px) {
+  .titlebar {
+    padding: 0 8px;
+    gap: 4px;
+    justify-content: space-between;
+  }
+  .titlebar > .tb-grow { display: none; }
+  .tb-section { gap: 2px; }
+  .tb-btn { min-width: 32px; padding: 0 7px; }
+  .search-pill {
+    width: 32px;
+    min-width: 32px;
+    flex: 0 0 32px;
+    justify-content: center;
+    padding: 0 8px;
+  }
+  .search-pill .ph, .search-pill .kbd { display: none; }
+  .wordmark { display: none; }
+  .titlebar > .tb-section:last-child .tb-btn:last-child { display: none; }
+  .library-sync-error { justify-content: space-between; }
+}
+@media (max-width: 560px) {
+  .sites-heading { margin-bottom: 18px; }
+  .sites-heading h1 { font-size: 27px; }
+  .site-grid { grid-template-columns: 1fr; gap: 12px; }
+  .site-card { min-height: 138px; border-radius: 8px; background: var(--bg-elevated); }
+  .site-card-main {
+    min-height: 138px;
+    grid-template-columns: 38px minmax(0, 1fr);
+    grid-template-rows: auto minmax(37px, 1fr) auto;
+    row-gap: 11px;
+    padding: 16px 16px 13px;
+  }
+  .site-open { right: 10px; top: 14px; }
+  .site-detail-inner { padding: 15px; }
+  .reading-preference-popover { right: 8px; width: min(250px, calc(100vw - 16px)); }
+  .back-to-top { right: 12px; bottom: 12px; }
+  .add-link-row { flex-direction: column; }
+  .add-link-submit { height: 36px; }
+}
+@media (max-width: 900px) {
+  .rvx-nav { width: 190px; flex-basis: 190px; }
+  .rvx-mode-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .rvx-home-columns { grid-template-columns: 1fr; gap: 0; }
+  .rvx-split { grid-template-columns: minmax(170px, 230px) minmax(0, 1fr); }
+  .inbox-workbench { grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); }
+  .inbox-reader-layout { padding-inline: clamp(18px, 4vw, 34px); }
+  .notes-split.tool-open { grid-template-columns: minmax(170px, 230px) minmax(0, 1fr); }
+  .rvx-notes-focus-mode .notes-split.tool-open { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 1024px) {
+  .notes-split > .chat, .notes-split > .note-panel {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    width: auto;
+    min-height: 360px;
+    max-height: min(58vh, 520px);
+    grid-column: 1 / -1;
+    border-top: .5px solid var(--divider);
+    border-left: 0;
+  }
+}
+@media (max-width: 680px) {
+  /* Stack the nav above the surface without leaving the flex column: dropping
+     to `display: block` here strands `.rvx-scroll` on `flex-basis: 0`, so the
+     content column collapses to its own padding. */
+  .rvx-workspace { flex-direction: column; }
+  .rvx-nav { width: auto; flex: 0 0 auto; display: block; padding: 7px; border-right: 0; border-bottom: .5px solid var(--divider); overflow: visible; }
+  /* Two rows instead of a column: five library modes, then 首页 plus the three
+     tools. Same DOM as the wide layout — the narrow shell used to render a
+     second copy of the surface actions (`.rvx-mobile-nav`) alongside a hidden
+     desktop group, which is exactly how the two drifted apart. */
+  .rvx-nav .wt-primary-nav {
+    position: static;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 2px;
+    padding: 0;
+    margin: 0;
+    border-bottom: 0;
+  }
+  .rvx-nav .wt-nav-surfaces { grid-column: 1 / 3; grid-row: 2; padding: 0; border-bottom: 0; }
+  .rvx-nav .wt-nav-tools { grid-column: 3 / -1; grid-row: 2; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 0; border-top: 0; }
+  .rvx-nav .rvx-nav-action { min-height: 34px; justify-content: center; gap: 5px; padding: 0 3px; font-size: 11px; }
+  .rvx-nav .library-mode-nav { grid-column: 1 / -1; grid-row: 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; }
+  .rvx-nav .library-mode-row { min-height: 34px; justify-content: center; padding: 0 3px; }
+  .rvx-nav .library-mode-row .sb-name { display: inline; font-size: 10px; }
+  .rvx-nav .library-mode-row .sb-icon { display: none; }
+  .rvx-header { min-height: 62px; padding: 11px 13px; }
+  .rvx-title-block h1 { font-size: 19px; }
+  .rvx-scroll { padding: 18px 13px 30px; }
+  .rvx-inbox-workspace .rvx-scroll { padding: 0; }
+  .inbox-workbench { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(190px, 34vh) minmax(0, 1fr); }
+  .inbox-queue { border-right: 0; border-bottom: .5px solid var(--divider); }
+  .inbox-list > li { min-height: 96px; }
+  .inbox-detail-toolbar { overflow-x: auto; scrollbar-width: none; }
+  .inbox-detail-toolbar::-webkit-scrollbar { display: none; }
+  .inbox-detail-state, .inbox-detail-actions { flex: 0 0 auto; }
+  .inbox-reader-layout { padding: 28px 16px 76px; }
+  .inbox-reader-document h1 { margin-block: 14px 25px; font-size: 29px; }
+  .inbox-editor-section + .inbox-editor-section { margin-top: 42px; padding-top: 26px; }
+  .inbox-global-message { top: 6px; }
+  .inbox-result { right: 10px; bottom: 10px; width: min(360px, calc(100% - 20px)) !important; }
+  .rvx-hero-row { display: block; }
+  .rvx-freshness { margin-top: 10px; }
+  .rvx-mode-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rvx-split { display: block; min-height: 0; }
+  .rvx-list-column { max-height: 210px; border-right: 0; border-bottom: .5px solid var(--divider); }
+  .rvx-detail-column { padding: 17px 13px; }
+  .rvx-note-toolbar { flex-wrap: wrap; }
+  .rvx-note-toolbar-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+  .rvx-note-toolbar-actions > .rvx-muted { margin-left: auto; }
+  .rvx-note-editor-input, .rvx-note-textarea, .rvx-note-preview-scroll { min-height: 360px; height: min(58vh, 520px); }
+  .rvx-note-textarea { resize: none; padding: 13px; font-size: 13px; }
+  .rvx-note-preview-scroll { display: block; padding: 22px 16px 72px; }
+  .rvx-note-preview-scroll > .reader-toc { display: none; }
+  /* The workbench stacks here, so the editor goes back to a bounded height:
+     a pane-filling textarea would push the caret — and the slash menu that
+     tracks it — past the bottom of the viewport. */
+  .notes-split { height: auto; }
+  .notes-split > .rvx-detail-column { overflow: visible; }
+  .notes-split > .rvx-list-column { padding: 4px 6px 8px; }
+  .notes-split .rvx-note-editor-input { min-height: 360px; height: min(58vh, 520px); padding: 13px; }
+  .notes-split .rvx-note-textarea { min-height: 0; height: 100%; margin: 0; padding: 13px; }
+  .notes-split .rvx-note-preview-scroll { min-height: 360px; height: min(58vh, 520px); padding: 22px 16px 72px; }
+  .notes-split > .chat, .notes-split > .note-panel { width: 100%; min-height: 360px; max-height: min(62vh, 520px); }
+  .rvx-notes-focus-mode .rvx-header { padding-inline: 13px; }
+  .rvx-todo-create { grid-template-columns: 1fr; align-items: stretch; }
+  .rvx-todo-create .rvx-button { width: 100%; }
+  .rvx-settings-row { display: block; padding-inline: 0; }
+  .rvx-settings-row .rvx-button { margin-top: 12px; }
+  .rvx-settings-control { justify-items: start; margin-top: 12px; }
+  .rvx-history-reattach { grid-template-columns: 1fr; }
+  .rvx-history-reattach .rvx-button { width: 100%; }
+  .rvx-history-panel li { align-items: flex-start; flex-direction: column; }
+  .rvx-history-actions { width: 100%; justify-content: flex-end; }
+}
+@media (max-width: 430px) {
+  .rvx-inbox-workspace .rvx-header { gap: 8px; }
+  .rvx-inbox-workspace .rvx-header-actions .rvx-button { padding-inline: 9px; }
+  .inbox-queue-head { padding-inline: 8px; }
+  .inbox-queue-head .rvx-segmented button { padding-inline: 6px; }
+  .inbox-detail-toolbar { padding-inline: 9px; }
+  .inbox-detail-actions { gap: 3px; }
+  .inbox-detail-actions .rvx-button { padding-inline: 8px; }
+  .inbox-reader-document h1 { font-size: 26px; }
+  .inbox-source-line a { max-width: 100%; }
+}
+@media (max-width: 720px) {
+  .reader-dialog-backdrop { padding: 9px; }
+  .reader-dialog { max-height: calc(100vh - 18px); padding: 16px; }
+}
+@media (max-width: 720px) {
+  .reader-list-row-dense,
+  .reader-list-row-compact {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "meta title"
+      "meta summary"
+      "meta details"
+      "foot foot";
+    row-gap: 4px;
+  }
+  .reader-list-row-dense > .reader-list-row-foot,
+  .reader-list-row-compact > .reader-list-row-foot { margin-top: 6px; }
+}
