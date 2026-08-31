@@ -15,7 +15,6 @@ import {
   type ApiResult,
   ok,
 } from '@webtag/api'
-import { isRecord } from '../records'
 import type {
   DiscoverFeedsResponse,
   FeedFolder,
@@ -104,22 +103,8 @@ import type {
   HealthResponse,
 } from './types'
 import {
-  isReaderThoughtAckResponse,
-  isReaderThoughtResponse,
-  isReaderThoughtsResponse,
-  isReaderThoughtSupersessionEventsResponse,
-  isReaderNoteResponse,
-  isReaderNotesResponse,
-  isReaderNoteHistoryResponse,
   isReaderHostLifecycleResponse,
   isReaderTrashResponse,
-  isReaderInboxResponse,
-  isReaderInboxResponsePage,
-  isReaderInboxBulkResponse,
-  isReaderInboxConfirmAIProposalsResponse,
-  isReaderConfirmResponse,
-  isReaderTodoResponse,
-  isReaderTodosResponse,
   isReaderHomeResponse,
   isReaderAIResponse,
   normalizeCapabilitiesResponse,
@@ -134,12 +119,13 @@ import {
 } from './transport'
 import {
   buildReaderQuery,
-  readerIdempotencyHeaders,
   readerLimit,
   type ReaderFeedSource,
 } from './endpoint-helpers'
 import * as librarySitesEndpoints from './library-sites-endpoints'
 import * as subscriptionsFeedEndpoints from './subscriptions-feed-endpoints'
+import * as thoughtNoteEndpoints from './thought-note-endpoints'
+import * as inboxTodoEndpoints from './inbox-todo-endpoints'
 import type {
   ReaderReadOptions,
   ReaderRequestOptions,
@@ -546,12 +532,7 @@ export class ReaderClient {
     request: ReaderThoughtOpsRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderThoughtAckResponse[]>> {
-    const r = await this.send('POST', '/api/annotations/ops', request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    if (!isRecord(r.data) || !Array.isArray(r.data.items) || !r.data.items.every(isReaderThoughtAckResponse)) {
-      return shapeMismatch('ReaderThoughtAckResponse[]')
-    }
-    return ok(r.data.items)
+    return thoughtNoteEndpoints.pushThoughtOps(this.transport, request, options)
   }
 
   /** GET /api/annotations -- list materialized durable thoughts. */
@@ -559,14 +540,7 @@ export class ReaderClient {
     params: { q?: string; after?: string; limit?: number } = {},
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderThoughtsResponse>> {
-    const query = buildReaderQuery({
-      q: params.q,
-      after: params.after,
-      limit: readerLimit(params.limit, 50),
-    })
-    const r = await this.send('GET', `/api/annotations${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderThoughtsResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderThoughtsResponse')
+    return thoughtNoteEndpoints.listThoughts(this.transport, params, options)
   }
 
   /** GET /api/annotations/sync -- replay server-ordered thoughts, including tombstones. */
@@ -574,13 +548,7 @@ export class ReaderClient {
     params: { after?: string; limit?: number } = {},
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderThoughtsResponse>> {
-    const query = buildReaderQuery({
-      after: params.after,
-      limit: readerLimit(params.limit, 100),
-    })
-    const r = await this.send('GET', `/api/annotations/sync${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderThoughtsResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderThoughtsResponse')
+    return thoughtNoteEndpoints.syncThoughts(this.transport, params, options)
   }
 
   /** GET /api/annotations/conflicts -- immutable superseded-version event log. */
@@ -588,22 +556,7 @@ export class ReaderClient {
     params: { after?: string; limit?: number } = {},
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderThoughtSupersessionEventsResponse>> {
-    const query = buildReaderQuery({
-      after: params.after,
-      limit: readerLimit(params.limit, 100),
-    })
-    const r = await this.send(
-      'GET',
-      `/api/annotations/conflicts${query}`,
-      undefined,
-      undefined,
-      undefined,
-      options.signal,
-    )
-    if (!r.ok) return r
-    return isReaderThoughtSupersessionEventsResponse(r.data)
-      ? ok(r.data)
-      : shapeMismatch('ReaderThoughtSupersessionEventsResponse')
+    return thoughtNoteEndpoints.listThoughtSupersessions(this.transport, params, options)
   }
 
   /** GET /api/annotations/history -- list thoughts whose host is tombstoned. */
@@ -611,17 +564,12 @@ export class ReaderClient {
     params: { after?: string; limit?: number } = {},
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderThoughtsResponse>> {
-    const query = buildReaderQuery({ after: params.after, limit: readerLimit(params.limit, 30) })
-    const r = await this.send('GET', `/api/annotations/history${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderThoughtsResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderThoughtsResponse')
+    return thoughtNoteEndpoints.listThoughtHistory(this.transport, params, options)
   }
 
   /** GET /api/annotations/{id} -- read one durable thought. */
   async getThought(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderThoughtResponse>> {
-    const r = await this.send('GET', `/api/annotations/${encodeURIComponent(id)}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderThoughtResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderThoughtResponse')
+    return thoughtNoteEndpoints.getThought(this.transport, id, options)
   }
 
   /** POST /api/notes -- create a note with an optional local draft. */
@@ -629,9 +577,7 @@ export class ReaderClient {
     request: ReaderNoteCreateRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderNoteResponse>> {
-    const r = await this.send('POST', '/api/notes', request, readerIdempotencyHeaders(options), undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderNoteResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderNoteResponse')
+    return thoughtNoteEndpoints.createNote(this.transport, request, options)
   }
 
   /** GET /api/notes -- list notes using the opaque server cursor. */
@@ -639,16 +585,11 @@ export class ReaderClient {
     params: { after?: string; limit?: number } = {},
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderNotesResponse>> {
-    const query = buildReaderQuery({ after: params.after, limit: readerLimit(params.limit, 30) })
-    const r = await this.send('GET', `/api/notes${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderNotesResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderNotesResponse')
+    return thoughtNoteEndpoints.listNotes(this.transport, params, options)
   }
 
   async getNote(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderNoteResponse>> {
-    const r = await this.send('GET', `/api/notes/${encodeURIComponent(id)}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderNoteResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderNoteResponse')
+    return thoughtNoteEndpoints.getNote(this.transport, id, options)
   }
 
   /** PATCH /api/notes/{id}/draft -- optimistic draft save. */
@@ -657,9 +598,7 @@ export class ReaderClient {
     request: ReaderNoteDraftRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderNoteResponse>> {
-    const r = await this.send('PATCH', `/api/notes/${encodeURIComponent(id)}/draft`, request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderNoteResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderNoteResponse')
+    return thoughtNoteEndpoints.saveNoteDraft(this.transport, id, request, options)
   }
 
   /** DELETE /api/notes/{id}/draft -- clear the unpublished draft with CAS. */
@@ -668,15 +607,7 @@ export class ReaderClient {
     expectedDraftRevision: number,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<true>> {
-    const r = await this.send(
-      'DELETE',
-      `/api/notes/${encodeURIComponent(id)}/draft`,
-      undefined,
-      { 'If-Match': `"${expectedDraftRevision}"` },
-      undefined,
-      options.signal,
-    )
-    return r.ok ? ok(true) : r
+    return thoughtNoteEndpoints.discardNoteDraft(this.transport, id, expectedDraftRevision, options)
   }
 
   /** POST /api/notes/{id}/publish -- publish the current draft with both CAS guards. */
@@ -685,21 +616,15 @@ export class ReaderClient {
     request: ReaderNotePublishRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderNoteResponse>> {
-    const r = await this.send('POST', `/api/notes/${encodeURIComponent(id)}/publish`, request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderNoteResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderNoteResponse')
+    return thoughtNoteEndpoints.publishNote(this.transport, id, request, options)
   }
 
   async deleteNote(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderHostLifecycleResponse>> {
-    const r = await this.send('DELETE', `/api/notes/${encodeURIComponent(id)}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderHostLifecycleResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderHostLifecycleResponse')
+    return thoughtNoteEndpoints.deleteNote(this.transport, id, options)
   }
 
   async restoreNote(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderHostLifecycleResponse>> {
-    const r = await this.send('POST', `/api/notes/${encodeURIComponent(id)}/restore`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderHostLifecycleResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderHostLifecycleResponse')
+    return thoughtNoteEndpoints.restoreNote(this.transport, id, options)
   }
 
   async listTrash(
@@ -761,13 +686,7 @@ export class ReaderClient {
     limit = 50,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderNoteHistoryResponse[]>> {
-    const query = buildReaderQuery({ limit: readerLimit(limit, 50) })
-    const r = await this.send('GET', `/api/notes/${encodeURIComponent(id)}/history${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    if (!isRecord(r.data) || !Array.isArray(r.data.items) || !r.data.items.every(isReaderNoteHistoryResponse)) {
-      return shapeMismatch('ReaderNoteHistoryResponse[]')
-    }
-    return ok(r.data.items)
+    return thoughtNoteEndpoints.listNoteHistory(this.transport, id, limit, options)
   }
 
   async restoreNoteRevision(
@@ -776,9 +695,7 @@ export class ReaderClient {
 	request: ReaderNoteRestoreRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderNoteResponse>> {
-    const r = await this.send('POST', `/api/notes/${encodeURIComponent(id)}/history/${encodeURIComponent(String(revision))}/restore`, request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderNoteResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderNoteResponse')
+    return thoughtNoteEndpoints.restoreNoteRevision(this.transport, id, revision, request, options)
   }
 
   /** POST /api/inbox -- create a capture that remains pending until confirmed. */
@@ -786,25 +703,18 @@ export class ReaderClient {
     request: ReaderInboxCreateRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderInboxResponse>> {
-    const r = await this.send('POST', '/api/inbox', request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderInboxResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderInboxResponse')
+    return inboxTodoEndpoints.createInbox(this.transport, request, options)
   }
 
   async listInbox(
     params: { partition?: ReaderInboxPartition; after?: string; limit?: number } = {},
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderInboxResponsePage>> {
-    const query = buildReaderQuery({ partition: params.partition, after: params.after, limit: readerLimit(params.limit, 50) })
-    const r = await this.send('GET', `/api/inbox${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderInboxResponsePage(r.data) ? ok(r.data) : shapeMismatch('ReaderInboxResponsePage')
+    return inboxTodoEndpoints.listInbox(this.transport, params, options)
   }
 
   async getInbox(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderInboxResponse>> {
-    const r = await this.send('GET', `/api/inbox/${encodeURIComponent(id)}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderInboxResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderInboxResponse')
+    return inboxTodoEndpoints.getInbox(this.transport, id, options)
   }
 
   /** PATCH /api/inbox/{id} -- metadata CAS uses the ETag revision. */
@@ -814,99 +724,55 @@ export class ReaderClient {
     request: ReaderInboxPatchRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderInboxResponse>> {
-    const r = await this.send(
-      'PATCH',
-      `/api/inbox/${encodeURIComponent(id)}`,
-      request,
-      { 'If-Match': `"${revision}"` },
-      undefined,
-      options.signal,
-    )
-    if (!r.ok) return r
-    return isReaderInboxResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderInboxResponse')
+    return inboxTodoEndpoints.patchInbox(this.transport, id, revision, request, options)
   }
 
   async confirmInbox(id: string, revision?: number, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderConfirmResponse>> {
-	const r = await this.send('POST', `/api/inbox/${encodeURIComponent(id)}/confirm`, undefined, { ...readerIdempotencyHeaders(options), ...(revision === undefined ? {} : { 'If-Match': `"${revision}"` }) }, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderConfirmResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderConfirmResponse')
+	return inboxTodoEndpoints.confirmInbox(this.transport, id, revision, options)
   }
 
   async restoreInbox(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<true>> {
-	const r = await this.send('POST', `/api/inbox/${encodeURIComponent(id)}/restore`, undefined, readerIdempotencyHeaders(options), undefined, options.signal)
-    return r.ok ? ok(true) : r
+	return inboxTodoEndpoints.restoreInbox(this.transport, id, options)
   }
 
   async confirmInboxBulk(
     request: ReaderInboxBulkRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderInboxBulkResponse>> {
-    const r = await this.send('POST', '/api/inbox/bulk/confirm', request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderInboxBulkResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderInboxBulkResponse')
+    return inboxTodoEndpoints.confirmInboxBulk(this.transport, request, options)
   }
 
   async confirmAIProposals(
     request: ReaderInboxConfirmAIProposalsRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderInboxConfirmAIProposalsResponse>> {
-    const r = await this.send('POST', '/api/inbox/confirm-ai-proposals', request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderInboxConfirmAIProposalsResponse(r.data)
-      ? ok(r.data)
-      : shapeMismatch('ReaderInboxConfirmAIProposalsResponse')
+    return inboxTodoEndpoints.confirmAIProposals(this.transport, request, options)
   }
 
   async discardInboxBulk(
     request: ReaderInboxBulkRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderInboxBulkResponse>> {
-    const r = await this.send('POST', '/api/inbox/bulk/discard', request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderInboxBulkResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderInboxBulkResponse')
+    return inboxTodoEndpoints.discardInboxBulk(this.transport, request, options)
   }
 
   async discardInbox(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<true>> {
-	const r = await this.send('POST', `/api/inbox/${encodeURIComponent(id)}/discard`, undefined, readerIdempotencyHeaders(options), undefined, options.signal)
-    return r.ok ? ok(true) : r
+	return inboxTodoEndpoints.discardInbox(this.transport, id, options)
   }
 
 	async resummarizeInbox(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderInboxResponse>> {
-		const r = await this.send('POST', `/api/inbox/${encodeURIComponent(id)}/resummarize`, undefined, readerIdempotencyHeaders(options), undefined, options.signal)
-		if (!r.ok) return r
-		return isReaderInboxResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderInboxResponse')
+		return inboxTodoEndpoints.resummarizeInbox(this.transport, id, options)
 	}
 
   async createTodo(
     request: ReaderTodoCreateRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderTodoResponse>> {
-    const r = await this.send('POST', '/api/todos', request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderTodoResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderTodoResponse')
+    return inboxTodoEndpoints.createTodo(this.transport, request, options)
   }
 
   async listTodos(options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderTodosResponse>> {
-    const items: ReaderTodoResponse[] = []
-    const seen = new Set<string>()
-    let after: string | undefined
-    for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
-      const path = `/api/todos${buildReaderQuery({ limit: 200, after })}`
-      const r = await this.send('GET', path, undefined, undefined, undefined, options.signal)
-      if (!r.ok) return r
-      if (!isReaderTodosResponse(r.data)) return shapeMismatch('ReaderTodosResponse')
-      items.push(...r.data.items)
-      const next = r.data.next_after?.trim()
-      if (!next) {
-        const response = { ...r.data, items }
-        delete response.next_after
-        return ok(response)
-      }
-      if (seen.has(next)) return shapeMismatch('ReaderTodosResponse cursor')
-      seen.add(next)
-      after = next
-    }
-    return shapeMismatch('ReaderTodosResponse page limit')
+    return inboxTodoEndpoints.listTodos(this.transport, options)
   }
 
   async patchTodo(
@@ -914,14 +780,11 @@ export class ReaderClient {
     request: ReaderTodoPatchRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderTodoResponse>> {
-    const r = await this.send('PATCH', `/api/todos/${encodeURIComponent(id)}`, request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderTodoResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderTodoResponse')
+    return inboxTodoEndpoints.patchTodo(this.transport, id, request, options)
   }
 
   async deleteTodo(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<true>> {
-    const r = await this.send('DELETE', `/api/todos/${encodeURIComponent(id)}`, undefined, undefined, undefined, options.signal)
-    return r.ok ? ok(true) : r
+    return inboxTodoEndpoints.deleteTodo(this.transport, id, options)
   }
 
   async getEngagement(linkID: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderEngagementResponse>> {
