@@ -10,11 +10,11 @@ github.com/jackc/pgpassfile v1.0.0
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761
 github.com/jackc/pgx/v5 v5.10.0
 github.com/jackc/puddle/v2 v2.2.2
-github.com/riverqueue/river v0.43.0
-github.com/riverqueue/river/riverdriver v0.43.0
-github.com/riverqueue/river/riverdriver/riverpgxv5 v0.43.0
-github.com/riverqueue/river/rivershared v0.43.0
-github.com/riverqueue/river/rivertype v0.43.0
+github.com/riverqueue/river v0.45.0
+github.com/riverqueue/river/riverdriver v0.45.0
+github.com/riverqueue/river/riverdriver/riverpgxv5 v0.45.0
+github.com/riverqueue/river/rivershared v0.45.0
+github.com/riverqueue/river/rivertype v0.45.0
 golang.org/x/sync v0.22.0
 golang.org/x/text v0.41.0
 
@@ -118,7 +118,7 @@ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-===== github.com/riverqueue/river v0.43.0 =====
+===== github.com/riverqueue/river v0.45.0 =====
 --- vendor/github.com/riverqueue/river/LICENSE ---
 Mozilla Public License Version 2.0
 ==================================
@@ -494,7 +494,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
 
-===== github.com/riverqueue/river/riverdriver v0.43.0 =====
+===== github.com/riverqueue/river/riverdriver v0.45.0 =====
 --- vendor/github.com/riverqueue/river/riverdriver/LICENSE ---
 Mozilla Public License Version 2.0
 ==================================
@@ -870,7 +870,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
 
-===== github.com/riverqueue/river/riverdriver/riverpgxv5 v0.43.0 =====
+===== github.com/riverqueue/river/riverdriver/riverpgxv5 v0.45.0 =====
 --- vendor/github.com/riverqueue/river/riverdriver/riverpgxv5/LICENSE ---
 Mozilla Public License Version 2.0
 ==================================
@@ -1246,7 +1246,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
 
-===== github.com/riverqueue/river/rivershared v0.43.0 =====
+===== github.com/riverqueue/river/rivershared v0.45.0 =====
 --- vendor/github.com/riverqueue/river/rivershared/LICENSE ---
 Mozilla Public License Version 2.0
 ==================================
@@ -1622,7 +1622,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
 
-===== github.com/riverqueue/river/rivertype v0.43.0 =====
+===== github.com/riverqueue/river/rivertype v0.45.0 =====
 --- vendor/github.com/riverqueue/river/rivertype/LICENSE ---
 Mozilla Public License Version 2.0
 ==================================
