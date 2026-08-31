@@ -69,16 +69,13 @@ import {
   type ThoughtMaterializedRecord,
   type ThoughtOutboxRecord,
   type ThoughtSupersessionEventRecord,
-  type ThoughtSyncStateRecord,
   type ThoughtVersionKey,
 } from './thought-types'
 import {
-  ThoughtClockError,
-  maximumThoughtClock,
-  nextThoughtLogicalClock,
   randomThoughtToken,
   stableThoughtDeviceID,
 } from './thought-clock'
+import { allocateThoughtClockTransition } from './thought-sync-transitions'
 
 interface CanonicalOperationBase {
   readonly opId: string
@@ -884,68 +881,32 @@ export function allocateThoughtClocks(
       }
       try {
         const deviceId = stableThoughtDeviceID(lease, rawState)
-        const priorFloor = rawState?.deviceId === deviceId
-          ? rawState.logicalClockFloor ?? 0
-          : 0
-        let floor = maximumThoughtClock([
-          priorFloor as number,
-          ...materialized.map((record) => record.winnerKey.logicalClock),
-          ...outbox.map((record) => record.logicalClock),
-          ...historyOutbox.map((record) => record.logicalClock),
-          ...historyOutbox.map((record) => record.snapshot.winnerKey.logicalClock),
-          ...observedClocks,
-        ])
-        const clocks: number[] = []
-        for (let index = 0; index < count; index += 1) {
-          floor = nextThoughtLogicalClock([floor])
-          clocks.push(floor)
-        }
-        const state: ThoughtSyncStateRecord = {
+        const allocation = allocateThoughtClockTransition({
           namespace,
-          cursor: typeof rawState?.cursor === 'string' ? rawState.cursor : '',
+          rawState,
           deviceId,
-          tabToken: typeof rawState?.tabToken === 'string' && rawState.tabToken.length > 0
-            ? rawState.tabToken
-            : randomThoughtToken('tab'),
-          logicalClockFloor: floor,
-          updatedAt: Date.now(),
-          ...(typeof rawState?.lastAckSequence === 'number'
-            ? { lastAckSequence: rawState.lastAckSequence }
-            : {}),
-          ...(typeof rawState?.pullAttemptCount === 'number'
-            ? { pullAttemptCount: rawState.pullAttemptCount }
-            : {}),
-          ...(typeof rawState?.pullRetryAt === 'number'
-            ? { pullRetryAt: rawState.pullRetryAt }
-            : {}),
-          ...(typeof rawState?.pullLastError === 'string'
-            ? { pullLastError: rawState.pullLastError }
-            : {}),
-          ...(typeof rawState?.retryAt === 'number' ? { retryAt: rawState.retryAt } : {}),
-          ...(typeof rawState?.lastError === 'string' ? { lastError: rawState.lastError } : {}),
-          ...(typeof rawState?.lastErrorCode === 'string'
-            ? { lastErrorCode: rawState.lastErrorCode }
-            : {}),
-          ...(typeof rawState?.lastSuccessfulSyncAt === 'number'
-            ? { lastSuccessfulSyncAt: rawState.lastSuccessfulSyncAt }
-            : {}),
-          ...(typeof rawState?.resyncRequired === 'boolean'
-            ? { resyncRequired: rawState.resyncRequired }
-            : {}),
-          ...(typeof rawState?.lastServerSequence === 'number'
-            ? { lastServerSequence: rawState.lastServerSequence }
-            : {}),
-          ...(typeof rawState?.retentionCutoff === 'number'
-            ? { retentionCutoff: rawState.retentionCutoff }
-            : {}),
-        }
-        stateStore.put(state)
-        onAllocated(deviceId, clocks)
-      } catch (error) {
-        if (error instanceof ThoughtClockError) {
-          onFailure(error.code)
+          tabToken: randomThoughtToken('tab'),
+          count,
+          now: Date.now(),
+          outbox,
+          historyOutbox,
+          materialized,
+          observedClocks,
+        })
+        if (!allocation.ok) {
+          if (
+            allocation.reason === 'invalid-thought-clock' ||
+            allocation.reason === 'thought-clock-exhausted'
+          ) {
+            onFailure(allocation.reason)
+            return
+          }
+          abortTransaction(transaction)
           return
         }
+        stateStore.put(allocation.state)
+        onAllocated(allocation.deviceId, allocation.clocks)
+      } catch {
         abortTransaction(transaction)
       }
     },
