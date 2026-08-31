@@ -30,10 +30,15 @@ jobs:
       - name: Run Mobile static and wire gates
         run: |
           python3 scripts/mobile-x1-check.py
+          python3 scripts/ios-ci-destination.test.py
           python3 scripts/mobile-wire-smoke.py
 
+      - name: Prepare iOS simulator
+        id: simulator
+        run: python3 scripts/ios-ci-destination.py >> "$GITHUB_OUTPUT"
+
       - name: Build and test iOS
-        run: xcodebuild -project mobile/ios/WebTagShare.xcodeproj -scheme WebTagShare -destination 'platform=iOS Simulator,name=iPhone 16' test
+        run: xcodebuild -project mobile/ios/WebTagShare.xcodeproj -scheme WebTagShare -destination "${{ steps.simulator.outputs.destination }}" test
 
       - name: Check whitespace and signing files
         shell: bash

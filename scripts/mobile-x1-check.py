@@ -513,9 +513,11 @@ def check_workflows(gate: Gate) -> None:
         "workflow_call:",
         "runs-on: macos-15",
         "/Applications/Xcode_16.4.app/Contents/Developer",
+        "python3 scripts/ios-ci-destination.test.py",
+        "python3 scripts/ios-ci-destination.py >> \"$GITHUB_OUTPUT\"",
         "xcodebuild -project mobile/ios/WebTagShare.xcodeproj",
         "-scheme WebTagShare",
-        "platform=iOS Simulator,name=iPhone 16",
+        "-destination \"${{ steps.simulator.outputs.destination }}\"",
     ):
         gate.require(token in ios_workflow, f"iOS workflow is missing {token}")
     for forbidden in ("secrets.", "environment:", "archive", "exportArchive"):

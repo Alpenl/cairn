@@ -345,7 +345,8 @@ test-no-skip: ## 断言没有测试在门禁上被 skip
 		exit 1; \
 	fi
 
-ci-contracts: ## 离线验证 CI 诊断与 main ruleset 策略工具
+ci-contracts: ## 离线验证 CI 诊断、iOS simulator 选择与 main ruleset 策略工具
+	python3 scripts/ios-ci-destination.test.py
 	node --test scripts/ci-path-filter.test.mjs scripts/ci-run-diagnose.test.mjs scripts/validate-main-ruleset.test.mjs
 
 # gate 是快速、离线的 Go 与发布版本门禁；verify 才是全仓门禁。
