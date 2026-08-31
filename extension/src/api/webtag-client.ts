@@ -9,17 +9,12 @@
  * 鉴权使用单安装后端配置的一把静态 Bearer token；扩展不管理用户身份
  * 或令牌刷新流程。
  * 提供与后端契约对应的方法：
- *   - getTree   GET  /api/links（分页拉取后前端按 URL 现算树）
- *   - getLinks  GET  /api/links
- *   - getTags   GET  /api/tags
  *   - getLink   GET  /api/links/{link_id}
  *   - ingest    POST /api/ingest
  *   - saveLinkContent POST /api/links/{id}/content
- *   - refreshLink POST /api/links/{id}/refresh
- *   - findByUrl   GET  /api/links?url=（v1.1 精确已存检测，带 feature-detect）
  *   - findSubscriptionByUrl GET /api/subscriptions?url=（RSS 已订阅检测）
  *   - createSubscription POST /api/subscriptions（仅由用户明确点击触发）
- *   - testConnection  轻量鉴权探活（复用 GET /api/tags）
+ *   - testConnection  轻量鉴权探活（复用 GET /api/session）
  *
  * 错误归一化（核心设计）：所有方法返回判别式联合 ApiResult<T>，调用方
  * 用 result.ok 分支，失败时 result.error.kind 精确区分五类错误：
@@ -36,11 +31,10 @@
  * 字段缺失、200 携带错误体、反代登录页（非 JSON 的 200）都可能流入 UI 导致
  * 渲染崩溃。因此每个 typed 方法在 HTTP 调用后用手写类型守卫校验响应形状，
  * 遵循「失败关闭」（fail closed）原则：
- *   - 顶层必需字段缺失/类型错（links.items 非数组、
- *     links.total/page/limit 非 number、200 实为 ApiErrorResponse、非对象/非 JSON）
+ *   - 顶层必需字段缺失/类型错（200 实为 ApiErrorResponse、非对象/非 JSON）
  *     → 归一化为 { ok: false, error: { kind: 'other' } }，不冒充合法数据。
  *     绝不把缺字段的响应伪装成「空数据成功」——否则真实故障会被掩盖成数据丢失。
- *   - Link / Tag / SubmitResponse 在 wire 边界按 generated contract 完整
+ *   - Link / SubmitResponse 在 wire 边界按 generated contract 完整
  *     校验；不补缺失字段、不过滤残缺数组项、不把非法 enum 强转为合法类型。
  *
  * 消费者：测试连接 UI（Task 2A）、知识库桌面（Phase 3 3A）、采集编排（Phase 3 3B）。
@@ -48,53 +42,31 @@
 
 import {
   buildQueryString,
+  isCapabilitiesResponse as isWireCapabilitiesResponse,
+  isLinkContentResponse as isWireLinkContentResponse,
+  isLinkResponse as isWireLink,
+  isSubmitResponse as isWireSubmitResponse,
   normalizeHttpError as normalizeSharedHttpError,
   normalizeThrownError as normalizeSharedThrownError,
   parseRetryAfter as parseRetryAfterValue,
   type ApiError,
   type ApiResult,
+  type QueryParameters,
 } from '@webtag/api'
 import type {
   CapabilitiesResponse,
   ApiErrorResponse,
-  GetTreeParams,
   IngestRequest,
   Link,
   LinkContentResponse,
-  ListLinksParams,
-  PaginatedLinksResponse,
   SessionIdentity,
   SubmitResponse,
   SubscriptionSummary,
-  Tag,
-  TreeResponse,
 } from './types'
-import { buildTreeFromLinks } from './tree-builder'
-import {
-  isWireCapabilitiesResponse,
-  isWireLink,
-  isWireLinkContentResponse,
-  isWirePaginatedLinksResponse,
-  isWireSubmitResponse,
-  isWireTag,
-} from './wire-guards'
 
 // ── 错误归一化类型 ──────────────────────────────────────────
 
 export type { ApiError, ApiResult } from '@webtag/api'
-
-/**
- * findByUrl 的三态判别结果（v1.1 popup 已存检测的 feature-detect 载体）。
- *
- * 把「后端是否支持 url= 参数」与「是否命中」一并表达，让调用方无需自行解析
- * 列表形状即可安全分支：
- *   - { supported: false }                后端不支持 url= （旧后端）。调用方静默
- *                                         隐藏已存检测，绝不据此报「已在库中」。
- *   - { supported: true; link: Link }     命中：该 URL 已在库中。
- *   - { supported: true; link: null }     支持但未命中：该 URL 不在库中。
- */
-export type FindByUrlResult =
-  { supported: false } | { supported: true; link: Link | null }
 
 // ── 客户端配置 ──────────────────────────────────────────────
 
@@ -182,55 +154,6 @@ function normalizeHttpError(
 /** 形状不符时统一构造的 ApiError。message 指明哪个接口、哪里不对。 */
 function shapeError(detail: string): ApiError {
   return { kind: 'other', message: `响应体格式不符：${detail}` }
-}
-
-/**
- * 校验 GET /api/links 响应。
- *
- * 失败关闭（fail closed）：顶层必需字段缺失或类型错 → other 错误。
- *   - items 不是数组
- *   - total / page / limit 缺失或不是 number
- * 这四个字段都是分页契约的硬要求，缺任意一个都意味着响应不可信。
- * 不把缺字段的响应伪装成「空知识库」，否则真实故障会被掩盖成数据丢失。
- *
- * items 中每一项都必须满足 generated LinkResponse；任一残缺项都会让整个
- * 响应失败关闭。next_cursor 是 omitempty 可选字段，存在时必须为字符串。
- */
-function validateLinksResponse(
-  body: unknown,
-): ApiResult<PaginatedLinksResponse> {
-  if (isApiErrorResponse(body)) {
-    return { ok: false, error: normalizeHttpError(200, body) }
-  }
-  if (!isWirePaginatedLinksResponse(body)) {
-    return {
-      ok: false,
-      error: shapeError('GET /api/links 响应体不是完整 PaginatedLinksResponse'),
-    }
-  }
-  return { ok: true, data: body }
-}
-
-/**
- * 校验并归一化 GET /api/tags 响应。
- * 通过条件：body 是数组（后端契约 GET /api/tags 直接返回 Tag[]）。
- * 数组中每一项都必须满足 generated TagCountResponse；任一残缺项都会让
- * 整个响应失败关闭。
- */
-function validateTagsResponse(body: unknown): ApiResult<Tag[]> {
-  if (isApiErrorResponse(body)) {
-    return { ok: false, error: normalizeHttpError(200, body) }
-  }
-  if (!Array.isArray(body)) {
-    return { ok: false, error: shapeError('GET /api/tags 响应体不是数组') }
-  }
-  if (!body.every(isWireTag)) {
-    return {
-      ok: false,
-      error: shapeError('GET /api/tags 响应体包含残缺 Tag'),
-    }
-  }
-  return { ok: true, data: body }
 }
 
 /**
@@ -444,16 +367,15 @@ function validateCreatedSubscription(
 /**
  * 内部统一的请求描述。
  *
- * query 取扩展实际消费的两个查询参数接口的并集（GetTreeParams / ListLinksParams）。
- * 二者字段值均为 `string | number | undefined`；buildURL 跳过 undefined、
- * 对其余值做 String() 转换。
+ * query 仅保留当前 Extension 仍消费的窄查询形状；buildURL 跳过
+ * undefined / null，对其余值做 String() 转换。
  */
 interface RequestSpec {
   method: 'GET' | 'POST'
   /** 相对路径，以 / 开头，如 /api/tree。 */
   path: string
   /** 查询参数。undefined 值跳过，其余值经 String() 转换。 */
-  query?: GetTreeParams | ListLinksParams | { url: string }
+  query?: QueryParameters
   /** POST 请求体，会被 JSON.stringify。 */
   body?: unknown
 }
@@ -677,58 +599,6 @@ export class WebTagClient {
     return validate(res.data)
   }
 
-  /**
-   * getTree — 通过 /api/links 分页拉完当前范围的 done 链接，再在前端按 URL
-   * 现算层级树。保留同名方法给上层调用，避免知识库桌面改契约。
-   */
-  async getTree(params?: GetTreeParams): Promise<ApiResult<TreeResponse>> {
-    const items: Link[] = []
-    let after = ''
-    for (;;) {
-      const page = await this.getLinks({
-        ...params,
-        status: 'done',
-        limit: 100,
-        after,
-      })
-      if (!page.ok) return { ok: false, error: page.error }
-      items.push(...page.data.items)
-      if (!page.data.next_cursor) break
-      after = page.data.next_cursor
-    }
-    return { ok: true, data: buildTreeFromLinks(items) }
-  }
-
-  /**
-   * GET /api/links — 按筛选与分页拉取已 done 链接。
-   * 查询参数语义见 ListLinksParams；offset 与 cursor 模式互斥由调用方保证。
-   *
-   * 响应经运行时校验（失败关闭）：顶层 items 非数组、或 total/page/limit
-   * 缺失/非 number → other 错误；items 中任一 Link 不满足 generated contract
-   * 也让整个响应失败关闭。响应体非对象或为错误体 → other 错误。
-   */
-  getLinks(
-    params?: ListLinksParams,
-  ): Promise<ApiResult<PaginatedLinksResponse>> {
-    return this.requestValidated(
-      { method: 'GET', path: '/api/links', query: params },
-      validateLinksResponse,
-    )
-  }
-
-  /**
-   * GET /api/tags — 获取标签聚合列表（按 count 降序，上限 1000 条）。
-   *
-   * 响应经运行时校验：必须是完整 TagCountResponse 数组；任一残缺项
-   * 都让整个响应失败关闭。
-   */
-  getTags(): Promise<ApiResult<Tag[]>> {
-    return this.requestValidated(
-      { method: 'GET', path: '/api/tags' },
-      validateTagsResponse,
-    )
-  }
-
   /** Probe additive collection capabilities. A 404 is an older backend, not an error. */
   async getCapabilities(): Promise<ApiResult<CapabilitiesResponse | null>> {
     const result = await this.requestValidated(
@@ -816,29 +686,6 @@ export class WebTagClient {
     )
   }
 
-  /**
-   * POST /api/links/{link_id}/refresh — 对已存在链接重新入队解析。
-   * 知识库「失败」分区的「重试」按钮调用：对 failed 链接重新抓取 + 重新分析。
-   * 后端返回 202 + SubmitResponse（含新的 job 状态），与 ingest 同形状，
-   * 复用 validateSubmitResponse 校验；该 endpoint 的成功响应应含 link_id。
-   *
-   * link_id 经 encodeURIComponent 编码，防止特殊字符破坏路径。
-   */
-  refreshLink(
-    linkId: string,
-    options: MutationRequestOptions = {},
-  ): Promise<ApiResult<SubmitResponse>> {
-    const idempotencyKey = options.idempotencyKey ?? createIdempotencyKey()
-    return this.requestValidated(
-      {
-        method: 'POST',
-        path: `/api/links/${encodeURIComponent(linkId)}/refresh`,
-      },
-      validateSubmitResponse,
-      { idempotencyKey, retryOnAmbiguous: true },
-    )
-  }
-
   /** Check whether a feed URL already has an active subscription. */
   async findSubscriptionByUrl(
     url: string,
@@ -864,62 +711,12 @@ export class WebTagClient {
   }
 
   /**
-   * GET /api/links?url=<url> — 精确 URL 已存检测（v1.1 / 后端 Spec v3.1）。
-   *
-   * 用于 popup 关系面板的「已在库中」检测：传入当前页完整 URL，后端按 url 精确
-   * 匹配返回 0 / 1 条。命中（恰一条且 URL 一致）→ 该页已在库中。
-   *
-   * ⚠️ feature-detect（核心）：`url` 参数由后端 Phase 9 实现。旧后端不识别它，
-   * 会忽略该参数按普通列表返回（全量最新 done 链接）。本方法在客户端就把这种
-   * 「不支持」判出来，向调用方返回三态判别结果 FindByUrlResult，绝不让旧后端
-   * 的普通列表被误读成「已在库中」：
-   *   - supported: false              后端不支持（返回多于 1 条，或唯一一条 URL
-   *                                   与查询不一致）→ 视为旧后端，调用方静默隐藏。
-   *   - supported: true, link: Link   命中：恰一条且 URL 与查询完全一致。
-   *   - supported: true, link: null   支持但未命中：0 条。
-   *
-   * limit=2 而非 1：旧后端忽略 url 时普通列表通常 > 1 条，多取一条让「返回多于 1 条」
-   * 这一不支持信号更易触发；新后端精确匹配至多 1 条，limit=2 不影响命中判定。
-   *
-   * 网络 / HTTP / 形状错误：透传底层 ApiResult.error（kind 见 ApiError），
-   * 调用方据此 fail-soft（隐藏面板，不阻塞采集）。
-   *
-   * @param url 当前页完整 URL（规范化前的原始 URL，与后端存储键一致）
-   */
-  async findByUrl(url: string): Promise<ApiResult<FindByUrlResult>> {
-    const res = await this.getLinks({ url, limit: 2 })
-    if (!res.ok) return res
-    const { items } = res.data
-    // 旧后端忽略 url：普通列表返回 ≥ 2 条 → 判为不支持。
-    if (items.length > 1) {
-      return { ok: true, data: { supported: false } }
-    }
-    // 0 条：支持但未命中。
-    if (items.length === 0) {
-      return { ok: true, data: { supported: true, link: null } }
-    }
-    // 恰 1 条：URL 与查询一致才算命中（防旧后端恰好库里只有 1 条时误判）。
-    // 后端存储/返回的是 Go ParseRequestURI().String() 归一化后的 URL——
-    // 它把浏览器 tab.url 中的 "#"（fragment）当作路径字符编码为 "%23"，
-    // 所以带锚点的页面用严格 === 会对真实命中误判"未命中"。比较时额外
-    // 接受 "#"→"%23" 的归一化变体；该宽松不会引入误报——即使是旧后端
-    // 凑巧返回的单条，URL 等于查询变体本身就意味着该页确实在库中。
-    const only = items[0]
-    const normalizedQuery = url.replace(/#/g, '%23')
-    if (only.url === url || only.url === normalizedQuery) {
-      return { ok: true, data: { supported: true, link: only } }
-    }
-    // 唯一一条但 URL 不一致 → 旧后端忽略了 url 参数，判为不支持。
-    return { ok: true, data: { supported: false } }
-  }
-
-  /**
-   * 测试连接 — 用当前 baseURL + Token 调一个轻量鉴权接口（GET /api/tags），
-   * 验证地址可达且 Token 有效。
+   * 测试连接 — 用当前 baseURL + Token 调当前采集身份接口（GET /api/session），
+   * 验证地址可达、Token 有效且返回的 namespace marker 与 body 一致。
    * 成功返回 ok:true；失败时 error.kind 区分 401（Token 错）/ 不可达 / 超时 / 其它。
    */
   async testConnection(): Promise<ApiResult<true>> {
-    const res = await this.getTags()
+    const res = await this.getSessionIdentity()
     if (res.ok) {
       return { ok: true, data: true }
     }

@@ -3,25 +3,20 @@
  * WebTag 后端 API 的 TypeScript 类型定义。
  *
  * 线缆形状由 internal/app/assets/openapi.json 自动生成。本模块只提供扩展侧
- * 领域命名，并补充 URL 树构建器使用的本地虚拟节点字段。
+ * 领域命名。
  *
  * 消费者：src/api/webtag-client.ts、知识库桌面与采集功能（Phase 3+）。
  */
 
 import type {
-  paths as WirePaths,
   CapabilitiesResponse as WireCapabilitiesResponse,
   ErrorResponse as WireErrorResponse,
   IngestRequest as WireIngestRequest,
   IngestSource as WireIngestSource,
   LinkContentResponse as WireLinkContentResponse,
   LinkResponse,
-  PaginatedLinksResponse as WirePaginatedLinksResponse,
   SessionIdentity as WireSessionIdentity,
   SubmitResponse as WireSubmitResponse,
-  TagCountResponse,
-  TreeNodeResponse,
-  TreeResponse as WireTreeResponse,
 } from '@webtag/api/generated'
 
 // ── 枚举类型 ────────────────────────────────────────────────
@@ -62,40 +57,6 @@ export type SessionIdentity = WireSessionIdentity
 
 /** 单条链接视图。 */
 export type Link = LinkResponse
-
-/**
- * URL 层级树节点。对应 internal/dto/response.go 的 TreeNodeResponse。
- * 字段与 Link 基本对应，额外带 `children` 子节点数组与 `truncated` 截断标记。
- * 注意 TreeNodeResponse 没有 parent_path / error_category / error_msg。
- */
-export type TreeNode = Omit<TreeNodeResponse, 'children' | 'status'> & {
-  /** 前端按 URL 现算出的虚拟路径节点，不对应数据库链接行。 */
-  virtual?: boolean
-  /** `virtual` 只存在于本地 URL 补位节点，不属于后端 wire enum。 */
-  status: TreeNodeResponse['status'] | 'virtual'
-  children: TreeNode[]
-}
-
-/**
- * getTree 的树响应。客户端由 /api/links 分页结果按 URL 现算；形状兼容 openapi TreeResponse。
- * `total` 是命中的真实链接数，不含虚拟路径节点。
- */
-export interface TreeResponse extends Omit<WireTreeResponse, 'nodes'> {
-  nodes: TreeNode[]
-}
-
-/**
- * 标签聚合项。对应 internal/dto/response.go 的 TagCountResponse。
- * GET /api/tags 返回 Tag[]（按 count 降序，上限 1000 条）。
- */
-export type Tag = TagCountResponse
-
-/**
- * GET /api/links 分页响应。对应 internal/dto/response.go 的 PaginatedLinksResponse。
- * offset 模式（page=）下 total/page 有效；cursor 模式（after=）下二者为 0，
- * 用 next_cursor 续传。next_cursor 仅在响应长度等于 limit（满页）时出现。
- */
-export type PaginatedLinksResponse = WirePaginatedLinksResponse
 
 /**
  * 提交结果。对应 internal/dto/response.go 的 SubmitResponse。
@@ -139,18 +100,3 @@ export type IngestSource = WireIngestSource
  * sources 长度 1–64。
  */
 export type IngestRequest = WireIngestRequest
-
-// ── 查询参数 ────────────────────────────────────────────────
-
-/** GET /api/links 查询参数直接派生自 generated path contract。 */
-export type ListLinksParams = NonNullable<
-  WirePaths['/api/links']['get']['parameters']['query']
->
-
-/**
- * getTree 查询参数。当前客户端将 domain 转换为 /api/links 的 domain 参数。
- * 后端还支持 view=domains 的域名树视图，但扩展 v1 不消费，故此处不收录该参数。
- */
-export interface GetTreeParams {
-  domain?: string
-}
