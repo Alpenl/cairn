@@ -47,6 +47,18 @@ describe('restoreFocusWhenReady', () => {
     expect(target).toHaveFocus()
   })
 
+  it('waits through a slow post-dialog render before giving up', () => {
+    const target = button(true)
+    restoreFocusWhenReady({ target: () => target })
+
+    vi.advanceTimersByTime(700)
+    expect(target).not.toHaveFocus()
+
+    target.disabled = false
+    vi.advanceTimersByTime(32)
+    expect(target).toHaveFocus()
+  })
+
   // 目标可能在重渲染里被换成新节点，所以每次尝试都要重新求值。
   it('re-reads the target so a replaced node still receives focus', () => {
     let target: HTMLButtonElement | null = null
