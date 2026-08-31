@@ -23,9 +23,6 @@ export function LibraryModeNav({ view, onView, onNavigate, activeRoute, policy }
       onView(route.id)
       return
     }
-
-    const legacyNavigate = onView as unknown as (next: ReaderRoute) => void
-    legacyNavigate(route)
   }
 
   return <PrimaryNav activeRoute={activeRoute} activeLibrary={view} onNavigate={navigate} policy={policy} />

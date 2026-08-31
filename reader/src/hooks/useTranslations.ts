@@ -5,7 +5,7 @@ import type {
   TranslationListResponse,
   TranslationResponse,
 } from '../lib/api/types'
-import { err, type ApiError, type ApiResult } from '../lib/api/result'
+import { err, type ApiError, type ApiResult } from '@webtag/api'
 import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { isSavedContentTranslationSource } from '../lib/article/document'

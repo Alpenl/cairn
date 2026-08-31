@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
-import type { ApiError } from '../lib/api/result'
+import type { ApiError } from '@webtag/api'
 import type { LinkResponse, ReaderRelatedTagsResponse } from '../lib/api/types'
 import { resourceStore } from '../lib/cache/store'
 import { useCachedResource } from '../lib/cache/useCachedResource'

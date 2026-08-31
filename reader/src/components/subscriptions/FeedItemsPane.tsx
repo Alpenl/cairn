@@ -11,7 +11,7 @@ import {
   itemIsStarred,
   itemPreview,
 } from '../../lib/feed'
-import type { ApiError } from '../../lib/api/result'
+import type { ApiError } from '@webtag/api'
 import type { FeedItem, FeedSubscription } from '../../lib/api/types'
 
 interface FeedItemsPaneProps {

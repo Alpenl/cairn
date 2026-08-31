@@ -13,7 +13,7 @@ import {
   linkDetailCacheKey,
 } from '../../hooks/useAnnotatedLinks'
 import { translationsKey } from '../../hooks/useTranslations'
-import { ok } from '../api/result'
+import { ok } from '@webtag/api'
 import {
   contentCacheKey,
   invalidateLibrary,

@@ -410,7 +410,7 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
         }
         visibleThoughts = selected.value
       }
-      if (view === 'live' && operationLease.isCurrent('todos') && typeof client.listTodos === 'function') {
+      if (view === 'live' && operationLease.isCurrent('todos')) {
         const todoResult = await client.listTodos()
         if (!gate.isCurrent(token) || !operationLease.isCurrent('history')) return
         if (!todoResult.ok) setError(readerErrorMessage(todoResult.error))

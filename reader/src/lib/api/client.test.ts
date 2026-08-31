@@ -780,13 +780,17 @@ describe('ReaderClient session exchange identity', () => {
       ),
     )
 
-    await expect(new ReaderClient({ baseURL: BASE }).login('secret')).resolves.toEqual({
+    await expect(new ReaderClient({ baseURL: BASE }).loginWithMutationStatus('secret'))
+      .resolves.toMatchObject({
+        sessionMayExist: true,
+        result: {
       ok: true,
       data: {
         expiresAt: '2030-01-01T00:00:00Z',
         clientDataNamespace: VALID_DATA_NAMESPACE,
       },
-    })
+        },
+      })
     expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body))).toEqual({
       token: 'secret',
     })
@@ -805,9 +809,12 @@ describe('ReaderClient session exchange identity', () => {
       ),
     )
 
-    await expect(new ReaderClient({ baseURL: BASE }).login('secret')).resolves.toMatchObject({
-      ok: false,
-      error: { kind: 'identity-mismatch' },
+    await expect(new ReaderClient({ baseURL: BASE }).loginWithMutationStatus('secret')).resolves.toMatchObject({
+      sessionMayExist: true,
+      result: {
+        ok: false,
+        error: { kind: 'identity-mismatch' },
+      },
     })
   })
 
@@ -853,9 +860,12 @@ describe('ReaderClient session exchange identity', () => {
       }),
     )
 
-    await expect(new ReaderClient({ baseURL: BASE }).login('secret')).resolves.toMatchObject({
-      ok: false,
-      error: { kind: 'other' },
+    await expect(new ReaderClient({ baseURL: BASE }).loginWithMutationStatus('secret')).resolves.toMatchObject({
+      sessionMayExist: true,
+      result: {
+        ok: false,
+        error: { kind: 'other' },
+      },
     })
   })
 

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ReaderThoughtResponse } from '../api/types'
 import type { IdentityBoundReaderClient } from '../api/client'
-import type { ApiError } from '../api/result'
+import type { ApiError } from '@webtag/api'
 import { IdentityLease } from '../identity'
 import { ownedDatabaseName } from '../storage-ownership'
 import {

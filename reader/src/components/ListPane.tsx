@@ -8,7 +8,7 @@
 import { useCallback, type UIEvent } from 'react'
 import { Icon } from './Icon'
 import { LinkCard } from './LinkCard'
-import type { ApiError } from '../lib/api/result'
+import type { ApiError } from '@webtag/api'
 import type { LinkResponse } from '../lib/api/types'
 
 export interface ListPaneProps {

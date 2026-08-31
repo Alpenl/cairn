@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
-import { err, ok } from '../../lib/api/result'
+import { err, ok } from '@webtag/api'
 import type { ReaderTrashItemResponse } from '../../lib/api/types'
 import { SURFACE_IDENTITY_ERROR } from '../../lib/reader-surface'
 import { enabledReaderCapabilityPolicy } from '../../test/capabilities'

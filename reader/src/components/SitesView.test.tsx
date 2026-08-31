@@ -10,7 +10,7 @@ import type {
   SiteSplitRequest,
 } from '../lib/api/types'
 import { resourceStore } from '../lib/cache/store'
-import { err, ok } from '../lib/api/result'
+import { err, ok } from '@webtag/api'
 import { enabledReaderCapabilityLease } from '../test/capabilities'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
 import { IdentityLease } from '../lib/identity'

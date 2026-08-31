@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Icon } from '../Icon'
 import { ReaderDialog } from '../ui/ReaderDialog'
-import type { ApiResult } from '../../lib/api/result'
+import type { ApiResult } from '@webtag/api'
 import type { DiscoveredFeed, DiscoverFeedsResponse, FeedFolder } from '../../lib/api/types'
 
 function discoveredURL(feed: DiscoveredFeed): string {

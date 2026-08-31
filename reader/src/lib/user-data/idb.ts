@@ -38,9 +38,6 @@ export const THOUGHT_MATERIALIZED_HOST_INDEX = 'by-host'
 export const THOUGHT_SUPERSESSION_EVENTS_STORE = 'thought_supersession_events'
 export const THOUGHT_SUPERSESSION_STATE_STORE = 'thought_supersession_state'
 
-export const LEGACY_STORE = LEGACY_PENDING_STORE
-export const DECISION_STORE = MIGRATION_DECISION_STORE
-
 export type UserDataStoreName =
   | typeof LEGACY_PENDING_STORE
   | typeof LEGACY_ARCHIVE_STORE

@@ -8,7 +8,7 @@ import type {
 } from '../../lib/api/types'
 import type { Annotation } from '../../lib/annotations'
 import { IdentityLease } from '../../lib/identity'
-import { err, ok } from '../../lib/api/result'
+import { err, ok } from '@webtag/api'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { enabledReaderCapabilityLease } from '../../test/capabilities'
 import { NotesSurface, type NotesLeaveResult } from './NotesSurface'

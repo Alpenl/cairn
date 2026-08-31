@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
-import { ok } from '../../lib/api/result'
+import { ok } from '@webtag/api'
 import type { ReaderHomeResponse, ReaderThoughtResponse } from '../../lib/api/types'
 import { IdentityLease } from '../../lib/identity'
 import { enabledReaderCapabilityLease } from '../../test/capabilities'

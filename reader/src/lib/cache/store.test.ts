@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ok, err, type ApiResult } from '../api/result'
+import { ok, err, type ApiResult } from '@webtag/api'
 import { ResourceStore } from './store'
 import { IdentityAuthority } from '../identity'
 

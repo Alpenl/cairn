@@ -10,7 +10,6 @@ import {
   readerThoughtHostTarget,
   readerThoughtViewFromURL,
   installReaderNavigationGuard,
-  navigateReaderRoute,
   notifyReaderNavigationCommitted,
   sameReaderRoute,
   readReaderStartupPreference,
@@ -339,17 +338,6 @@ describe('RC-01A route model', () => {
       { kind: 'library', id: 'pending', inboxId: ' ' },
       { kind: 'library', id: 'pending' },
     )).toBe(true)
-  })
-
-  it('delegates an inbox target without committing browser history', () => {
-    window.history.replaceState({}, '', '/?view=reading')
-    const onNavigate = vi.fn()
-    const route: ReaderRoute = { kind: 'library', id: 'pending', inboxId: 'I2' }
-
-    navigateReaderRoute(route, onNavigate)
-
-    expect(onNavigate).toHaveBeenCalledWith(route)
-    expect(window.location.search).toBe('?view=reading')
   })
 
   it('keeps all thought history branches addressable without adding a route kind', () => {

@@ -39,7 +39,7 @@ vi.mock('../../lib/user-data/thought-sync', async (importOriginal) => ({
 }))
 
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
-import { err, ok, type ApiResult } from '../../lib/api/result'
+import { err, ok, type ApiResult } from '@webtag/api'
 import type {
   ReaderNoteCreateRequest,
   ReaderNoteResponse,

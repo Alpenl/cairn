@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import type { ReaderClient } from '../lib/api/client'
-import type { ApiError } from '../lib/api/result'
+import type { ApiError } from '@webtag/api'
 import type { FeedSubscription, SubscriptionsResponse } from '../lib/api/types'
 import type { IdentityOwnership } from '../lib/identity'
 import { resourceStore } from '../lib/cache/store'

@@ -26,7 +26,7 @@ import {
   itemIsStarred,
   patchItemState,
 } from '../lib/feed'
-import { ok, type ApiResult } from '../lib/api/result'
+import { ok, type ApiResult } from '@webtag/api'
 import type { ReaderClient } from '../lib/api/client'
 import type {
   FeedFolder,
@@ -316,28 +316,6 @@ export function SubsView({
     onCloseNavigation()
   }
 
-  // SubscriptionSidebar still owns the historical `onView` prop and embeds
-  // LibraryModeNav. Adapt both its five library ids and the new surface/tool
-  // routes to the same MainView route owner without changing that workspace's
-  // data or interaction model.
-  const routeAwareView = useCallback(
-    (destination: LibraryView | ReaderRoute) => {
-      if (onNavigate) {
-        onNavigate(typeof destination === 'string'
-          ? { kind: 'library', id: destination }
-          : destination)
-        return
-      }
-      if (typeof destination === 'string') {
-        onView(destination)
-        return
-      }
-      const legacyNavigate = onView as unknown as (route: ReaderRoute) => void
-      legacyNavigate(destination)
-    },
-    [onNavigate, onView],
-  )
-
   const refresh = async () => {
     const subscription = selectedSubscription
     const id = subscription?.id ?? 'all'
@@ -611,7 +589,8 @@ export function SubsView({
         selection={selection}
         loading={overview.loading}
         onSelect={pickSelection}
-        onView={routeAwareView}
+        onView={onView}
+        onNavigate={onNavigate}
         capabilityPolicy={capabilityPolicy}
         collapsed={collapsed}
         onAddSubscription={() => setAddOpen(true)}

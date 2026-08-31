@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { useFeedItems } from './useFeedItems'
-import { ok, type ApiResult } from '../lib/api/result'
+import { ok, type ApiResult } from '@webtag/api'
 import type { ReaderClient } from '../lib/api/client'
 import type { FeedItem, ListFeedItemsParams, PaginatedFeedItemsResponse } from '../lib/api/types'
 import { readerIdentity } from '../lib/identity'

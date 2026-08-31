@@ -384,11 +384,6 @@ export function FeedSurface({
       clearForIdentityLoss()
       return
     }
-    if (typeof client.listTodos !== 'function') {
-      setTodos([])
-      setTodosLoading(false)
-      return
-    }
     try {
       const result = await client.listTodos()
       if (!gate.isSameOwner(token) || !capabilityCurrent('todos')) return

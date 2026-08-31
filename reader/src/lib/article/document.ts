@@ -1,5 +1,5 @@
 import { isContentAnchored, type Annotation } from '../annotations'
-import type { ApiError, ApiResult } from '../api/result'
+import type { ApiError, ApiResult } from '@webtag/api'
 import type {
   LinkContentResponse,
   LinkResponse,

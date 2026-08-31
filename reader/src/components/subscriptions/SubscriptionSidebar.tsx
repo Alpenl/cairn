@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { Icon } from '../Icon'
 import { LibraryModeNav, type LibraryView } from '../LibraryModeNav'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
+import type { ReaderRoute } from '../../lib/navigation/route'
 import { feedError, feedTitle } from '../../lib/feed'
 import type {
   FeedFolder,
@@ -43,6 +44,7 @@ interface SubscriptionSidebarProps {
   loading: boolean
   onSelect: (selection: FeedSelection) => void
   onView: (view: LibraryView) => void
+  onNavigate?: (route: ReaderRoute) => void
   capabilityPolicy: ReaderCapabilityPolicy
   collapsed: boolean
   onAddSubscription: () => void
@@ -179,6 +181,7 @@ export function SubscriptionSidebar({
   loading,
   onSelect,
   onView,
+  onNavigate,
   capabilityPolicy,
   collapsed,
   onAddSubscription,
@@ -330,7 +333,7 @@ export function SubscriptionSidebar({
       aria-label="订阅导航"
       aria-busy={batchBusy}
     >
-      <LibraryModeNav view="subs" onView={onView} policy={capabilityPolicy} />
+      <LibraryModeNav view="subs" onView={onView} onNavigate={onNavigate} policy={capabilityPolicy} />
 
       <div className="rss-sidebar-title">
         <span>条目</span>

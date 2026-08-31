@@ -8,7 +8,7 @@ import type {
   ReaderClient,
   ReaderRequestOptions,
 } from '../lib/api/client'
-import type { ApiResult } from '../lib/api/result'
+import type { ApiResult } from '@webtag/api'
 import type { LinkResponse, PaginatedLinksResponse } from '../lib/api/types'
 import { resourceStore } from '../lib/cache/store'
 import { IdentityLease, readerIdentity } from '../lib/identity'

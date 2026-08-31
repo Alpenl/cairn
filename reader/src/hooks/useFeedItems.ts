@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReaderClient } from '../lib/api/client'
 import { buildFeedItemsQuery } from '../lib/api/client'
-import type { ApiError } from '../lib/api/result'
+import type { ApiError } from '@webtag/api'
 import type { FeedItem, ListFeedItemsParams, PaginatedFeedItemsResponse } from '../lib/api/types'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 

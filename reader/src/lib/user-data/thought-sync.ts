@@ -3,7 +3,7 @@ import type {
   ReaderThoughtOpRequest,
 } from '../api/types'
 import type { IdentityBoundReaderClient } from '../api/client'
-import type { ApiError } from '../api/result'
+import type { ApiError } from '@webtag/api'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../reader-events'
 import { isRecord } from '../records'
 import {

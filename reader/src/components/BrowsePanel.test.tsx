@@ -6,7 +6,7 @@ import type { TagStat, DomainStat } from '../lib/stats'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import { IdentityLease } from '../lib/identity'
 import { resourceStore } from '../lib/cache/store'
-import { ok } from '../lib/api/result'
+import { ok } from '@webtag/api'
 
 const tags: TagStat[] = [
   { tag: 'rust', count: 2, lastAt: '2026-01-01T00:00:00Z' },

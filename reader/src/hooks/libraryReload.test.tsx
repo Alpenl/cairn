@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { IdentityBoundReaderClient, ReaderClient } from '../lib/api/client'
-import { err, ok, type ApiResult } from '../lib/api/result'
+import { err, ok, type ApiResult } from '@webtag/api'
 import type { PaginatedLinksResponse } from '../lib/api/types'
 import { resourceStore } from '../lib/cache/store'
 import { readerIdentity } from '../lib/identity'

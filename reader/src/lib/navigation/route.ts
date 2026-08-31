@@ -478,17 +478,3 @@ export function installReaderNavigationGuard(guard: () => boolean | Promise<bool
     window.removeEventListener(READER_NAVIGATION_COMMIT_EVENT, rememberCommittedEntry)
   }
 }
-
-/**
- * Navigate through the app-owned callback while preserving a pending inbox
- * target. MainView owns the normal push/pop transition, but its legacy state
- * setter clears inbox_id during that transition; a same-entry replace plus
- * popstate lets its existing location reader restore the target without
- * creating a second history entry.
- */
-export function navigateReaderRoute(
-  route: ReaderRoute,
-  onNavigate: (route: ReaderRoute) => void,
-): void {
-  onNavigate(route)
-}

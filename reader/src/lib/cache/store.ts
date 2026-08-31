@@ -22,7 +22,7 @@
  * 这个约束是刻意维持的。所需语义（SWR + in-flight 去重 + 前缀失效 + LRU）
  * 加起来就是这个文件，不值得为它引入一棵依赖树。
  */
-import type { ApiError, ApiResult } from '../api/result'
+import type { ApiError, ApiResult } from '@webtag/api'
 import type { IdentityLease, IdentityOwnership } from '../identity'
 import { sameResource } from './equal'
 
@@ -49,9 +49,6 @@ export interface ResourceSnapshot<T = unknown> {
   /** The newest generation whose request reached a terminal result. */
   readonly settledGeneration: number
 }
-
-/** Backward-compatible name used by persistence and callers while RF4 lands. */
-export type CacheEntry<T = unknown> = ResourceSnapshot<T>
 
 const EMPTY_ENTRY: ResourceSnapshot = {
   error: null,
@@ -124,7 +121,7 @@ interface DesiredGenerationFence {
  * 合成命名空间，好让它躲开库级失效（见 invalidate.ts 的 CONTENT_CACHE_PREFIX）。
  */
 export class ResourceStore {
-  private readonly entries = new Map<string, CacheEntry>()
+  private readonly entries = new Map<string, ResourceSnapshot>()
   private readonly listeners = new Map<string, Set<() => void>>()
   private readonly inflight = new Map<string, Map<number, Promise<ApiResult<unknown>>>>()
   /** 访问顺序，队尾最新。用于 LRU 淘汰。 */
@@ -235,17 +232,17 @@ export class ResourceStore {
   }
 
   /** 读当前快照。永不返回 undefined，便于 useSyncExternalStore 拿到稳定引用。 */
-  peek<T>(key: string): CacheEntry<T> {
-    if (!this.canAccessIdentity()) return EMPTY_ENTRY as CacheEntry<T>
-    const existing = this.entries.get(key) as CacheEntry<T> | undefined
+  peek<T>(key: string): ResourceSnapshot<T> {
+    if (!this.canAccessIdentity()) return EMPTY_ENTRY as ResourceSnapshot<T>
+    const existing = this.entries.get(key) as ResourceSnapshot<T> | undefined
     if (existing) return existing
     let desiredGeneration = 0
     for (const [prefix, generation] of this.invalidationFloors) {
       if (key.startsWith(prefix)) desiredGeneration = Math.max(desiredGeneration, generation)
     }
-    if (desiredGeneration === 0) return EMPTY_ENTRY as CacheEntry<T>
-    const snapshot: CacheEntry<T> = {
-      ...(EMPTY_ENTRY as CacheEntry<T>),
+    if (desiredGeneration === 0) return EMPTY_ENTRY as ResourceSnapshot<T>
+    const snapshot: ResourceSnapshot<T> = {
+      ...(EMPTY_ENTRY as ResourceSnapshot<T>),
       desiredGeneration,
     }
     this.entries.set(key, snapshot)
@@ -773,15 +770,15 @@ export class ResourceStore {
     if (byGeneration.size === 0) this.inflight.delete(key)
   }
 
-  private publishGeneration(key: string, desiredGeneration: number): CacheEntry {
+  private publishGeneration(key: string, desiredGeneration: number): ResourceSnapshot {
     const current = this.peek(key)
     if (desiredGeneration <= current.desiredGeneration) return current
-    const next: CacheEntry = { ...current, desiredGeneration }
+    const next: ResourceSnapshot = { ...current, desiredGeneration }
     this.publish(key, next)
     return next
   }
 
-  private publish(key: string, entry: CacheEntry, notify = true): void {
+  private publish(key: string, entry: ResourceSnapshot, notify = true): void {
     const previous = this.entries.get(key)
     this.entries.set(key, entry)
     this.touch(key)

@@ -87,14 +87,6 @@ describe('LibraryModeNav', () => {
     expect(document.activeElement).toBe(tabs[tabs.length - 1])
   })
 
-  it('keeps the legacy callback usable for the unmodified subscription sidebar', () => {
-    const onView = vi.fn()
-    render(<LibraryModeNav view="subs" policy={enabledReaderCapabilityPolicy()} onView={onView} />)
-
-    fireEvent.click(screen.getByRole('button', { name: '今天' }))
-    expect(onView).toHaveBeenCalledWith({ kind: 'surface', id: 'home' })
-  })
-
   it.each([
     ['home', 'button', '今天'],
     ['inbox', 'tab', '收件箱'],

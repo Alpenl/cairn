@@ -9,7 +9,7 @@ import { useState, type CSSProperties } from 'react'
 import { Icon } from './Icon'
 import { resetApplicationCache } from '../lib/sw'
 import { ReaderClient } from '../lib/api/client'
-import type { ApiError } from '../lib/api/result'
+import type { ApiError } from '@webtag/api'
 import { negotiateSession } from '../lib/session-negotiation'
 import { getConnection, type Connection } from '../lib/settings'
 

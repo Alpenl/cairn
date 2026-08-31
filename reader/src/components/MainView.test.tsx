@@ -5,8 +5,7 @@ import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MainView } from './MainView'
-import { err, ok } from '../lib/api/result'
-import type { ApiError, ApiResult } from '../lib/api/result'
+import { err, ok, type ApiError, type ApiResult } from '@webtag/api'
 import type {
   IdentityBoundReaderClient,
   ListLinksParams,

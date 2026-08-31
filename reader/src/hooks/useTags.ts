@@ -6,7 +6,7 @@
  */
 import { useCallback, useMemo } from 'react'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
-import type { ApiError, ApiResult } from '../lib/api/result'
+import type { ApiError, ApiResult } from '@webtag/api'
 import type { TagCountResponse } from '../lib/api/types'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryReload'

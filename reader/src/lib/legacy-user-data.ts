@@ -7,12 +7,12 @@ import {
 } from './storage-ownership'
 import { readerIdentity, type IdentityLease, type IdentityOperationContext } from './identity'
 import {
-  DECISION_STORE,
   LEGACY_ARCHIVE_FINGERPRINT_INDEX,
   LEGACY_ARCHIVE_NAMESPACE_INDEX,
   LEGACY_ARCHIVE_STORE,
   LEGACY_DEDUP_STORE,
-  LEGACY_STORE,
+  LEGACY_PENDING_STORE,
+  MIGRATION_DECISION_STORE,
   attachLeaseAbort,
   openUserDataDatabase as userDataDatabase,
 } from './user-data/idb'
@@ -216,10 +216,10 @@ async function preserveLegacyRecords(records: readonly PreparedLegacyRecord[]): 
     }
     try {
       const transaction = database.transaction(
-        [LEGACY_STORE, LEGACY_DEDUP_STORE, DECISION_STORE],
+        [LEGACY_PENDING_STORE, LEGACY_DEDUP_STORE, MIGRATION_DECISION_STORE],
         'readwrite',
       )
-      const pending = transaction.objectStore(LEGACY_STORE)
+      const pending = transaction.objectStore(LEGACY_PENDING_STORE)
       const pendingRequest = pending.getAll()
       const dedupRequest = transaction.objectStore(LEGACY_DEDUP_STORE).getAll()
       let ready = 0
@@ -250,7 +250,7 @@ async function preserveLegacyRecords(records: readonly PreparedLegacyRecord[]): 
           existing.set(record.id, merged)
           changed = true
         }
-        if (changed) transaction.objectStore(DECISION_STORE).clear()
+        if (changed) transaction.objectStore(MIGRATION_DECISION_STORE).clear()
       }
       pendingRequest.onsuccess = preserveWhenReady
       dedupRequest.onsuccess = preserveWhenReady
@@ -1009,15 +1009,15 @@ export async function getLegacyImportPrompt(
     }
     try {
       const transaction = database.transaction(
-        [LEGACY_STORE, LEGACY_ARCHIVE_STORE, DECISION_STORE],
+        [LEGACY_PENDING_STORE, LEGACY_ARCHIVE_STORE, MIGRATION_DECISION_STORE],
         'readonly',
       )
-      const recordsRequest = transaction.objectStore(LEGACY_STORE).getAll()
+      const recordsRequest = transaction.objectStore(LEGACY_PENDING_STORE).getAll()
       const archiveRequest = archiveRecordsForNamespace(
         transaction.objectStore(LEGACY_ARCHIVE_STORE),
         operation.physicalNamespace,
       )
-      const decisions = transaction.objectStore(DECISION_STORE)
+      const decisions = transaction.objectStore(MIGRATION_DECISION_STORE)
       const resolutionRequest = decisions.get(RESOLUTION_ID)
       const ignoredRequest = decisions.get(ignoredDecisionID(operation.physicalNamespace))
       transaction.oncomplete = () => finish({
@@ -1057,9 +1057,9 @@ export async function keepLegacyDataIsolated(lease: IdentityLease): Promise<bool
     }
     let detachAbort: () => void = () => undefined
     try {
-      const transaction = database.transaction(DECISION_STORE, 'readwrite')
+      const transaction = database.transaction(MIGRATION_DECISION_STORE, 'readwrite')
       detachAbort = attachLeaseAbort(transaction, operation)
-      transaction.objectStore(DECISION_STORE).put({
+      transaction.objectStore(MIGRATION_DECISION_STORE).put({
         id: ignoredDecisionID(operation.physicalNamespace),
         kind: 'ignored',
         namespace: operation.physicalNamespace,
@@ -1093,12 +1093,12 @@ export async function importLegacyData(lease: IdentityLease): Promise<LegacyImpo
     let detachAbort: () => void = () => undefined
     try {
       const transaction = database.transaction(
-        [LEGACY_STORE, LEGACY_ARCHIVE_STORE, LEGACY_DEDUP_STORE, DECISION_STORE],
+        [LEGACY_PENDING_STORE, LEGACY_ARCHIVE_STORE, LEGACY_DEDUP_STORE, MIGRATION_DECISION_STORE],
         'readwrite',
       )
       detachAbort = attachLeaseAbort(transaction, operation)
-      const recordsRequest = transaction.objectStore(LEGACY_STORE).getAll()
-      const decisions = transaction.objectStore(DECISION_STORE)
+      const recordsRequest = transaction.objectStore(LEGACY_PENDING_STORE).getAll()
+      const decisions = transaction.objectStore(MIGRATION_DECISION_STORE)
       const archive = transaction.objectStore(LEGACY_ARCHIVE_STORE)
       const dedup = transaction.objectStore(LEGACY_DEDUP_STORE)
       const archiveRequest = archiveRecordsForNamespace(
@@ -1147,7 +1147,7 @@ export async function importLegacyData(lease: IdentityLease): Promise<LegacyImpo
           } satisfies LegacyArchiveRecord)
           addFingerprints(dedup, record.id, record.fingerprints ?? [], transaction)
         }
-        transaction.objectStore(LEGACY_STORE).clear()
+        transaction.objectStore(LEGACY_PENDING_STORE).clear()
         decisions.clear()
         decisions.put({
           id: RESOLUTION_ID,

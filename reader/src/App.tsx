@@ -40,7 +40,7 @@ import {
 } from './lib/settings'
 import { negotiateLegacySessionUpgrade } from './lib/legacy-session-upgrade'
 import type { CapabilitiesResponse } from './lib/api/types'
-import type { ApiError } from './lib/api/result'
+import type { ApiError } from '@webtag/api'
 
 type Probe =
   | { phase: 'pending' }

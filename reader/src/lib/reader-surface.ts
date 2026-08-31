@@ -5,7 +5,6 @@
 // 所有用户可见文案与 SurfaceShell 中的原实现逐字一致。
 import { asRecord } from './records'
 import type { ReaderTodoPatchRequest, ReaderTodoResponse } from './api/types'
-import type { ReaderNavigationRequest, ReaderRoute, ReaderRouteTargets } from './navigation/route'
 
 export const SURFACE_IDENTITY_ERROR = 'Reader 身份已失效，请重新连接。'
 
@@ -54,17 +53,4 @@ export function todoDesiredStatePatch(todo: ReaderTodoResponse, done: boolean): 
   if (todo.origin_kind === 'standalone') return { done }
   if (!Number.isSafeInteger(todo.host_revision) || todo.host_revision < 0) return null
   return { done, expected_host_revision: todo.host_revision }
-}
-
-// Keep a source target in the URL when a surface delegates navigation to the
-// legacy app shell. The route callback changes the rendered surface; the
-// replace plus popstate carries the exact resource identity to MainView.
-/** @deprecated Todo 改为直接调用 navigation callback 后删除。 */
-export function navigateReaderTarget(
-  route: ReaderRoute,
-  onNavigate: ReaderNavigationRequest,
-  targets: ReaderRouteTargets = {},
-): void {
-  if (Object.keys(targets).length === 0) onNavigate(route)
-  else onNavigate(route, targets)
 }

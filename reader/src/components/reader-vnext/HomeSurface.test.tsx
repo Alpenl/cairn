@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
-import { err, ok, type ApiResult } from '../../lib/api/result'
+import { err, ok, type ApiResult } from '@webtag/api'
 import type {
   ReaderFeedItemResponse,
   ReaderHomeResponse,

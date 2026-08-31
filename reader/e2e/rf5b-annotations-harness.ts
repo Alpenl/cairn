@@ -6,7 +6,7 @@ import {
   IdentityBoundReaderClient,
   type ReaderRequestOptions,
 } from '../src/lib/api/client'
-import type { ApiError, ApiResult } from '../src/lib/api/result'
+import type { ApiError, ApiResult } from '@webtag/api'
 import type { LinkResponse } from '../src/lib/api/types'
 import {
   AnnotationDocumentChannel,

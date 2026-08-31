@@ -7,8 +7,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 
-import type { ApiError, ApiResult } from '../api/result'
-import { resourceStore, type CacheEntry, type FetchContext, type FetchOptions } from './store'
+import type { ApiError, ApiResult } from '@webtag/api'
+import { resourceStore, type FetchContext, type FetchOptions, type ResourceSnapshot } from './store'
 
 export interface CachedResource<T> {
   /** 当前可渲染的数据。从未成功过时为 undefined。 */
@@ -54,7 +54,7 @@ export function useCachedResource<T>(
   )
 
   const getSnapshot = useCallback(
-    (): CacheEntry<T> => (key ? resourceStore.peek<T>(key) : EMPTY),
+    (): ResourceSnapshot<T> => (key ? resourceStore.peek<T>(key) : EMPTY),
     [key],
   )
 
@@ -123,7 +123,7 @@ export function useCachedResource<T>(
   )
 }
 
-const EMPTY: CacheEntry<never> = {
+const EMPTY: ResourceSnapshot<never> = {
   error: null,
   updatedAt: 0,
   revalidating: false,

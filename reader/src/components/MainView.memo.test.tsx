@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { MainView } from './MainView'
-import { ok } from '../lib/api/result'
+import { ok } from '@webtag/api'
 import type { IdentityBoundReaderClient, ReaderClient } from '../lib/api/client'
 import type { LinkResponse, TranslationResponse } from '../lib/api/types'
 import { ownedDatabaseName } from '../lib/storage-ownership'

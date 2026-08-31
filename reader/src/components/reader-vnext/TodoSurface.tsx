@@ -5,13 +5,12 @@ import {
   type ReaderCapabilityPolicy,
 } from '../../lib/capabilities'
 import type { ReaderTodoResponse } from '../../lib/api/types'
-import { navigateReaderRoute, type ReaderRoute } from '../../lib/navigation/route'
+import type { ReaderNavigationRequest, ReaderRoute } from '../../lib/navigation/route'
 import { useExclusiveAction } from '../../hooks/useExclusiveAction'
 import { useSurfaceRequestGate, type SurfaceRequestToken } from '../../hooks/useSurfaceRequestGate'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
 import { asRecord, isRecord } from '../../lib/records'
 import {
-  navigateReaderTarget,
   readerErrorMessage,
   SURFACE_IDENTITY_ERROR,
   formatRelativeDate,
@@ -24,7 +23,7 @@ import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 
 export interface TodoSurfaceProps {
   readonly client: IdentityBoundReaderClient
-  readonly onNavigate: (route: ReaderRoute) => void
+  readonly onNavigate: ReaderNavigationRequest
   readonly onOpenLink: (id: string) => void
   readonly capabilityPolicy: ReaderCapabilityPolicy
   readonly completedExpanded: boolean
@@ -51,10 +50,7 @@ function dateTimeLocalISO(value: string): string | null {
 }
 
 const CREATE_BUSY_ID = '__create__'
-const UNSUPPORTED_TODO_MESSAGE = '当前服务端不支持 TODO，未使用本地状态伪造结果。'
 const INCOMPLETE_TODO_MESSAGE = '服务端返回的 TODO 数据不完整，未应用本地更改。'
-
-type TodoClientMethod = 'listTodos' | 'createTodo' | 'patchTodo' | 'deleteTodo'
 
 /**
  * 请求通道。
@@ -192,10 +188,6 @@ function normalizeMutationTodo(value: unknown): TodoItem | null {
   return normalizeTodo(unwrapTodo(value))
 }
 
-function supportsTodoMethod(client: IdentityBoundReaderClient, method: TodoClientMethod): boolean {
-  return typeof (client as unknown as Record<string, unknown>)[method] === 'function'
-}
-
 // eslint-disable-next-line react-refresh/only-export-components
 export function sortTodos(items: readonly ReaderTodoResponse[]): ReaderTodoResponse[] {
   return [...items].sort((left, right) => {
@@ -308,8 +300,6 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
   const openItems = ordered.filter((item) => !item.done)
   const completedItems = ordered.filter((item) => item.done)
   const completedListID = useId()
-  const navigate = useCallback((route: ReaderRoute) => navigateReaderRoute(route, onNavigate), [onNavigate])
-
   const load = useCallback(async (): Promise<boolean> => {
     const token = gate.begin('list')
     // 本地写入会顶掉这个代次：回包时若代次已变，说明列表快照比界面还旧。
@@ -318,14 +308,6 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
     setError(null)
     if (!gate.isCurrent(token)) {
       clearForIdentityLoss(token)
-      return false
-    }
-    if (!supportsTodoMethod(client, 'listTodos')) {
-      if (gate.isSameOwner(token)) {
-        setItems([])
-        setError(UNSUPPORTED_TODO_MESSAGE)
-        setLoading(false)
-      }
       return false
     }
     try {
@@ -374,10 +356,6 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
         clearForIdentityLoss(token)
         return
       }
-      if (!supportsTodoMethod(client, 'createTodo')) {
-        setError(UNSUPPORTED_TODO_MESSAGE)
-        return
-      }
       const result = await client.createTodo({ text: text.trim(), due_at: dueAt ? new Date(dueAt).toISOString() : null })
       if (!gate.isSameOwner(token)) return
       if (!gate.isCurrent(token)) {
@@ -414,10 +392,6 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
     const token = gate.begin('mutation')
     const desiredDone = !todo.done
     try {
-      if (!supportsTodoMethod(client, 'patchTodo')) {
-        setError(UNSUPPORTED_TODO_MESSAGE)
-        return
-      }
       if (item.origin_kind !== 'standalone' && !item.hostRevisionKnown) {
         setError('来源 TODO 缺少版本信息，未执行完成状态更改。')
         return
@@ -467,10 +441,6 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
     try {
       if (!gate.isCurrent(token)) {
         clearForIdentityLoss(token)
-        return
-      }
-      if (!supportsTodoMethod(client, 'patchTodo')) {
-        setError(UNSUPPORTED_TODO_MESSAGE)
         return
       }
       const originalDueAt = dateTimeLocalValue(todo.due_at)
@@ -528,10 +498,6 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
         clearForIdentityLoss(token)
         return
       }
-      if (!supportsTodoMethod(client, 'deleteTodo')) {
-        setError(UNSUPPORTED_TODO_MESSAGE)
-        return
-      }
       const result = await client.deleteTodo(todo.id)
       if (!gate.isSameOwner(token)) return
       if (!gate.isCurrent(token)) {
@@ -566,13 +532,13 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
       return
     }
     if (target.kind === 'note') {
-      navigateReaderTarget({ kind: 'library', id: 'notes' }, onNavigate, { noteId: target.id })
+      onNavigate({ kind: 'library', id: 'notes' }, { noteId: target.id })
     } else if (target.kind === 'inbox') {
-      navigateReaderTarget({ kind: 'library', id: 'pending', inboxId: target.id }, onNavigate)
+      onNavigate({ kind: 'library', id: 'pending', inboxId: target.id })
     } else if (target.kind === 'thought') {
-      navigate({ kind: 'tool', id: 'history' })
+      onNavigate({ kind: 'tool', id: 'history' })
     }
-  }, [capabilityPolicy, navigate, onNavigate, onOpenLink])
+  }, [capabilityPolicy, onNavigate, onOpenLink])
 
   const renderTodoRow = (todo: ReaderTodoResponse) => {
     const targetAvailable = availableOriginTarget(todo, capabilityPolicy) !== null

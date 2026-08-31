@@ -6,7 +6,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 
-import type { ApiResult } from '../lib/api/result'
+import type { ApiResult } from '@webtag/api'
 import type { LinkContentResponse, LinkResponse } from '../lib/api/types'
 import {
   SavedArticleDocumentController,

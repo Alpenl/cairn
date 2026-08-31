@@ -1,4 +1,4 @@
-import type { ApiResult } from '../lib/api/result'
+import type { ApiResult } from '@webtag/api'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
 import {
   resourceStore,

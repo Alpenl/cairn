@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { IdentityBoundReaderClient } from '../lib/api/client'
-import { err, type ApiError } from '../lib/api/result'
+import { err, type ApiError } from '@webtag/api'
 import type { ListSitesParams, PaginatedSitesResponse, SiteListItemResponse } from '../lib/api/types'
 import { resourceStore } from '../lib/cache/store'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
