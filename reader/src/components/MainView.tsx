@@ -51,11 +51,6 @@ import {
 import {
   type HistoricalArticleAnnotation,
 } from '../hooks/useArticleAnnotations'
-import {
-  EMPTY_THOUGHT_SYNC_SNAPSHOT,
-  getThoughtSyncController,
-  type ThoughtSyncSnapshot,
-} from '../lib/user-data/thought-sync'
 import { usePins } from '../lib/meta'
 import { readingFocusStore } from '../lib/reading-surface'
 import { applyServiceWorkerUpdate } from '../lib/sw'
@@ -63,18 +58,15 @@ import {
   invalidateLibrary,
   invalidateLink,
 } from '../lib/cache/invalidate'
-import { resourceStore } from '../lib/cache/store'
 import { readOwnedStorage, writeOwnedStorage } from '../lib/storage-ownership'
 import {
   readerThoughtHostTarget,
   type ReaderRoute,
 } from '../lib/navigation/route'
-import type { ArchiveV2Selection } from '../lib/api/archive-v2'
 import type {
   CapabilitiesResponse,
   LinkResponse,
 } from '../lib/api/types'
-import { type ApiResult } from '@webtag/api'
 import type {
   ReaderAIPort,
   ReaderHomePort,
@@ -94,43 +86,9 @@ import {
 } from './main-view/navigation-controller'
 import { useActiveResourceController } from './main-view/active-resource-controller'
 import { useSavedDocumentWorkspace } from './main-view/saved-document-workspace'
+import { useSyncArchiveController } from './main-view/sync-archive-controller'
 
 type Theme = 'light' | 'dark'
-const LIBRARY_SYNC_RESOURCES = ['links', 'tags', 'domains'] as const
-type LibrarySyncResource = typeof LIBRARY_SYNC_RESOURCES[number]
-
-function libraryReloadFailed(
-  outcome: PromiseSettledResult<ApiResult<unknown> | null>,
-): boolean {
-  if (outcome.status === 'rejected' || outcome.value === null) return true
-  return !outcome.value.ok
-}
-
-function startLibraryReload<T>(reload: () => Promise<T>): Promise<T> {
-  try {
-    return reload()
-  } catch (thrown) {
-    return Promise.reject(thrown)
-  }
-}
-
-function thoughtSyncOutcome(snapshot: ThoughtSyncSnapshot): string {
-  switch (snapshot.phase) {
-    case 'offline':
-      return snapshot.pendingCount > 0 ? `想法离线，${snapshot.pendingCount} 项待同步` : '想法离线'
-    case 'syncing':
-      return snapshot.pendingCount > 0 ? `想法同步中，${snapshot.pendingCount} 项待同步` : '想法同步中'
-    case 'failed': {
-      const blocked = snapshot.blockedCount > 0 ? `，${snapshot.blockedCount} 项被阻塞` : ''
-      const code = snapshot.errorCode ? `（${snapshot.errorCode}）` : ''
-      return `想法同步失败，${snapshot.pendingCount} 项待同步${blocked}${code}`
-    }
-    case 'pending':
-      return `想法待同步，${snapshot.pendingCount} 项操作`
-    case 'synced':
-      return '想法已同步'
-  }
-}
 
 type MainViewClient = ReaderLibrarySitesPort &
   ReaderSubscriptionsFeedPort &
@@ -274,9 +232,27 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     flash,
     dismissToast,
   })
+  const {
+    librarySyncing,
+    librarySyncFailures,
+    thoughtSync,
+    syncLibraryAndThoughts,
+    subscriptionSyncRequest,
+    requestSubscriptionSync,
+    archiveDownloading,
+    downloadArchive,
+  } = useSyncArchiveController({
+    client,
+    lease,
+    capabilityLease,
+    reloadLinks,
+    reloadTags,
+    reloadDomains,
+    onRefreshCapabilities,
+    flash,
+  })
 	const homeScrollRef = useRef<HTMLDivElement>(null)
 	const [todoCompletedExpanded, setTodoCompletedExpanded] = useState(false)
-  const [subsSyncRequest, setSubsSyncRequest] = useState(0)
   const [chatOpen, setChatOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readOwnedStorage('sidebarCollapsed') === '1')
   const focusMode = useSyncExternalStore(
@@ -290,44 +266,15 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   const [noteEd, setNoteEd] = useState<AnnotationLocator | null>(null)
   const [historicalNote, setHistoricalNote] = useState<HistoricalArticleAnnotation | null>(null)
   const [chatDraft, setChatDraft] = useState<ChatDraft | null>(null)
-  const [librarySyncing, setLibrarySyncing] = useState(false)
-  const [librarySyncFailures, setLibrarySyncFailures] = useState<LibrarySyncResource[]>([])
   // 新版本就绪：给一条可点的提示，不静默强制刷新（那会打断正在读文章的人）。
   const [updateReady, setUpdateReady] = useState(false)
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
-  const [archiveDownloading, setArchiveDownloading] = useState(false)
   const [convertingLink, setConvertingLink] = useState<LinkResponse | null>(null)
   const [pins, togglePin] = usePins()
-  const librarySyncInFlight = useRef<Promise<void> | null>(null)
-  const librarySyncController = useRef<AbortController | null>(null)
   const draftNonce = useRef(0)
   const canCreateNote = capabilityPolicy.notes
   const createNoteIntent = useRef<Promise<void> | null>(null)
   const [creatingNote, setCreatingNote] = useState(false)
-  const thoughtSyncController = useMemo(
-    () => (
-      capabilityLease.isCurrent('annotations') &&
-      typeof client.syncThoughts === 'function' &&
-      typeof client.pushThoughtOps === 'function'
-        ? getThoughtSyncController(lease, client)
-        : null
-    ),
-    [capabilityLease, client, lease],
-  )
-  const subscribeThoughtSync = useCallback(
-    (listener: () => void) => thoughtSyncController?.subscribe(listener) ?? (() => undefined),
-    [thoughtSyncController],
-  )
-  const getThoughtSyncSnapshot = useCallback(
-    () => thoughtSyncController?.getSnapshot() ?? EMPTY_THOUGHT_SYNC_SNAPSHOT,
-    [thoughtSyncController],
-  )
-  const thoughtSyncSnapshot = useSyncExternalStore(
-    subscribeThoughtSync,
-    getThoughtSyncSnapshot,
-    getThoughtSyncSnapshot,
-  )
-  useEffect(() => thoughtSyncController?.start(), [thoughtSyncController])
 
   useEffect(() => {
     const onUpdateReady = () => setUpdateReady(true)
@@ -342,7 +289,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
 
   useEffect(() => {
     const policy = capabilityLease.policy
-    setArchiveDownloading(false)
     if (!policy.annotations) {
       setNoteEd(null)
       setHistoricalNote(null)
@@ -500,141 +446,9 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     setChatOpen(true)
   }, [capabilityLease, setMobileNavOpen])
 
-  // 同步：等待资料库与 Thought 两个独立子系统落定，部分成功的数据继续保留。
-  const onSync = useCallback(() => {
-    onRefreshCapabilities?.()
-    if (librarySyncInFlight.current) return
-    const ownership = lease.captureOwnership('synchronize Reader library')
-    if (
-      !lease.isOwnershipCurrent(ownership) ||
-      !resourceStore.isIdentityActive(lease)
-    ) return
-
-    const controller = new AbortController()
-    const abortForIdentity = () => controller.abort()
-    ownership.operation.signal.addEventListener('abort', abortForIdentity, { once: true })
-    librarySyncController.current = controller
-    setLibrarySyncing(true)
-
-    const run = (async () => {
-      const [outcomes, thoughtOutcome] = await Promise.all([
-        Promise.allSettled([
-          startLibraryReload(() => reloadLinks({ signal: controller.signal })),
-          startLibraryReload(() => reloadTags({ signal: controller.signal })),
-          startLibraryReload(() => reloadDomains({ signal: controller.signal })),
-        ]),
-        thoughtSyncController
-          ? thoughtSyncController.sync().then(
-              (result) => ({ ok: true as const, result }),
-              () => ({ ok: false as const }),
-            )
-          : Promise.resolve(null),
-      ])
-      if (
-        controller.signal.aborted ||
-        !lease.isOwnershipCurrent(ownership) ||
-        !resourceStore.isIdentityActive(lease)
-      ) return
-
-      const failures = LIBRARY_SYNC_RESOURCES.filter((_, index) =>
-        libraryReloadFailed(outcomes[index] as PromiseSettledResult<ApiResult<unknown> | null>),
-      )
-      setLibrarySyncFailures(failures)
-
-      let libraryMessage = '资料库已同步'
-      for (const outcome of outcomes) {
-        if (outcome.status === 'rejected' || outcome.value === null) {
-          libraryMessage = '资料库同步失败'
-          break
-        }
-        if (!outcome.value.ok) {
-          libraryMessage = `资料库同步失败：${outcome.value.error.message}`
-          break
-        }
-      }
-
-      const thoughtSnapshot = thoughtSyncController?.getSnapshot()
-      const thoughtStale = thoughtOutcome?.ok === true && thoughtOutcome.result.status === 'stale'
-      if (!thoughtSnapshot || thoughtStale) {
-        if (failures.length === 0) flash(libraryMessage, 'refresh')
-        return
-      }
-      const thoughtFailed = thoughtOutcome?.ok === false ||
-        thoughtOutcome?.result.status === 'failed' || thoughtSnapshot.phase === 'failed'
-      flash(
-        `${libraryMessage}；${thoughtSyncOutcome(thoughtSnapshot)}`,
-        failures.length > 0 || thoughtFailed ? 'alert' : 'refresh',
-      )
-    })()
-    librarySyncInFlight.current = run
-    const finish = () => {
-      ownership.operation.signal.removeEventListener('abort', abortForIdentity)
-      if (librarySyncInFlight.current !== run) return
-      librarySyncInFlight.current = null
-      librarySyncController.current = null
-      if (
-        lease.isOwnershipCurrent(ownership) &&
-        resourceStore.isIdentityActive(lease)
-      ) {
-        setLibrarySyncing(false)
-      }
-    }
-    void run.then(finish, finish)
-  }, [flash, lease, onRefreshCapabilities, reloadDomains, reloadLinks, reloadTags, thoughtSyncController])
-
-  useEffect(() => () => {
-    librarySyncController.current?.abort()
-    librarySyncController.current = null
-    librarySyncInFlight.current = null
-  }, [lease])
-
-  const onDownloadArchive = useCallback(async (selection: ArchiveV2Selection): Promise<boolean> => {
-    const operationLease = capabilityLease
-    if (!operationLease.isCurrent('archiveDownload')) return false
-    setArchiveDownloading(true)
-    let objectURL: string | null = null
-    let anchor: HTMLAnchorElement | null = null
-    try {
-      const result = await client.downloadArchiveV2(selection)
-      if (!client.isIdentityCurrent() || !operationLease.isCurrent('archiveDownload')) {
-        return false
-      }
-      if (!result.ok) {
-        flash(`归档下载失败：${result.error.message}`, 'alert')
-        return false
-      }
-
-      // The API client has already verified the original response bytes. Do
-      // not create an object URL until that succeeds, and release it as soon
-      // as the browser receives the click.
-      objectURL = URL.createObjectURL(result.data)
-      anchor = document.createElement('a')
-      anchor.href = objectURL
-      anchor.download = `webtag-archive-v2-${new Date().toISOString().slice(0, 10)}.json`
-      document.body.appendChild(anchor)
-      anchor.click()
-      flash('归档已下载', 'download')
-      return true
-    } catch (cause) {
-      if (!client.isIdentityCurrent() || !operationLease.isCurrent('archiveDownload')) {
-        return false
-      }
-      const message = cause instanceof Error ? cause.message : '下载请求未完成'
-      flash(`归档下载失败：${message}`, 'alert')
-      return false
-    } finally {
-      anchor?.remove()
-      if (objectURL) URL.revokeObjectURL(objectURL)
-      if (client.isIdentityCurrent() && operationLease.isCurrent('archiveDownload')) {
-        setArchiveDownloading(false)
-      }
-    }
-  }, [capabilityLease, client, flash])
-
   useEffect(() => {
     if (capabilityPolicy.archiveDownload) return
     setArchiveDialogOpen(false)
-    setArchiveDownloading(false)
   }, [capabilityPolicy.archiveDownload])
 
   // 命令面板路由（对齐 app.jsx onCommand）。
@@ -708,13 +522,13 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           navigateRoute({ kind: 'library', id: 'subs' })
           break
         case 'refresh':
-          onSync()
+          syncLibraryAndThoughts()
           break
         default:
           break
       }
     },
-    [capabilityLease, createEmptyNote, navigateRoute, onSync, openLink, setMobileNavOpen, setSel],
+    [capabilityLease, createEmptyNote, navigateRoute, openLink, setMobileNavOpen, setSel, syncLibraryAndThoughts],
   )
 
   // 采纳某条 AI 回复为划线笔记（ChatSidebar 草稿模式调用）。
@@ -825,14 +639,11 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           navigationOpen={mobileNavOpen}
           sidebarCollapsed={sidebarCollapsed}
           syncing={displayedView !== 'subs' && librarySyncing}
-          thoughtSync={thoughtSyncController ? thoughtSyncSnapshot : null}
+          thoughtSync={thoughtSync}
           onSync={
             displayedView === 'subs'
-              ? () => {
-                  onRefreshCapabilities?.()
-                  setSubsSyncRequest((request) => request + 1)
-                }
-              : onSync
+              ? requestSubscriptionSync
+              : syncLibraryAndThoughts
           }
           onToggleNavigation={toggleNavigation}
           onAddLink={() => setAddLinkOpen(true)}
@@ -849,7 +660,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
         {displayedView !== 'subs' && librarySyncFailures.length > 0 && (
           <div className="library-sync-error" role="alert">
             <span>资料库同步部分失败：{librarySyncFailures.join('、')}</span>
-            <button type="button" onClick={onSync} disabled={librarySyncing}>
+            <button type="button" onClick={syncLibraryAndThoughts} disabled={librarySyncing}>
               重试资料库同步
             </button>
           </div>
@@ -932,7 +743,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
               onOpenAnalysis={openLink}
               onOpenSettings={openSettings}
               onToast={flash}
-              syncRequest={subsSyncRequest}
+              syncRequest={subscriptionSyncRequest}
               capabilityPolicy={capabilityPolicy}
             />
           ) : displayedView === 'sites' ? (
@@ -1120,7 +931,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           open={archiveDialogOpen}
           downloading={archiveDownloading}
           onClose={() => setArchiveDialogOpen(false)}
-          onDownload={onDownloadArchive}
+          onDownload={downloadArchive}
         />
         {browse && (
           <BrowsePanel
