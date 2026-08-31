@@ -51,6 +51,9 @@ jobs:
       - name: Typecheck shared API package (no DOM)
         run: pnpm api:typecheck
 
+      - name: Test shared API runtime contracts
+        run: pnpm api:test
+
       # ESLint check mode (no --fix), --max-warnings 0 per package.json script.
       - name: Lint
         run: pnpm --filter webtag-reader lint

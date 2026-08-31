@@ -10,8 +10,9 @@
     "api:generate": "pnpm --filter @webtag/api api:generate",
     "api:check": "pnpm --filter @webtag/api api:check",
     "api:typecheck": "pnpm --filter @webtag/api typecheck",
+    "api:test": "pnpm --filter @webtag/api test",
     "audit:ci": "node reader/scripts/audit-gate.mjs",
-    "verify:workspace": "pnpm api:check && pnpm api:typecheck && pnpm audit:ci",
+    "verify:workspace": "pnpm api:check && pnpm api:typecheck && pnpm api:test && pnpm audit:ci",
     "verify:reader": "pnpm --filter webtag-reader lint && pnpm --filter webtag-reader typecheck && pnpm --filter webtag-reader test && pnpm --filter webtag-reader build && pnpm --filter webtag-reader test:browser",
     "verify:extension": "pnpm --filter webtag-extension lint && pnpm --filter webtag-extension build && pnpm --filter webtag-extension verify:build && pnpm --filter webtag-extension typecheck && pnpm --filter webtag-extension test && pnpm --filter webtag-extension run pack && pnpm --filter webtag-extension verify:artifacts",
     "verify": "pnpm verify:workspace && pnpm verify:reader && pnpm verify:extension"

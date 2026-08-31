@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest'
 import type { components, paths } from './generated'
 
 type BulkRequest = components['schemas']['ReaderInboxBulkRequest']
@@ -48,3 +49,20 @@ export const readerInboxBulkContractExamples = {
     remaining_count: 101,
   } satisfies AIProposalResponse & AIProposalResponseBody,
 }
+
+describe('reader inbox bulk API contract', () => {
+  it('keeps confirm, discard, and AI proposal examples executable', () => {
+    expect(readerInboxBulkContractExamples.confirmRequest.inbox_ids).toHaveLength(1)
+    expect(readerInboxBulkContractExamples.discardRequest.inbox_ids).toHaveLength(1)
+    expect(readerInboxBulkContractExamples.response.atomic).toBe(true)
+    expect(readerInboxBulkContractExamples.response.items[0]?.status).toBe(
+      'confirmed',
+    )
+    expect(readerInboxBulkContractExamples.confirmAIProposalsRequest.partition).toBe(
+      'active',
+    )
+    expect(readerInboxBulkContractExamples.confirmAIProposalsResponse.remaining_count).toBe(
+      101,
+    )
+  })
+})

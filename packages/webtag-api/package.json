@@ -11,7 +11,7 @@
   "scripts": {
     "api:generate": "openapi-typescript ../../internal/app/assets/openapi.json -o src/generated.ts --root-types --root-types-no-schema-prefix",
     "api:check": "openapi-typescript ../../internal/app/assets/openapi.json -o src/generated.ts --root-types --root-types-no-schema-prefix --check",
-    "test": "vitest run src/case-fold.test.ts",
+    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

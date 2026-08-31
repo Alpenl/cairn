@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest'
 import type { components, paths } from './generated'
 
 type IngestRequestBody = NonNullable<paths['/api/ingest']['post']['requestBody']>['content']['application/json']
@@ -316,4 +317,8 @@ export function assertReaderCrossSurfaceContract(): void {
 
 }
 
-assertReaderCrossSurfaceContract()
+describe('reader cross-surface API contract', () => {
+  it('keeps the shared reader wire examples executable', () => {
+    expect(() => assertReaderCrossSurfaceContract()).not.toThrow()
+  })
+})

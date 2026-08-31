@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest'
 import type { components, paths } from './generated'
 
 type LinkMetadataOperation = paths['/api/links/{link_id}/metadata']['patch']
@@ -109,3 +110,23 @@ export const readerLinkMetadataNullTags: LinkMetadataRequestBody = {
   // @ts-expect-error tags must be an array even when the caller is clearing all tags.
   tags: null,
 }
+
+describe('reader link metadata API contract', () => {
+  it('keeps replacement metadata examples executable', () => {
+    expect(readerLinkMetadataContractExamples.header).toBe('"7"')
+    expect(readerLinkMetadataContractExamples.response.metadata_revision).toBe(8)
+    expect(readerLinkMetadataContractExamples.successHeaders.ETag).toBe('"8"')
+    expect(readerLinkMetadataContractExamples.request.tags).toEqual([
+      'Research',
+      'reader',
+    ])
+    expect(readerLinkMetadataResponseStatuses).toEqual({
+      success: 200,
+      conflict: 409,
+      tooLarge: 413,
+      validation: 422,
+      precondition: 428,
+      internalError: 500,
+    })
+  })
+})

@@ -48,6 +48,9 @@ jobs:
       - name: Typecheck shared API package (no DOM)
         run: pnpm api:typecheck
 
+      - name: Test shared API runtime contracts
+        run: pnpm api:test
+
       # ESLint check mode (no --fix, zero-warning gate). Catches
       # prettier/prettier drift and lint regressions before merge; the
       # auto-fixer is `pnpm lint:fix`.

@@ -78,6 +78,7 @@ jobs:
           pnpm audit:ci
           pnpm --filter webtag-extension api:check
           pnpm api:typecheck
+          pnpm api:test
           pnpm --filter webtag-extension lint
           pnpm --filter webtag-extension typecheck
           pnpm --filter webtag-extension test
