@@ -34,7 +34,7 @@ import { AddLinkDialog } from './AddLinkDialog'
 import { ArchiveDownloadDialog } from './ArchiveDownloadDialog'
 import { HomeSurface } from './reader-vnext/HomeSurface'
 import { clearFeedSessionState, FeedSurface } from './reader-vnext/FeedSurface'
-import { InboxSurface, type InboxDraftLeaveState } from './reader-vnext/InboxSurface'
+import { InboxSurface } from './reader-vnext/InboxSurface'
 import { NotesSurface } from './reader-vnext/NotesSurface'
 import { TodoSurface } from './reader-vnext/TodoSurface'
 import { SettingsSurface } from './reader-vnext/SettingsSurface'
@@ -93,21 +93,9 @@ import {
 import { resourceStore } from '../lib/cache/store'
 import { readOwnedStorage, writeOwnedStorage } from '../lib/storage-ownership'
 import {
-  ensureReaderHistoryEntry,
-  installReaderNavigationGuard,
-  notifyReaderNavigationCommitted,
-  parseReaderRoute,
-  READER_NAVIGATION_RESTORED_EVENT,
-  rememberReaderRoute,
-  readerHistoryState,
-  readerRouteURL,
-  readerThoughtIDFromURL,
   readerThoughtHostTarget,
-  readerThoughtViewFromURL,
-  type ReaderRouteTargets,
   type ReaderRoute,
 } from '../lib/navigation/route'
-import { ReaderNavigationGuardRegistry } from '../lib/navigation/guard'
 import type { ArchiveV2Selection } from '../lib/api/archive-v2'
 import type {
   CapabilitiesResponse,
@@ -136,11 +124,13 @@ import type {
 } from '../lib/reader-api-ports'
 import {
   deriveReaderCapabilityPolicy,
-  firstAvailableReaderRoute,
   ReaderCapabilityLease,
   readerCapabilityFingerprint,
-  readerRouteIsAvailable,
 } from '../lib/capabilities'
+import {
+  type OpenLinkOptions,
+  useMainViewNavigation,
+} from './main-view/navigation-controller'
 
 type Theme = 'light' | 'dark'
 const CORPUS_LIMIT = 100
@@ -271,17 +261,6 @@ function metadataPatchTouchesTuple(patch: Partial<LinkResponse>): boolean {
   )
 }
 
-function sameContentEditState(
-  left: ContentEditState | null,
-  right: ContentEditState | null,
-): boolean {
-  return left?.linkId === right?.linkId &&
-    left?.expectedRevision === right?.expectedRevision &&
-    left?.editing === right?.editing &&
-    left?.dirty === right?.dirty &&
-    left?.saving === right?.saving
-}
-
 function annotationCommandCommitted(
   result: ArticleAnnotationCommandResult,
 ): result is Extract<ArticleAnnotationCommandResult, { readonly sequence: number }> {
@@ -307,71 +286,6 @@ async function sha256Hex(text: string): Promise<string> {
     new TextEncoder().encode(text),
   )
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
-type MainViewRoute = 'home' | 'feed' | 'pending' | 'reading' | 'sites' | 'subs' | 'notes' | 'todo' | 'settings' | 'history' | 'trash'
-
-function mainViewFromRoute(route: ReaderRoute): MainViewRoute {
-  if (route.kind === 'surface') return route.id
-  if (route.kind === 'tool') return route.id
-  if (route.kind === 'library') {
-    if (route.id === 'pending') return 'pending'
-    if (route.id === 'sites') return 'sites'
-    if (route.id === 'subs') return 'subs'
-    if (route.id === 'reading') return 'reading'
-    if (route.id === 'notes') return 'notes'
-  }
-  return 'reading'
-}
-
-interface MainViewRouteTargets extends ReaderRouteTargets {
-  readonly inboxId?: string
-}
-
-interface OpenLinkOptions {
-  readonly history?: 'push' | 'none'
-  readonly address?: boolean
-  readonly guard?: boolean
-}
-
-function readerRouteForMainView(view: MainViewRoute, targets: MainViewRouteTargets = {}): ReaderRoute {
-  if (view === 'home') return { kind: 'surface', id: 'home' }
-  if (view === 'feed') return { kind: 'surface', id: 'feed' }
-  if (view === 'pending') return { kind: 'library', id: 'pending', inboxId: targets.inboxId }
-  if (view === 'notes') return { kind: 'library', id: 'notes' }
-  if (view === 'todo') return { kind: 'tool', id: 'todo' }
-  if (view === 'settings') return { kind: 'tool', id: 'settings' }
-  if (view === 'history') return { kind: 'tool', id: 'history' }
-  if (view === 'sites') return { kind: 'library', id: 'sites' }
-  if (view === 'subs') return { kind: 'library', id: 'subs' }
-  return { kind: 'library', id: 'reading' }
-}
-
-function siteIDFromLocation(): string | undefined {
-	const route = parseReaderRoute(window.location.href)
-	if (route.kind !== 'library' || route.id !== 'sites') return undefined
-	const siteID = new URLSearchParams(window.location.search).get('site_id')?.trim()
-	return siteID || undefined
-}
-
-function noteIDFromLocation(): string | undefined {
-	const route = parseReaderRoute(window.location.href)
-	if (route.kind !== 'library' || route.id !== 'notes') return undefined
-	const noteID = new URLSearchParams(window.location.search).get('note_id')?.trim()
-	return noteID || undefined
-}
-
-function inboxIDFromLocation(): string | undefined {
-	const route = parseReaderRoute(window.location.href)
-	if (route.kind !== 'library' || route.id !== 'pending') return undefined
-	return route.inboxId?.trim() || undefined
-}
-
-function linkIDFromLocation(): string | undefined {
-  const route = parseReaderRoute(window.location.href)
-  if (route.kind !== 'library' || route.id !== 'reading') return undefined
-  const linkID = new URLSearchParams(window.location.search).get('link_id')?.trim()
-  return linkID || undefined
 }
 
 /** 当前/最近已见链接的有界去重缓存；新数据优先，避免长期会话无界增长。 */
@@ -446,10 +360,6 @@ export interface MainViewProps {
 
 export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabilities }: MainViewProps) {
   const lease = client.identityLease
-	const initialRoute = useMemo(
-		() => parseReaderRoute(window.location.href, undefined, { identity: lease.context }),
-		[lease],
-	)
 	const capabilityPolicy = useMemo(
 		() => deriveReaderCapabilityPolicy(capabilities),
 		[capabilities],
@@ -466,22 +376,64 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
 		capabilityLease.activate()
 		return () => capabilityLease.deactivate()
 	}, [capabilityLease])
-	const initialLinkTargetID = linkIDFromLocation()
 	const [theme, setTheme] = useState<Theme>(() => readOwnedStorage('theme') === 'dark' ? 'dark' : 'light')
-	const [view, setView] = useState<MainViewRoute>(() => mainViewFromRoute(initialRoute))
+  const [toast, setToast] = useState<{ msg: string; icon?: IconName; action?: ToastAction } | null>(null)
+  const toastTimer = useRef<number | null>(null)
+  useEffect(() => () => {
+    if (toastTimer.current !== null) {
+      window.clearTimeout(toastTimer.current)
+      toastTimer.current = null
+    }
+  }, [])
+
+  const dismissToast = useCallback(() => {
+    if (toastTimer.current !== null) {
+      window.clearTimeout(toastTimer.current)
+      toastTimer.current = null
+    }
+    setToast(null)
+  }, [])
+
+  // 带动作的提示停留更久：2.6 秒够读完一句话，但不够看到、移动指针并点中一个
+  // 按钮——撤销要是点不着，就等于没有撤销。
+  const flash = useCallback((msg: string, icon?: IconName, action?: ToastAction) => {
+    setToast({ msg, icon, action })
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => {
+      toastTimer.current = null
+      setToast(null)
+    }, action ? 7000 : 2600)
+  }, [])
+  const {
+    view,
+    displayedView,
+    siteTargetID,
+    noteTargetID,
+    inboxTargetID,
+    activeId,
+    setActiveId,
+    mobilePane,
+    setMobilePane,
+    mobileNavOpen,
+    setMobileNavOpen,
+    contentEditState,
+    navigationRestoreEpoch,
+    pendingLinkTarget,
+    getContentEditState,
+    reportContentEditState,
+    confirmDiscardContentEdit,
+    confirmDiscardNavigation,
+    commitRoute,
+    navigateRoute,
+    reportNotesDraftDirty,
+    reportNotesPendingPersistence,
+    reportNotesPrepareToLeave,
+    reportInboxDraftState,
+  } = useMainViewNavigation({ lease, capabilityPolicy, flash })
 	const homeScrollRef = useRef<HTMLDivElement>(null)
 	const [todoCompletedExpanded, setTodoCompletedExpanded] = useState(false)
-	const [siteTargetID, setSiteTargetID] = useState<string | undefined>(siteIDFromLocation)
-	const [noteTargetID, setNoteTargetID] = useState<string | undefined>(noteIDFromLocation)
-	const [inboxTargetID, setInboxTargetID] = useState<string | undefined>(() => (
-		initialRoute.kind === 'library' && initialRoute.id === 'pending'
-			? initialRoute.inboxId
-			: inboxIDFromLocation()
-	))
   const [subsSyncRequest, setSubsSyncRequest] = useState(0)
   const [sel, setSel] = useState<Selection>({ type: 'smart', id: 'all', name: '全部链接' })
-  const [activeId, setActiveId] = useState<string | null>(initialLinkTargetID ?? null)
-  const [activeLinkAddressed, setActiveLinkAddressed] = useState(Boolean(initialLinkTargetID))
   const [activeFallback, setActiveFallback] = useState<LinkResponse | null>(null)
   const [activeDetail, setActiveDetail] = useState<LinkResponse | null>(null)
   const [summarySourceIdentity, setSummarySourceIdentity] =
@@ -490,8 +442,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   const [metadataProjectionEpoch, setMetadataProjectionEpoch] = useState(0)
   const [corpus, setCorpus] = useState<LinkResponse[]>([])
   const [chatOpen, setChatOpen] = useState(false)
-  const [mobilePane, setMobilePane] = useState<'list' | 'detail'>('list')
-  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readOwnedStorage('sidebarCollapsed') === '1')
   const focusMode = useSyncExternalStore(
     readingFocusStore.subscribe,
@@ -504,7 +454,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   const [noteEd, setNoteEd] = useState<AnnotationLocator | null>(null)
   const [historicalNote, setHistoricalNote] = useState<HistoricalArticleAnnotation | null>(null)
   const [chatDraft, setChatDraft] = useState<ChatDraft | null>(null)
-  const [toast, setToast] = useState<{ msg: string; icon?: IconName; action?: ToastAction } | null>(null)
   const [librarySyncing, setLibrarySyncing] = useState(false)
   const [librarySyncFailures, setLibrarySyncFailures] = useState<LibrarySyncResource[]>([])
   // 新版本就绪：给一条可点的提示，不静默强制刷新（那会打断正在读文章的人）。
@@ -514,37 +463,17 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   const [archiveDownloading, setArchiveDownloading] = useState(false)
   const [convertingLink, setConvertingLink] = useState<LinkResponse | null>(null)
   const [detailRequest, setDetailRequest] = useState<DetailRequestState | null>(null)
-  const [contentEditState, setContentEditState] = useState<ContentEditState | null>(null)
-  const [navigationRestoreEpoch, setNavigationRestoreEpoch] = useState(0)
-  const navigationGuards = useMemo(() => new ReaderNavigationGuardRegistry(), [])
   const [pins, togglePin] = usePins()
-  const toastTimer = useRef<number | null>(null)
   const librarySyncInFlight = useRef<Promise<void> | null>(null)
   const librarySyncController = useRef<AbortController | null>(null)
   const draftNonce = useRef(0)
   const detailRequestSeq = useRef(0)
   const ownedDetailRequest = useRef<OwnedDetailRequest | null>(null)
-  const contentEditStateRef = useRef<ContentEditState | null>(null)
-  const notesDraftDirtyRef = useRef(false)
-  const notesPendingPersistenceRef = useRef(false)
-  const notesPrepareToLeaveRef = useRef<(() => Promise<{ readonly status: 'ready' } | { readonly status: 'blocked'; readonly code: string }>) | null>(null)
-  const inboxDraftStateRef = useRef<InboxDraftLeaveState>({ dirty: false, saving: false })
-  const pendingLinkTarget = useRef<string | null>(initialLinkTargetID ?? null)
   const flashedDetailError = useRef<number | null>(null)
   const automaticOpenRef = useRef<string | null>(null)
   const canCreateNote = capabilityPolicy.notes
   const createNoteIntent = useRef<Promise<void> | null>(null)
   const [creatingNote, setCreatingNote] = useState(false)
-  const requestedRoute = useMemo(
-    () => readerRouteForMainView(view, { inboxId: inboxTargetID }),
-    [inboxTargetID, view],
-  )
-  const requestedRouteAvailable = readerRouteIsAvailable(requestedRoute, capabilityPolicy)
-  const effectiveRoute = useMemo(
-    () => requestedRouteAvailable ? requestedRoute : firstAvailableReaderRoute(capabilityPolicy),
-    [capabilityPolicy, requestedRoute, requestedRouteAvailable],
-  )
-  const displayedView = mainViewFromRoute(effectiveRoute)
   const thoughtSyncController = useMemo(
     () => (
       capabilityLease.isCurrent('annotations') &&
@@ -659,191 +588,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   }, [theme])
 
   useEffect(() => {
-    const targets = requestedRouteAvailable ? {
-      linkId: view === 'reading' && activeLinkAddressed ? activeId ?? undefined : undefined,
-      siteId: view === 'sites' ? siteTargetID : undefined,
-      noteId: view === 'notes' ? noteTargetID : undefined,
-      thoughtView: view === 'history' ? readerThoughtViewFromURL(window.location.href) : undefined,
-      thoughtId: view === 'history' ? readerThoughtIDFromURL(window.location.href) : undefined,
-    } : {}
-    const canonical = readerRouteURL(effectiveRoute, window.location.href, targets)
-    if (canonical.href !== window.location.href) {
-      window.history.replaceState(window.history.state, '', canonical)
-    }
-    rememberReaderRoute(effectiveRoute, undefined, targets, lease.context)
-  }, [activeId, activeLinkAddressed, effectiveRoute, lease, noteTargetID, requestedRouteAvailable, siteTargetID, view])
-
-  useEffect(() => {
-    const restoreView = () => {
-      const route = parseReaderRoute(window.location.href, undefined, { identity: lease.context })
-      const nextLinkID = linkIDFromLocation()
-      setView(mainViewFromRoute(route))
-      setSiteTargetID(siteIDFromLocation())
-      setNoteTargetID(noteIDFromLocation())
-      setInboxTargetID(inboxIDFromLocation())
-      setActiveId(nextLinkID ?? null)
-      setActiveLinkAddressed(Boolean(nextLinkID))
-      pendingLinkTarget.current = nextLinkID ?? null
-    }
-    window.addEventListener('popstate', restoreView)
-    return () => window.removeEventListener('popstate', restoreView)
-  }, [lease])
-
-  useEffect(() => () => {
-    if (toastTimer.current !== null) {
-      window.clearTimeout(toastTimer.current)
-      toastTimer.current = null
-    }
-  }, [])
-
-  const dismissToast = useCallback(() => {
-    if (toastTimer.current !== null) {
-      window.clearTimeout(toastTimer.current)
-      toastTimer.current = null
-    }
-    setToast(null)
-  }, [])
-
-  // 带动作的提示停留更久：2.6 秒够读完一句话，但不够看到、移动指针并点中一个
-  // 按钮——撤销要是点不着，就等于没有撤销。
-  const flash = useCallback((msg: string, icon?: IconName, action?: ToastAction) => {
-    setToast({ msg, icon, action })
-    if (toastTimer.current) window.clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => {
-      toastTimer.current = null
-      setToast(null)
-    }, action ? 7000 : 2600)
-  }, [])
-
-  const reportContentEditState = useCallback((next: ContentEditState | null) => {
-    contentEditStateRef.current = next
-    setContentEditState((current) => sameContentEditState(current, next) ? current : next)
-  }, [])
-
-  const confirmDiscardContentEdit = useCallback(() => {
-    const current = contentEditStateRef.current
-    if (!current?.editing) return true
-    if (current.saving) {
-      flash('正文正在保存，请稍候', 'clock')
-      return false
-    }
-    if (!current.dirty) return true
-    return window.confirm('当前正文有未保存修改，确定放弃？')
-  }, [flash])
-
-  const confirmDiscardInboxDraft = useCallback(() => {
-    if (inboxDraftStateRef.current.saving) {
-      flash('收件箱草稿正在保存，请稍候', 'clock')
-      return false
-    }
-    if (!inboxDraftStateRef.current.dirty) return true
-    return window.confirm('当前收件箱条目的草稿有未保存修改，确定离开？')
-  }, [flash])
-
-  const confirmDiscardNavigation = useCallback(() => {
-    return navigationGuards.requestNavigation()
-  }, [navigationGuards])
-
-  useEffect(() => navigationGuards.register('saved-content', {
-    blocksNavigation: () => Boolean(
-      contentEditStateRef.current?.editing &&
-      (contentEditStateRef.current.dirty || contentEditStateRef.current.saving),
-    ),
-    requestNavigation: confirmDiscardContentEdit,
-  }), [confirmDiscardContentEdit, navigationGuards])
-
-  useEffect(() => navigationGuards.register('notes', {
-    blocksNavigation: () => notesDraftDirtyRef.current,
-    requestNavigation: () => notesPrepareToLeaveRef.current?.().then((result) => result.status === 'ready') ?? true,
-  }), [navigationGuards])
-
-  useEffect(() => navigationGuards.register('inbox', {
-    blocksNavigation: () => inboxDraftStateRef.current.dirty || inboxDraftStateRef.current.saving,
-    requestNavigation: confirmDiscardInboxDraft,
-  }), [confirmDiscardInboxDraft, navigationGuards])
-
-  const reportNotesDraftDirty = useCallback((dirty: boolean) => {
-    notesDraftDirtyRef.current = dirty
-  }, [])
-
-  const reportNotesPendingPersistence = useCallback((pending: boolean) => {
-    notesPendingPersistenceRef.current = pending
-  }, [])
-
-  const reportNotesPrepareToLeave = useCallback((prepare: (() => Promise<{ readonly status: 'ready' } | { readonly status: 'blocked'; readonly code: string }>) | null) => {
-    notesPrepareToLeaveRef.current = prepare
-  }, [])
-
-  const reportInboxDraftState = useCallback((state: InboxDraftLeaveState) => {
-    inboxDraftStateRef.current = state
-  }, [])
-
-  useEffect(() => {
-    return installReaderNavigationGuard(confirmDiscardNavigation)
-  }, [confirmDiscardNavigation])
-
-  useEffect(() => {
-    const restoreDraftUI = () => setNavigationRestoreEpoch((current) => current + 1)
-    window.addEventListener(READER_NAVIGATION_RESTORED_EVENT, restoreDraftUI)
-    return () => window.removeEventListener(READER_NAVIGATION_RESTORED_EVENT, restoreDraftUI)
-  }, [])
-
-  const applyRouteState = useCallback((route: ReaderRoute, targets: ReaderRouteTargets, addressLink: boolean) => {
-    const nextView = mainViewFromRoute(route)
-    const nextLinkID = route.kind === 'library' && route.id === 'reading'
-      ? targets.linkId?.trim() || undefined
-      : undefined
-    setView(nextView)
-    setSiteTargetID(route.kind === 'library' && route.id === 'sites' ? targets.siteId?.trim() || undefined : undefined)
-    setNoteTargetID(route.kind === 'library' && route.id === 'notes' ? targets.noteId?.trim() || undefined : undefined)
-    setInboxTargetID(route.kind === 'library' && route.id === 'pending' ? route.inboxId?.trim() || undefined : undefined)
-    setActiveId(nextLinkID ?? null)
-    setActiveLinkAddressed(Boolean(nextLinkID) && addressLink)
-    pendingLinkTarget.current = nextLinkID && addressLink ? nextLinkID : null
-    setMobilePane('list')
-    setMobileNavOpen(false)
-  }, [])
-
-  const commitRoute = useCallback((
-    route: ReaderRoute,
-    targets: ReaderRouteTargets = {},
-    historyMode: 'push' | 'replace' | 'none' = 'push',
-    addressLink = Boolean(targets.linkId),
-  ) => {
-    const url = readerRouteURL(route, window.location.href, targets)
-    if (historyMode === 'push') {
-      const currentIndex = ensureReaderHistoryEntry()
-      if (url.href !== window.location.href) {
-        window.history.pushState(readerHistoryState(window.history.state, currentIndex + 1), '', url)
-      }
-    } else if (historyMode === 'replace') {
-      ensureReaderHistoryEntry()
-      window.history.replaceState(window.history.state, '', url)
-    }
-    if (historyMode !== 'none') rememberReaderRoute(route, undefined, targets, lease.context)
-    applyRouteState(route, targets, addressLink)
-    notifyReaderNavigationCommitted()
-  }, [applyRouteState, lease])
-
-  const navigateRoute = useCallback((route: ReaderRoute, targets?: ReaderRouteTargets): boolean | Promise<boolean> => {
-    if (!readerRouteIsAvailable(route, capabilityPolicy)) return false
-    const commit = () => {
-      commitRoute(route, targets ?? {}, 'push', Boolean(targets?.linkId))
-      return true
-    }
-    const result = confirmDiscardNavigation()
-    if (typeof (result as Promise<boolean>)?.then === 'function') {
-      return Promise.resolve(result).then((allowed) => allowed ? commit() : false)
-    }
-    return result ? commit() : false
-  }, [capabilityPolicy, commitRoute, confirmDiscardNavigation])
-
-  useEffect(() => {
-    if (requestedRouteAvailable) return
-    commitRoute(effectiveRoute, {}, 'replace', false)
-  }, [commitRoute, effectiveRoute, requestedRouteAvailable])
-
-  useEffect(() => {
     const policy = capabilityLease.policy
     setArchiveDownloading(false)
     if (!policy.annotations) {
@@ -855,23 +599,14 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       setChatDraft(null)
     }
     if (!policy.notes) {
-      setNoteTargetID(undefined)
-      notesDraftDirtyRef.current = false
-      notesPendingPersistenceRef.current = false
-      notesPrepareToLeaveRef.current = null
       createNoteIntent.current = null
       setCreatingNote(false)
-    }
-    if (!policy.inbox) {
-      setInboxTargetID(undefined)
-      inboxDraftStateRef.current = { dirty: false, saving: false }
     }
     if (!policy.todos) setTodoCompletedExpanded(false)
     if (!policy.history) {
       setHistoricalNote(null)
     }
     if (!policy.siteRead) {
-      setSiteTargetID(undefined)
       setConvertingLink(null)
       invalidateSites()
     } else if (!policy.siteWrite) {
@@ -916,21 +651,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       void Promise.resolve(result).then((allowed) => { if (allowed) onOpenSettings() })
     } else if (result) onOpenSettings()
   }, [confirmDiscardNavigation, onOpenSettings])
-
-  useEffect(() => {
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      const contentPending = Boolean(
-        contentEditStateRef.current?.editing &&
-        (contentEditStateRef.current.dirty || contentEditStateRef.current.saving),
-      )
-      const inboxPending = inboxDraftStateRef.current.dirty || inboxDraftStateRef.current.saving
-      if (!contentPending && !notesPendingPersistenceRef.current && !inboxPending) return
-      event.preventDefault()
-      event.returnValue = ''
-    }
-    window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
-  }, [contentEditState, navigationGuards])
 
   // 每条链接的 content_revision 下界。
   //
@@ -1779,6 +1499,9 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       commitRoute,
       confirmDiscardNavigation,
       patchKnownLink,
+      pendingLinkTarget,
+      setMobileNavOpen,
+      setMobilePane,
     ],
   )
 
@@ -1787,7 +1510,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     if (!target || list.loading) return
     const candidate = protectedListLinks.find((link) => link.id === target)
     openLink(target, candidate, false, { history: 'none', address: true, guard: false })
-  }, [protectedListLinks, list.loading, openLink])
+  }, [pendingLinkTarget, protectedListLinks, list.loading, openLink])
 
   useEffect(() => {
     if (activeId) {
@@ -1812,7 +1535,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       }
       return !o
     })
-  }, [capabilityLease])
+  }, [capabilityLease, setMobileNavOpen])
 
   const openNote = useCallback((annotation: AnnotationLocator) => {
     if (!capabilityLease.isCurrent('annotations')) return
@@ -1820,7 +1543,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     setHistoricalNote(null)
     setNoteEd(annotation)
     setChatOpen(false)
-  }, [capabilityLease])
+  }, [capabilityLease, setMobileNavOpen])
 
   const openHistoricalAnnotation = useCallback((annotation: Annotation) => {
     if (!capabilityLease.isCurrent('annotations')) return
@@ -1835,7 +1558,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     setNoteEd(null)
     setHistoricalNote(historical)
     setChatOpen(false)
-  }, [articleAnnotations.historicalAnnotations, capabilityLease, flash])
+  }, [articleAnnotations.historicalAnnotations, capabilityLease, flash, setMobileNavOpen])
 
   const addAnnotation = useCallback(async (
     input: AnnotationInput,
@@ -1927,7 +1650,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     setNoteEd(null)
     setMobileNavOpen(false)
     setChatOpen(true)
-  }, [capabilityLease])
+  }, [capabilityLease, setMobileNavOpen])
 
   // 同步：等待资料库与 Thought 两个独立子系统落定，部分成功的数据继续保留。
   const onSync = useCallback(() => {
@@ -2190,7 +1913,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       id: string,
       request: ContentEditRequest,
     ): Promise<ApiResult<LinkContentResponse>> => {
-      const current = contentEditStateRef.current
+      const current = getContentEditState()
       if (!current || current.linkId !== id || !current.editing) {
         return err({ kind: 'identity-mismatch', message: '当前编辑会话已经结束' })
       }
@@ -2236,6 +1959,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     [
       captureSavedDocumentContext,
       client,
+      getContentEditState,
       noteContentRevision,
       patchKnownLink,
       reloadTranslationsAfterSourceChange,
@@ -2572,7 +2296,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           break
       }
     },
-    [capabilityLease, createEmptyNote, navigateRoute, onSync, openLink],
+    [capabilityLease, createEmptyNote, navigateRoute, onSync, openLink, setMobileNavOpen],
   )
 
   // 采纳某条 AI 回复为划线笔记（ChatSidebar 草稿模式调用）。
@@ -2597,7 +2321,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     setSel(next)
     setMobilePane('list')
     setMobileNavOpen(false)
-  }, [])
+  }, [setMobileNavOpen, setMobilePane])
 
   const onSidebarView = useCallback((next: LibraryView | ReaderRoute) => {
     if (typeof next === 'string') {
@@ -2617,7 +2341,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   const onSidebarBrowse = useCallback((kind: 'tags' | 'domains') => {
     setBrowse(kind)
     setMobileNavOpen(false)
-  }, [])
+  }, [setMobileNavOpen])
 
   const toggleNavigation = useCallback(() => {
     if (!window.matchMedia('(max-width: 1439px)').matches) {
@@ -2635,7 +2359,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       }
       return !open
     })
-  }, [])
+  }, [setMobileNavOpen])
 
   const backToMobileList = useCallback(() => {
     if (!confirmDiscardContentEdit()) return
@@ -2643,7 +2367,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     setNoteEd(null)
     setHistoricalNote(null)
     setMobilePane('list')
-  }, [confirmDiscardContentEdit])
+  }, [confirmDiscardContentEdit, setMobilePane])
 
   // ⌘K / ⌘J（⌘J 右栏互斥：打开 AI 助手时关笔记面板）。
   const onToggleCmdk = useCallback(() => setCmdkOpen((o) => !o), [])
@@ -2672,7 +2396,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   const onPickTag = useCallback((tag: string) => {
     setSel({ type: 'tag', id: tag, name: '#' + tag })
     setMobilePane('list')
-  }, [])
+  }, [setMobilePane])
 
   const onToggleFocus = useCallback(() => readingFocusStore.toggle(), [])
 
@@ -2720,7 +2444,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
         },
       })
     })()
-  }, [client, confirmDiscardContentEdit, dismissToast, flash, list])
+  }, [client, confirmDiscardContentEdit, dismissToast, flash, list, setActiveId])
 
   // 空闲预取上一篇 / 下一篇：用户点「下一篇」时是 0 个网络请求。
   // 预取的是译文列表——详情本身已经能从列表数据直接渲染（PF6 让列表说了真话）。
