@@ -240,7 +240,7 @@ describe('TodoSurface', () => {
     expect(window.location.search).toBe('')
   })
 
-  it('routes projected sources to the exact link, note, and inbox targets', async () => {
+  it('routes projected sources to the exact link, note, inbox, and thought targets', async () => {
     const link = todo({
       id: 'thought-link',
       text: '链接来源任务',
@@ -265,7 +265,15 @@ describe('TodoSurface', () => {
       origin_host_id: 'thought-inbox',
       origin_ref: { source_kind: 'inbox', source_id: 'I9' },
     })
-    const { onNavigate, onOpenLink } = renderTodo(makeClient([link, note, inbox]).client)
+    const thought = todo({
+      id: 'thought-direct',
+      text: '想法来源任务',
+      origin_kind: 'thought',
+      origin_host_kind: 'thought',
+      origin_host_id: 'T9',
+      origin_ref: { source_kind: 'thought', source_id: 'T9' },
+    })
+    const { onNavigate, onOpenLink } = renderTodo(makeClient([link, note, inbox, thought]).client)
 
     const linkRow = (await screen.findByText('链接来源任务')).closest('li') as HTMLElement
     fireEvent.click(within(linkRow).getByRole('button', { name: '打开来源' }))
@@ -279,6 +287,11 @@ describe('TodoSurface', () => {
     const inboxRow = screen.getByText('收件箱来源任务').closest('li') as HTMLElement
     fireEvent.click(within(inboxRow).getByRole('button', { name: '打开来源' }))
     expect(onNavigate).toHaveBeenCalledWith({ kind: 'library', id: 'pending', inboxId: 'I9' })
+    expect(window.location.search).toBe('')
+
+    const thoughtRow = screen.getByText('想法来源任务').closest('li') as HTMLElement
+    fireEvent.click(within(thoughtRow).getByRole('button', { name: '打开来源' }))
+    expect(onNavigate).toHaveBeenCalledWith({ kind: 'tool', id: 'history' }, { thoughtView: 'live' })
     expect(window.location.search).toBe('')
   })
 
@@ -312,6 +325,22 @@ describe('TodoSurface', () => {
     fireEvent.click(within(inboxRow).getByRole('button', { name: '打开来源' }))
     expect(onNavigate).toHaveBeenCalledWith({ kind: 'library', id: 'pending', inboxId: 'I-ref-only' })
     expect(window.location.search).toBe('')
+  })
+
+  it('renders unknown source metadata without enabling source navigation', async () => {
+    renderTodo(makeClient([todo({
+      id: 'unknown-source',
+      text: '未知来源任务',
+      origin_kind: 'external-system',
+      origin_host_kind: 'site',
+      origin_host_id: 'S9',
+      origin_ref: { source_kind: 'site', source_id: 'S9' },
+      host_revision: 3,
+    })]).client)
+
+    const row = (await screen.findByText('未知来源任务')).closest('li') as HTMLElement
+    expect(within(row).getByText('来源：external-system')).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: '打开来源' })).toBeDisabled()
   })
 
   it('disables only source routes whose capability is unavailable', async () => {

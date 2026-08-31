@@ -1,19 +1,16 @@
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
-import {
-  readerRouteIsAvailable,
-  type ReaderCapabilityPolicy,
-} from '../../lib/capabilities'
+import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
 import type { ReaderTodoResponse } from '../../lib/api/types'
-import type { ReaderNavigationRequest, ReaderRoute } from '../../lib/navigation/route'
+import type { ReaderNavigationRequest } from '../../lib/navigation/route'
 import { useExclusiveAction } from '../../hooks/useExclusiveAction'
 import { useSurfaceRequestGate, type SurfaceRequestToken } from '../../hooks/useSurfaceRequestGate'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
 import { asRecord, isRecord } from '../../lib/records'
+import { describeTodoRow, type TodoRowDescriptor } from '../../lib/todo-row-descriptor'
 import {
   readerErrorMessage,
   SURFACE_IDENTITY_ERROR,
-  formatRelativeDate,
   identityIsCurrent,
   isIdentityError,
   todoDesiredStatePatch,
@@ -204,56 +201,6 @@ export function sortTodos(items: readonly ReaderTodoResponse[]): ReaderTodoRespo
 
 function replaceTodo(items: readonly TodoItem[], next: TodoItem): TodoItem[] {
   return items.map((item) => item.id === next.id ? next : item)
-}
-
-function originLinkID(todo: ReaderTodoResponse): string | null {
-  if (todo.origin_host_kind === 'link' && todo.origin_host_id) return todo.origin_host_id
-  const originRef = asRecord(todo.origin_ref)
-  if (!originRef) return null
-  const linkID = readNullableString(originRef, 'link_id', 'linkId')
-  if (linkID) return linkID
-  const sourceKind = readNullableString(originRef, 'source_kind', 'sourceKind', 'target_kind', 'targetKind', 'kind')
-  const sourceID = readNullableString(originRef, 'source_id', 'sourceId', 'target_id', 'targetId', 'id')
-  return sourceKind === 'link' ? sourceID : null
-}
-
-type TodoOriginTarget = {
-  readonly kind: 'link' | 'note' | 'inbox' | 'thought'
-  readonly id: string
-}
-
-function originTarget(todo: ReaderTodoResponse): TodoOriginTarget | null {
-  const linkID = originLinkID(todo)
-  if (linkID) return { kind: 'link', id: linkID }
-
-  const originRef = asRecord(todo.origin_ref)
-  const sourceKind = originRef
-    ? readNullableString(originRef, 'source_kind', 'sourceKind', 'target_kind', 'targetKind', 'kind')
-    : null
-  const sourceID = originRef
-    ? readNullableString(originRef, 'source_id', 'sourceId', 'target_id', 'targetId', 'id')
-    : null
-  const kind = sourceKind ?? todo.origin_host_kind ?? (todo.origin_kind === 'note' || todo.origin_kind === 'inbox' ? todo.origin_kind : null)
-  const id = sourceID ?? todo.origin_host_id
-  if ((kind === 'note' || kind === 'inbox' || kind === 'thought') && id) return { kind, id }
-  return null
-}
-
-function originTargetRoute(target: TodoOriginTarget): ReaderRoute {
-  if (target.kind === 'link') return { kind: 'library', id: 'reading' }
-  if (target.kind === 'note') return { kind: 'library', id: 'notes' }
-  if (target.kind === 'inbox') return { kind: 'library', id: 'pending', inboxId: target.id }
-  return { kind: 'tool', id: 'history' }
-}
-
-function availableOriginTarget(
-  todo: ReaderTodoResponse,
-  capabilityPolicy: ReaderCapabilityPolicy,
-): TodoOriginTarget | null {
-  const target = originTarget(todo)
-  return target && readerRouteIsAvailable(originTargetRoute(target), capabilityPolicy)
-    ? target
-    : null
 }
 
 export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, completedExpanded, onCompletedExpandedChange }: TodoSurfaceProps) {
@@ -524,36 +471,31 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
     }
   }, [beginAction, clearForIdentityLoss, client, finishAction, gate])
 
-  const openOrigin = useCallback((todo: ReaderTodoResponse) => {
-    const target = availableOriginTarget(todo, capabilityPolicy)
-    if (!target) return
-    if (target.kind === 'link') {
-      onOpenLink(target.id)
+  const openOrigin = useCallback((descriptor: TodoRowDescriptor) => {
+    const navigation = descriptor.navigation
+    if (!navigation?.available) return
+    if (navigation.action === 'open-link') {
+      onOpenLink(navigation.linkId)
       return
     }
-    if (target.kind === 'note') {
-      onNavigate({ kind: 'library', id: 'notes' }, { noteId: target.id })
-    } else if (target.kind === 'inbox') {
-      onNavigate({ kind: 'library', id: 'pending', inboxId: target.id })
-    } else if (target.kind === 'thought') {
-      onNavigate({ kind: 'tool', id: 'history' })
-    }
-  }, [capabilityPolicy, onNavigate, onOpenLink])
+    if (navigation.targets) onNavigate(navigation.route, navigation.targets)
+    else onNavigate(navigation.route)
+  }, [onNavigate, onOpenLink])
 
   const renderTodoRow = (todo: ReaderTodoResponse) => {
-    const targetAvailable = availableOriginTarget(todo, capabilityPolicy) !== null
+    const descriptor = describeTodoRow(todo, capabilityPolicy)
     return <li key={todo.id} className={'rvx-todo-item' + (todo.done ? ' done' : '')}>
-      <button className="rvx-check-button" type="button" disabled={actionBusy} aria-label={todo.done ? `重新打开 ${todo.text}` : `完成 ${todo.text}`} aria-pressed={todo.done} onClick={() => void toggle(todo)}><Icon name="check" size={16} /></button>
+      <button className="rvx-check-button" type="button" disabled={actionBusy} aria-label={descriptor.toggleLabel} aria-pressed={todo.done} onClick={() => void toggle(todo)}><Icon name="check" size={16} /></button>
       <div className="rvx-todo-content">
         {editingID === todo.id ? (
           <div className="rvx-todo-edit-fields">
             <input autoFocus disabled={actionBusy} value={editingText} onChange={(event) => setEditingText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void saveText(todo) } if (event.key === 'Escape') { setEditingID(null); setEditingDueAt('') } }} />
             <label><span>截止时间</span><input type="datetime-local" value={editingDueAt} disabled={actionBusy} onChange={(event) => setEditingDueAt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void saveText(todo) } if (event.key === 'Escape') { setEditingID(null); setEditingDueAt('') } }} /></label>
           </div>
-        ) : todo.origin_kind === 'standalone' ? <button className="rvx-todo-text" type="button" disabled={actionBusy} onClick={() => { setEditingID(todo.id); setEditingText(todo.text); setEditingDueAt(dateTimeLocalValue(todo.due_at)) }}>{todo.text}</button> : <span className="rvx-todo-text">{todo.text}</span>}
-        <div className="rvx-todo-meta">{todo.due_at && <span className={todo.expired && !todo.done ? 'rvx-expired' : ''}>{todo.expired && !todo.done ? '已过期 · ' : '截止 · '}{formatRelativeDate(todo.due_at)}</span>}{todo.completed_at && <span>完成于 · {formatRelativeDate(todo.completed_at)}</span>}<span>{todo.origin_kind === 'standalone' ? '独立任务' : `来源：${todo.origin_kind}`}</span></div>
+        ) : descriptor.canEditText ? <button className="rvx-todo-text" type="button" disabled={actionBusy} onClick={() => { setEditingID(todo.id); setEditingText(todo.text); setEditingDueAt(dateTimeLocalValue(todo.due_at)) }}>{descriptor.title}</button> : <span className="rvx-todo-text">{descriptor.title}</span>}
+        <div className="rvx-todo-meta">{descriptor.meta.map((segment) => <span key={segment.key} className={segment.emphasis === 'expired' ? 'rvx-expired' : undefined}>{segment.text}</span>)}</div>
       </div>
-      <div className="rvx-action-row"><button className="rvx-icon-button" type="button" title="打开来源" aria-label="打开来源" disabled={actionBusy || !targetAvailable} onClick={() => openOrigin(todo)}><Icon name="arrowright" size={15} /></button>{todo.origin_kind === 'standalone' && <button className="rvx-icon-button danger" type="button" title="删除" aria-label="删除" disabled={actionBusy} onClick={() => void remove(todo)}><Icon name="trash" size={15} /></button>}</div>
+      <div className="rvx-action-row"><button className="rvx-icon-button" type="button" title={descriptor.navigation?.title ?? '打开来源'} aria-label={descriptor.navigation?.label ?? '打开来源'} disabled={actionBusy || !descriptor.navigation?.available} onClick={() => openOrigin(descriptor)}><Icon name="arrowright" size={15} /></button>{descriptor.canDelete && <button className="rvx-icon-button danger" type="button" title="删除" aria-label="删除" disabled={actionBusy} onClick={() => void remove(todo)}><Icon name="trash" size={15} /></button>}</div>
     </li>
   }
 
