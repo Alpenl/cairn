@@ -109,6 +109,7 @@ import {
   ReaderHttpTransport,
 } from './transport'
 import {
+  type ReaderActivityRequestOptions,
   type ReaderFeedSource,
 } from './endpoint-helpers'
 import * as librarySitesEndpoints from './library-sites-endpoints'
@@ -164,18 +165,15 @@ export type IdentityBoundReaderClientConfig = Omit<ReaderClientConfig, 'identity
 export type { ListLinksParams } from './types'
 export { buildLinksQuery }
 export { buildFeedItemsQuery } from './endpoint-helpers'
+export type {
+  ReaderActivityKind,
+  ReaderActivityRequestOptions,
+} from './endpoint-helpers'
 export {
   archiveV2Sections,
   fullArchiveV2Selection,
   type ArchiveV2Selection,
 } from './archive-v2'
-
-export type ReaderActivityKind = 'all' | 'tag' | 'domain'
-
-export interface ReaderActivityRequestOptions extends ReaderRequestOptions {
-  readonly kind?: ReaderActivityKind
-  readonly after?: string
-}
 
 export class ReaderClient {
   private readonly transport: ReaderHttpTransport

@@ -9,6 +9,13 @@ import type { ListFeedItemsParams } from './types'
 
 export type ReaderEndpointTransport = Pick<ReaderHttpTransport, 'send'>
 
+export type ReaderActivityKind = 'all' | 'tag' | 'domain'
+
+export interface ReaderActivityRequestOptions extends ReaderRequestOptions {
+  readonly kind?: ReaderActivityKind
+  readonly after?: string
+}
+
 export function readerIdempotencyHeaders(options: ReaderRequestOptions): Record<string, string> | undefined {
   const key = options.idempotencyKey?.trim()
   return key ? { 'Idempotency-Key': key } : undefined

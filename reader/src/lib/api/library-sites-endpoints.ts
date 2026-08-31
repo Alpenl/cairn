@@ -7,6 +7,7 @@ import {
 import {
   buildReaderQuery,
   readerLimit,
+  type ReaderActivityRequestOptions,
   type ReaderEndpointTransport,
 } from './endpoint-helpers'
 import {
@@ -72,7 +73,6 @@ import type {
   TranslationListResponse,
   TranslationResponse,
 } from './types'
-import type { ReaderActivityRequestOptions } from './client'
 
 export async function getLinks(
   transport: ReaderEndpointTransport,
