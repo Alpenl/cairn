@@ -47,7 +47,8 @@ import { restoreFocusWhenReady } from '../../lib/restore-focus'
 import { READER_EVENTS, emitReaderEvent, subscribeReaderEvents } from '../../lib/reader-events'
 import { formatRelativeDate, identityIsCurrent, readerErrorMessage } from '../../lib/reader-surface'
 import { Icon } from '../Icon'
-import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
+import { ListEmptyState, ListStateView } from './ListStateView'
+import { SurfaceShell } from './SurfaceShell'
 import { NoteWorkspaceTabs } from './NoteWorkspaceTabs'
 
 export type ThoughtFilter = 'all' | 'highlighted' | 'with-thought' | 'todo'
@@ -738,6 +739,27 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
     : view === 'history'
       ? '原文或笔记被删除后留下的想法，可以重新挂回到其他内容上'
       : '由服务端不可变 supersession 事件保存的版本'
+  const listLoading = loading && (view === 'superseded' ? supersessions.length === 0 : items.length === 0)
+  const listEmpty = view === 'superseded' ? supersessions.length === 0 : visibleItems.length === 0
+  const listEmptyState = view === 'superseded'
+    ? (
+        <ListEmptyState
+          icon="clock"
+          title="没有被取代版本"
+          description="发生 supersession 后，旧版本会保留在这里。"
+        />
+      )
+    : (
+        <ListEmptyState
+          icon={view === 'live' ? 'marker' : 'clock'}
+          title={view === 'live' ? '没有符合条件的想法' : '没有已归档的想法'}
+          description={view === 'live'
+            ? capabilityPolicy.todos
+              ? '新的高亮、想法和来源 TODO 会出现在这里。'
+              : '新的高亮和想法会出现在这里。'
+            : '原文被删除后，写在上面的想法会留在这里。'}
+        />
+      )
 
   return (
     <SurfaceShell
@@ -763,84 +785,91 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
         </div>
         {view === 'live' && <label className="rvx-field"><span className="rvx-sr-only">筛选想法</span><select aria-label="想法筛选" value={filter} disabled={deletingID !== null} onChange={(event) => setFilter(event.target.value as ThoughtFilter)}>{THOUGHT_FILTERS.filter((option) => option.value !== 'todo' || capabilityPolicy.todos).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>}
       </div>
-      {error && <SurfaceError message={error} onRetry={() => void load()} />}
-      {loading && (view === 'superseded' ? supersessions.length === 0 : items.length === 0) ? <SurfaceLoading /> : view === 'superseded' ? supersessions.length === 0 ? <div className="rvx-empty"><Icon name="clock" size={24} /><h2>没有被取代版本</h2><p>发生 supersession 后，旧版本会保留在这里。</p></div> : (
-        <ul className="rvx-compact-list rvx-history-list">
-          {supersessions.map((event) => {
-            const availability = recoveryAvailability.get(event.eventSequence) ?? 'missing-current-winner'
-            const recoveryState = recoveryStates.get(event.eventSequence) ?? 'not-started'
-            const disabled = availability !== 'ready' || recoveryState === 'recovery-conflict' || recoveringSequence !== null
-            const reason = recoveryState === 'recovery-conflict'
-              ? '恢复候选遇到新的当前版本。请刷新当前想法后重新选择恢复。'
-              : recoveryState === 'blocked'
-                ? '恢复候选已被阻止，请刷新后检查当前版本。'
-              : availability === 'host-tombstoned'
-              ? '宿主已 tombstone，请先手动重挂。'
-              : availability === 'missing-current-winner'
-                ? '等待当前版本同步。'
-                : availability === 'current-winner-deleted'
-                  ? '当前版本已删除。'
-                  : availability === 'target-or-quote-incomplete'
-                    ? '当前版本缺少完整定位。'
-                    : null
-            return <li key={event.eventSequence}>
-              <article className="rvx-history-item">
-                <div className="rvx-history-heading">
-                  <strong>{event.loser.body || '无正文想法'}</strong>
-                  <small>事件 {event.eventSequence}</small>
-                </div>
-                <p className="rvx-muted">来源：{event.loser.hostKind}/{event.loser.hostId}</p>
-                {reason && <p className="rvx-muted">{reason}</p>}
-                <button className="rvx-button primary" type="button" disabled={disabled} onClick={() => void recover(event)}>{recoveringSequence === event.eventSequence ? '恢复中…' : recoveryState === 'recovery-conflict' ? '需刷新后重新恢复' : '恢复此版本'}</button>
-              </article>
-            </li>
-          })}
-        </ul>
-      ) : visibleItems.length === 0 ? <div className="rvx-empty"><Icon name={view === 'live' ? 'marker' : 'clock'} size={24} /><h2>{view === 'live' ? '没有符合条件的想法' : '没有已归档的想法'}</h2><p>{view === 'live' ? capabilityPolicy.todos ? '新的高亮、想法和来源 TODO 会出现在这里。' : '新的高亮和想法会出现在这里。' : '原文被删除后，写在上面的想法会留在这里。'}</p></div> : (
-        <ul className="rvx-compact-list rvx-history-list">
-          {visibleItems.map((thought) => {
-            const focused = view === 'history' && focusedThoughtID === thought.id
-            return (
-            <li key={thought.id}>
-              <article className={`rvx-history-item${focused ? ' is-focused' : ''}`} aria-current={focused ? 'true' : undefined} data-thought-id={thought.id}>
-                <div className="rvx-history-heading">
-                  <label>{capabilityPolicy.notes && <input type="checkbox" checked={selectedThoughtIDs.includes(thought.id)} disabled={saving || creating || deletingID !== null} aria-label={`选择想法 ${thought.id}`} onChange={() => toggleThought(thought.id)} />}<strong>{thought.body || '无正文想法'}</strong></label>
-                  <small>{view === 'history' ? `${lifecycleReasonText(thought.lifecycle_reason)} · ` : ''}{formatRelativeDate(thought.updated_at)}</small>
-                </div>
-                <p className="rvx-muted">出处：{thoughtSource(thought)}{view === 'live' && <>{hasHighlight(thought) ? ' · 高亮' : ''}{thought.body.trim() ? ' · 有想法' : ''}</>}</p>
-                {view === 'live' && (() => {
-                  const target = readerThoughtHostTarget(thought)
-                  return target && readerRouteIsAvailable(target.route, capabilityPolicy)
-                    ? <button className="rvx-button secondary" type="button" disabled={deletingID !== null} onClick={() => navigateToHost(requestNavigation, thought)}><Icon name="arrowright" size={14} />打开出处</button>
-                    : null
-                })()}
-                {view === 'history' && <>
-                  <p className="rvx-muted">冻结目标：{frozenValueText(thought.target) ?? '无'}</p>
-                  <p className="rvx-muted">冻结引用：{frozenValueText(thought.quote) ?? '无'}</p>
-                  <p className="rvx-muted">冻结来源：{thought.source || '无'}</p>
-                  <p className="rvx-muted">冻结原文：{frozenValueText((thought as ThoughtHistoryItem).original_host_snapshot) ?? '无'}</p>
-                  <button className="rvx-link-button" type="button" disabled={creating || deletingID !== null} onClick={() => setReattachID((current) => current === thought.id ? null : thought.id)}>手动重挂</button>
-                </>}
-                {view === 'history' && reattachID === thought.id && <div className="rvx-history-reattach"><select value={targetKind} onChange={(event) => setTargetKind(event.target.value as typeof targetKind)} aria-label="目标类型"><option value="link">链接</option>{capabilityPolicy.notes && <option value="note">笔记</option>}{capabilityPolicy.inbox && <option value="inbox">收件箱</option>}</select><input value={targetID} onChange={(event) => setTargetID(event.target.value)} placeholder="目标 ID" aria-label="目标 ID" /><input type="number" min="1" step="1" value={targetRevision} onChange={(event) => setTargetRevision(event.target.value)} placeholder="目标版本号" aria-label="目标版本号" /><button className="rvx-button primary" type="button" disabled={saving || creating || deletingID !== null || !targetID.trim() || !targetRevision.trim()} onClick={() => void reattach(thought)}>重挂</button></div>}
-                <button
-                  ref={(button) => {
-                    if (button) deleteButtonRefs.current.set(thought.id, button)
-                    else deleteButtonRefs.current.delete(thought.id)
-                  }}
-                  className="rvx-link-button danger"
-                  type="button"
-                  disabled={creating || saving || deletingID !== null}
-                  aria-busy={deletingID === thought.id ? 'true' : undefined}
-                  aria-label={`${deletingID === thought.id ? '正在删除想法' : '删除想法'} ${thought.id}`}
-                  title="删除想法"
-                  onClick={() => void deleteThought(thought)}
-                ><span aria-hidden="true"><Icon name={deletingID === thought.id ? 'loader' : 'trash'} size={14} /></span>{deletingID === thought.id ? '删除中…' : '删除'}</button>
-              </article>
-            </li>
-            )
-          })}
-        </ul>
-      )}
+      <ListStateView
+        loading={listLoading}
+        error={error}
+        empty={listEmpty}
+        emptyState={listEmptyState}
+        onRetry={() => void load()}
+      >
+        {view === 'superseded' ? (
+          <ul className="rvx-compact-list rvx-history-list">
+            {supersessions.map((event) => {
+              const availability = recoveryAvailability.get(event.eventSequence) ?? 'missing-current-winner'
+              const recoveryState = recoveryStates.get(event.eventSequence) ?? 'not-started'
+              const disabled = availability !== 'ready' || recoveryState === 'recovery-conflict' || recoveringSequence !== null
+              const reason = recoveryState === 'recovery-conflict'
+                ? '恢复候选遇到新的当前版本。请刷新当前想法后重新选择恢复。'
+                : recoveryState === 'blocked'
+                  ? '恢复候选已被阻止，请刷新后检查当前版本。'
+                : availability === 'host-tombstoned'
+                ? '宿主已 tombstone，请先手动重挂。'
+                : availability === 'missing-current-winner'
+                  ? '等待当前版本同步。'
+                  : availability === 'current-winner-deleted'
+                    ? '当前版本已删除。'
+                    : availability === 'target-or-quote-incomplete'
+                      ? '当前版本缺少完整定位。'
+                      : null
+              return <li key={event.eventSequence}>
+                <article className="rvx-history-item">
+                  <div className="rvx-history-heading">
+                    <strong>{event.loser.body || '无正文想法'}</strong>
+                    <small>事件 {event.eventSequence}</small>
+                  </div>
+                  <p className="rvx-muted">来源：{event.loser.hostKind}/{event.loser.hostId}</p>
+                  {reason && <p className="rvx-muted">{reason}</p>}
+                  <button className="rvx-button primary" type="button" disabled={disabled} onClick={() => void recover(event)}>{recoveringSequence === event.eventSequence ? '恢复中…' : recoveryState === 'recovery-conflict' ? '需刷新后重新恢复' : '恢复此版本'}</button>
+                </article>
+              </li>
+            })}
+          </ul>
+        ) : (
+          <ul className="rvx-compact-list rvx-history-list">
+            {visibleItems.map((thought) => {
+              const focused = view === 'history' && focusedThoughtID === thought.id
+              return (
+              <li key={thought.id}>
+                <article className={`rvx-history-item${focused ? ' is-focused' : ''}`} aria-current={focused ? 'true' : undefined} data-thought-id={thought.id}>
+                  <div className="rvx-history-heading">
+                    <label>{capabilityPolicy.notes && <input type="checkbox" checked={selectedThoughtIDs.includes(thought.id)} disabled={saving || creating || deletingID !== null} aria-label={`选择想法 ${thought.id}`} onChange={() => toggleThought(thought.id)} />}<strong>{thought.body || '无正文想法'}</strong></label>
+                    <small>{view === 'history' ? `${lifecycleReasonText(thought.lifecycle_reason)} · ` : ''}{formatRelativeDate(thought.updated_at)}</small>
+                  </div>
+                  <p className="rvx-muted">出处：{thoughtSource(thought)}{view === 'live' && <>{hasHighlight(thought) ? ' · 高亮' : ''}{thought.body.trim() ? ' · 有想法' : ''}</>}</p>
+                  {view === 'live' && (() => {
+                    const target = readerThoughtHostTarget(thought)
+                    return target && readerRouteIsAvailable(target.route, capabilityPolicy)
+                      ? <button className="rvx-button secondary" type="button" disabled={deletingID !== null} onClick={() => navigateToHost(requestNavigation, thought)}><Icon name="arrowright" size={14} />打开出处</button>
+                      : null
+                  })()}
+                  {view === 'history' && <>
+                    <p className="rvx-muted">冻结目标：{frozenValueText(thought.target) ?? '无'}</p>
+                    <p className="rvx-muted">冻结引用：{frozenValueText(thought.quote) ?? '无'}</p>
+                    <p className="rvx-muted">冻结来源：{thought.source || '无'}</p>
+                    <p className="rvx-muted">冻结原文：{frozenValueText((thought as ThoughtHistoryItem).original_host_snapshot) ?? '无'}</p>
+                    <button className="rvx-link-button" type="button" disabled={creating || deletingID !== null} onClick={() => setReattachID((current) => current === thought.id ? null : thought.id)}>手动重挂</button>
+                  </>}
+                  {view === 'history' && reattachID === thought.id && <div className="rvx-history-reattach"><select value={targetKind} onChange={(event) => setTargetKind(event.target.value as typeof targetKind)} aria-label="目标类型"><option value="link">链接</option>{capabilityPolicy.notes && <option value="note">笔记</option>}{capabilityPolicy.inbox && <option value="inbox">收件箱</option>}</select><input value={targetID} onChange={(event) => setTargetID(event.target.value)} placeholder="目标 ID" aria-label="目标 ID" /><input type="number" min="1" step="1" value={targetRevision} onChange={(event) => setTargetRevision(event.target.value)} placeholder="目标版本号" aria-label="目标版本号" /><button className="rvx-button primary" type="button" disabled={saving || creating || deletingID !== null || !targetID.trim() || !targetRevision.trim()} onClick={() => void reattach(thought)}>重挂</button></div>}
+                  <button
+                    ref={(button) => {
+                      if (button) deleteButtonRefs.current.set(thought.id, button)
+                      else deleteButtonRefs.current.delete(thought.id)
+                    }}
+                    className="rvx-link-button danger"
+                    type="button"
+                    disabled={creating || saving || deletingID !== null}
+                    aria-busy={deletingID === thought.id ? 'true' : undefined}
+                    aria-label={`${deletingID === thought.id ? '正在删除想法' : '删除想法'} ${thought.id}`}
+                    title="删除想法"
+                    onClick={() => void deleteThought(thought)}
+                  ><span aria-hidden="true"><Icon name={deletingID === thought.id ? 'loader' : 'trash'} size={14} /></span>{deletingID === thought.id ? '删除中…' : '删除'}</button>
+                </article>
+              </li>
+              )
+            })}
+          </ul>
+        )}
+      </ListStateView>
       {nextCursor && <button className="rvx-load-more" type="button" disabled={loadingMore || saving || creating || deletingID !== null} onClick={loadMore}>{loadingMore ? '加载中…' : '更多'}</button>}
     </SurfaceShell>
   )

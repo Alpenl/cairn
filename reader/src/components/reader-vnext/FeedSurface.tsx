@@ -18,7 +18,8 @@ import {
 } from '../../lib/reader-surface'
 import { Icon } from '../Icon'
 import { ReaderListRow } from '../ui/ReaderListRow'
-import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
+import { ListEmptyState, ListStateView } from './ListStateView'
+import { SurfaceShell } from './SurfaceShell'
 
 export interface FeedSurfaceProps {
   readonly client: IdentityBoundReaderClient
@@ -851,15 +852,28 @@ export function FeedSurface({
   const feedBody = (
       <div className="rvx-home-columns">
         <div>
-          {loading && items.length === 0 ? <SurfaceLoading /> : error && items.length === 0 ? (
-            <SurfaceError message={error} onRetry={retry} />
-          ) : items.length === 0 ? (
-            <div className="rvx-empty"><Icon name="layers" size={24} /><h2>Feed 暂时为空</h2><p>新的收件箱条目、阅读记录或订阅条目会出现在这里。</p></div>
-          ) : visibleItems.length === 0 ? (
-            <div className="rvx-empty"><Icon name="layers" size={24} /><h2>没有符合筛选的内容</h2><p>打开右侧的来源开关，继续浏览混合 Feed。</p></div>
-          ) : (
+          <ListStateView
+            loading={loading && items.length === 0}
+            error={items.length === 0 || visibleItems.length > 0 ? error : null}
+            empty={items.length === 0 || visibleItems.length === 0}
+            emptyState={items.length === 0
+              ? (
+                  <ListEmptyState
+                    icon="layers"
+                    title="Feed 暂时为空"
+                    description="新的收件箱条目、阅读记录或订阅条目会出现在这里。"
+                  />
+                )
+              : (
+                  <ListEmptyState
+                    icon="layers"
+                    title="没有符合筛选的内容"
+                    description="打开右侧的来源开关，继续浏览混合 Feed。"
+                  />
+                )}
+            onRetry={retry}
+          >
             <>
-              {error && <SurfaceError message={error} onRetry={retry} />}
               <div className="rvx-feed-meta">
                 <span>{mode === 'recommended' ? '按推荐顺序' : '按时间倒序'} · 已加载 {visibleItems.length} 条</span>
               </div>
@@ -867,7 +881,7 @@ export function FeedSurface({
               <ul className="rvx-feed-list">{visibleItems.map(renderFeedItem)}</ul>
               {nextCursor && <button className="rvx-load-more" type="button" disabled={loadingMore} onClick={loadMore}>{loadingMore ? '加载中' : '加载更多'}</button>}
             </>
-          )}
+          </ListStateView>
         </div>
         {variant === 'surface' && <aside className="rvx-section" aria-label="Feed 辅助栏">
           {policy.todos && <section className="rvx-editor" aria-labelledby="feed-todos">

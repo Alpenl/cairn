@@ -100,6 +100,11 @@ export function SurfaceError({ message, onRetry }: { readonly message: string; r
   )
 }
 
-export function SurfaceLoading() {
-  return <div className="rvx-message" aria-busy="true"><Icon name="loader" size={18} /><span>加载中</span></div>
+export function SurfaceLoading({ label = '加载中' }: { readonly label?: string } = {}) {
+  return (
+    <div className="rvx-message" role="status" aria-label={label} aria-busy="true">
+      <Icon name="loader" size={18} />
+      <span>{label}</span>
+    </div>
+  )
 }

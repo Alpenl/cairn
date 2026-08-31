@@ -18,7 +18,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Icon, type IconName } from '../Icon'
-import { SurfaceShell, SurfaceLoading } from './SurfaceShell'
+import { ListEmptyState, ListErrorState, ListStateView } from './ListStateView'
+import { SurfaceShell } from './SurfaceShell'
 import { ReaderListRow } from '../ui/ReaderListRow'
 import { useExclusiveAction } from '../../hooks/useExclusiveAction'
 import { useSurfaceRequestGate } from '../../hooks/useSurfaceRequestGate'
@@ -208,22 +209,22 @@ export function TrashSurface({ client, onNavigate, capabilityPolicy, onToast }: 
         </div>
       }
     >
-      {error ? (
-        <div className="rvx-empty">
-          <Icon name="alert" size={24} />
-          <h2>无法读取回收站</h2>
-          <p>{error}</p>
-          <button className="rvx-button secondary" type="button" onClick={() => void load(false)}>重试</button>
-        </div>
-      ) : loading && items.length === 0 ? (
-        <SurfaceLoading />
-      ) : items.length === 0 ? (
-        <div className="rvx-empty">
-          <Icon name="trash" size={24} />
-          <h2>回收站为空</h2>
-          <p>删除的链接、收件箱条目和笔记都会先留在这里，直到你永久清除它。</p>
-        </div>
-      ) : (
+      <ListStateView
+        loading={loading && items.length === 0}
+        error={error}
+        empty={items.length === 0}
+        emptyState={(
+          <ListEmptyState
+            icon="trash"
+            title="回收站为空"
+            description="删除的链接、收件箱条目和笔记都会先留在这里，直到你永久清除它。"
+          />
+        )}
+        emptyErrorState={error
+          ? <ListErrorState title="无法读取回收站" message={error} onRetry={() => void load(false)} />
+          : undefined}
+        onRetry={() => void load(false)}
+      >
         <>
           <ul className="rvx-trash-list">
             {items.map((item) => {
@@ -275,11 +276,11 @@ export function TrashSurface({ client, onNavigate, capabilityPolicy, onToast }: 
               disabled={loading}
               onClick={() => void load(true, cursor)}
             >
-              更多
-            </button>
+            更多
+          </button>
           )}
         </>
-      )}
+      </ListStateView>
     </SurfaceShell>
   )
 }
