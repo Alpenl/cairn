@@ -13,7 +13,7 @@ describe('getManifest', () => {
     process.env.BROWSER = 'chrome'
     const manifest = await getManifest()
 
-    // 不接管新标签页：那是上游 NaiveTab 的形态，删掉 full profile 后不该再回来。
+    // 不接管新标签页：那是上游 NaiveTab 的形态，删掉 full build 后不该再回来。
     expect(manifest.chrome_url_overrides).toBeUndefined()
     expect(manifest.content_scripts).toEqual([
       expect.objectContaining({

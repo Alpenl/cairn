@@ -47,7 +47,7 @@ async function createCaptureOutput() {
     'dist/options/index.html',
     '<title>WebTag Settings</title><script type="module" src="/dist/assets/options.capture-test.js"></script>',
   )
-  await write(root, 'dist/background/index.mjs', 'const profile="capture"')
+  await write(root, 'dist/background/index.mjs', 'const capture=true')
   await write(root, 'dist/contentScripts/rss.global.js', 'const rss=true')
   await write(root, 'dist/assets/popup.capture-test.js', 'const capture=true')
   await write(root, 'dist/assets/options.capture-test.js', 'const capture=true')
@@ -69,7 +69,6 @@ describe('verifyBuildOutput', () => {
 
     const report = await verifyBuildOutput(root)
 
-    expect(report.profile).toBe('capture')
     expect(report.largestOwnChunk).not.toBeNull()
   })
 

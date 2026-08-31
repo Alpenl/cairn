@@ -1,19 +1,12 @@
 /// <reference types="vitest" />
 
-import { basename, dirname, resolve } from 'node:path'
-import { defineConfig, type UserConfig, type PluginOption } from 'vite'
+import { basename, dirname } from 'node:path'
+import { defineConfig, type UserConfig } from 'vite'
 import Vue from '@vitejs/plugin-vue'
-import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
-import Icons from 'unplugin-icons/vite'
-import IconsResolver from 'unplugin-icons/resolver'
-import AutoImport from 'unplugin-auto-import/vite'
-import Components from 'unplugin-vue-components/vite'
-import { NaiveUiResolver } from 'unplugin-vue-components/resolvers'
-import postcssPresetEnv from 'postcss-preset-env'
 import { isDev, port, r, BROWSER_DIR } from './scripts/utils'
 import packageJson from './package.json'
 import {
-  buildProfile,
+  webViewEntries,
   getWebViews,
   type WebView,
 } from './scripts/build-profile'
@@ -30,39 +23,16 @@ export const sharedConfig: UserConfig = {
     __DEV__: isDev,
     __NAME__: JSON.stringify(packageJson.name),
   },
-  css: {
-    postcss: {
-      plugins: [
-        postcssPresetEnv({ stage: 3, features: { 'nesting-rules': true } }),
-      ],
-    },
-  },
   plugins: [
     Vue(),
-    VueI18nPlugin({
-      include: resolve(__dirname, './src/locales/**'),
-    }),
-    AutoImport({
-      imports: ['vue', { 'webextension-polyfill': [['*', 'browser']] }],
-      dts: r('src/auto-imports.d.ts'),
-    }),
-    // https://github.com/antfu/unplugin-vue-components
-    // 只保留按需解析：Naive UI 组件与图标。本地组件目录已随上游新标签页一起
-    // 删除，采集页面用到的三个组件都是显式 import。
-    Components({
-      dirs: [],
-      dts: r('src/components.d.ts'),
-      resolvers: [IconsResolver({ prefix: '' }), NaiveUiResolver()],
-    }),
-    Icons(), // https://github.com/antfu/unplugin-icons
 
     {
-      name: 'extension-profile-entry',
+      name: 'extension-entry',
       transformIndexHtml: {
         order: 'pre',
         handler(html, context) {
           const view = basename(dirname(context.filename)) as WebView
-          const entry = buildProfile.entries[view]
+          const entry = webViewEntries[view]
           if (!entry) return html
 
           return html.replace('./main.ts', `../${entry}`)
@@ -88,7 +58,7 @@ export const sharedConfig: UserConfig = {
     },
   ],
   optimizeDeps: {
-    include: ['vue', 'webextension-polyfill', 'naive-ui', 'vue-i18n'],
+    include: ['vue', 'naive-ui', 'vue-i18n'],
   },
 }
 
@@ -117,26 +87,23 @@ export default defineConfig(({ command }) => ({
     rollupOptions: {
       input: {
         ...Object.fromEntries(
-          getWebViews(buildProfile).map((view) => [
-            view,
-            r(`src/${view}/index.html`),
-          ]),
+          getWebViews().map((view) => [view, r(`src/${view}/index.html`)]),
         ),
       },
       output: {
         entryFileNames(chunk) {
           const view = chunk.name as WebView
-          const profileEntry = buildProfile.entries[view]
-          if (!profileEntry) return 'assets/[name]-[hash].js'
+          const declaredEntry = webViewEntries[view]
+          if (!declaredEntry) return 'assets/[name]-[hash].js'
           // 页面 chunk 必须真的包含它声明的入口模块。历史上 popup/options 的
           // HTML 曾在改入口后仍指向旧 main.ts，产物照常构建、装上才发现是空壳。
-          const expectedEntry = r(`src/${profileEntry}`)
+          const expectedEntry = r(`src/${declaredEntry}`)
           const hasExpectedEntry = chunk.moduleIds.some(
             (id) => id.split('?')[0] === expectedEntry,
           )
           if (!hasExpectedEntry) {
             throw new Error(
-              `${view} chunk does not contain its capture entry: ${profileEntry}`,
+              `${view} chunk does not contain its capture entry: ${declaredEntry}`,
             )
           }
           return 'assets/[name].capture-[hash].js'
@@ -149,11 +116,6 @@ export default defineConfig(({ command }) => ({
             }
             // 其余第三方依赖统一归入一个 vendor chunk
             return 'vendor-libs'
-          }
-
-          // 业务代码统一归入 main chunk，避免碎片化
-          if (['~icon'].some((pkg) => id.includes(pkg))) {
-            return 'main'
           }
         },
       },

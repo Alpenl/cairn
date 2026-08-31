@@ -1,7 +1,6 @@
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { resolve, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildProfile } from './build-profile'
 import { assertLegalFilesInDirectory } from './release-artifacts'
 
 interface ManifestLike {
@@ -15,7 +14,6 @@ interface ManifestLike {
 }
 
 export interface BuildOutputReport {
-  profile: string
   totalBytes: number
   fileCount: number
   largestOwnChunk: { path: string; bytes: number } | null
@@ -188,7 +186,6 @@ export async function verifyBuildOutput(
     .sort((a, b) => b.bytes - a.bytes)
 
   return {
-    profile: buildProfile.name,
     totalBytes: sizes.reduce((total, file) => total + file.bytes, 0),
     fileCount: files.length,
     largestOwnChunk: ownChunks[0] ?? null,

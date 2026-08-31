@@ -30,6 +30,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@iconify/vue'
+import { NButton, NInput, NRadioButton, NRadioGroup } from 'naive-ui'
 import { useCaptureBridge } from '@/popup/composables/useCaptureBridge'
 import { isForbiddenUrl } from '@/env'
 import type {
@@ -455,16 +456,16 @@ onMounted(async () => {
     transition:
       background-color var(--transition-fast, 0.15s),
       color var(--transition-fast, 0.15s);
+  }
 
-    &:hover {
-      color: var(--n-text-color-1);
-      background-color: var(--gray-alpha-100, rgba(128, 128, 128, 0.08));
-    }
+  .capture-form__settings-btn:hover {
+    color: var(--n-text-color-1);
+    background-color: var(--gray-alpha-100, rgba(128, 128, 128, 0.08));
+  }
 
-    &:focus-visible {
-      outline: 2px solid var(--gray-alpha-35, rgba(128, 128, 128, 0.35));
-      outline-offset: -2px;
-    }
+  .capture-form__settings-btn:focus-visible {
+    outline: 2px solid var(--gray-alpha-35, rgba(128, 128, 128, 0.35));
+    outline-offset: -2px;
   }
 
   .capture-form__settings-icon {

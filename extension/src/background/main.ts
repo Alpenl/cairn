@@ -7,8 +7,8 @@
  * - 采集状态轮询 / 恢复
  * - 首次安装打开设置页
  *
- * NaiveTab 的快捷键、Port 与 content script 接线位于 main.full.ts，capture
- * profile 不会导入它们。
+ * NaiveTab 的快捷键、Port 与旧 content script 接线已随 full build 删除，
+ * 当前 background 入口不再导入它们。
  */
 import { createCaptureController } from './captureHandler'
 import { createCaptureDeps, setupCaptureMessaging } from './capture-messaging'

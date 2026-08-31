@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import JSZip from 'jszip'
+import { packageInstallArchive } from '../scripts/package-install'
 import {
   assertZipMembersEqual,
   authoritativeLegalFiles,
   EXTENSION_ROOT,
+  readZipFiles,
 } from '../scripts/release-artifacts'
 import { verifyInstallArchive } from '../scripts/verify-install-archives'
 
@@ -89,5 +91,27 @@ describe('assertZipMembersEqual', () => {
     await expect(assertZipMembersEqual(official, rebuilt)).rejects.toThrow(
       'changed: manifest.json',
     )
+  })
+})
+
+describe('packageInstallArchive', () => {
+  it('从浏览器构建目录内容创建根级 ZIP，并忽略 .DS_Store', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'webtag-package-install-'))
+    roots.push(root)
+    const input = resolve(root, 'extension-firefox')
+    const output = resolve(root, 'artifact.zip')
+    await mkdir(resolve(input, 'assets'), { recursive: true })
+    await writeFile(resolve(input, 'manifest.json'), '{}')
+    await writeFile(resolve(input, 'LICENSE'), 'license')
+    await writeFile(resolve(input, '.DS_Store'), 'noise')
+    await writeFile(resolve(input, 'assets/icon.png'), 'icon')
+
+    await packageInstallArchive(input, output)
+
+    expect([...(await readZipFiles(output)).keys()]).toEqual([
+      'assets/icon.png',
+      'LICENSE',
+      'manifest.json',
+    ])
   })
 })
