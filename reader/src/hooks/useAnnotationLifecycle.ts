@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import {
+  commitTargetAnnotationCommand,
+  loadAnnotationTargets,
+  type AnnotationLifecycleExtraResult,
+  type AnnotationLifecycleReadContext,
+  type AnnotationMutationCommittedResult,
+  type AnnotationMutationResult,
+} from '../lib/annotation-commands'
 import type { Annotation } from '../lib/annotations'
 import type { IdentityLease } from '../lib/identity'
 import {
-  emitReaderEvent,
   READER_EVENTS,
   subscribeReaderEvents,
   type ReaderEventName,
 } from '../lib/reader-events'
 import {
   compactAnnotationOperations,
-  commitAnnotationOperation,
-  readAnnotationSnapshot,
-  type AnnotationCommitResult,
   type AnnotationOperationInput,
-  type AnnotationSnapshot,
   type AnnotationTarget,
 } from '../lib/user-data/annotation-store'
 import { annotationTargetKey } from '../lib/user-data/annotation-types'
@@ -28,18 +31,6 @@ export interface AnnotationLifecycleState<TExtra> {
   readonly annotationStoreVersion: number
   readonly extra: TExtra
 }
-
-export interface AnnotationLifecycleReadContext {
-  readonly lease: IdentityLease
-  readonly linkId: string
-  readonly targets: readonly AnnotationTarget[]
-  readonly annotations: readonly Annotation[]
-  readonly annotationStoreVersion: number
-}
-
-export type AnnotationLifecycleExtraResult<TExtra> =
-  | { readonly ok: true; readonly value: TExtra }
-  | { readonly ok: false }
 
 export interface UseAnnotationLifecycleOptions<TExtra> {
   readonly identityKey: string
@@ -65,17 +56,6 @@ export interface UseAnnotationLifecycleResult<TExtra> {
   ) => void
 }
 
-export type AnnotationMutationCommittedResult = {
-  readonly status: 'committed' | 'duplicate'
-  readonly annotationId: string
-  readonly sequence: number
-  readonly annotationStoreVersion: number
-}
-
-export type AnnotationMutationResult =
-  | AnnotationMutationCommittedResult
-  | { readonly status: 'stale' | 'failed' | 'op-id-conflict' }
-
 export interface CommitAnnotationMutationInput {
   readonly lease: IdentityLease | null
   readonly linkId: string | null
@@ -94,6 +74,15 @@ const DEFAULT_LIFECYCLE_EVENTS: readonly ReaderEventName[] = Object.freeze([
 ])
 const pendingCompactions = new Map<string, Promise<unknown>>()
 
+export {
+  combineAnnotationSignals,
+  randomAnnotationToken,
+  type AnnotationLifecycleExtraResult,
+  type AnnotationLifecycleReadContext,
+  type AnnotationMutationCommittedResult,
+  type AnnotationMutationResult,
+} from '../lib/annotation-commands'
+
 function targetIdentity(target: AnnotationTarget): string {
   return annotationTargetKey(target) ?? 'invalid'
 }
@@ -104,50 +93,6 @@ function compactionKey(
   target: AnnotationTarget,
 ): string {
   return `${lease.context.localEpoch}\0${lease.context.physicalNamespace}\0${linkId}\0${targetIdentity(target)}`
-}
-
-function mergeSnapshots(
-  snapshots: readonly AnnotationSnapshot[],
-): { readonly annotations: readonly Annotation[]; readonly version: number } {
-  const annotations = snapshots
-    .flatMap((snapshot) => snapshot.annotations)
-    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
-  return {
-    annotations: annotations.length === 0 ? EMPTY_ANNOTATIONS : annotations,
-    version: snapshots.reduce(
-      (current, snapshot) => Math.max(current, snapshot.annotationStoreVersion),
-      0,
-    ),
-  }
-}
-
-export function randomAnnotationToken(): string | null {
-  try {
-    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
-    const bytes = new Uint8Array(16)
-    crypto.getRandomValues(bytes)
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
-  } catch {
-    return null
-  }
-}
-
-export function combineAnnotationSignals(signals: readonly AbortSignal[]): {
-  readonly signal: AbortSignal
-  readonly dispose: () => void
-} {
-  const controller = new AbortController()
-  const abort = () => controller.abort()
-  for (const signal of signals) {
-    signal.addEventListener('abort', abort, { once: true })
-    if (signal.aborted) controller.abort()
-  }
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      for (const signal of signals) signal.removeEventListener('abort', abort)
-    },
-  }
 }
 
 export function scheduleAnnotationCompaction(
@@ -163,19 +108,6 @@ export function scheduleAnnotationCompaction(
   pendingCompactions.set(key, task)
 }
 
-export function annotationMutationResult(
-  result: AnnotationCommitResult,
-  annotationId: string,
-): AnnotationMutationResult {
-  if (result.status === 'op-id-conflict') return { status: result.status }
-  return {
-    status: result.status,
-    annotationId,
-    sequence: result.sequence,
-    annotationStoreVersion: result.annotationStoreVersion,
-  }
-}
-
 export async function commitAnnotationMutation({
   lease,
   linkId,
@@ -186,16 +118,17 @@ export async function commitAnnotationMutation({
   refresh,
   afterCommit,
 }: CommitAnnotationMutationInput): Promise<AnnotationMutationResult> {
-  if (!lease || !linkId || signal.aborted) return { status: 'stale' }
-  const result = await commitAnnotationOperation(lease, operation, { signal })
-  if (!result.ok) return signal.aborted ? { status: 'stale' } : { status: 'failed' }
-  const outcome = annotationMutationResult(result.value, annotationId)
-  if (outcome.status !== 'committed' && outcome.status !== 'duplicate') return outcome
-  await refresh()
-  afterCommit?.(outcome)
-  emitReaderEvent(READER_EVENTS.annotationsChanged)
-  scheduleAnnotationCompaction(lease, linkId, target)
-  return outcome
+  return commitTargetAnnotationCommand({
+    lease,
+    linkId,
+    target,
+    operation,
+    annotationId,
+    signal,
+    refresh,
+    afterCommit,
+    scheduleCompaction: scheduleAnnotationCompaction,
+  })
 }
 
 export function useAbortableAnnotationGeneration(key: string): AbortSignal {
@@ -261,34 +194,20 @@ export function useAnnotationLifecycle<TExtra>({
           annotationStoreVersion: 0,
           extra: emptyExtra,
         })
-    const results = await Promise.all(
-      targets.map((target) => readAnnotationSnapshot(lease, linkId, target)),
-    )
-    if (signal.aborted) return false
-    if (results.some((result) => !result.ok)) {
-      setState((current) => current.identityKey === identityKey
-        ? { ...current, status: 'error' }
-        : {
-            identityKey,
-            status: 'error',
-            annotations: EMPTY_ANNOTATIONS,
-            annotationStoreVersion: 0,
-            extra: emptyExtra,
-          })
-      return false
+    const result = await loadAnnotationTargets({
+      lease,
+      linkId,
+      targets,
+      signal,
+      emptyExtra,
+      readExtra,
+    })
+    if (result.status === 'stale') return false
+    if (result.status === 'empty') {
+      readyEmpty()
+      return true
     }
-    const merged = mergeSnapshots(results.flatMap((result) => result.ok ? [result.value] : []))
-    const extraResult = readExtra
-      ? await readExtra({
-          lease,
-          linkId,
-          targets,
-          annotations: merged.annotations,
-          annotationStoreVersion: merged.version,
-        })
-      : { ok: true as const, value: emptyExtra }
-    if (signal.aborted) return false
-    if (!extraResult.ok) {
+    if (result.status === 'failed') {
       setState((current) => current.identityKey === identityKey
         ? { ...current, status: 'error' }
         : {
@@ -303,9 +222,9 @@ export function useAnnotationLifecycle<TExtra>({
     setState({
       identityKey,
       status: 'ready',
-      annotations: merged.annotations,
-      annotationStoreVersion: merged.version,
-      extra: extraResult.value,
+      annotations: result.annotations,
+      annotationStoreVersion: result.annotationStoreVersion,
+      extra: result.extra,
     })
     return true
   }, [emptyExtra, identityKey, lease, linkId, readExtra, setState, signal, targets])

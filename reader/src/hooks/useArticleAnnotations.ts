@@ -2,6 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Annotation, AnnotationInput, AnnotationPatch } from '../lib/annotations'
 import {
+  annotationCommandTargetForBlock,
+  combineAnnotationSignals,
+  commitTargetAnnotationCommand,
+  createAnnotationDeleteCommand,
+  createAnnotationSelectionCommit,
+  createAnnotationUpdateCommand,
+  type AnnotationCommandResult,
+} from '../lib/annotation-commands'
+import {
   AnnotationDocumentChannel,
   type AnnotationChangeHintInput,
 } from '../lib/article/document-channel'
@@ -24,10 +33,10 @@ import {
   commitAnnotationOperation,
   listAnnotatedLinks,
   readAnnotationSnapshot,
+  type AnnotationOperationInput,
   type AnnotationTarget,
 } from '../lib/user-data/annotation-store'
 import {
-  cloneTargetAnnotation,
   isSavedContentAnnotationBlockKey,
 } from '../lib/user-data/annotation-codec'
 import {
@@ -36,9 +45,6 @@ import {
   type SavedContentAnnotationBlockKey,
 } from '../lib/user-data/annotation-types'
 import {
-  combineAnnotationSignals,
-  commitAnnotationMutation,
-  randomAnnotationToken,
   scheduleAnnotationCompaction,
   useAbortableAnnotationGeneration,
   useAnnotationLifecycle,
@@ -70,16 +76,7 @@ interface ArticleAnnotationLifecycleExtra {
   readonly historicalAnnotations: readonly HistoricalArticleAnnotation[]
 }
 
-type ArticleAnnotationCommittedResult = {
-  readonly status: 'committed' | 'duplicate'
-  readonly annotationId: string
-  readonly sequence: number
-  readonly annotationStoreVersion: number
-}
-
-export type ArticleAnnotationCommandResult =
-  | ArticleAnnotationCommittedResult
-  | { readonly status: 'stale' | 'failed' | 'unsupported' | 'op-id-conflict' }
+export type ArticleAnnotationCommandResult = AnnotationCommandResult
 
 export type ArticleAnnotationReference = Readonly<Annotation>
 
@@ -143,16 +140,6 @@ function safeSourceBlockKey(sourceBlock: SourceBlockId | null): string | null {
 
 function targetIdentity(target: AnnotationTarget | null): string {
   return target ? annotationTargetKey(target) ?? 'invalid' : 'none'
-}
-
-function targetForBlock(
-  blockKey: string,
-  saved: AnnotationTarget | null,
-  summary: AnnotationTarget | null,
-): AnnotationTarget | null {
-  if (isSavedContentAnnotationBlockKey(blockKey)) return saved
-  if (blockKey === 'summary') return summary
-  return null
 }
 
 type HistoricalTargetInfo = {
@@ -525,7 +512,7 @@ export function useArticleAnnotations(
   }, [identityKey, lease, linkId, refresh, saved, stateRef, summary])
 
   const commit = useCallback(async (
-    operation: Parameters<typeof commitAnnotationMutation>[0]['operation'],
+    operation: AnnotationOperationInput,
     target: AnnotationTarget,
     annotationId: string,
     options: ArticleAnnotationCommandOptions | undefined,
@@ -545,7 +532,7 @@ export function useArticleAnnotations(
     const cancellation = combineAnnotationSignals(signals)
     const publicationChannel = channelRef.current
     try {
-      return await commitAnnotationMutation({
+      return await commitTargetAnnotationCommand({
         lease,
         linkId,
         target,
@@ -563,6 +550,7 @@ export function useArticleAnnotations(
           }
           publicationChannel?.publish(hint)
         },
+        scheduleCompaction: scheduleAnnotationCompaction,
       })
     } finally {
       cancellation.dispose()
@@ -580,46 +568,15 @@ export function useArticleAnnotations(
     input: AnnotationInput,
     options?: ArticleAnnotationCommandOptions,
   ): Promise<ArticleAnnotationCommandResult> => {
-    const target = targetForBlock(input.blockKey, saved, summary)
-    const annotationToken = randomAnnotationToken()
-    const operationToken = randomAnnotationToken()
+    const target = annotationCommandTargetForBlock(input.blockKey, { saved, summary })
     if (!target) return { status: 'unsupported' }
-    if (!annotationToken || !operationToken) return { status: 'failed' }
-    const now = Date.now()
-    const annotationId = `an:${annotationToken}`
-    const draft = {
-      id: annotationId,
-      note: input.note ?? '',
-      source: input.source ?? 'self',
-      createdAt: now,
-      updatedAt: now,
-      start: input.start,
-      end: input.end,
-      text: input.text,
-      ...(input.quote === undefined ? {} : { quote: input.quote }),
-    }
-    if (target.kind === 'saved-content') {
-      return commit({
-        kind: 'add',
-        opId: `op:${operationToken}`,
-        linkId: linkId ?? '',
-        target,
-        draft: {
-          ...draft,
-          blockKey: input.blockKey as SavedContentAnnotationBlockKey,
-        },
-      }, target, annotationId, options)
-    }
-    if (target.kind === 'summary') {
-      return commit({
-        kind: 'add',
-        opId: `op:${operationToken}`,
-        linkId: linkId ?? '',
-        target,
-        draft,
-      }, target, annotationId, options)
-    }
-    return { status: 'unsupported' }
+    const built = createAnnotationSelectionCommit({
+      linkId,
+      target,
+      selection: input,
+    })
+    if (!built.ok) return { status: built.status }
+    return commit(built.operation, target, built.annotationId, options)
   }, [commit, linkId, saved, summary])
 
   const update = useCallback(async (
@@ -627,37 +584,31 @@ export function useArticleAnnotations(
     patch: AnnotationPatch,
     options?: ArticleAnnotationCommandOptions,
   ): Promise<ArticleAnnotationCommandResult> => {
-    const target = targetForBlock(annotation.blockKey, saved, summary)
-    const operationToken = randomAnnotationToken()
+    const target = annotationCommandTargetForBlock(annotation.blockKey, { saved, summary })
     if (!target) return { status: 'unsupported' }
-    if (!cloneTargetAnnotation(annotation, target)) return { status: 'stale' }
-    if (!operationToken) return { status: 'failed' }
-    return commit({
-      kind: 'update',
-      opId: `op:${operationToken}`,
-      linkId: linkId ?? '',
+    const built = createAnnotationUpdateCommand({
+      linkId,
       target,
-      annotationId: annotation.id,
-      patch: { ...patch, updatedAt: Date.now() },
-    }, target, annotation.id, options)
+      annotation,
+      patch,
+    })
+    if (!built.ok) return { status: built.status }
+    return commit(built.operation, target, built.annotationId, options)
   }, [commit, linkId, saved, summary])
 
   const remove = useCallback(async (
     annotation: ArticleAnnotationReference,
     options?: ArticleAnnotationCommandOptions,
   ): Promise<ArticleAnnotationCommandResult> => {
-    const target = targetForBlock(annotation.blockKey, saved, summary)
-    const operationToken = randomAnnotationToken()
+    const target = annotationCommandTargetForBlock(annotation.blockKey, { saved, summary })
     if (!target) return { status: 'unsupported' }
-    if (!cloneTargetAnnotation(annotation, target)) return { status: 'stale' }
-    if (!operationToken) return { status: 'failed' }
-    return commit({
-      kind: 'delete',
-      opId: `op:${operationToken}`,
-      linkId: linkId ?? '',
+    const built = createAnnotationDeleteCommand({
+      linkId,
       target,
-      annotationId: annotation.id,
-    }, target, annotation.id, options)
+      annotation,
+    })
+    if (!built.ok) return { status: built.status }
+    return commit(built.operation, target, built.annotationId, options)
   }, [commit, linkId, saved, summary])
 
   const visibleState = state.identityKey === identityKey ? state : null
