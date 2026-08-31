@@ -10,8 +10,6 @@ const contentScriptFileName = contentScript.path.split('/').at(-1)!
 export default defineConfig({
   ...sharedConfig,
   define: {
-    __DEV__: isDev,
-    __NAME__: JSON.stringify(packageJson.name),
     // https://github.com/vitejs/vite/issues/9320
     // https://github.com/vitejs/vite/issues/9186
     'process.env.NODE_ENV': JSON.stringify(

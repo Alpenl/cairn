@@ -111,7 +111,6 @@
    不该显示成一个被点中的输入框。 */
 .reader-dialog:focus { outline: none; }
 .reader-dialog-compact { width: min(420px, 100%); }
-.reader-dialog-wide { width: min(680px, 100%); }
 .reader-dialog-header {
   display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px;
 }

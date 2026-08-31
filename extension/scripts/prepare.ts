@@ -1,6 +1,7 @@
 import chokidar from 'chokidar'
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { relative } from 'node:path'
+import { dirname, relative } from 'node:path'
+import { getManifest } from '../src/manifest'
 import { isDev, log, port, r, BROWSER_DIR } from './utils'
 import {
   backgroundEntry,
@@ -8,9 +9,21 @@ import {
   shouldCopyExtensionAsset,
   webViewEntries,
 } from './build-profile'
-import { writeLocales } from './locale'
-import { writeManifest } from './manifest'
 import { LEGAL_FILES } from './release-artifacts'
+
+async function writeManifest() {
+  const output = r(`${BROWSER_DIR}/manifest.json`)
+  await mkdir(dirname(output), { recursive: true })
+  await writeFile(output, `${JSON.stringify(await getManifest(), null, 2)}\n`)
+  log('PRE', `write ${BROWSER_DIR}/manifest.json`)
+}
+
+async function writeLocales() {
+  await cp(r('src/_locales'), r(`${BROWSER_DIR}/_locales`), {
+    recursive: true,
+  })
+  log('PRE', 'write _locales')
+}
 
 /**
  * Stub index.html to use Vite in development

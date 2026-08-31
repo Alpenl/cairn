@@ -27,6 +27,28 @@ describe('SurfaceShell', () => {
     expect(onBack).not.toHaveBeenCalled()
   })
 
+  it('applies the before-navigation guard to nav commands', () => {
+    const onNavigate = vi.fn()
+    const onBeforeNavigate = vi.fn(() => false)
+
+    render(
+      <SurfaceShell
+        title="首页"
+        activeRoute={{ kind: 'surface', id: 'home' }}
+        capabilityPolicy={enabledReaderCapabilityPolicy()}
+        onNavigate={onNavigate}
+        onBeforeNavigate={onBeforeNavigate}
+      >
+        <p>内容</p>
+      </SurfaceShell>,
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: '阅读' }))
+
+    expect(onBeforeNavigate).toHaveBeenCalledTimes(1)
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
   it('leaves identity-owned route persistence to MainView', () => {
     const route: ReaderRoute = { kind: 'library', id: 'notes' }
     window.history.replaceState({}, '', '/?view=notes&note_id=N9')

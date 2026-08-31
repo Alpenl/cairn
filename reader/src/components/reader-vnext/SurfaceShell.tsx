@@ -1,8 +1,8 @@
 import { useCallback, useMemo, type ReactNode, type RefObject } from 'react'
 import { Icon } from '../Icon'
+import { PrimaryNav } from '../PrimaryNav'
 import { type ReaderRoute } from '../../lib/navigation/route'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
-import { SurfaceNav } from './SurfaceNav'
 
 // 非组件工具全部住在 lib/reader-surface.ts，本文件只留组件——过渡期的
 // re-export 与它带来的 react-refresh 例外都已经删掉。
@@ -63,12 +63,14 @@ export function SurfaceShell({
 
   return (
     <div className={'rvx-workspace' + (workspaceClassName ? ` ${workspaceClassName}` : '')}>
-      <SurfaceNav
-        active={active}
-        activeRoute={inferredRoute}
-        onNavigate={handleNavigate}
-        capabilityPolicy={capabilityPolicy}
-      />
+      <aside className="rvx-nav" aria-label="Reader 导航">
+        <PrimaryNav
+          activeRoute={inferredRoute}
+          activeLibrary={active ?? null}
+          onNavigate={handleNavigate}
+          policy={capabilityPolicy}
+        />
+      </aside>
       <main className="rvx-main">
         <header className="rvx-header">
           <div className="rvx-title-block">

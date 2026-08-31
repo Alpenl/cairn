@@ -69,12 +69,6 @@
 .rvx-hero-row p { margin: 0; }
 .rvx-freshness { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; padding: 7px 9px; border: .5px solid var(--accent-line); border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 11px; }
 .rvx-freshness.stale { border-color: var(--border); background: var(--bg-chip); color: var(--text-tertiary); }
-.rvx-mode-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 28px; }
-.rvx-mode-card { min-width: 0; min-height: 82px; display: grid; grid-template-columns: 30px minmax(0, 1fr) 16px; align-items: center; gap: 8px; padding: 13px; border: .5px solid var(--border); border-radius: 8px; background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; text-align: left; }
-.rvx-mode-card:hover { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text-primary); }
-.rvx-mode-card strong, .rvx-mode-card small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rvx-mode-card strong { color: var(--text-primary); font-size: 12.5px; }
-.rvx-mode-card small { margin-top: 4px; color: var(--text-tertiary); font-size: 10.5px; }
 /* 「今天」的计数条。五张 82px 高的卡片说的全是 0，压成一行 chip，把纵向空间
    让给下面内嵌的 Feed 流。 */
 .rvx-count-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 22px; }
@@ -85,7 +79,6 @@
 .rvx-feed-embedded { display: block; margin-bottom: 28px; padding-top: 4px; border-top: .5px solid var(--divider); }
 .rvx-feed-embedded > .rvx-section-head { margin-bottom: 10px; }
 .rvx-feed-embedded .rvx-home-columns { display: block; }
-.rvx-mode-icon { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
 .rvx-home-columns { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(260px, .7fr); gap: 24px; }
 .rvx-section { min-width: 0; margin-bottom: 28px; }
 .rvx-section-head { justify-content: space-between; gap: 12px; margin-bottom: 11px; }
@@ -145,7 +138,6 @@
 .rvx-form-grid textarea, .rvx-field textarea { resize: vertical; }
 .rvx-form-grid input:focus, .rvx-form-grid textarea:focus, .rvx-field input:focus, .rvx-field textarea:focus, .rvx-category-row input:focus, .rvx-todo-create input:focus { border-color: var(--accent-line); }
 .rvx-editor { padding: 16px; border: .5px solid var(--border); border-radius: 7px; background: var(--bg-elevated); }
-.rvx-create-panel { margin-bottom: 18px; }
 .rvx-proposal { margin: 18px 0; padding: 12px; border-left: 2px solid var(--accent-line); background: var(--bg-chip); }
 .rvx-proposal p { margin: 6px 0 8px; color: var(--text-secondary); font-size: 12px; line-height: 1.55; }
 .rvx-chip-row, .rvx-category-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
@@ -635,10 +627,6 @@
 .rvx-history-current strong { color: var(--text-primary); }
 .rvx-history-copy { min-width: 0; flex: 1; }
 .rvx-history-copy p { overflow-wrap: anywhere; }
-.rvx-history-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.rvx-history-actions details { position: relative; }
-.rvx-history-actions summary { cursor: pointer; color: var(--text-secondary); font-size: 11px; }
-.rvx-history-actions pre { position: absolute; z-index: 2; right: 0; top: 22px; width: min(520px, 70vw); max-height: 300px; margin: 0; padding: 10px; overflow: auto; border: .5px solid var(--border); border-radius: 5px; background: var(--bg-elevated); color: var(--text-secondary); box-shadow: var(--shadow-pop); white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.55 var(--font-mono); }
 .rvx-todo-create { display: grid; grid-template-columns: minmax(0, 1fr) 210px auto; align-items: end; gap: 9px; margin-bottom: 20px; }
 .rvx-todo-create label span { color: var(--text-secondary); }
 .rvx-todo-page-list { border-top: .5px solid var(--divider); }

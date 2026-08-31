@@ -4,7 +4,6 @@ import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import { PrimaryNav } from '../PrimaryNav'
 import { refreshPendingInboxCount } from '../../lib/pending-inbox-events'
 import { PendingInboxCountProvider } from './PendingInboxCount'
-import { SurfaceNav } from './SurfaceNav'
 import { ok } from '@webtag/api'
 import {
   enabledReaderCapabilityLease,
@@ -41,7 +40,9 @@ const BADGE_HOSTS: readonly BadgeHost[] = ['reading', 'sites', 'subs', 'notes']
 function renderNavigation(clientValue: IdentityBoundReaderClient, host: BadgeHost = 'reading') {
   return render(
     <PendingInboxCountProvider client={clientValue} capabilityLease={enabledReaderCapabilityLease()}>
-      <SurfaceNav active={host} capabilityPolicy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />
+      <aside className="rvx-nav" aria-label="Reader 导航">
+        <PrimaryNav activeLibrary={host} policy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />
+      </aside>
       <PrimaryNav activeLibrary={host} policy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />
     </PendingInboxCountProvider>,
   )
@@ -126,7 +127,9 @@ describe('PendingInboxCountProvider', () => {
     })
     rendered.rerender(
       <PendingInboxCountProvider client={next} capabilityLease={enabledReaderCapabilityLease()}>
-        <SurfaceNav active="reading" capabilityPolicy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />
+        <aside className="rvx-nav" aria-label="Reader 导航">
+          <PrimaryNav activeLibrary="reading" policy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />
+        </aside>
         <PrimaryNav activeLibrary="sites" policy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />
       </PendingInboxCountProvider>,
     )

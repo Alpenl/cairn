@@ -4,7 +4,6 @@ import { basename, dirname } from 'node:path'
 import { defineConfig, type UserConfig } from 'vite'
 import Vue from '@vitejs/plugin-vue'
 import { isDev, port, r, BROWSER_DIR } from './scripts/utils'
-import packageJson from './package.json'
 import {
   webViewEntries,
   getWebViews,
@@ -18,10 +17,6 @@ export const sharedConfig: UserConfig = {
     alias: {
       '@/': `${r('src')}/`,
     },
-  },
-  define: {
-    __DEV__: isDev,
-    __NAME__: JSON.stringify(packageJson.name),
   },
   plugins: [
     Vue(),

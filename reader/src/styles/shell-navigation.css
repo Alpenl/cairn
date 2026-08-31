@@ -85,9 +85,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.library-modes { display: inline-flex; align-items: center; padding: 3px; border: 0.5px solid var(--border); background: var(--bg-chip); border-radius: 6px; gap: 2px; }
-.library-modes button { height: 24px; border: 0; border-radius: 4px; background: transparent; color: var(--text-tertiary); font: 12px var(--font-ui); padding: 0 9px; cursor: pointer; }
-.library-modes button.active { background: var(--bg-reader); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 .mobile-only, .mobile-nav-backdrop { display: none; }
 .tb-btn.danger:hover { color: var(--err); background: var(--err-soft); }
 /* ── body 3-pane ────────────────────────────────────────── */
@@ -137,8 +134,6 @@
 .sb-row.child { padding-left: 28px; }
 .sb-disc { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-faint); transition: transform 0.18s; }
 .sb-disc.open { transform: rotate(90deg); }
-.tag-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.feed-fav { width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 9px; font-weight: 700; }
 .unread-pill { font-family: var(--font-mono); font-size: 10.5px; background: var(--accent); color: #fff; border-radius: 9px; padding: 1px 6px; min-width: 18px; text-align: center; }
 [data-theme="dark"] .unread-pill { color: #1a1917; }
 /* ── Toast ──────────────────────────────────────────────── */
@@ -148,7 +143,6 @@
 .toast-action { margin-left: 3px; padding: 3px 8px; border: 0; border-left: 0.5px solid var(--border-strong); border-radius: 0 6px 6px 0; background: transparent; color: var(--accent); font: inherit; font-weight: 500; cursor: pointer; }
 .toast-action:hover { background: var(--bg-hover); }
 *::-webkit-scrollbar-thumb { background: transparent; border-radius: 9px; border: 2px solid transparent; background-clip: padding-box; }
-.sb-group.planned .sb-row { color: var(--text-tertiary); }
 /* primary toolbar action (打开原文) */
 a.tb-btn { text-decoration: none; }
 .tb-btn.primary { background: var(--accent-soft); color: var(--accent); font-weight: 560; }
