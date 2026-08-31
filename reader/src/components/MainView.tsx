@@ -12,16 +12,15 @@
  * 右栏互斥：NotePanel 与 ChatSidebar 共用同一条
  * 右栏。问 AI 创建 AI 划线 + 写草稿（chatDraft），ChatSidebar 消费并「采用为笔记」回写。
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { type IconName } from './Icon'
+import { useLayoutEffect, useMemo } from 'react'
 import { Sidebar } from './Sidebar'
 import { ListPane } from './ListPane'
 import { DetailPane } from './DetailPane'
-import { Toast, type ToastAction } from './Toast'
-import { CommandPalette, type CommandItem } from './CommandPalette'
+import { Toast } from './Toast'
+import { CommandPalette } from './CommandPalette'
 import { BrowsePanel } from './BrowsePanel'
 import { NotePanel } from './NotePanel'
-import { ChatSidebar, type ChatDraft } from './ChatSidebar'
+import { ChatSidebar } from './ChatSidebar'
 import { SubsView } from './SubsView'
 import { SitesView } from './SitesView'
 import { LinkConversionDialog } from './LinkConversionDialog'
@@ -29,43 +28,17 @@ import { Titlebar } from './Titlebar'
 import { AddLinkDialog } from './AddLinkDialog'
 import { ArchiveDownloadDialog } from './ArchiveDownloadDialog'
 import { HomeSurface } from './reader-vnext/HomeSurface'
-import { clearFeedSessionState, FeedSurface } from './reader-vnext/FeedSurface'
+import { FeedSurface } from './reader-vnext/FeedSurface'
 import { InboxSurface } from './reader-vnext/InboxSurface'
 import { NotesSurface } from './reader-vnext/NotesSurface'
 import { TodoSurface } from './reader-vnext/TodoSurface'
 import { SettingsSurface } from './reader-vnext/SettingsSurface'
 import { ThoughtHistorySurface } from './reader-vnext/ThoughtHistorySurface'
 import { TrashSurface } from './reader-vnext/TrashSurface'
-import { PendingInboxCountProvider, refreshPendingInboxCount } from './reader-vnext/PendingInboxCount'
+import { PendingInboxCountProvider } from './reader-vnext/PendingInboxCount'
 import type { LibraryView } from './LibraryModeNav'
-import { type Selection, type SmartId } from '../hooks/useLinks'
-import { invalidateSites } from '../hooks/useSites'
-import { invalidateReaderActivity } from '../hooks/useReaderActivity'
-import { invalidateReaderRelatedTags } from '../hooks/useReaderRelatedTags'
-import { useAppShortcuts } from '../hooks/useAppChrome'
-import {
-  annotationMatchesLocator,
-  type Annotation,
-  type AnnotationLocator,
-} from '../lib/annotations'
-import {
-  type HistoricalArticleAnnotation,
-} from '../hooks/useArticleAnnotations'
-import { usePins } from '../lib/meta'
-import { readingFocusStore } from '../lib/reading-surface'
-import { applyServiceWorkerUpdate } from '../lib/sw'
-import {
-  invalidateLibrary,
-  invalidateLink,
-} from '../lib/cache/invalidate'
-import { readOwnedStorage, writeOwnedStorage } from '../lib/storage-ownership'
-import {
-  readerThoughtHostTarget,
-  type ReaderRoute,
-} from '../lib/navigation/route'
 import type {
   CapabilitiesResponse,
-  LinkResponse,
 } from '../lib/api/types'
 import type {
   ReaderAIPort,
@@ -87,8 +60,10 @@ import {
 import { useActiveResourceController } from './main-view/active-resource-controller'
 import { useSavedDocumentWorkspace } from './main-view/saved-document-workspace'
 import { useSyncArchiveController } from './main-view/sync-archive-controller'
-
-type Theme = 'light' | 'dark'
+import {
+  useMainViewAppController,
+  useMainViewToast,
+} from './main-view/app-composition-controller'
 
 type MainViewClient = ReaderLibrarySitesPort &
   ReaderSubscriptionsFeedPort &
@@ -126,34 +101,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
 		capabilityLease.activate()
 		return () => capabilityLease.deactivate()
 	}, [capabilityLease])
-	const [theme, setTheme] = useState<Theme>(() => readOwnedStorage('theme') === 'dark' ? 'dark' : 'light')
-  const [toast, setToast] = useState<{ msg: string; icon?: IconName; action?: ToastAction } | null>(null)
-  const toastTimer = useRef<number | null>(null)
-  useEffect(() => () => {
-    if (toastTimer.current !== null) {
-      window.clearTimeout(toastTimer.current)
-      toastTimer.current = null
-    }
-  }, [])
-
-  const dismissToast = useCallback(() => {
-    if (toastTimer.current !== null) {
-      window.clearTimeout(toastTimer.current)
-      toastTimer.current = null
-    }
-    setToast(null)
-  }, [])
-
-  // 带动作的提示停留更久：2.6 秒够读完一句话，但不够看到、移动指针并点中一个
-  // 按钮——撤销要是点不着，就等于没有撤销。
-  const flash = useCallback((msg: string, icon?: IconName, action?: ToastAction) => {
-    setToast({ msg, icon, action })
-    if (toastTimer.current) window.clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => {
-      toastTimer.current = null
-      setToast(null)
-    }, action ? 7000 : 2600)
-  }, [])
+  const { toast, flash, dismissToast } = useMainViewToast()
   const {
     view,
     displayedView,
@@ -251,106 +199,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     onRefreshCapabilities,
     flash,
   })
-	const homeScrollRef = useRef<HTMLDivElement>(null)
-	const [todoCompletedExpanded, setTodoCompletedExpanded] = useState(false)
-  const [chatOpen, setChatOpen] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readOwnedStorage('sidebarCollapsed') === '1')
-  const focusMode = useSyncExternalStore(
-    readingFocusStore.subscribe,
-    readingFocusStore.getSnapshot,
-    () => false,
-  )
-  const [addLinkOpen, setAddLinkOpen] = useState(false)
-  const [cmdkOpen, setCmdkOpen] = useState(false)
-  const [browse, setBrowse] = useState<'tags' | 'domains' | null>(null)
-  const [noteEd, setNoteEd] = useState<AnnotationLocator | null>(null)
-  const [historicalNote, setHistoricalNote] = useState<HistoricalArticleAnnotation | null>(null)
-  const [chatDraft, setChatDraft] = useState<ChatDraft | null>(null)
-  // 新版本就绪：给一条可点的提示，不静默强制刷新（那会打断正在读文章的人）。
-  const [updateReady, setUpdateReady] = useState(false)
-  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
-  const [convertingLink, setConvertingLink] = useState<LinkResponse | null>(null)
-  const [pins, togglePin] = usePins()
-  const draftNonce = useRef(0)
-  const canCreateNote = capabilityPolicy.notes
-  const createNoteIntent = useRef<Promise<void> | null>(null)
-  const [creatingNote, setCreatingNote] = useState(false)
-
-  useEffect(() => {
-    const onUpdateReady = () => setUpdateReady(true)
-    window.addEventListener('webtag:sw-update-ready', onUpdateReady)
-    return () => window.removeEventListener('webtag:sw-update-ready', onUpdateReady)
-  }, [])
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-    writeOwnedStorage('theme', theme)
-  }, [theme])
-
-  useEffect(() => {
-    const policy = capabilityLease.policy
-    if (!policy.annotations) {
-      setNoteEd(null)
-      setHistoricalNote(null)
-    }
-    if (!policy.ai) {
-      setChatOpen(false)
-      setChatDraft(null)
-    }
-    if (!policy.notes) {
-      createNoteIntent.current = null
-      setCreatingNote(false)
-    }
-    if (!policy.todos) setTodoCompletedExpanded(false)
-    if (!policy.history) {
-      setHistoricalNote(null)
-    }
-    if (!policy.siteRead) {
-      setConvertingLink(null)
-      invalidateSites()
-    } else if (!policy.siteWrite) {
-      setConvertingLink(null)
-    }
-    if (!policy.relatedTags) invalidateReaderRelatedTags()
-    if (!policy.activity) invalidateReaderActivity()
-    if (!policy.feed) clearFeedSessionState(client)
-  }, [capabilityLease, client])
-
-  const createEmptyNote = useCallback((): Promise<void> => {
-    if (!canCreateNote || !capabilityLease.isCurrent('notes')) return Promise.resolve()
-    if (createNoteIntent.current) return createNoteIntent.current
-
-    const operationLease = capabilityLease
-    const intent = (async () => {
-      const allowed = await Promise.resolve(confirmDiscardNavigation())
-      if (!allowed || !client.isIdentityCurrent() || !operationLease.isCurrent('notes')) return
-      const operationID = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
-      const result = await client.createNote({ content: '' }, { idempotencyKey: operationID })
-      if (!client.isIdentityCurrent() || !operationLease.isCurrent('notes')) return
-      if (!result.ok) {
-        flash(result.error.message || '新建笔记失败，请重试。', 'alert')
-        return
-      }
-      commitRoute({ kind: 'library', id: 'notes' }, { noteId: result.data.id })
-    })()
-    createNoteIntent.current = intent
-    setCreatingNote(true)
-    void intent.finally(() => {
-      if (createNoteIntent.current === intent) {
-        createNoteIntent.current = null
-        setCreatingNote(false)
-      }
-    })
-    return intent
-  }, [canCreateNote, capabilityLease, client, commitRoute, confirmDiscardNavigation, flash])
-
-  const openSettings = useCallback(() => {
-    const result = confirmDiscardNavigation()
-    if (typeof (result as Promise<boolean>)?.then === 'function') {
-      void Promise.resolve(result).then((allowed) => { if (allowed) onOpenSettings() })
-    } else if (result) onOpenSettings()
-  }, [confirmDiscardNavigation, onOpenSettings])
-
   const {
     anns,
     translations,
@@ -389,255 +237,39 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     flash,
   })
 
-  // 切换文章时清掉笔记面板与问 AI 草稿，避免跨链接误写。
-  useEffect(() => {
-    setNoteEd(null)
-    setHistoricalNote(null)
-    setChatDraft(null)
-  }, [activeId])
-
-  // 右栏互斥：打开 AI 助手则关笔记面板，反之亦然。
-  const toggleChat = useCallback(() => {
-    if (!capabilityLease.isCurrent('ai')) return
-    setMobileNavOpen(false)
-    setChatOpen((o) => {
-      if (!o) {
-        setNoteEd(null)
-        setHistoricalNote(null)
-      }
-      return !o
-    })
-  }, [capabilityLease, setMobileNavOpen])
-
-  const openNote = useCallback((annotation: AnnotationLocator) => {
-    if (!capabilityLease.isCurrent('annotations')) return
-    setMobileNavOpen(false)
-    setHistoricalNote(null)
-    setNoteEd(annotation)
-    setChatOpen(false)
-  }, [capabilityLease, setMobileNavOpen])
-
-  const openHistoricalAnnotation = useCallback((annotation: Annotation) => {
-    if (!capabilityLease.isCurrent('annotations')) return
-    const historical = historicalAnnotations.find(
-      (item) => item.annotation.id === annotation.id,
-    )
-    if (!historical) {
-      flash('已归档想法已更新，请重新打开正文', 'alert')
-      return
-    }
-    setMobileNavOpen(false)
-    setNoteEd(null)
-    setHistoricalNote(historical)
-    setChatOpen(false)
-  }, [capabilityLease, flash, historicalAnnotations, setMobileNavOpen])
-
-  // 问 AI：DetailPane / NotePanel 先创建 AI 划线，这里写草稿并打开右栏（ChatSidebar 消费）。
-  const onAskAI = useCallback((annotation: AnnotationLocator, text: string) => {
-    if (!capabilityLease.isCurrent('ai') || !capabilityLease.isCurrent('annotations')) return
-    draftNonce.current += 1
-    setChatDraft({
-      annotation,
-      text,
-      nonce: draftNonce.current,
-    })
-    setNoteEd(null)
-    setMobileNavOpen(false)
-    setChatOpen(true)
-  }, [capabilityLease, setMobileNavOpen])
-
-  useEffect(() => {
-    if (capabilityPolicy.archiveDownload) return
-    setArchiveDialogOpen(false)
-  }, [capabilityPolicy.archiveDownload])
-
-  // 命令面板路由（对齐 app.jsx onCommand）。
-  const onCommand = useCallback(
-    (c: CommandItem) => {
-      if (c.id === 'create-note') {
-        void createEmptyNote()
-        return
-      }
-      if (c.id.startsWith('open:')) return openLink(c.id.slice(5), c.link)
-      if (c.id.startsWith('thought:')) {
-        const thought = c.thought
-        if (!thought) return
-        if (thought.lifecycle_status === 'tombstone') {
-          navigateRoute({ kind: 'tool', id: 'history' }, { thoughtView: 'history', thoughtId: thought.id })
-          return
-        }
-        const target = readerThoughtHostTarget(thought)
-        if (!target) return
-        if (target.route.kind === 'library' && target.route.id === 'reading') {
-          return openLink(target.targets?.linkId ?? '', undefined, true)
-        }
-        navigateRoute(target.route, target.targets)
-        return
-      }
-      if (c.id.startsWith('note:')) {
-        const noteID = c.note?.id?.trim() || c.id.slice(5).trim()
-        if (noteID) navigateRoute({ kind: 'library', id: 'notes' }, { noteId: noteID })
-        return
-      }
-      if (c.id.startsWith('site:')) {
-        const siteID = c.id.slice(5).trim()
-        if (siteID) navigateRoute({ kind: 'library', id: 'sites' }, { siteId: siteID })
-        return
-      }
-      if (c.id.startsWith('tag:')) {
-        if (!navigateRoute({ kind: 'library', id: 'reading' })) return
-        setSel({ type: 'tag', id: c.id.slice(4), name: '#' + c.id.slice(4) })
-        return
-      }
-      if (c.id.startsWith('domain:')) {
-        if (!navigateRoute({ kind: 'library', id: 'reading' })) return
-        setSel({ type: 'domain', id: c.id.slice(7), name: c.id.slice(7) })
-        return
-      }
-      if (c.id.startsWith('nav:')) {
-        const id = c.id.slice(4) as SmartId
-        const names: Record<string, string> = {
-          all: '全部链接',
-          today: '今天',
-          annotated: '有划线',
-        }
-        if (!navigateRoute({ kind: 'library', id: 'reading' })) return
-        setSel({ type: 'smart', id, name: names[id] || id })
-        return
-      }
-      switch (c.id) {
-        case 'pending':
-          navigateRoute({ kind: 'library', id: 'pending' })
-          break
-        case 'theme':
-          setTheme((t) => (t === 'light' ? 'dark' : 'light'))
-          break
-        case 'chat':
-          if (!capabilityLease.isCurrent('ai')) break
-          setNoteEd(null)
-          setMobileNavOpen(false)
-          setChatOpen(true)
-          break
-        case 'subs':
-          navigateRoute({ kind: 'library', id: 'subs' })
-          break
-        case 'refresh':
-          syncLibraryAndThoughts()
-          break
-        default:
-          break
-      }
-    },
-    [capabilityLease, createEmptyNote, navigateRoute, openLink, setMobileNavOpen, setSel, syncLibraryAndThoughts],
-  )
-
-  // 采纳某条 AI 回复为划线笔记（ChatSidebar 草稿模式调用）。
-  const onAdoptNote = useCallback(
-    async (locator: AnnotationLocator, text: string) => {
-      if (!capabilityLease.isCurrent('ai') || !capabilityLease.isCurrent('annotations')) return
-      const annotation = anns.find((item) => annotationMatchesLocator(item, locator))
-      if (!annotation) return
-      if (await updateAnnotation(annotation, { note: text, source: 'ai' })) {
-        flash('已存为划线笔记 ✓', 'marker')
-      } else {
-        flash('保存划线笔记失败，请重试', 'alert')
-      }
-    },
-    [anns, capabilityLease, flash, updateAnnotation],
-  )
-
-  // 退出草稿模式（ChatSidebar 调用）。
-  const clearChatDraft = useCallback(() => setChatDraft(null), [])
-
-  const onSidebarSelect = useCallback((next: Selection) => {
-    setSel(next)
-    setMobilePane('list')
-    setMobileNavOpen(false)
-  }, [setMobileNavOpen, setMobilePane, setSel])
-
-  const onSidebarView = useCallback((next: LibraryView | ReaderRoute) => {
-    if (typeof next === 'string') {
-      // Changing a reading filter is a list concern. Keep the current detail
-      // target mounted so an empty filtered list does not discard the article
-      // the user was already reading.
-      if (next === 'reading' && activeId) {
-        navigateRoute({ kind: 'library', id: 'reading' }, { linkId: activeId })
-        return
-      }
-      navigateRoute({ kind: 'library', id: next })
-      return
-    }
-    navigateRoute(next)
-  }, [activeId, navigateRoute])
-
-  const onSidebarBrowse = useCallback((kind: 'tags' | 'domains') => {
-    setBrowse(kind)
-    setMobileNavOpen(false)
-  }, [setMobileNavOpen])
-
-  const toggleNavigation = useCallback(() => {
-    if (!window.matchMedia('(max-width: 1439px)').matches) {
-      setSidebarCollapsed((collapsed) => {
-        const next = !collapsed
-        writeOwnedStorage('sidebarCollapsed', next ? '1' : '0')
-        return next
-      })
-      return
-    }
-    setMobileNavOpen((open) => {
-      if (!open) {
-        setChatOpen(false)
-        setNoteEd(null)
-      }
-      return !open
-    })
-  }, [setMobileNavOpen])
-
-  const backToMobileList = useCallback(() => {
-    if (!confirmDiscardContentEdit()) return
-    setChatOpen(false)
-    setNoteEd(null)
-    setHistoricalNote(null)
-    setMobilePane('list')
-  }, [confirmDiscardContentEdit, setMobilePane])
-
-  // ⌘K / ⌘J（⌘J 右栏互斥：打开 AI 助手时关笔记面板）。
-  const onToggleCmdk = useCallback(() => setCmdkOpen((o) => !o), [])
-  useAppShortcuts({ onToggleCmdk, onToggleChat: toggleChat })
-
-  // 当前编辑的划线（NotePanel 用）。
-  const editingAnn = useMemo(
-    () => noteEd
-      ? anns.find((annotation) => annotationMatchesLocator(annotation, noteEd)) ?? null
-      : null,
-    [anns, noteEd],
-  )
-  const notePanelAnnotation = editingAnn ?? historicalNote?.annotation ?? null
-
-  // 以下几个回调与两个 pager 对象过去都是 JSX 里的内联字面量，每渲染新建一次。
-  // DetailPane 加上 memo 之后它们必须稳定，否则 memo 的浅比较每次都判定
-  // props 变了——测试照样绿，收益却是零。
-  const onPickTag = useCallback((tag: string) => {
-    setSel({ type: 'tag', id: tag, name: '#' + tag })
-    setMobilePane('list')
-  }, [setMobilePane, setSel])
-
-  const onToggleFocus = useCallback(() => readingFocusStore.toggle(), [])
-
-  const onConvertToSite = useCallback(() => {
-    if (!capabilityLease.isCurrent('siteWrite')) return
-    if (!confirmDiscardContentEdit()) return
-    setConvertingLink((current) => current ?? getActiveLink() ?? null)
-  }, [capabilityLease, confirmDiscardContentEdit, getActiveLink])
+  const app = useMainViewAppController({
+    client,
+    capabilityPolicy,
+    capabilityLease,
+    activeId,
+    anns,
+    historicalAnnotations,
+    setSelection: setSel,
+    setMobilePane,
+    setMobileNavOpen,
+    confirmDiscardContentEdit,
+    confirmDiscardNavigation,
+    commitRoute,
+    navigateRoute,
+    openLink,
+    getActiveLink,
+    clearActiveResource,
+    reloadList: list.reload,
+    updateAnnotation,
+    removeAnnotation,
+    onOpenSettings,
+    syncLibraryAndThoughts,
+    flash,
+  })
 
   return (
     <div className="stage">
       <div className="win" key={capabilityLease.generation}>
         <Titlebar
-          theme={theme}
-          chatOpen={chatOpen}
+          theme={app.theme}
+          chatOpen={app.chatOpen}
           navigationOpen={mobileNavOpen}
-          sidebarCollapsed={sidebarCollapsed}
+          sidebarCollapsed={app.sidebarCollapsed}
           syncing={displayedView !== 'subs' && librarySyncing}
           thoughtSync={thoughtSync}
           onSync={
@@ -645,14 +277,14 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
               ? requestSubscriptionSync
               : syncLibraryAndThoughts
           }
-          onToggleNavigation={toggleNavigation}
-          onAddLink={() => setAddLinkOpen(true)}
-          onOpenCmdk={() => setCmdkOpen(true)}
-          onToggleTheme={() => setTheme((t) => (t === 'light' ? 'dark' : 'light'))}
-          onToggleChat={toggleChat}
-          onOpenSettings={openSettings}
+          onToggleNavigation={app.toggleNavigation}
+          onAddLink={app.openAddLinkDialog}
+          onOpenCmdk={app.openCommandPalette}
+          onToggleTheme={app.onToggleTheme}
+          onToggleChat={app.toggleChat}
+          onOpenSettings={app.openSettings}
           archiveDownloading={archiveDownloading}
-          onDownloadArchive={() => setArchiveDialogOpen(true)}
+          onDownloadArchive={app.openArchiveDialog}
           canUseAI={capabilityPolicy.ai}
           canDownloadArchive={capabilityPolicy.archiveDownload}
         />
@@ -673,9 +305,9 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
             'body' +
             (displayedView === 'reading' && mobilePane === 'detail' ? ' mobile-detail-active' : '') +
             (mobileNavOpen ? ' mobile-nav-open' : '') +
-            (sidebarCollapsed ? ' sidebar-collapsed' : '') +
-            (focusMode && displayedView === 'reading' ? ' focus-mode' : '') +
-            (chatOpen || editingAnn || contentEditState?.editing ? ' mobile-tool-open' : '')
+            (app.sidebarCollapsed ? ' sidebar-collapsed' : '') +
+            (app.focusMode && displayedView === 'reading' ? ' focus-mode' : '') +
+            (app.chatOpen || app.notePanelEditing || contentEditState?.editing ? ' mobile-tool-open' : '')
           }
         >
           {displayedView === 'home' ? (
@@ -685,7 +317,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
               capabilityLease={capabilityLease}
               onNavigate={navigateRoute}
               onOpenLink={openLink}
-              scrollRef={homeScrollRef}
+              scrollRef={app.homeScrollRef}
               feedSlot={(
                 <FeedSurface
                   client={client}
@@ -693,7 +325,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
                   onNavigate={navigateRoute}
                   onOpenLink={openLink}
                   variant="embedded"
-                  hostScrollRef={homeScrollRef}
+                  hostScrollRef={app.homeScrollRef}
                 />
               )}
             />
@@ -711,8 +343,8 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
               onDraftDirtyChange={reportNotesDraftDirty}
               onPendingPersistenceChange={reportNotesPendingPersistence}
               onPrepareToLeaveChange={reportNotesPrepareToLeave}
-              onCreateNote={canCreateNote ? () => { void createEmptyNote() } : undefined}
-              creatingNote={creatingNote}
+              onCreateNote={app.canCreateNote ? () => { void app.createEmptyNote() } : undefined}
+              creatingNote={app.creatingNote}
               annotationsEnabled={capabilityPolicy.annotations}
               aiEnabled={capabilityPolicy.ai}
               trashEnabled={capabilityPolicy.trash}
@@ -723,11 +355,11 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
               capabilityPolicy={capabilityPolicy}
               onNavigate={navigateRoute}
               onOpenLink={openLink}
-              completedExpanded={todoCompletedExpanded}
-              onCompletedExpandedChange={setTodoCompletedExpanded}
+              completedExpanded={app.todoCompletedExpanded}
+              onCompletedExpandedChange={app.setTodoCompletedExpanded}
             />
           ) : displayedView === 'settings' ? (
-            <SettingsSurface client={client} capabilityPolicy={capabilityPolicy} onNavigate={navigateRoute} onOpenConnectionSettings={openSettings} />
+            <SettingsSurface client={client} capabilityPolicy={capabilityPolicy} onNavigate={navigateRoute} onOpenConnectionSettings={app.openSettings} />
           ) : displayedView === 'history' ? (
 			<ThoughtHistorySurface client={client} lease={lease} capabilityLease={capabilityLease} onNavigate={navigateRoute} />
           ) : displayedView === 'trash' ? (
@@ -737,11 +369,11 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
               client={client}
               navigationOpen={mobileNavOpen}
               onCloseNavigation={() => setMobileNavOpen(false)}
-              onView={onSidebarView}
+              onView={app.onSidebarView}
               onNavigate={navigateRoute}
-              collapsed={sidebarCollapsed}
+              collapsed={app.sidebarCollapsed}
               onOpenAnalysis={openLink}
-              onOpenSettings={openSettings}
+              onOpenSettings={app.openSettings}
               onToast={flash}
               syncRequest={subscriptionSyncRequest}
               capabilityPolicy={capabilityPolicy}
@@ -752,8 +384,8 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
               capabilityLease={capabilityLease}
               onToast={flash}
               initialSiteId={siteTargetID}
-              collapsed={sidebarCollapsed}
-              onView={onSidebarView}
+              collapsed={app.sidebarCollapsed}
+              onView={app.onSidebarView}
               onNavigate={navigateRoute}
               navigationOpen={mobileNavOpen}
               onCloseNavigation={() => setMobileNavOpen(false)}
@@ -762,14 +394,14 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
             <>
               <Sidebar
                 sel={sel}
-                onSelect={onSidebarSelect}
+                onSelect={app.onSidebarSelect}
                 view={displayedView as LibraryView}
-                onView={onSidebarView}
+                onView={app.onSidebarView}
                 onNavigate={navigateRoute}
-                collapsed={sidebarCollapsed}
-                pins={pins}
-                onTogglePin={togglePin}
-                onBrowse={onSidebarBrowse}
+                collapsed={app.sidebarCollapsed}
+                pins={app.pins}
+                onTogglePin={app.onTogglePin}
+                onBrowse={app.onSidebarBrowse}
                 tags={tagStatList}
                 domains={domainStatList}
                 tagsAvailable={tagsAvailable}
@@ -795,27 +427,27 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
                 hasMore={list.hasMore}
                 onLoadMore={list.loadMore}
                 onReload={list.reload}
-                onOpenSettings={openSettings}
+                onOpenSettings={app.openSettings}
               />
               <DetailPane
                 l={renderedActive}
                 document={savedDocument}
                 captureDocumentContext={captureSavedDocumentContext}
-                onBack={backToMobileList}
-                chatOpen={chatOpen}
-                onChat={toggleChat}
+                onBack={app.backToMobileList}
+                chatOpen={app.chatOpen}
+                onChat={app.toggleChat}
                 onToast={flash}
                 curTag={sel.type === 'tag' ? sel.id : null}
-                onPickTag={onPickTag}
+                onPickTag={app.onPickTag}
                 corpus={corpus}
                 anns={anns}
                 historicalAnnotations={historicalAnnotations}
                 historicalDegraded={historicalDegraded}
-                onOpenHistoricalAnnotation={openHistoricalAnnotation}
+                onOpenHistoricalAnnotation={app.openHistoricalAnnotation}
                 onAddAnn={addAnnotation}
                 onRemoveAnn={removeAnnotation}
-                onOpenNote={openNote}
-                onAskAI={onAskAI}
+                onOpenNote={app.openNote}
+                onAskAI={app.onAskAI}
                 annotationsEnabled={capabilityPolicy.annotations}
                 aiEnabled={capabilityPolicy.ai}
                 relatedTagsEnabled={capabilityPolicy.relatedTags}
@@ -837,126 +469,88 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
                 summaryProjectionEpoch={summaryProjectionEpoch}
                 onTranslateSelection={onTranslateSelection}
                 onTranslateFull={onTranslateFull}
-				focusMode={focusMode}
-				onToggleFocus={onToggleFocus}
-				onConvertToSite={capabilityPolicy.siteWrite ? onConvertToSite : undefined}
+				focusMode={app.focusMode}
+				onToggleFocus={app.onToggleFocus}
+				onConvertToSite={capabilityPolicy.siteWrite ? app.onConvertToSite : undefined}
 				onDeleteLink={onDeleteLink}
 				previous={previousPager}
 				next={nextPager}
               />
             </>
           )}
-          {capabilityPolicy.annotations && notePanelAnnotation && displayedView === 'reading' && (
+          {capabilityPolicy.annotations && app.notePanelAnnotation && displayedView === 'reading' && (
             <NotePanel
-              ann={notePanelAnnotation}
-              readOnly={historicalNote !== null}
-              onSave={async (v) => {
-                if (!editingAnn || historicalNote) return
-                if (await updateAnnotation(editingAnn, { note: v.trim() })) {
-                  setNoteEd(null)
-                  flash('笔记已保存', 'marker')
-                } else {
-                  flash('保存笔记失败，请重试', 'alert')
-                }
-              }}
-              onDelete={async () => {
-                if (!editingAnn || historicalNote) return
-                if (await removeAnnotation(editingAnn)) setNoteEd(null)
-              }}
-              onAskAI={async (annotation, text, draftVal) => {
-                if (!editingAnn || historicalNote) return
-                // 切去问 AI 前把未保存草稿写回，不丢字。
-                if (draftVal != null && draftVal.trim() !== (editingAnn.note || '')) {
-                  if (!await updateAnnotation(editingAnn, { note: draftVal.trim() })) {
-                    flash('保存草稿失败，请重试', 'alert')
-                    return
-                  }
-                }
-                onAskAI(annotation, text)
-              }}
-              onClose={() => {
-                setNoteEd(null)
-                setHistoricalNote(null)
-              }}
+              ann={app.notePanelAnnotation}
+              readOnly={app.notePanelReadOnly}
+              onSave={app.onSaveNotePanel}
+              onDelete={app.onDeleteNotePanel}
+              onAskAI={app.onAskAINotePanel}
+              onClose={app.closeNotePanel}
             />
           )}
-			{capabilityPolicy.siteWrite && convertingLink && <LinkConversionDialog capabilityLease={capabilityLease} client={client} link={convertingLink} initialNote={anns.map((ann) => ann.note.trim()).filter(Boolean).join('\n\n')} onClose={() => setConvertingLink(null)} onToast={flash} onConverted={() => { if (!capabilityLease.isCurrent('siteWrite')) return; invalidateLibrary(); invalidateLink(convertingLink.id); setConvertingLink(null); clearActiveResource(); navigateRoute({ kind: 'library', id: 'sites' }); list.reload() }} />}
-          {capabilityPolicy.ai && chatOpen && displayedView === 'reading' && !notePanelAnnotation && (
+			{capabilityPolicy.siteWrite && app.convertingLink && <LinkConversionDialog capabilityLease={capabilityLease} client={client} link={app.convertingLink} initialNote={app.conversionInitialNote} onClose={app.closeConversionDialog} onToast={flash} onConverted={app.onConversionConverted} />}
+          {capabilityPolicy.ai && app.chatOpen && displayedView === 'reading' && !app.notePanelAnnotation && (
             <ChatSidebar
               client={client}
               link={renderedActive}
               contentContext={aiContentContext}
-              draft={chatDraft}
-              onAdopt={onAdoptNote}
-              onClearDraft={clearChatDraft}
-              onClose={() => setChatOpen(false)}
+              draft={app.chatDraft}
+              onAdopt={app.onAdoptNote}
+              onClearDraft={app.clearChatDraft}
+              onClose={app.closeChat}
             />
           )}
         </div>
         </PendingInboxCountProvider>
 
         <CommandPalette
-          open={cmdkOpen}
-          onClose={() => setCmdkOpen(false)}
-          onCommand={onCommand}
+          open={app.cmdkOpen}
+          onClose={app.closeCommandPalette}
+          onCommand={app.onCommand}
           client={client}
           corpus={corpus}
           tagStats={tagStatList}
           domainStats={domainStatList}
-          canCreateNote={canCreateNote}
+          canCreateNote={app.canCreateNote}
           capabilityPolicy={capabilityPolicy}
         />
-        {addLinkOpen && (
+        {app.addLinkOpen && (
           <AddLinkDialog
             client={client}
             capabilityLease={capabilityLease}
             destination={capabilityPolicy.inbox ? 'inbox' : 'library'}
-            onClose={() => setAddLinkOpen(false)}
+            onClose={app.closeAddLinkDialog}
             onToast={flash}
-            onAdded={(target) => {
-              invalidateLibrary()
-              setAddLinkOpen(false)
-              if (target.kind === 'inbox') {
-                refreshPendingInboxCount()
-                navigateRoute({ kind: 'library', id: 'pending', inboxId: target.id })
-                return
-              }
-              navigateRoute({ kind: 'library', id: 'reading' }, { linkId: target.id })
-              setSel({ type: 'smart', id: 'all', name: '全部链接' })
-              list.reload()
-            }}
+            onAdded={app.onAddLinkAdded}
           />
         )}
         <ArchiveDownloadDialog
-          open={archiveDialogOpen}
+          open={app.archiveDialogOpen}
           downloading={archiveDownloading}
-          onClose={() => setArchiveDialogOpen(false)}
+          onClose={app.closeArchiveDialog}
           onDownload={downloadArchive}
         />
-        {browse && (
+        {app.browse && (
           <BrowsePanel
-            kind={browse}
-            onClose={() => setBrowse(null)}
-            pins={pins}
-            onTogglePin={togglePin}
+            kind={app.browse}
+            onClose={app.closeBrowse}
+            pins={app.pins}
+            onTogglePin={app.onTogglePin}
             tags={tagStatList}
             domains={domainStatList}
             readerClient={client}
             activityEnabled={capabilityPolicy.activity}
-            onPick={(type, id) => {
-              if (!navigateRoute({ kind: 'library', id: 'reading' })) return
-              setSel({ type, id, name: type === 'tag' ? '#' + id : id })
-            }}
+            onPick={app.onBrowsePick}
           />
         )}
 
         <Toast msg={toast?.msg ?? null} icon={toast?.icon} action={toast?.action} />
-        {updateReady && (
+        {app.updateReady && (
           <button
             type="button"
             className="ne-btn"
             style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 90 }}
-            onClick={applyServiceWorkerUpdate}
+            onClick={app.applyUpdate}
           >
             新版本已就绪，点击刷新
           </button>
