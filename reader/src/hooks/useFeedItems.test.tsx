@@ -17,11 +17,29 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
+function bindClient(
+  methods: Partial<ReaderClient>,
+  current: () => boolean = () => true,
+): ReaderClient {
+  const lease = readerIdentity.activeLease!
+  return {
+    ...methods,
+    identityLease: lease,
+    isIdentityCurrent: vi.fn(() => current()),
+    captureIdentity: vi.fn((logicalKey: string) => {
+      if (!current()) return null
+      const ownership = lease.captureOwnership(logicalKey)
+      return lease.isOwnershipCurrent(ownership) ? ownership : null
+    }),
+  } as unknown as ReaderClient
+}
+
 function Harness({ client, q }: { client: ReaderClient; q: string }) {
   const result = useFeedItems(client, { view: 'all', q })
   return (
     <div>
       {result.items.map((candidate) => <span key={candidate.id}>{candidate.title}</span>)}
+      <button type="button" onClick={() => void result.reload()}>reload</button>
       <button type="button" onClick={() => void result.loadMore()}>more</button>
     </div>
   )
@@ -37,10 +55,9 @@ describe('useFeedItems pagination ownership', () => {
       }
       return Promise.resolve(ok({ items: [makeItem('old-1', '旧筛选首页')], total: 2, page: 1, limit: 30 }))
     })
-    const client = {
+    const client = bindClient({
       getFeedItems,
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as ReaderClient
+    } as unknown as Partial<ReaderClient>)
     const rendered = render(<Harness client={client} q="old" />)
 
     await screen.findByText('旧筛选首页')
@@ -59,7 +76,7 @@ describe('useFeedItems pagination ownership', () => {
     const leaseA = readerIdentity.activeLease!
     const ownershipA = leaseA.capture('feed pagination test')
     const oldPage = deferred<ApiResult<PaginatedFeedItemsResponse>>()
-    const clientA = {
+    const clientA = bindClient({
       getFeedItems: vi.fn((params: ListFeedItemsParams) =>
         params.page === 2
           ? oldPage.promise
@@ -70,8 +87,7 @@ describe('useFeedItems pagination ownership', () => {
               limit: 30,
             })),
       ),
-      isIdentityCurrent: vi.fn(() => leaseA.isCurrent(ownershipA)),
-    } as unknown as ReaderClient
+    } as unknown as Partial<ReaderClient>, () => leaseA.isCurrent(ownershipA))
     const rendered = render(<Harness client={clientA} q="same" />)
     await screen.findByText('A 首页')
     fireEvent.click(screen.getByRole('button', { name: 'more' }))
@@ -79,21 +95,21 @@ describe('useFeedItems pagination ownership', () => {
       expect.objectContaining({ q: 'same', page: 2 }),
     ))
 
-    const clientB = {
-      getFeedItems: vi.fn(async () => ok({
-        items: [makeItem('B-1', 'B 首页')],
-        total: 1,
-        page: 1,
-        limit: 30,
-      })),
-      isIdentityCurrent: vi.fn(() => true),
-    } as unknown as ReaderClient
+    let clientB!: ReaderClient
     act(() => {
       const leaseB = readerIdentity.install({
         serverClientDataNamespace: 'server-B',
         physicalNamespace: 'physical-B',
       })
       resourceStore.activateIdentity(leaseB)
+      clientB = bindClient({
+        getFeedItems: vi.fn(async () => ok({
+          items: [makeItem('B-1', 'B 首页')],
+          total: 1,
+          page: 1,
+          limit: 30,
+        })),
+      } as unknown as Partial<ReaderClient>)
       rendered.rerender(<Harness client={clientB} q="same" />)
     })
     await screen.findByText('B 首页')
@@ -110,5 +126,42 @@ describe('useFeedItems pagination ownership', () => {
 
     expect(screen.queryByText('A 迟到的下一页')).not.toBeInTheDocument()
     expect(screen.getByText('B 首页')).toBeInTheDocument()
+  })
+
+  it('does not let a stale reload reset appended items for the replacement filter', async () => {
+    let oldFirstPageCalls = 0
+    const oldReload = deferred<ApiResult<PaginatedFeedItemsResponse>>()
+    const getFeedItems = vi.fn((params: ListFeedItemsParams) => {
+      if (params.q === 'old' && params.page === 1) {
+        oldFirstPageCalls += 1
+        return oldFirstPageCalls === 1
+          ? Promise.resolve(ok({ items: [makeItem('old-1', '旧筛选首页')], total: 2, page: 1, limit: 30 }))
+          : oldReload.promise
+      }
+      if (params.q === 'new' && params.page === 2) {
+        return Promise.resolve(ok({ items: [makeItem('new-2', '新筛选下一页')], total: 2, page: 2, limit: 30 }))
+      }
+      return Promise.resolve(ok({ items: [makeItem('new-1', '新筛选首页')], total: 2, page: 1, limit: 30 }))
+    })
+    const client = bindClient({ getFeedItems } as unknown as Partial<ReaderClient>)
+    const rendered = render(<Harness client={client} q="old" />)
+
+    await screen.findByText('旧筛选首页')
+    fireEvent.click(screen.getByRole('button', { name: 'reload' }))
+    await waitFor(() => expect(oldFirstPageCalls).toBe(2))
+
+    rendered.rerender(<Harness client={client} q="new" />)
+    await screen.findByText('新筛选首页')
+    fireEvent.click(screen.getByRole('button', { name: 'more' }))
+    await screen.findByText('新筛选下一页')
+
+    await act(async () => {
+      oldReload.resolve(ok({ items: [makeItem('old-reload', '迟到 reload')], total: 1, page: 1, limit: 30 }))
+      await oldReload.promise
+    })
+
+    expect(screen.getByText('新筛选首页')).toBeInTheDocument()
+    expect(screen.getByText('新筛选下一页')).toBeInTheDocument()
+    expect(screen.queryByText('迟到 reload')).not.toBeInTheDocument()
   })
 })

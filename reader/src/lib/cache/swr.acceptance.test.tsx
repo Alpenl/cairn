@@ -22,7 +22,35 @@ function useTestLinks(client: ReaderClient, selection: Parameters<typeof useLink
     configurable: true,
     value: lease,
   })
+  Object.defineProperty(client, 'captureIdentity', {
+    configurable: true,
+    value: (logicalKey: string) => {
+      const ownership = lease.captureOwnership(logicalKey)
+      return lease.isOwnershipCurrent(ownership) ? ownership : null
+    },
+  })
   return useLinks(client as IdentityBoundReaderClient, selection)
+}
+
+function bindTestClient(client: ReaderClient): ReaderClient {
+  const lease = readerIdentity.activeLease
+  if (!lease) throw new Error('test identity lease is not active')
+  Object.defineProperty(client, 'identityLease', {
+    configurable: true,
+    value: lease,
+  })
+  Object.defineProperty(client, 'captureIdentity', {
+    configurable: true,
+    value: (logicalKey: string) => {
+      const ownership = lease.captureOwnership(logicalKey)
+      return lease.isOwnershipCurrent(ownership) ? ownership : null
+    },
+  })
+  Object.defineProperty(client, 'isIdentityCurrent', {
+    configurable: true,
+    value: () => true,
+  })
+  return client
 }
 
 function linksClient(items: LinkResponse[]) {
@@ -62,7 +90,7 @@ describe('PF3 量化验收：切走再切回来不重拉', () => {
       counts: { all: 3, unread: 1, starred: 0, later: 0 },
     }
     const getSubscriptions = vi.fn(async () => ok(payload))
-    const client = { getSubscriptions } as unknown as ReaderClient
+    const client = bindTestClient({ getSubscriptions } as unknown as ReaderClient)
 
     const first = renderHook(() => useSubscriptions(client))
     await waitFor(() => expect(first.result.current.loading).toBe(false))

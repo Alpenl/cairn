@@ -7,7 +7,10 @@ import {
   readerRelatedTagsCacheKey,
 } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
-import { useCachedResource } from '../lib/cache/useCachedResource'
+import {
+  cacheKeyForActiveReaderIdentity,
+  useFinalIdentityCachedResource,
+} from './useIdentityCachedResource'
 import { useReaderClient } from './useReaderClient'
 
 const LOCAL_FALLBACK_LIMIT = 12
@@ -22,31 +25,6 @@ export interface ReaderRelatedTagsState {
 
 function supportsRelatedTags(client: IdentityBoundReaderClient | null): boolean {
   return typeof (client as unknown as { getRelatedTags?: unknown } | null)?.getRelatedTags === 'function'
-}
-
-function isActiveClient(client: IdentityBoundReaderClient | null): boolean {
-  if (!client) return false
-  try {
-    const lease = client.identityLease
-    return Boolean(
-      lease &&
-      client.isIdentityCurrent() &&
-      resourceStore.isIdentityActive(lease),
-    )
-  } catch {
-    return false
-  }
-}
-
-function relatedTagsCacheKey(
-  linkId: string,
-  client: IdentityBoundReaderClient | null,
-): string {
-  try {
-    return readerRelatedTagsCacheKey(linkId, client?.identityLease.context, LOCAL_FALLBACK_LIMIT)
-  } catch {
-    return readerRelatedTagsCacheKey(linkId, null, LOCAL_FALLBACK_LIMIT)
-  }
 }
 
 function stableLocalRelatedTags(
@@ -93,14 +71,20 @@ export function useReaderRelatedTags(
 ): ReaderRelatedTagsState {
   const client = useReaderClient(explicitClient)
   const linkID = link?.id ?? null
-  const canFetch = Boolean(options.enabled !== false && linkID && isActiveClient(client) && supportsRelatedTags(client))
-  const cacheKey = canFetch
-    ? relatedTagsCacheKey(linkID as string, client)
-    : null
-  const resource = useCachedResource<ReaderRelatedTagsResponse>(
+  const cacheKey = options.enabled === false || !linkID
+    ? null
+    : cacheKeyForActiveReaderIdentity(
+      client,
+      'build related-tags cache key',
+      (context) => readerRelatedTagsCacheKey(linkID, context, LOCAL_FALLBACK_LIMIT),
+    )
+  const {
+    resource,
+  } = useFinalIdentityCachedResource<ReaderRelatedTagsResponse>(
+    client,
     cacheKey,
-    () => client!.getRelatedTags(linkID!, LOCAL_FALLBACK_LIMIT),
-    { enabled: canFetch },
+    ({ client }) => client.getRelatedTags(linkID!, LOCAL_FALLBACK_LIMIT),
+    { enabled: supportsRelatedTags(client) },
   )
   const localTags = useMemo(
     () => stableLocalRelatedTags(link, corpus).slice(0, LOCAL_FALLBACK_LIMIT),

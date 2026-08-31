@@ -6,6 +6,7 @@ import { MainView } from './MainView'
 import { DATA_NAMESPACE_HEADER, IdentityBoundReaderClient } from '../lib/api/client'
 import { makeLink } from '../test/fixtures'
 import { IdentityAuthority } from '../lib/identity'
+import { resourceStore } from '../lib/cache/store'
 
 beforeEach(() => {
   window.history.replaceState({}, '', '/?view=reading')
@@ -26,6 +27,7 @@ describe('MainView read model', () => {
       serverClientDataNamespace: 'server-test',
       physicalNamespace: 'physical-test',
     })
+    resourceStore.activateIdentity(identity)
     const ownershipHeaders = { [DATA_NAMESPACE_HEADER]: 'server-test' }
     vi.stubGlobal(
       'fetch',
@@ -87,7 +89,7 @@ describe('MainView read model', () => {
         (url) =>
           url.pathname === '/api/links' &&
           url.searchParams.get('status') === 'done' &&
-          url.searchParams.has('after'),
+          (url.searchParams.get('after') ?? '') !== '',
       ),
     ).toBe(false)
   })

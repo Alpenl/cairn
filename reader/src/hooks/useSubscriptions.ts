@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import type { ReaderClient } from '../lib/api/client'
 import type { ApiError } from '@webtag/api'
 import type { FeedSubscription, SubscriptionsResponse } from '../lib/api/types'
 import type { IdentityOwnership } from '../lib/identity'
 import { SUBSCRIPTIONS_CACHE_KEY } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
-import { useCachedResource } from '../lib/cache/useCachedResource'
+import { useIdentityBoundOperationGate } from './identityBoundOperation'
+import { useFinalIdentityCachedResource } from './useIdentityCachedResource'
+import { useIdentityPolling } from './useIdentityPolling'
 
 const EMPTY_SUBSCRIPTIONS: SubscriptionsResponse = {
   folders: [],
@@ -22,23 +24,33 @@ export { SUBSCRIPTIONS_CACHE_KEY } from '../lib/cache/keys'
  * 也不再产生任何重渲染。
  */
 export function useSubscriptions(client: ReaderClient) {
-  const resource = useCachedResource<SubscriptionsResponse>(
+  const {
+    canFetch,
+    resource,
+  } = useFinalIdentityCachedResource<SubscriptionsResponse>(
+    client,
     SUBSCRIPTIONS_CACHE_KEY,
-    (conditional) => client.getSubscriptions(undefined, conditional),
+    ({ client, signal }) => client.getSubscriptions(undefined, { signal }),
   )
+  const operationGate = useIdentityBoundOperationGate<'reload'>(client, [SUBSCRIPTIONS_CACHE_KEY])
 
   const reload = useCallback(
     async (quiet = false): Promise<boolean> => {
+      const operation = operationGate.begin('reload', 'reload subscriptions')
+      if (!operation) return false
       const result = await resource.reload({ silent: quiet })
-      return Boolean(result?.ok)
+      return Boolean(result?.ok && operationGate.isCurrent(operation))
     },
-    [resource],
+    [operationGate, resource],
   )
 
-  useEffect(() => {
-    const timer = window.setInterval(() => void reload(true), 60_000)
-    return () => window.clearInterval(timer)
-  }, [reload])
+  useIdentityPolling(client, {
+    enabled: canFetch,
+    intervalMs: 60_000,
+    logicalKey: 'poll subscriptions',
+    ownerKey: SUBSCRIPTIONS_CACHE_KEY,
+    onTick: () => { void reload(true) },
+  })
 
   const patchSubscription = useCallback((
     id: string,
@@ -73,7 +85,7 @@ export function useSubscriptions(client: ReaderClient) {
   return useMemo(
     () => ({
       data: resource.data ?? EMPTY_SUBSCRIPTIONS,
-      loading: resource.loading,
+      loading: canFetch && resource.loading,
       error: resource.error as ApiError | null,
       reload,
       patchSubscription,
@@ -81,6 +93,7 @@ export function useSubscriptions(client: ReaderClient) {
     }),
     [
       resource.data,
+      canFetch,
       resource.loading,
       resource.error,
       reload,

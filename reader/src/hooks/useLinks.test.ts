@@ -21,9 +21,24 @@ function bindClient(
   client: ReaderClient,
   lease = readerIdentity.activeLease!,
 ): IdentityBoundReaderClient {
+  const current = (client as { isIdentityCurrent?: () => boolean }).isIdentityCurrent
   Object.defineProperty(client, 'identityLease', {
     configurable: true,
     value: lease,
+  })
+  if (!current) {
+    Object.defineProperty(client, 'isIdentityCurrent', {
+      configurable: true,
+      value: () => true,
+    })
+  }
+  Object.defineProperty(client, 'captureIdentity', {
+    configurable: true,
+    value: (logicalKey: string) => {
+      if (current && !current.call(client)) return null
+      const ownership = lease.captureOwnership(logicalKey)
+      return lease.isOwnershipCurrent(ownership) ? ownership : null
+    },
   })
   return client as IdentityBoundReaderClient
 }

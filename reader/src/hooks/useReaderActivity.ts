@@ -10,8 +10,11 @@ import {
   READER_ACTIVITY_CACHE_PREFIX,
   readerActivityCacheKey,
 } from '../lib/cache/keys'
-import { useCachedResource } from '../lib/cache/useCachedResource'
 import { resourceStore } from '../lib/cache/store'
+import {
+  cacheKeyForActiveReaderIdentity,
+  useFinalIdentityCachedResource,
+} from './useIdentityCachedResource'
 import { useReaderClient } from './useReaderClient'
 
 const ACTIVITY_PAGE_LIMIT = 100
@@ -42,31 +45,6 @@ interface CachedReaderActivity {
   readonly pages: readonly CachedReaderActivityPage[]
   readonly complete: boolean
   readonly continuationError: ApiError | null
-}
-
-function isActiveClient(client: IdentityBoundReaderClient | null): boolean {
-  if (!client) return false
-  try {
-    const lease = client.identityLease
-    return Boolean(
-      lease &&
-      client.isIdentityCurrent() &&
-      resourceStore.isIdentityActive(lease),
-    )
-  } catch {
-    return false
-  }
-}
-
-function activityCacheKey(
-  kind: ReaderActivityKind,
-  client: IdentityBoundReaderClient | null,
-): string {
-  try {
-    return readerActivityCacheKey(kind, client?.identityLease.context, ACTIVITY_PAGE_LIMIT)
-  } catch {
-    return readerActivityCacheKey(kind, null, ACTIVITY_PAGE_LIMIT)
-  }
 }
 
 function isValidActivityTimestamp(value: string): boolean {
@@ -239,20 +217,26 @@ export function useReaderActivity(
   const client = useReaderClient(explicitClient)
   const kind = options.kind ?? 'all'
   const allPages = options.allPages ?? false
-  const canFetch = options.enabled !== false && isActiveClient(client)
-  const cacheKey = canFetch
-    ? activityCacheKey(kind, client)
-    : null
-  const resource = useCachedResource<CachedReaderActivity>(
+  const cacheKey = options.enabled === false
+    ? null
+    : cacheKeyForActiveReaderIdentity(
+      client,
+      'build reader activity cache key',
+      (context) => readerActivityCacheKey(kind, context, ACTIVITY_PAGE_LIMIT),
+    )
+  const {
+    canFetch,
+    resource,
+  } = useFinalIdentityCachedResource<CachedReaderActivity>(
+    client,
     cacheKey,
-    ({ signal }) => fetchActivity(
-      client!,
+    ({ client, signal }) => fetchActivity(
+      client as IdentityBoundReaderClient,
       kind,
       allPages,
       signal,
       cacheKey ? resourceStore.peek<CachedReaderActivity>(cacheKey).data : undefined,
     ),
-    { enabled: canFetch },
   )
   const {
     data: activityData,

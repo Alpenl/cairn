@@ -3,8 +3,8 @@ import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ApiError, ApiResult } from '@webtag/api'
 import type { DomainTreeSummaryEnvelope, DomainTreeSummaryResponse } from '../lib/api/types'
 import { DOMAIN_SUMMARIES_CACHE_KEY } from '../lib/cache/keys'
-import { useCachedResource } from '../lib/cache/useCachedResource'
 import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryReload'
+import { useFinalIdentityCachedResource } from './useIdentityCachedResource'
 
 export interface DomainSummariesState {
   summaries: DomainTreeSummaryResponse[] | null
@@ -22,9 +22,12 @@ export {
 
 /** 读取 Reading partition 的 truthful 域名聚合；null 表示尚未成功取得摘要。 */
 export function useDomainSummaries(client: IdentityBoundReaderClient): DomainSummariesState {
-  const resource = useCachedResource<DomainTreeSummaryEnvelope>(
+  const {
+    resource,
+  } = useFinalIdentityCachedResource<DomainTreeSummaryEnvelope>(
+    client,
     DOMAIN_SUMMARIES_CACHE_KEY,
-    (conditional) => client.getDomainSummaries('reading', conditional),
+    ({ client, signal }) => client.getDomainSummaries('reading', { signal }),
   )
   const reload = useCallback(
     (options: LibraryReloadOptions = {}) => reloadForActiveIdentity(

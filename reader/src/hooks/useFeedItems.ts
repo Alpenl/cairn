@@ -3,7 +3,9 @@ import type { ReaderClient } from '../lib/api/client'
 import type { ApiError } from '@webtag/api'
 import type { FeedItem, ListFeedItemsParams, PaginatedFeedItemsResponse } from '../lib/api/types'
 import { feedItemsCacheKey } from '../lib/cache/keys'
-import { useCachedResource } from '../lib/cache/useCachedResource'
+import { useFinalIdentityCachedResource } from './useIdentityCachedResource'
+import { useIdentityBoundOperationGate } from './identityBoundOperation'
+import { useIdentityPolling } from './useIdentityPolling'
 
 const PAGE_SIZE = 30
 
@@ -36,9 +38,15 @@ export function useFeedItems(client: ReaderClient, filters: ListFeedItemsParams)
   )
   const key = feedItemsCacheKey({ ...stableFilters, page: 1 })
 
-  const first = useCachedResource<PaginatedFeedItemsResponse>(key, (conditional) =>
-    client.getFeedItems({ ...stableFilters, page: 1 }, conditional),
+  const {
+    canFetch,
+    resource: first,
+  } = useFinalIdentityCachedResource<PaginatedFeedItemsResponse>(
+    client,
+    key,
+    ({ client, signal }) => client.getFeedItems({ ...stableFilters, page: 1 }, { signal }),
   )
+  const operationGate = useIdentityBoundOperationGate<'reload' | 'load-more'>(client, [key])
 
   const [extra, setExtra] = useState<FeedItem[]>([])
   const [page, setPage] = useState(1)
@@ -71,34 +79,47 @@ export function useFeedItems(client: ReaderClient, filters: ListFeedItemsParams)
 
   const reload = useCallback(
     async (quiet = false): Promise<boolean> => {
+      const operation = operationGate.begin('reload', 'reload feed items')
+      if (!operation) return false
       const result = await first.reload({ silent: quiet })
       if (result?.ok) {
-        setExtra([])
-        setPage(1)
+        operationGate.commit(operation, () => {
+          setExtra([])
+          setPage(1)
+        })
       }
-      return Boolean(result?.ok)
+      return Boolean(result?.ok && operationGate.isCurrent(operation))
     },
-    [first],
+    [first, operationGate],
   )
 
-  useEffect(() => {
-    const timer = window.setInterval(() => void reload(true), 60_000)
-    return () => window.clearInterval(timer)
-  }, [reload])
+  useIdentityPolling(client, {
+    enabled: canFetch,
+    intervalMs: 60_000,
+    logicalKey: 'poll feed items',
+    ownerKey: key,
+    onTick: () => { void reload(true) },
+  })
 
   const loadMore = useCallback(async (): Promise<void> => {
-    if (first.loading || loadingMore || items.length >= total) return
+    if (!canFetch || first.loading || loadingMore || items.length >= total) return
+    const operation = operationGate.begin('load-more', 'load more feed items')
+    if (!operation) return
     const nextPage = page + 1
     setLoadingMore(true)
     const requestedKey = keyRef.current
-    const result = await client.getFeedItems({ ...stableFilters, page: nextPage })
-    if (!client.isIdentityCurrent()) return
-    if (keyRef.current !== requestedKey) return // 筛选已切换，这一页不再属于当前列表
-    setLoadingMore(false)
-    if (!result.ok) return
-    setExtra((current) => mergeUnique(current, result.data.items))
-    setPage(nextPage)
-  }, [client, first.loading, items.length, loadingMore, page, stableFilters, total])
+    try {
+      const result = await client.getFeedItems({ ...stableFilters, page: nextPage })
+      operationGate.commit(operation, () => {
+        if (keyRef.current !== requestedKey) return // 筛选已切换，这一页不再属于当前列表
+        if (!result.ok) return
+        setExtra((current) => mergeUnique(current, result.data.items))
+        setPage(nextPage)
+      })
+    } finally {
+      operationGate.finish(operation, () => setLoadingMore(false))
+    }
+  }, [canFetch, client, first.loading, items.length, loadingMore, operationGate, page, stableFilters, total])
 
   const patchItem = useCallback((id: string, patch: Partial<FeedItem>) => {
     setPatches((current) => ({ ...current, [id]: { ...current[id], ...patch } }))
@@ -115,7 +136,7 @@ export function useFeedItems(client: ReaderClient, filters: ListFeedItemsParams)
   return {
     items,
     total,
-    loading: first.loading,
+    loading: canFetch && first.loading,
     loadingMore,
     error: first.error as ApiError | null,
     hasMore: items.length < total,

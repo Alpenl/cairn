@@ -30,6 +30,7 @@ import { useCachedResource } from '../lib/cache/useCachedResource'
 import { useAnnotatedLinks } from './useAnnotatedLinks'
 import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryReload'
 import { registerReaderClient } from './useReaderClient'
+import { useIdentityPolling } from './useIdentityPolling'
 
 export { LINKS_CACHE_PREFIX } from '../lib/cache/keys'
 
@@ -411,22 +412,17 @@ export function useLinks(
   // 网络抖动会把用户正读着的列表换成红色错误块——用户什么都没做。
   // 成功但数据未变时 store 不通知订阅者，因此这条定时器在稳态下**不产生任何
   // 重渲染**。
-  useEffect(() => {
-    if (annotatedSelected) return
+  useIdentityPolling(client, {
     // 只在停留在"流的开头"时静默刷新：已经翻过页的人不该被拽回顶部。
-    if (cursor !== undefined) return
-    const tick = () => {
-      if (document.visibilityState !== 'visible') return
-      void reload({ silent: true })
-    }
-    const timer = window.setInterval(tick, AUTO_REFRESH_MS)
+    enabled: !annotatedSelected && cursor === undefined,
+    intervalMs: AUTO_REFRESH_MS,
+    logicalKey: 'poll reading links',
+    ownerKey: selKey,
+    visibleOnly: true,
     // 从后台切回前台时立即补一次，而不是再等一个完整周期。
-    document.addEventListener('visibilitychange', tick)
-    return () => {
-      window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', tick)
-    }
-  }, [annotatedSelected, cursor, reload])
+    tickOnVisible: true,
+    onTick: () => { void reload({ silent: true }) },
+  })
 
   const loadMore = useCallback(() => {
     if (
