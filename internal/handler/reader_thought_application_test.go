@@ -40,7 +40,7 @@ func TestReaderThoughtRoutesMapCommandAndAck(t *testing.T) {
 		SubmittedKey: model.ReaderThoughtVersionKey{LogicalClock: 3, DeviceID: "device-1", OpID: "op-1"},
 		WinnerKey:    model.ReaderThoughtVersionKey{LogicalClock: 4, DeviceID: "device-2", OpID: "op-2"},
 	}}}
-	applications := service.NewReaderApplications(readerServiceTestStores(store), nil)
+	applications := readerServiceTestApplications(store)
 	routes := NewReaderThoughtRoutes(applications.Thoughts)
 	response, err := routes.PushThoughtOps(context.Background(), dto.ReaderThoughtOpsRequest{Ops: []dto.ReaderThoughtOpRequest{{
 		ContractVersion: model.ReaderThoughtContractVersion,
@@ -72,7 +72,7 @@ func TestReaderThoughtRoutesMapPagesAndFrozenSnapshot(t *testing.T) {
 		WinnerKey:            model.ReaderThoughtVersionKey{LogicalClock: 5, DeviceID: "device", OpID: "op"},
 		OriginalHostSnapshot: json.RawMessage(`{"blocks":["frozen original"]}`),
 	}}}
-	applications := service.NewReaderApplications(readerServiceTestStores(store), nil)
+	applications := readerServiceTestApplications(store)
 	response, err := NewReaderThoughtRoutes(applications.Thoughts).ListThoughts(context.Background(), "", "", 30)
 	if err != nil {
 		t.Fatalf("ListThoughts() error = %v", err)
@@ -99,7 +99,7 @@ func TestReaderThoughtRoutesMapConflictOperationEnvelope(t *testing.T) {
 	store := &readerThoughtApplicationStore{conflicts: []model.ReaderThoughtConflict{{
 		Sequence: 10, AnnotationID: "thought-1", Winner: operation, Loser: operation,
 	}}}
-	applications := service.NewReaderApplications(readerServiceTestStores(store), nil)
+	applications := readerServiceTestApplications(store)
 	response, err := NewReaderThoughtRoutes(applications.Thoughts).ListThoughtConflicts(context.Background(), "", 30)
 	if err != nil {
 		t.Fatalf("ListThoughtConflicts() error = %v", err)

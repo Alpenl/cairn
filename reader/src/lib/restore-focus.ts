@@ -19,10 +19,11 @@
 const RETRY_INTERVAL_MS = 16
 
 /**
- * 尝试上限。约 20 帧；再等下去说明这一屏根本没有可聚焦的落点，继续轮询只会
- * 在后台标签页里空转。
+ * 尝试上限。约 2 秒；原生 dialog 关闭后，headless shell 和 React commit
+ * 在高负载门禁里都可能比一小段帧窗口更慢。再等下去说明这一屏根本没有可
+ * 聚焦的落点，继续轮询只会在后台标签页里空转。
  */
-const MAX_ATTEMPTS = 20
+const MAX_ATTEMPTS = 125
 
 export interface RestoreFocusOptions {
   /** 每次尝试重新求值——目标可能在重渲染中被替换。 */
@@ -41,6 +42,8 @@ function focusable(element: HTMLElement | null | undefined): element is HTMLElem
 }
 
 export function restoreFocusWhenReady(options: RestoreFocusOptions): CancelRestoreFocus {
+  const runtimeWindow = window
+  const runtimeDocument = document
   const retryInterval = options.retryIntervalMs ?? RETRY_INTERVAL_MS
   const maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS
 
@@ -50,8 +53,16 @@ export function restoreFocusWhenReady(options: RestoreFocusOptions): CancelResto
 
   const cancel: CancelRestoreFocus = () => {
     settled = true
-    for (const timer of timers) window.clearTimeout(timer)
+    for (const timer of timers) runtimeWindow.clearTimeout(timer)
     timers.clear()
+  }
+
+  const schedule = (delay: number) => {
+    const timer = runtimeWindow.setTimeout(() => {
+      timers.delete(timer)
+      attempt()
+    }, delay)
+    timers.add(timer)
   }
 
   const attempt = () => {
@@ -61,7 +72,7 @@ export function restoreFocusWhenReady(options: RestoreFocusOptions): CancelResto
       target.focus()
       // 焦点真的落上了才算完。否则说明目标此刻仍不接受焦点，下一帧带着
       // 刷新后的状态再试。
-      if (document.activeElement === target) {
+      if (runtimeDocument.activeElement === target) {
         cancel()
         return
       }
@@ -71,13 +82,13 @@ export function restoreFocusWhenReady(options: RestoreFocusOptions): CancelResto
       cancel()
       return
     }
-    timers.add(window.setTimeout(attempt, retryInterval))
+    schedule(retryInterval)
   }
 
   // rAF 只在页面参与渲染时回调——标签页切到后台、窗口最小化或无显示环境里
   // 可能迟迟不触发甚至不触发。用一个立即的 setTimeout 并行兜底。
-  window.requestAnimationFrame(attempt)
-  timers.add(window.setTimeout(attempt, 0))
+  runtimeWindow.requestAnimationFrame(attempt)
+  schedule(0)
 
   return cancel
 }

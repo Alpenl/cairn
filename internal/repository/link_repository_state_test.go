@@ -28,6 +28,7 @@ func TestLinkRepositoryDeleteReturnsNotFoundWhenNoRowsAreAffected(t *testing.T) 
 	mock.ExpectQuery(regexp.QuoteMeta(lockLinkForDeleteSQL)).
 		WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"id"}).AddRow(linkID))
+	expectNoLinkThoughtHostTombstones(mock, linkID)
 	mock.ExpectExec(regexp.QuoteMeta(terminalizeDeletedTranslationAttemptsSQL)).
 		WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))

@@ -19,7 +19,6 @@ import (
 	"webtag/internal/httperr"
 	"webtag/internal/model"
 	"webtag/internal/repository"
-	readerservice "webtag/internal/service"
 )
 
 type readerTodoRevisionState struct {
@@ -249,7 +248,7 @@ func TestReaderTodoHostRevisionPostgresContract(t *testing.T) {
 		before := readReaderTodoPatchState(t, pool)
 		gin.SetMode(gin.TestMode)
 		router := gin.New()
-		readerService := readerservice.NewReaderApplications(postgresReaderStores(reader), nil).Todos
+		readerService := postgresReaderApplications(t, pool, reader).Todos
 		handler.RegisterReaderRoutes(router, handler.ReaderRoutes{Todos: handler.NewReaderTodoRoutes(readerService)})
 		response := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPatch, "/api/todos/"+projected.ID.String(), strings.NewReader(`{"done":true,"expected_host_revision":null}`)).WithContext(ctx)

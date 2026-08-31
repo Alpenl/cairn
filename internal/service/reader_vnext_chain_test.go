@@ -391,8 +391,8 @@ func TestReaderFeatureApplicationsCrossSurfaceChain(t *testing.T) {
 		ContractVersion: 1, OpID: "thought-op-1", DeviceID: "reader-device-1", LogicalClock: 2,
 		OperationKind: "add", AnnotationID: thoughtID,
 		HostKind: "link", HostID: store.linkID.String(),
-		Target:  json.RawMessage(`{"kind":"saved-content","host_id":"` + store.linkID.String() + `","version":{"content_revision":3}}`),
-		Payload: json.RawMessage(`{"body":"A synced idea becomes searchable.","quote":{"exact":"Captured body"}}`),
+		Target:  thoughtTargetJSON(`{"kind":"saved-content","host_id":"` + store.linkID.String() + `","version":{"content_revision":3}}`),
+		Payload: thoughtPayloadJSON(`{"body":"A synced idea becomes searchable.","quote":{"exact":"Captured body"}}`),
 	}}}
 	acks, err := service.PushThoughtOps(ctx, thoughtRequest)
 	if err != nil || len(acks) != 1 || acks[0].Sequence != 2 ||
@@ -418,9 +418,8 @@ func TestReaderFeatureApplicationsCrossSurfaceChain(t *testing.T) {
 		t.Fatalf("SaveNoteDraft() = %#v, error = %v", draft, err)
 	}
 	expectedDraftRevision, expectedPublishedRevision := draft.DraftRevision, note.PublishedRevision
-	published, err := service.PublishNote(ctx, model.ReaderNotePublishCommand{
+	published, err := service.PublishNote(ctx, ReaderNotePublishCommand{
 		NoteID: note.ID, ExpectedDraftRevision: expectedDraftRevision, ExpectedPublishedRevision: expectedPublishedRevision,
-		ReanchorOps: []json.RawMessage{json.RawMessage(`{"thought_id":"` + thoughtID + `","status":"reanchored"}`)},
 	})
 	if err != nil || published.DraftContent != nil || published.PublishedContent == "" {
 		t.Fatalf("PublishNote() = %#v, error = %v", published, err)

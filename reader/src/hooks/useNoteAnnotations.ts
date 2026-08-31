@@ -1,20 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 
 import type { Annotation, AnnotationInput, AnnotationPatch } from '../lib/annotations'
 import type { IdentityLease } from '../lib/identity'
-import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../lib/reader-events'
-import {
-  compactAnnotationOperations,
-  commitAnnotationOperation,
-  readAnnotationSnapshot,
-  type AnnotationCommitResult,
-} from '../lib/user-data/annotation-store'
 import { cloneTargetAnnotation } from '../lib/user-data/annotation-codec'
 import {
   annotationTargetKey,
   canonicalAnnotationTarget,
   type NoteAnnotationTarget,
 } from '../lib/user-data/annotation-types'
+import {
+  commitAnnotationMutation,
+  randomAnnotationToken,
+  useAnnotationLifecycle,
+  type AnnotationMutationResult,
+} from './useAnnotationLifecycle'
 
 export type NoteAnnotationCommandResult =
   | {
@@ -36,23 +35,16 @@ export interface UseNoteAnnotationsResult {
 
 const EMPTY_ANNOTATIONS: readonly Annotation[] = Object.freeze([])
 
-function randomToken(): string | null {
-  try {
-    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
-    const bytes = new Uint8Array(16)
-    crypto.getRandomValues(bytes)
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
-  } catch {
-    return null
+function noteCommandResult(result: AnnotationMutationResult): NoteAnnotationCommandResult {
+  if (result.status === 'committed' || result.status === 'duplicate') {
+    return {
+      status: result.status,
+      annotationId: result.annotationId,
+      sequence: result.sequence,
+    }
   }
-}
-
-function commandResult(result: AnnotationCommitResult, annotationId: string): NoteAnnotationCommandResult {
-  if (result.status === 'op-id-conflict') return { status: result.status }
   return {
     status: result.status,
-    annotationId,
-    sequence: result.sequence,
   }
 }
 
@@ -77,84 +69,42 @@ export function useNoteAnnotations(
   )
   const targetKey = target ? annotationTargetKey(target) : null
   const identityKey = `${lease?.context.physicalNamespace ?? 'none'}\0${noteID ?? 'none'}\0${targetKey ?? 'none'}`
-  const generation = useMemo(
-    () => ({ key: identityKey, controller: new AbortController() }),
-    [identityKey],
+  const targets = useMemo(
+    () => target ? [target] : [],
+    [target],
   )
-  const [state, setState] = useState<{
-    readonly identityKey: string
-    readonly status: 'idle' | 'loading' | 'ready' | 'error'
-    readonly annotations: readonly Annotation[]
-  }>({ identityKey, status: 'idle', annotations: EMPTY_ANNOTATIONS })
-  const stateRef = useRef(state)
-
-  const updateState = useCallback((next: typeof state): void => {
-    stateRef.current = next
-    setState(next)
-  }, [])
-
-  useEffect(() => () => generation.controller.abort(), [generation])
-
-  const refresh = useCallback(async (): Promise<boolean> => {
-    if (!lease || !noteID || !target || generation.controller.signal.aborted) {
-      updateState({ identityKey, status: 'ready', annotations: EMPTY_ANNOTATIONS })
-      return false
-    }
-    updateState(stateRef.current.identityKey === identityKey
-      ? { ...stateRef.current, status: 'loading' }
-      : { identityKey, status: 'loading', annotations: EMPTY_ANNOTATIONS })
-    const result = await readAnnotationSnapshot(lease, noteID, target)
-    if (generation.controller.signal.aborted) return false
-    if (!result.ok) {
-      updateState({ identityKey, status: 'error', annotations: EMPTY_ANNOTATIONS })
-      return false
-    }
-    updateState({ identityKey, status: 'ready', annotations: result.value.annotations })
-    return true
-  }, [generation, identityKey, lease, noteID, target, updateState])
-
-  useEffect(() => {
-    updateState({ identityKey, status: 'loading', annotations: EMPTY_ANNOTATIONS })
-    void refresh()
-  }, [identityKey, refresh, updateState])
-
-  useEffect(() => {
-    const onChange = () => void refresh()
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void refresh()
-    }
-    const unsubscribe = subscribeReaderEvents(
-      [READER_EVENTS.annotationsChanged, READER_EVENTS.thoughtsSynced],
-      onChange,
-    )
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    return () => {
-      unsubscribe()
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-    }
-  }, [refresh])
+  const {
+    state,
+    signal,
+    refresh,
+  } = useAnnotationLifecycle({
+    identityKey,
+    lease,
+    linkId: noteID,
+    targets,
+    emptyExtra: null,
+  })
 
   const commit = useCallback(async (
-    operation: Parameters<typeof commitAnnotationOperation>[1],
+    operation: Parameters<typeof commitAnnotationMutation>[0]['operation'],
     annotationId: string,
   ): Promise<NoteAnnotationCommandResult> => {
-    if (!lease || !noteID || !target || generation.controller.signal.aborted) return { status: 'stale' }
-    const result = await commitAnnotationOperation(lease, operation, {
-      signal: generation.controller.signal,
-    })
-    if (!result.ok) return generation.controller.signal.aborted ? { status: 'stale' } : { status: 'failed' }
-    const outcome = commandResult(result.value, annotationId)
-    if (outcome.status === 'op-id-conflict') return outcome
-    await refresh()
-    emitReaderEvent(READER_EVENTS.annotationsChanged)
-    void compactAnnotationOperations(lease, noteID, target)
-    return outcome
-  }, [generation, lease, noteID, refresh, target])
+    if (!target) return { status: 'stale' }
+    return noteCommandResult(await commitAnnotationMutation({
+      lease,
+      linkId: noteID,
+      target,
+      operation,
+      annotationId,
+      signal,
+      refresh,
+    }))
+  }, [lease, noteID, refresh, signal, target])
 
   const add = useCallback(async (input: AnnotationInput): Promise<NoteAnnotationCommandResult> => {
     if (!target || !noteID) return { status: 'stale' }
-    const annotationToken = randomToken()
-    const operationToken = randomToken()
+    const annotationToken = randomAnnotationToken()
+    const operationToken = randomAnnotationToken()
     if (!annotationToken || !operationToken) return { status: 'failed' }
     const annotationId = `an:${annotationToken}`
     const now = Date.now()
@@ -184,7 +134,7 @@ export function useNoteAnnotations(
   ): Promise<NoteAnnotationCommandResult> => {
     if (!target || !noteID || annotation.sourceNoteRevision !== target.noteRevision ||
       !cloneTargetAnnotation(annotation, target)) return { status: 'stale' }
-    const operationToken = randomToken()
+    const operationToken = randomAnnotationToken()
     if (!operationToken) return { status: 'failed' }
     return commit({
       kind: 'update',
@@ -199,7 +149,7 @@ export function useNoteAnnotations(
   const remove = useCallback(async (annotation: Annotation): Promise<NoteAnnotationCommandResult> => {
     if (!target || !noteID || annotation.sourceNoteRevision !== target.noteRevision ||
       !cloneTargetAnnotation(annotation, target)) return { status: 'stale' }
-    const operationToken = randomToken()
+    const operationToken = randomAnnotationToken()
     if (!operationToken) return { status: 'failed' }
     return commit({
       kind: 'delete',

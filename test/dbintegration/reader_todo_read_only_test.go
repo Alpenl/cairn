@@ -10,7 +10,6 @@ import (
 
 	"webtag/internal/model"
 	"webtag/internal/repository"
-	readerservice "webtag/internal/service"
 )
 
 // readReaderTodoWriteFingerprint captures the volatile columns a projection
@@ -39,7 +38,7 @@ func TestReaderHomeAndTodosAreReadOnlyUnderConcurrency(t *testing.T) {
 	pool := StartPostgres(t)
 	ctx := t.Context()
 	reader := repository.NewPGXReaderVNextRepository(pool)
-	service := readerservice.NewReaderApplications(postgresReaderStores(reader), nil).Todos
+	service := postgresReaderApplications(t, pool, reader).Todos
 
 	if _, err := reader.CreateNote(ctx, model.ReaderNote{
 		Title:            "Concurrent read host",

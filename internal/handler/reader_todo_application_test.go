@@ -9,7 +9,6 @@ import (
 
 	"webtag/internal/dto"
 	"webtag/internal/model"
-	"webtag/internal/service"
 )
 
 func TestReaderTodoSourceHrefUsesCanonicalReaderRoutes(t *testing.T) {
@@ -53,7 +52,7 @@ func TestReaderTodoRoutesRejectInvalidIDBeforeApplicationStore(t *testing.T) {
 	t.Parallel()
 
 	store := &readerTodoPatchPresenceStore{}
-	applications := service.NewReaderApplications(readerServiceTestStores(store), nil)
+	applications := readerServiceTestApplications(store)
 	routes := NewReaderTodoRoutes(applications.Todos)
 
 	_, err := routes.PatchTodo(context.Background(), "not-a-uuid", dto.ReaderTodoPatchRequest{})

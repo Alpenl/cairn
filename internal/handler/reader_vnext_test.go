@@ -198,7 +198,7 @@ func TestReaderActivityHandlerRejectsTamperedAndCrossBoundCursor(t *testing.T) {
 		{Kind: "tag", Key: "alpha", NormalizedKey: "alpha", LastAt: when},
 		{Kind: "tag", Key: "beta", NormalizedKey: "beta", LastAt: when},
 	}}
-	reader := service.NewReaderApplications(readerServiceTestStores(store), nil, service.ReaderApplicationOptions{CursorSigningKey: "handler-activity-key"})
+	reader := readerServiceTestApplications(store, service.ReaderApplicationOptions{CursorSigningKey: "handler-activity-key"})
 	router := gin.New()
 	RegisterReaderRoutes(router, readerTestRoutes(reader))
 
@@ -327,7 +327,7 @@ func TestReaderTodoPatchHTTPPreservesExpectedHostRevisionPresence(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			store := &readerTodoPatchPresenceStore{err: tt.storeErr}
 			router := gin.New()
-			reader := service.NewReaderApplications(readerServiceTestStores(store), nil)
+			reader := readerServiceTestApplications(store)
 			RegisterReaderRoutes(router, readerTestRoutes(reader))
 
 			response := httptest.NewRecorder()

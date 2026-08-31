@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSites } from './useSites'
-import type { ReaderClient } from '../lib/api/client'
+import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ListSitesParams, PaginatedSitesResponse, SiteListItemResponse } from '../lib/api/types'
 import { resourceStore } from '../lib/cache/store'
 import { err, ok, type ApiResult } from '../lib/api/result'
@@ -51,18 +51,45 @@ function deferred<T>() {
 
 function mockClient(
   getSites: (params?: ListSitesParams) => Promise<ApiResult<PaginatedSitesResponse>>,
-): ReaderClient {
+  lease = identityLease,
+): IdentityBoundReaderClient {
   return {
+    identityLease: lease,
     getSites: vi.fn(getSites),
     isIdentityCurrent: vi.fn(() => true),
-  } as unknown as ReaderClient
+  } as unknown as IdentityBoundReaderClient
 }
 
+let testNumber = 0
+let identityLease: IdentityLease
 let capabilityLease: ReaderCapabilityLease
 
+function makeIdentityLease(prefix: string): IdentityLease {
+  return new IdentityLease({
+    serverClientDataNamespace: `${prefix}-server`,
+    physicalNamespace: `${prefix}-physical`,
+    localEpoch: testNumber,
+  })
+}
+
+function identityCacheKey(baseKey: string, lease = identityLease): string {
+  return `${baseKey}#${[
+    lease.context.serverClientDataNamespace,
+    lease.context.physicalNamespace,
+    String(lease.context.localEpoch),
+  ].map((part) => encodeURIComponent(part)).join(':')}`
+}
+
 beforeEach(() => {
+  testNumber += 1
+  identityLease = makeIdentityLease(`sites-${testNumber}`)
   resourceStore.clear()
+  resourceStore.activateIdentity(identityLease)
   capabilityLease = enabledReaderCapabilityLease()
+})
+
+afterEach(() => {
+  resourceStore.deactivateIdentity()
 })
 
 describe('useSites', () => {
@@ -80,7 +107,9 @@ describe('useSites', () => {
     expect(result.current.hasMore).toBe(true)
     expect(client.getSites).toHaveBeenCalledWith({ view: 'all', page: 1, limit: 30 })
     expect(
-      resourceStore.peek<PaginatedSitesResponse>(`GET /api/sites?view=all&limit=30#capability=${capabilityLease.generation}`).data?.total,
+      resourceStore.peek<PaginatedSitesResponse>(
+        identityCacheKey(`GET /api/sites?view=all&limit=30#capability=${capabilityLease.generation}`),
+      ).data?.total,
     ).toBe(59)
 
     await act(async () => { await result.current.loadMore() })
@@ -263,18 +292,18 @@ describe('useSites', () => {
   it('clears data when the identity-owned client changes and fences its late response', async () => {
     const delayedA = deferred<ApiResult<PaginatedSitesResponse>>()
     const clientA = mockClient(async () => delayedA.promise)
-    const clientB = mockClient(async () => page([makeSite(2, 'identity-b')], 1, 1))
+    const leaseB = new IdentityLease({
+      serverClientDataNamespace: 'sites-identity-b-server',
+      physicalNamespace: 'sites-identity-b-physical',
+      localEpoch: testNumber + 100,
+    })
+    const clientB = mockClient(async () => page([makeSite(2, 'identity-b')], 1, 1), leaseB)
     const { result, rerender } = renderHook(
-      ({ client }: { client: ReaderClient }) => useSites(client, capabilityLease, { view: 'all' }),
+      ({ client }: { client: IdentityBoundReaderClient }) => useSites(client, capabilityLease, { view: 'all' }),
       { initialProps: { client: clientA } },
     )
     await waitFor(() => expect(clientA.getSites).toHaveBeenCalledTimes(1))
 
-    const leaseB = new IdentityLease({
-      serverClientDataNamespace: 'sites-identity-b-server',
-      physicalNamespace: 'sites-identity-b-physical',
-      localEpoch: 2,
-    })
     act(() => {
       resourceStore.activateIdentity(leaseB)
       rerender({ client: clientB })
@@ -293,10 +322,15 @@ describe('useSites', () => {
         ? page([makeSite(31, 'identity-a')], 31, 2)
         : page(firstA, 31, 1)
     ))
-    const clientB = mockClient(async () => delayedB.promise)
+    const leaseB = new IdentityLease({
+      serverClientDataNamespace: 'sites-render-b-server',
+      physicalNamespace: 'sites-render-b-physical',
+      localEpoch: testNumber + 100,
+    })
+    const clientB = mockClient(async () => delayedB.promise, leaseB)
     const renderSnapshots: Array<{ owner: 'a' | 'b'; names: string[] }> = []
     const { result, rerender } = renderHook(
-      ({ client }: { client: ReaderClient }) => {
+      ({ client }: { client: IdentityBoundReaderClient }) => {
         const sites = useSites(client, capabilityLease, { view: 'all' })
         renderSnapshots.push({
           owner: client === clientA ? 'a' : 'b',
@@ -311,11 +345,6 @@ describe('useSites', () => {
     expect(result.current.items.at(-1)?.name).toBe('identity-a 31')
 
     const switchRender = renderSnapshots.length
-    const leaseB = new IdentityLease({
-      serverClientDataNamespace: 'sites-render-b-server',
-      physicalNamespace: 'sites-render-b-physical',
-      localEpoch: 2,
-    })
     act(() => {
       resourceStore.activateIdentity(leaseB)
       rerender({ client: clientB })
@@ -332,6 +361,26 @@ describe('useSites', () => {
       await delayedB.promise
     })
     await waitFor(() => expect(result.current.items.map((item) => item.name)).toEqual(['identity-b 1']))
+  })
+
+  it('does not request or render active cache through an inactive explicit client', async () => {
+    const activeClient = mockClient(async () => page([makeSite(1, 'active')], 1, 1))
+    const active = renderHook(() => useSites(activeClient, capabilityLease, { view: 'all' }))
+    await waitFor(() => expect(active.result.current.items.map((item) => item.name)).toEqual(['active 1']))
+    active.unmount()
+
+    const staleLease = new IdentityLease({
+      serverClientDataNamespace: 'sites-stale-server',
+      physicalNamespace: identityLease.context.physicalNamespace,
+      localEpoch: identityLease.context.localEpoch + 100,
+    })
+    const getStaleSites = vi.fn(async () => page([makeSite(1, 'stale')], 1, 1))
+    const staleClient = mockClient(getStaleSites, staleLease)
+    const stale = renderHook(() => useSites(staleClient, capabilityLease, { view: 'all' }))
+
+    expect(stale.result.current.items).toEqual([])
+    expect(stale.result.current.loading).toBe(false)
+    expect(getStaleSites).not.toHaveBeenCalled()
   })
 
   it('does not request page one, reload, or load more when siteRead is unavailable', async () => {
@@ -365,7 +414,7 @@ describe('useSites', () => {
       siteWrite: false,
       siteAdvanced: false,
     })
-    const staleKey = `GET /api/sites?view=all&limit=30#capability=${activeLease.generation}`
+    const staleKey = identityCacheKey(`GET /api/sites?view=all&limit=30#capability=${activeLease.generation}`)
     const { result, rerender } = renderHook(
       ({ lease }: { lease: ReaderCapabilityLease }) => useSites(client, lease, { view: 'all' }),
       { initialProps: { lease: activeLease } },

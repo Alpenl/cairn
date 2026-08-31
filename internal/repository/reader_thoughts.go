@@ -611,6 +611,49 @@ func thoughtVersionKey(op model.ReaderThoughtOp) model.ReaderThoughtVersionKey {
 	}
 }
 
+type readerThoughtTransitionKind string
+
+const (
+	readerThoughtTransitionAdd      readerThoughtTransitionKind = "add"
+	readerThoughtTransitionUpdate   readerThoughtTransitionKind = "update"
+	readerThoughtTransitionDelete   readerThoughtTransitionKind = "delete"
+	readerThoughtTransitionRecovery readerThoughtTransitionKind = "recovery"
+	readerThoughtTransitionReattach readerThoughtTransitionKind = "reattach"
+)
+
+// classifyReaderThoughtTransition is the single append-log transition matrix.
+// The five durable classes are intentionally disjoint:
+//   - add/update/delete are normal client writes ordered solely by winner key;
+//   - recovery is a normal update with durable loser provenance and a winner CAS;
+//   - reattach is a client command that must be rebuilt from a lifecycle
+//     tombstone and may not carry recovery provenance.
+func classifyReaderThoughtTransition(op model.ReaderThoughtOp) (readerThoughtTransitionKind, error) {
+	hasRecovery := op.RecoveryOf != nil || op.ExpectedWinnerKey != nil
+	if op.Reattach != nil {
+		if hasRecovery || op.OperationKind != "update" ||
+			op.Reattach.ExpectedLastSequence < 0 || op.Reattach.ExpectedHostRevision <= 0 {
+			return "", fmt.Errorf("%w: invalid reattach metadata", ErrInvalidReaderThought)
+		}
+		return readerThoughtTransitionReattach, nil
+	}
+	if hasRecovery {
+		if op.RecoveryOf == nil || op.ExpectedWinnerKey == nil || op.OperationKind != "update" {
+			return "", fmt.Errorf("%w: invalid recovery metadata", ErrInvalidReaderThought)
+		}
+		return readerThoughtTransitionRecovery, nil
+	}
+	switch op.OperationKind {
+	case "add":
+		return readerThoughtTransitionAdd, nil
+	case "update":
+		return readerThoughtTransitionUpdate, nil
+	case "delete":
+		return readerThoughtTransitionDelete, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported thought operation", ErrInvalidReaderThought)
+	}
+}
+
 func (r *PGXReaderVNextRepository) readThoughtWinnerKey(ctx context.Context, db database.Querier, annotationID string) (model.ReaderThoughtVersionKey, error) {
 	var key model.ReaderThoughtVersionKey
 	err := db.QueryRow(ctx, `
@@ -629,16 +672,8 @@ func validateReaderThoughtOpEnvelope(op model.ReaderThoughtOp) error {
 	if op.LogicalClock < 0 || op.LogicalClock > model.ReaderThoughtMaxLogicalClock {
 		return fmt.Errorf("%w: logical_clock is outside the safe range", ErrReaderThoughtClockInvalid)
 	}
-	if (op.RecoveryOf == nil) != (op.ExpectedWinnerKey == nil) {
-		return fmt.Errorf("%w: incomplete recovery metadata", ErrInvalidReaderThought)
-	}
-	if op.Reattach != nil {
-		if op.RecoveryOf != nil || op.ExpectedWinnerKey != nil || op.OperationKind != "update" ||
-			op.Reattach.ExpectedLastSequence < 0 || op.Reattach.ExpectedHostRevision <= 0 {
-			return fmt.Errorf("%w: invalid reattach metadata", ErrInvalidReaderThought)
-		}
-	}
-	return nil
+	_, err := classifyReaderThoughtTransition(op)
+	return err
 }
 
 // readExistingThoughtOp verifies the full immutable operation envelope. It is

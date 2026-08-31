@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
 
+	"webtag/internal/model"
 	"webtag/internal/readertext"
 )
 
@@ -229,4 +230,10 @@ func expectLinkThoughtTodoProjectionRefresh(mock pgxmock.PgxPoolIface, linkID uu
 	for _, thoughtID := range thoughtIDs {
 		expectThoughtTodoProjectionRefresh(mock, thoughtID)
 	}
+}
+
+func expectNoLinkThoughtHostTombstones(mock pgxmock.PgxPoolIface, linkID uuid.UUID) {
+	mock.ExpectQuery("(?s)SELECT id\\s+FROM reader_thoughts\\s+WHERE host_kind=\\$1 AND host_id=\\$2 AND deleted=false\\s+ORDER BY id\\s+FOR UPDATE").
+		WithArgs(string(model.ReaderHostLink), linkID.String()).
+		WillReturnRows(mock.NewRows([]string{"id"}))
 }

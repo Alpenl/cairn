@@ -76,10 +76,10 @@ func (r *PGXReaderVNextRepository) replaceNoteTodoProjectionsOn(ctx context.Cont
 const readerLinkHostedThoughtsSQL = `
 SELECT id FROM reader_thoughts WHERE host_kind='link' AND host_id=$1::text ORDER BY id`
 
-// replaceLinkThoughtTodoProjectionsOn covers the one Thought lifecycle edge
-// that is not written by Go: a Link delete tombstones its Thoughts through a
-// database trigger. Without this the Thoughts stop being TODO sources while
-// their projections stay live, and no later read would notice.
+// replaceLinkThoughtTodoProjectionsOn covers Link lifecycle transitions that
+// retire every Thought anchored to one Link. Without this the Thoughts stop
+// being TODO sources while their projections stay live, and no later read
+// would notice.
 func (r *PGXReaderVNextRepository) replaceLinkThoughtTodoProjectionsOn(ctx context.Context, db database.Querier, linkID uuid.UUID) error {
 	rows, err := db.Query(ctx, readerLinkHostedThoughtsSQL, linkID)
 	if err != nil {

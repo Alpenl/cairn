@@ -95,6 +95,7 @@ func TestUnsaveSubscriptionTrashesLastFeedManagedLink(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectQuery("SELECT EXISTS.*reader_feed_saves").WithArgs(linkID).
 		WillReturnRows(mock.NewRows([]string{"exists"}).AddRow(false))
+	expectNoLinkThoughtHostTombstones(mock, linkID)
 	mock.ExpectExec(regexp.QuoteMeta(terminalizeDeletedTranslationAttemptsSQL)).WithArgs(linkID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectExec(regexp.QuoteMeta(deleteLinkSQL)).WithArgs(linkID).

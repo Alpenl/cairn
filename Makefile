@@ -1,4 +1,4 @@
-.PHONY: help build build-full reader-build reader-clean run migrate migrate-fresh test test-integration test-dbintegration test-dbintegration-required test-no-skip ci-contracts version-test core-legal-check core-release-test vet tools lint actionlint fmt tidy modules-verify vuln race fuzz-smoke bench frontend-verify reader-perf-postgres reader-perf-fixture-manifest reader-perf-browser docker-build db-migrate schema-dump schema-check container-smoke deploy-permissions gate verify clean
+.PHONY: help build build-full reader-build reader-clean run migrate migrate-fresh test test-integration test-dbintegration test-dbintegration-required test-no-skip ci-contracts version-test core-legal-check core-release-test reader-bundle-test deploy-contracts vet tools lint actionlint fmt tidy modules-verify vuln race fuzz-smoke bench frontend-verify reader-perf-postgres reader-perf-fixture-manifest reader-perf-browser docker-build db-migrate schema-dump schema-check container-smoke deploy-permissions gate verify clean
 
 GO ?= go
 BIN_DIR ?= bin
@@ -99,6 +99,12 @@ core-release-test: core-legal-check ## 验证法律材料、签名 manifest、dr
 	bash scripts/core-release-verify.test.sh
 	bash scripts/core-release-manifest.test.sh
 	bash scripts/core-release-promote.test.sh
+
+reader-bundle-test: ## 离线验证 Core 携带的 Reader bundle provenance 与双形态 artifact 合同
+	bash scripts/reader-vnext-release.test.sh
+
+deploy-contracts: ## 离线验证部署配置、Caddy fragment 与 systemd socket 边界
+	bash scripts/deploy-contracts.test.sh
 
 # Live fetcher integration tests hit real ArXiv, GitHub and Jina endpoints.
 # Network required. Set WEBTAG_TEST_GITHUB_TOKEN to avoid anonymous rate
@@ -339,7 +345,8 @@ test-no-skip: ## 断言没有测试在门禁上被 skip
 		exit 1; \
 	fi
 
-ci-contracts: ## 离线验证 CI 诊断与 main ruleset 策略工具
+ci-contracts: ## 离线验证 CI 诊断、iOS simulator 选择与 main ruleset 策略工具
+	python3 scripts/ios-ci-destination.test.py
 	node --test scripts/ci-path-filter.test.mjs scripts/ci-run-diagnose.test.mjs scripts/validate-main-ruleset.test.mjs
 
 # gate 是快速、离线的 Go 与发布版本门禁；verify 才是全仓门禁。

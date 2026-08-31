@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build and verify Reader release artifacts for both production deployment
-# shapes: the standalone root-domain Reader and the embedded /reader/ smoke
-# build carried by the backend image.
+# Build and verify the Reader bundle carried by Core artifacts for both
+# production deployment shapes: the root-domain Reader and the embedded
+# /reader/ smoke build carried by the backend image.
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -134,6 +134,7 @@ verify_manifest() {
   local manifest=$1
   local expected_commit=$2
   python3 - "$manifest" "$expected_commit" <<'PY'
+import hashlib
 import json
 import re
 import sys
@@ -189,10 +190,45 @@ for build in builds:
         fail(f"{name} sw.js does not contain API denylist evidence")
     if not any((build_dir / "assets").glob("*")):
         fail(f"{name} build has no assets")
-    if build.get("file_count", 0) <= 0 or build.get("total_bytes", 0) <= 0:
+    files = build.get("files")
+    if not isinstance(files, list) or not files:
         fail(f"{name} file provenance is empty")
+    seen = set()
+    total_bytes = 0
+    for item in files:
+        rel = item.get("path")
+        expected_bytes = item.get("bytes")
+        expected_sha = item.get("sha256")
+        if not isinstance(rel, str) or rel.startswith("/") or ".." in Path(rel).parts:
+            fail(f"{name} file provenance has an unsafe path: {rel!r}")
+        if not isinstance(expected_bytes, int) or expected_bytes < 0:
+            fail(f"{name} file provenance has invalid byte count for {rel}")
+        if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+            fail(f"{name} file provenance has invalid sha256 for {rel}")
+        if rel in seen:
+            fail(f"{name} file provenance duplicates {rel}")
+        file_path = build_dir / rel
+        if not file_path.is_file():
+            fail(f"{name} file provenance references a missing file: {rel}")
+        body = file_path.read_bytes()
+        actual_sha = hashlib.sha256(body).hexdigest()
+        if len(body) != expected_bytes:
+            fail(f"{name} file provenance byte count mismatch for {rel}")
+        if actual_sha != expected_sha:
+            fail(f"{name} file provenance digest mismatch for {rel}")
+        seen.add(rel)
+        total_bytes += len(body)
+    actual_files = {
+        path.relative_to(build_dir).as_posix()
+        for path in build_dir.rglob("*")
+        if path.is_file()
+    }
+    if seen != actual_files:
+        fail(f"{name} file provenance inventory mismatch")
+    if build.get("file_count") != len(files) or build.get("total_bytes") != total_bytes:
+        fail(f"{name} file provenance summary mismatch")
 
-print(f"verified reader release manifest: {manifest_path}")
+print(f"verified reader bundle manifest: {manifest_path}")
 PY
 }
 

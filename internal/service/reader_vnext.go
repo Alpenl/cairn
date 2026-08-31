@@ -77,15 +77,17 @@ type ReaderApplicationOptions struct {
 	HostRestoreCommands      ReaderHostRestoreCommands
 }
 
-func NewReaderApplications(stores ReaderStores, ai ReaderAIBackend, options ...ReaderApplicationOptions) *ReaderApplications {
+func NewReaderApplications(stores ReaderStores, ai ReaderAIBackend, configured ReaderApplicationOptions) *ReaderApplications {
 	cursorKey := processReaderCursorKey
-	var configured ReaderApplicationOptions
-	if len(options) > 0 {
-		configured = options[0]
-	}
 	if configured.CursorSigningKey != "" {
 		cursorKey = []byte(configured.CursorSigningKey)
 	}
+	requireReaderApplicationCommand("InboxProposalCommands", configured.InboxProposalCommands)
+	requireReaderApplicationCommand("InboxConfirmCommands", configured.InboxConfirmCommands)
+	requireReaderApplicationCommand("InboxBulkConfirmCommands", configured.InboxBulkConfirmCommands)
+	requireReaderApplicationCommand("InboxAIConfirmCommands", configured.InboxAIConfirmCommands)
+	requireReaderApplicationCommand("FeedFeedbackCommands", configured.FeedFeedbackCommands)
+	requireReaderApplicationCommand("HostRestoreCommands", configured.HostRestoreCommands)
 	return &ReaderApplications{
 		Thoughts: &ReaderThoughtApplication{thoughts: stores.Thoughts, now: time.Now},
 		Notes: &ReaderNoteApplication{
@@ -102,6 +104,12 @@ func NewReaderApplications(stores ReaderStores, ai ReaderAIBackend, options ...R
 			now: time.Now, activityCursorKey: append([]byte(nil), cursorKey...),
 		},
 		Hosts: &ReaderHostApplication{hosts: stores.Hosts, hostRestores: configured.HostRestoreCommands},
+	}
+}
+
+func requireReaderApplicationCommand(name string, command any) {
+	if command == nil {
+		panic("service.NewReaderApplications: ReaderApplicationOptions." + name + " is required")
 	}
 }
 

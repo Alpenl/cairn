@@ -25,13 +25,25 @@ func validThoughtCommand(operationKind string) ReaderThoughtOpCommand {
 		AnnotationID:    "annotation-1",
 		HostKind:        "link",
 		HostID:          "link-1",
-		Target: json.RawMessage(`{
+		Target: thoughtTargetJSON(`{
             "kind": "saved-content",
             "host_id": "link-1",
             "version": {"content_revision": 3}
         }`),
-		Payload: json.RawMessage(`{"quote":{"exact":"selected text"}}`),
+		Payload: thoughtPayloadJSON(`{"quote":{"exact":"selected text"}}`),
 	}
+}
+
+func thoughtTargetJSON(raw string) ReaderThoughtTargetCommand {
+	var target ReaderThoughtTargetCommand
+	_ = json.Unmarshal([]byte(raw), &target)
+	return target
+}
+
+func thoughtPayloadJSON(raw string) ReaderThoughtPayloadCommand {
+	var payload ReaderThoughtPayloadCommand
+	_ = json.Unmarshal([]byte(raw), &payload)
+	return payload
 }
 
 func TestValidateThoughtCommandAcceptsSupportedTargets(t *testing.T) {
@@ -63,12 +75,23 @@ func TestValidateThoughtCommandAcceptsSupportedTargets(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			input := validThoughtCommand("add")
-			input.Target = json.RawMessage(tc.target)
+			input.Target = thoughtTargetJSON(tc.target)
 			if err := validateThoughtCommand(input); err != nil {
 				t.Fatalf("validateThoughtCommand() error = %v", err)
 			}
 		})
 	}
+}
+
+func TestNewReaderApplicationsRequiresExplicitCommandOptions(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("NewReaderApplications() did not panic for missing command options")
+		}
+	}()
+	_ = NewReaderApplications(ReaderStores{}, nil, ReaderApplicationOptions{})
 }
 
 func TestValidateThoughtCommandRejectsInvalidTarget(t *testing.T) {
@@ -120,7 +143,7 @@ func TestValidateThoughtCommandRejectsInvalidTarget(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			input := validThoughtCommand("add")
-			input.Target = json.RawMessage(tc.target)
+			input.Target = thoughtTargetJSON(tc.target)
 			if err := validateThoughtCommand(input); err == nil {
 				t.Fatal("validateThoughtCommand() error = nil, want validation error")
 			}
@@ -132,14 +155,9 @@ func TestValidateThoughtCommandDeleteMayOmitQuote(t *testing.T) {
 	t.Parallel()
 
 	input := validThoughtCommand("delete")
-	input.Payload = json.RawMessage(`{"body":""}`)
+	input.Payload = thoughtPayloadJSON(`{"body":""}`)
 	if err := validateThoughtCommand(input); err != nil {
 		t.Fatalf("delete without quote should be accepted: %v", err)
-	}
-
-	input.Payload = json.RawMessage(`{"quote":}`)
-	if err := validateThoughtCommand(input); err == nil {
-		t.Fatal("malformed delete quote should be rejected")
 	}
 }
 
@@ -155,12 +173,12 @@ func TestValidateThoughtCommandAcceptsArchiveThoughtBoundaries(t *testing.T) {
 	deleteWithArchivedHost := validThoughtCommand("delete")
 	deleteWithArchivedHost.HostKind = "inbox"
 	deleteWithArchivedHost.HostID = "purged-inbox:legacy-42"
-	deleteWithArchivedHost.Target = json.RawMessage(`{
+	deleteWithArchivedHost.Target = thoughtTargetJSON(`{
         "kind": "inbox",
         "host_id": "purged-inbox:legacy-42",
         "version": {"metadata_revision": 1}
     }`)
-	deleteWithArchivedHost.Payload = json.RawMessage(`{}`)
+	deleteWithArchivedHost.Payload = thoughtPayloadJSON(`{}`)
 	if err := validateThoughtCommand(deleteWithArchivedHost); err != nil {
 		t.Fatalf("delete with non-UUID persisted host should be accepted: %v", err)
 	}
@@ -171,7 +189,7 @@ func TestValidateThoughtCommandRequiresQuoteForAddAndUpdate(t *testing.T) {
 
 	for _, operationKind := range []string{"add", "update"} {
 		input := validThoughtCommand(operationKind)
-		input.Payload = json.RawMessage(`{"body":"missing quote"}`)
+		input.Payload = thoughtPayloadJSON(`{"body":"missing quote"}`)
 		if err := validateThoughtCommand(input); err == nil {
 			t.Fatalf("%s without quote should be rejected", operationKind)
 		}
@@ -184,7 +202,7 @@ func TestValidateThoughtCommandAcceptsClientOwnedReattachCommand(t *testing.T) {
 	input := validThoughtCommand("update")
 	input.ContractVersion = model.ReaderThoughtContractVersion
 	input.LogicalClock = 17
-	input.Payload = json.RawMessage(`{
+	input.Payload = thoughtPayloadJSON(`{
         "reattach": {
             "expected_last_sequence": 11,
             "expected_host_revision": 3
@@ -212,19 +230,19 @@ func TestValidateThoughtCommandRejectsMalformedClientReattachCommand(t *testing.
 		{
 			name: "contains client body",
 			mutate: func(input *ReaderThoughtOpCommand) {
-				input.Payload = json.RawMessage(`{"body":"must not be sent","reattach":{"expected_last_sequence":11,"expected_host_revision":3}}`)
+				input.Payload = thoughtPayloadJSON(`{"body":"must not be sent","reattach":{"expected_last_sequence":11,"expected_host_revision":3}}`)
 			},
 		},
 		{
 			name: "wrong target kind",
 			mutate: func(input *ReaderThoughtOpCommand) {
-				input.Target = json.RawMessage(`{"kind":"summary","host_id":"link-1","version":{"source_hash":"hash"}}`)
+				input.Target = thoughtTargetJSON(`{"kind":"summary","host_id":"link-1","version":{"source_hash":"hash"}}`)
 			},
 		},
 		{
 			name: "target revision differs from expected revision",
 			mutate: func(input *ReaderThoughtOpCommand) {
-				input.Target = json.RawMessage(`{"kind":"saved-content","host_id":"link-1","version":{"content_revision":4}}`)
+				input.Target = thoughtTargetJSON(`{"kind":"saved-content","host_id":"link-1","version":{"content_revision":4}}`)
 			},
 		},
 		{
@@ -241,7 +259,7 @@ func TestValidateThoughtCommandRejectsMalformedClientReattachCommand(t *testing.
 			input := validThoughtCommand("update")
 			input.ContractVersion = model.ReaderThoughtContractVersion
 			input.LogicalClock = 17
-			input.Payload = json.RawMessage(`{"reattach":{"expected_last_sequence":11,"expected_host_revision":3}}`)
+			input.Payload = thoughtPayloadJSON(`{"reattach":{"expected_last_sequence":11,"expected_host_revision":3}}`)
 			tc.mutate(&input)
 			if err := validateThoughtCommand(input); err == nil {
 				t.Fatal("validateThoughtCommand() error = nil, want malformed reattach rejection")

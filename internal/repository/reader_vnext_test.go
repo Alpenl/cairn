@@ -18,6 +18,256 @@ import (
 
 var readerThoughtOperationCreatedAt = time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
 
+func TestNewPGXReaderVNextRepositoryRequiresTransactionBeginner(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("NewPGXReaderVNextRepository() did not panic for a nil transaction beginner")
+		}
+	}()
+	_ = NewPGXReaderVNextRepository(nil)
+}
+
+func TestReaderRepositoryWithTxCommitsAndRollsBackSurfaceMatrix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		surface  string
+		success  func(context.Context, *PGXReaderVNextRepository) error
+		commit   func(pgxmock.PgxPoolIface)
+		failure  func(context.Context, *PGXReaderVNextRepository) error
+		rollback func(pgxmock.PgxPoolIface, error)
+	}{
+		{
+			surface: "thought",
+			success: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				op := derivedThoughtOpForTest("tx-thought-duplicate")
+				_, err := repo.AppendThoughtOps(ctx, []model.ReaderThoughtOp{op})
+				return err
+			},
+			commit: func(mock pgxmock.PgxPoolIface) {
+				op := derivedThoughtOpForTest("tx-thought-duplicate")
+				mock.ExpectQuery("(?s)SELECT sequence,created_at,device_id,logical_clock,operation_kind,annotation_id,host_kind,host_id,target,payload,recovery_of,expected_winner_key.*FROM reader_thought_ops").
+					WithArgs(op.OpID).
+					WillReturnRows(mock.NewRows([]string{
+						"sequence", "created_at", "device_id", "logical_clock", "operation_kind", "annotation_id",
+						"host_kind", "host_id", "target", "payload", "recovery_of", "expected_winner_key",
+					}).AddRow(
+						int64(11), readerThoughtOperationCreatedAt, op.DeviceID, op.LogicalClock, op.OperationKind, op.AnnotationID,
+						op.HostKind, op.HostID, []byte(op.Target), []byte(op.Payload), nil, nil,
+					))
+				mock.ExpectQuery("(?s)SELECT id\\s+FROM reader_thoughts\\s+WHERE id=\\$1\\s+FOR UPDATE").
+					WithArgs(op.AnnotationID).
+					WillReturnRows(mock.NewRows([]string{"id"}).AddRow(op.AnnotationID))
+				mock.ExpectExec("(?s)SELECT pg_advisory_xact_lock\\(hashtextextended").
+					WithArgs(op.AnnotationID).
+					WillReturnResult(pgxmock.NewResult("SELECT", 1))
+				mock.ExpectQuery("(?s)SELECT winner_logical_clock,winner_device_id,winner_op_id\\s+FROM reader_thoughts\\s+WHERE id=\\$1").
+					WithArgs(op.AnnotationID).
+					WillReturnRows(mock.NewRows([]string{"winner_logical_clock", "winner_device_id", "winner_op_id"}).
+						AddRow(op.LogicalClock, op.DeviceID, op.OpID))
+			},
+			failure: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				op := derivedThoughtOpForTest("tx-thought-failure")
+				_, err := repo.AppendThoughtOps(ctx, []model.ReaderThoughtOp{op})
+				return err
+			},
+			rollback: func(mock pgxmock.PgxPoolIface, sentinel error) {
+				op := derivedThoughtOpForTest("tx-thought-failure")
+				mock.ExpectQuery("(?s)SELECT sequence,created_at,device_id,logical_clock,operation_kind,annotation_id,host_kind,host_id,target,payload,recovery_of,expected_winner_key.*FROM reader_thought_ops").
+					WithArgs(op.OpID).
+					WillReturnError(sentinel)
+			},
+		},
+		{
+			surface: "note",
+			success: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				noteID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+				_, err := repo.PublishNote(ctx, model.ReaderNotePublishCommand{
+					NoteID: noteID, ExpectedDraftRevision: 2, ExpectedPublishedRevision: 1,
+				})
+				return err
+			},
+			commit: func(mock pgxmock.PgxPoolIface) {
+				noteID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+				expectPublishedNoteLock(
+					mock,
+					noteID,
+					readerNoteRowForTest(noteID, "Reader note", "published", 1, nil, 2, readerThoughtOperationCreatedAt),
+				)
+			},
+			failure: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				noteID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+				_, err := repo.PublishNote(ctx, model.ReaderNotePublishCommand{
+					NoteID: noteID, ExpectedDraftRevision: 2, ExpectedPublishedRevision: 1,
+				})
+				return err
+			},
+			rollback: func(mock pgxmock.PgxPoolIface, sentinel error) {
+				noteID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+				mock.ExpectQuery("(?s)SELECT " + regexp.QuoteMeta(readerNoteColumns) + " FROM reader_notes.*FOR UPDATE").
+					WithArgs(noteID).
+					WillReturnError(sentinel)
+			},
+		},
+		{
+			surface: "inbox",
+			success: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				return repo.RestoreInbox(ctx, uuid.MustParse("33333333-3333-3333-3333-333333333333"))
+			},
+			commit: func(mock pgxmock.PgxPoolIface) {
+				inboxID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+				mock.ExpectQuery("(?s)SELECT " + regexp.QuoteMeta(readerInboxColumns) + ".*FROM reader_inbox.*WHERE id=\\$1.*FOR UPDATE").
+					WithArgs(inboxID).
+					WillReturnRows(mock.NewRows(readerInboxColumnsForTest()).
+						AddRow(readerInboxRowForTest(inboxID, nil, false, nil, readerThoughtOperationCreatedAt)...))
+			},
+			failure: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				return repo.RestoreInbox(ctx, uuid.MustParse("44444444-4444-4444-4444-444444444444"))
+			},
+			rollback: func(mock pgxmock.PgxPoolIface, sentinel error) {
+				inboxID := uuid.MustParse("44444444-4444-4444-4444-444444444444")
+				mock.ExpectQuery("(?s)SELECT " + regexp.QuoteMeta(readerInboxColumns) + ".*FROM reader_inbox.*WHERE id=\\$1.*FOR UPDATE").
+					WithArgs(inboxID).
+					WillReturnError(sentinel)
+			},
+		},
+		{
+			surface: "todo",
+			success: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				todoID := uuid.MustParse("55555555-5555-5555-5555-555555555555")
+				text := "changed"
+				_, err := repo.PatchTodo(ctx, model.ReaderTodoPatch{ID: todoID, Text: &text})
+				return err
+			},
+			commit: func(mock pgxmock.PgxPoolIface) {
+				todoID := uuid.MustParse("55555555-5555-5555-5555-555555555555")
+				mock.ExpectQuery("SELECT origin_kind,host_revision FROM reader_todos WHERE id=\\$1 AND deleted_at IS NULL FOR UPDATE").
+					WithArgs(todoID).
+					WillReturnRows(mock.NewRows([]string{"origin_kind", "host_revision"}).AddRow("standalone", int64(0)))
+				mock.ExpectQuery("(?s)UPDATE reader_todos SET.*RETURNING "+regexp.QuoteMeta(readerTodoColumns)).
+					WithArgs(pgxmock.AnyArg(), false, (*time.Time)(nil), (*bool)(nil), todoID).
+					WillReturnRows(mock.NewRows(readerTodoColumnsForTest()).
+						AddRow(readerTodoRowForTest(todoID, "standalone", false, 0)...))
+			},
+			failure: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				todoID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
+				text := "changed"
+				_, err := repo.PatchTodo(ctx, model.ReaderTodoPatch{ID: todoID, Text: &text})
+				return err
+			},
+			rollback: func(mock pgxmock.PgxPoolIface, sentinel error) {
+				todoID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
+				mock.ExpectQuery("SELECT origin_kind,host_revision FROM reader_todos WHERE id=\\$1 AND deleted_at IS NULL FOR UPDATE").
+					WithArgs(todoID).
+					WillReturnError(sentinel)
+			},
+		},
+		{
+			surface: "library",
+			success: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				title := "title"
+				summary := "summary"
+				_, err := repo.UpdateLinkMetadata(ctx, model.ReaderLinkMetadataPatch{
+					LinkID: uuid.MustParse("77777777-7777-7777-7777-777777777777"), ExpectedRevision: 3,
+					Title: &title, Summary: &summary, Tags: []string{"tag"},
+				})
+				return err
+			},
+			commit: func(mock pgxmock.PgxPoolIface) {
+				linkID := uuid.MustParse("77777777-7777-7777-7777-777777777777")
+				mock.ExpectQuery(readerMetadataUpdateQueryPattern).
+					WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), []string{"tag"}, linkID, int64(3), model.LinkMetadataMaxRevision).
+					WillReturnRows(mock.NewRows([]string{"found", "metadata_revision", "tags_changed", "changed", "tuple_changed"}).
+						AddRow(true, int64(3), false, false, false))
+			},
+			failure: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				title := "title"
+				summary := "summary"
+				_, err := repo.UpdateLinkMetadata(ctx, model.ReaderLinkMetadataPatch{
+					LinkID: uuid.MustParse("88888888-8888-8888-8888-888888888888"), ExpectedRevision: 3,
+					Title: &title, Summary: &summary, Tags: []string{"tag"},
+				})
+				return err
+			},
+			rollback: func(mock pgxmock.PgxPoolIface, sentinel error) {
+				linkID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+				mock.ExpectQuery(readerMetadataUpdateQueryPattern).
+					WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), []string{"tag"}, linkID, int64(3), model.LinkMetadataMaxRevision).
+					WillReturnError(sentinel)
+			},
+		},
+		{
+			surface: "host",
+			success: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				_, err := repo.RestoreHost(ctx, model.ReaderHostNote, uuid.MustParse("99999999-9999-9999-9999-999999999999"))
+				return err
+			},
+			commit: func(mock pgxmock.PgxPoolIface) {
+				noteID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+				mock.ExpectQuery("SELECT deleted_at,published_content,published_revision FROM reader_notes WHERE id=\\$1 FOR UPDATE").
+					WithArgs(noteID).
+					WillReturnRows(mock.NewRows([]string{"deleted_at", "published_content", "published_revision"}).
+						AddRow(nil, "body", int64(1)))
+			},
+			failure: func(ctx context.Context, repo *PGXReaderVNextRepository) error {
+				_, err := repo.RestoreHost(ctx, model.ReaderHostNote, uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+				return err
+			},
+			rollback: func(mock pgxmock.PgxPoolIface, sentinel error) {
+				noteID := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+				mock.ExpectQuery("SELECT deleted_at,published_content,published_revision FROM reader_notes WHERE id=\\$1 FOR UPDATE").
+					WithArgs(noteID).
+					WillReturnError(sentinel)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.surface+"/commit", func(t *testing.T) {
+			t.Parallel()
+			mock, err := pgxmock.NewPool()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mock.Close()
+			mock.ExpectBegin()
+			test.commit(mock)
+			mock.ExpectCommit()
+
+			err = test.success(context.Background(), NewPGXReaderVNextRepository(mock))
+			if err != nil {
+				t.Fatalf("%s commit path error = %v", test.surface, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+
+		t.Run(test.surface+"/rollback", func(t *testing.T) {
+			t.Parallel()
+			mock, err := pgxmock.NewPool()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mock.Close()
+			mock.ExpectBegin()
+			sentinel := errors.New(test.surface + " surface failed")
+			test.rollback(mock, sentinel)
+			mock.ExpectRollback()
+
+			err = test.failure(context.Background(), NewPGXReaderVNextRepository(mock))
+			if !errors.Is(err, sentinel) {
+				t.Fatalf("%s rollback path error = %v, want %v", test.surface, err, sentinel)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func derivedThoughtOpForTest(opID string) model.ReaderThoughtOp {
 	return model.ReaderThoughtOp{
 		OpID:          opID,
@@ -988,8 +1238,14 @@ func TestListInboxDerivesExpiryPartitionsFromServerTimeAndReturnsBothCounts(t *t
 }
 
 func TestListInboxRejectsInvalidPartition(t *testing.T) {
-	repo := NewPGXReaderVNextRepository(nil)
-	_, _, _, _, err := repo.ListInbox(context.Background(), model.ReaderInboxPartition("other"), "", 30)
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	repo := NewPGXReaderVNextRepository(mock)
+	_, _, _, _, err = repo.ListInbox(context.Background(), model.ReaderInboxPartition("other"), "", 30)
 	if !errors.Is(err, ErrReaderInboxStateConflict) {
 		t.Fatalf("ListInbox() error = %v, want ErrReaderInboxStateConflict", err)
 	}
