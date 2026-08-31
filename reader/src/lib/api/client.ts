@@ -104,14 +104,6 @@ import type {
   HealthResponse,
 } from './types'
 import {
-  isDiscoverFeedsResponse,
-  isFeedFolder,
-  isFeedItem,
-  isFeedItemAnalyzeResponse,
-  isFeedSubscription,
-  isOPMLImportResponse,
-  isPaginatedFeedItems,
-  isSubscriptionsResponse,
   isReaderThoughtAckResponse,
   isReaderThoughtResponse,
   isReaderThoughtsResponse,
@@ -128,8 +120,6 @@ import {
   isReaderConfirmResponse,
   isReaderTodoResponse,
   isReaderTodosResponse,
-  isReaderFeedFeedbackResponse,
-  isReaderFeedResponse,
   isReaderHomeResponse,
   isReaderAIResponse,
   normalizeCapabilitiesResponse,
@@ -143,14 +133,13 @@ import {
   shapeMismatch,
 } from './transport'
 import {
-  buildFeedItemsQuery,
   buildReaderQuery,
-  normalizeReaderFeedSources,
   readerIdempotencyHeaders,
   readerLimit,
   type ReaderFeedSource,
 } from './endpoint-helpers'
 import * as librarySitesEndpoints from './library-sites-endpoints'
+import * as subscriptionsFeedEndpoints from './subscriptions-feed-endpoints'
 import type {
   ReaderReadOptions,
   ReaderRequestOptions,
@@ -472,137 +461,84 @@ export class ReaderClient {
     url?: string,
     options?: ReaderReadOptions,
   ): Promise<ApiResult<SubscriptionsResponse>> {
-    const query = url?.trim() ? `?url=${encodeURIComponent(url.trim())}` : ''
-    const r = await this.send('GET', `/api/subscriptions${query}`, undefined, undefined, options)
-    if (!r.ok) return r
-    if (!isSubscriptionsResponse(r.data)) return shapeMismatch('SubscriptionsResponse')
-    return ok(r.data)
+    return subscriptionsFeedEndpoints.getSubscriptions(this.transport, url, options)
   }
 
   /** Resolve a feed URL directly or discover alternate feeds from an HTML page. */
   async discoverFeeds(url: string): Promise<ApiResult<DiscoverFeedsResponse>> {
-    const r = await this.send('POST', '/api/subscriptions/discover', { url })
-    if (!r.ok) return r
-    if (!isDiscoverFeedsResponse(r.data)) return shapeMismatch('DiscoverFeedsResponse')
-    return ok(r.data)
+    return subscriptionsFeedEndpoints.discoverFeeds(this.transport, url)
   }
 
   async createSubscription(input: {
     url: string
     folder_id?: string | null
   }): Promise<ApiResult<FeedSubscription>> {
-    const r = await this.send('POST', '/api/subscriptions', input)
-    if (!r.ok) return r
-    const candidate = isRecord(r.data) && 'subscription' in r.data ? r.data.subscription : r.data
-    if (!isFeedSubscription(candidate)) return shapeMismatch('FeedSubscription')
-    return ok(candidate)
+    return subscriptionsFeedEndpoints.createSubscription(this.transport, input)
   }
 
   async updateSubscription(
     id: string,
     patch: { folder_id?: string | null },
   ): Promise<ApiResult<FeedSubscription | null>> {
-    const r = await this.send('PUT', `/api/subscriptions/${encodeURIComponent(id)}`, patch)
-    if (!r.ok) return r
-    if (r.data === null) return ok(null)
-    const candidate = isRecord(r.data) && 'subscription' in r.data ? r.data.subscription : r.data
-    if (!isFeedSubscription(candidate)) return shapeMismatch('FeedSubscription')
-    return ok(candidate)
+    return subscriptionsFeedEndpoints.updateSubscription(this.transport, id, patch)
   }
 
   async deleteSubscription(id: string): Promise<ApiResult<true>> {
-    const r = await this.send('DELETE', `/api/subscriptions/${encodeURIComponent(id)}`)
-    return r.ok ? ok(true) : r
+    return subscriptionsFeedEndpoints.deleteSubscription(this.transport, id)
   }
 
   async refreshSubscription(id: string): Promise<ApiResult<true>> {
-    const r = await this.send('POST', `/api/subscriptions/${encodeURIComponent(id)}/refresh`)
-    return r.ok ? ok(true) : r
+    return subscriptionsFeedEndpoints.refreshSubscription(this.transport, id)
   }
 
   async refreshSubscriptions(): Promise<ApiResult<true>> {
-    const r = await this.send('POST', '/api/subscriptions/refresh')
-    return r.ok ? ok(true) : r
+    return subscriptionsFeedEndpoints.refreshSubscriptions(this.transport)
   }
 
   async getFeedItems(
     params: ListFeedItemsParams = {},
     options?: ReaderReadOptions,
   ): Promise<ApiResult<PaginatedFeedItemsResponse>> {
-    const r = await this.send('GET', `/api/feed-items${buildFeedItemsQuery(params)}`, undefined, undefined, options)
-    if (!r.ok) return r
-    if (!isPaginatedFeedItems(r.data)) return shapeMismatch('PaginatedFeedItemsResponse')
-    return ok(r.data)
+    return subscriptionsFeedEndpoints.getFeedItems(this.transport, params, options)
   }
 
   async getFeedItem(id: string): Promise<ApiResult<FeedItem>> {
-    const r = await this.send('GET', `/api/feed-items/${encodeURIComponent(id)}`)
-    if (!r.ok) return r
-    const candidate = isRecord(r.data) && 'item' in r.data ? r.data.item : r.data
-    if (!isFeedItem(candidate)) return shapeMismatch('FeedItem')
-    return ok(candidate)
+    return subscriptionsFeedEndpoints.getFeedItem(this.transport, id)
   }
 
   async updateFeedItem(
     id: string,
     patch: FeedItemStatePatch,
   ): Promise<ApiResult<FeedItem | null>> {
-    const r = await this.send('PUT', `/api/feed-items/${encodeURIComponent(id)}/state`, patch)
-    if (!r.ok) return r
-    if (r.data === null) return ok(null)
-    const candidate = isRecord(r.data) && 'item' in r.data ? r.data.item : r.data
-    if (!isFeedItem(candidate)) return shapeMismatch('FeedItem')
-    return ok(candidate)
+    return subscriptionsFeedEndpoints.updateFeedItem(this.transport, id, patch)
   }
 
   async markFeedItemsRead(filters: ListFeedItemsParams): Promise<ApiResult<true>> {
-    const r = await this.send('POST', '/api/feed-items/mark-read', filters)
-    return r.ok ? ok(true) : r
+    return subscriptionsFeedEndpoints.markFeedItemsRead(this.transport, filters)
   }
 
   async analyzeFeedItem(id: string): Promise<ApiResult<FeedItemAnalyzeResponse>> {
-    const r = await this.send('POST', `/api/feed-items/${encodeURIComponent(id)}/analyze`)
-    if (!r.ok) return r
-    if (isFeedItem(r.data)) return ok({ item: r.data })
-    if (!isFeedItemAnalyzeResponse(r.data)) return shapeMismatch('FeedItemAnalyzeResponse')
-    return ok(r.data)
+    return subscriptionsFeedEndpoints.analyzeFeedItem(this.transport, id)
   }
 
   async createFeedFolder(name: string): Promise<ApiResult<FeedFolder>> {
-    const r = await this.send('POST', '/api/feed-folders', { name })
-    if (!r.ok) return r
-    const candidate = isRecord(r.data) && 'folder' in r.data ? r.data.folder : r.data
-    if (!isFeedFolder(candidate)) return shapeMismatch('FeedFolder')
-    return ok(candidate)
+    return subscriptionsFeedEndpoints.createFeedFolder(this.transport, name)
   }
 
   async updateFeedFolder(id: string, name: string): Promise<ApiResult<FeedFolder | null>> {
-    const r = await this.send('PUT', `/api/feed-folders/${encodeURIComponent(id)}`, { name })
-    if (!r.ok) return r
-    if (r.data === null) return ok(null)
-    const candidate = isRecord(r.data) && 'folder' in r.data ? r.data.folder : r.data
-    if (!isFeedFolder(candidate)) return shapeMismatch('FeedFolder')
-    return ok(candidate)
+    return subscriptionsFeedEndpoints.updateFeedFolder(this.transport, id, name)
   }
 
   async deleteFeedFolder(id: string): Promise<ApiResult<true>> {
-    const r = await this.send('DELETE', `/api/feed-folders/${encodeURIComponent(id)}`)
-    return r.ok ? ok(true) : r
+    return subscriptionsFeedEndpoints.deleteFeedFolder(this.transport, id)
   }
 
   async exportSubscriptionsOPML(): Promise<ApiResult<string>> {
-    const r = await this.send('GET', '/api/subscriptions/opml')
-    if (!r.ok) return r
-    if (typeof r.data === 'string') return ok(r.data)
-    if (isRecord(r.data) && typeof r.data.opml === 'string') return ok(r.data.opml)
-    return shapeMismatch('OPML string or { opml }')
+    return subscriptionsFeedEndpoints.exportSubscriptionsOPML(this.transport)
   }
 
   async importSubscriptionsOPML(opml: string): Promise<ApiResult<OPMLImportResponse>> {
-    const r = await this.send('POST', '/api/subscriptions/opml', { opml })
-    if (!r.ok) return r
-    if (!isOPMLImportResponse(r.data)) return shapeMismatch('OPMLImportResponse')
-    return ok(r.data)
+    return subscriptionsFeedEndpoints.importSubscriptionsOPML(this.transport, opml)
   }
 
   /** POST /api/annotations/ops -- append durable thought operations. */
@@ -1015,15 +951,7 @@ export class ReaderClient {
     } = {},
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderFeedResponse>> {
-    const query = buildReaderQuery({
-      mode: params.mode,
-      source: normalizeReaderFeedSources(params.source),
-      after: params.after,
-      limit: readerLimit(params.limit, 50),
-    })
-    const r = await this.send('GET', `/api/reader-feed${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderFeedResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderFeedResponse')
+    return subscriptionsFeedEndpoints.getReaderFeed(this.transport, params, options)
   }
 
   async sendReaderFeedFeedback(
@@ -1031,10 +959,7 @@ export class ReaderClient {
     request: ReaderFeedFeedbackRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderFeedFeedbackResponse>> {
-    const query = buildReaderQuery({ item_key: itemKey })
-    const r = await this.send('POST', `/api/reader-feed/feedback${query}`, request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderFeedFeedbackResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderFeedFeedbackResponse')
+    return subscriptionsFeedEndpoints.sendReaderFeedFeedback(this.transport, itemKey, request, options)
   }
 
   async patchLinkMetadata(
