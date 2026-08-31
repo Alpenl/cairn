@@ -1,10 +1,8 @@
 import {
   buildQueryString,
-  type ApiResult,
-  ok,
 } from '@webtag/api'
 import type { ReaderHttpTransport } from './transport'
-import { shapeMismatch, type ReaderRequestOptions } from './transport'
+import type { ReaderRequestOptions } from './transport'
 import type { ListFeedItemsParams } from './types'
 
 export type ReaderEndpointTransport = Pick<ReaderHttpTransport, 'send'>
@@ -87,13 +85,4 @@ export function normalizeReaderFeedSources(values: readonly string[] | undefined
 export function readerLimit(limit: number | undefined, fallback: number): number | undefined {
   if (limit === undefined) return fallback
   return limit > 0 ? Math.min(Math.floor(limit), 200) : fallback
-}
-
-export function expectPayload<T>(
-  result: ApiResult<unknown>,
-  guard: (value: unknown) => value is T,
-  detail: string,
-): ApiResult<T> {
-  if (!result.ok) return result
-  return guard(result.data) ? ok(result.data) : shapeMismatch(detail)
 }

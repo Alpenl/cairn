@@ -119,7 +119,7 @@ export function collectIDBRequestList<T>(
   })
 }
 
-export function transactionComplete(transaction: IDBTransaction): Promise<boolean> {
+function transactionComplete(transaction: IDBTransaction): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false
     let hadError = false

@@ -7,7 +7,7 @@
  */
 import { useMemo } from 'react'
 import { Icon } from './Icon'
-import { LibraryModeNav, type LibraryView } from './LibraryModeNav'
+import { PrimaryNav, type LibraryView } from './PrimaryNav'
 import { FoldGroup, SbRow } from './SidebarRows'
 import type { Selection } from '../hooks/useLinks'
 import type { DomainStat, TagStat } from '../lib/stats'
@@ -121,9 +121,17 @@ export function Sidebar({
     return [...pinned, ...rest.slice(0, Math.max(0, 5 - pinned.length))]
   }, [activityDomains, pins.domains])
 
+  const navigatePrimary = (route: ReaderRoute) => {
+    if (onNavigate) {
+      onNavigate(route)
+      return
+    }
+    if (route.kind === 'library') onView(route.id)
+  }
+
   return (
     <aside className={'sidebar' + (collapsed ? ' collapsed' : '')} id="primary-navigation">
-      <LibraryModeNav view={view} onView={onView} onNavigate={onNavigate} policy={capabilityPolicy} />
+      <PrimaryNav activeLibrary={view} onNavigate={navigatePrimary} policy={capabilityPolicy} />
       <div className="sb-group smart-group">
         <SbRow
           icon="stack"

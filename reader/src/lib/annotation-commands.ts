@@ -98,7 +98,7 @@ export interface LoadAnnotationTargetsInput<TExtra> {
   ) => Promise<AnnotationLifecycleExtraResult<TExtra>>
 }
 
-export function randomAnnotationToken(): string | null {
+function randomAnnotationToken(): string | null {
   try {
     if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
     const bytes = new Uint8Array(16)
@@ -136,7 +136,7 @@ export function annotationCommandTargetForBlock(
   return targets.note ?? null
 }
 
-export function annotationMutationResult(
+function annotationMutationResult(
   result: AnnotationCommitResult,
   annotationId: string,
 ): AnnotationMutationResult {

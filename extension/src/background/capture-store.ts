@@ -185,7 +185,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const OWNER_KEYS = new Set(['fingerprint', 'revision'])
 
-export function isCaptureOwner(value: unknown): value is CaptureOwner {
+function isCaptureOwner(value: unknown): value is CaptureOwner {
   if (!isRecord(value)) return false
   if (Object.keys(value).some((key) => !OWNER_KEYS.has(key))) return false
   return (
@@ -198,7 +198,7 @@ export function isCaptureOwner(value: unknown): value is CaptureOwner {
 }
 
 /** Reject corrupted session data before it can block capture recovery. */
-export function isCaptureSnapshot(value: unknown): value is CaptureSnapshot {
+function isCaptureSnapshot(value: unknown): value is CaptureSnapshot {
   if (
     !isRecord(value) ||
     typeof value.stage !== 'string' ||

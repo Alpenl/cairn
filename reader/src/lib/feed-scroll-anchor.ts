@@ -27,7 +27,7 @@ export interface FeedItemMetric {
   readonly bottom: number
 }
 
-export const FEED_ITEM_KEY_ATTRIBUTE = 'data-feed-item-key'
+const FEED_ITEM_KEY_ATTRIBUTE = 'data-feed-item-key'
 
 const FEED_SCROLL_ANCHOR_PREFIX = 'webtag:reader:mixed-feed:v1'
 const FEED_SCROLL_ANCHOR_VERSION = 1

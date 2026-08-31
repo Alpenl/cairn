@@ -1,14 +1,8 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { ReaderCapabilityLease } from '../../lib/capabilities'
-import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
+import { READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
 import type { ReaderInboxTodosPort } from '../../lib/reader-api-ports'
-
-const PendingInboxCountContext = createContext<number | null>(null)
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function refreshPendingInboxCount(): void {
-  emitReaderEvent(READER_EVENTS.pendingInboxChanged)
-}
+import { PendingInboxCountContext } from './pending-inbox-count-context'
 
 async function readPendingCount(
   client: Pick<ReaderInboxTodosPort, 'listInbox' | 'isIdentityCurrent'>,
@@ -49,9 +43,4 @@ export function PendingInboxCountProvider({ client, capabilityLease, children }:
 
   const count = snapshot.client === client ? snapshot.count : null
   return <PendingInboxCountContext.Provider value={count}>{children}</PendingInboxCountContext.Provider>
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function usePendingInboxCount(): number | null {
-  return useContext(PendingInboxCountContext)
 }

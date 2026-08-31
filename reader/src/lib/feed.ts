@@ -1,6 +1,6 @@
 import type { FeedAnalysisStatus, FeedItem, FeedSubscription } from './api/types'
 
-export function feedURL(subscription: FeedSubscription): string {
+function feedURL(subscription: FeedSubscription): string {
   return subscription.feed_url ?? subscription.url ?? ''
 }
 

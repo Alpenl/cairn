@@ -6,7 +6,7 @@ import {
 import { FeedItemsPane } from './subscriptions/FeedItemsPane'
 import { FeedItemDetail } from './subscriptions/FeedItemDetail'
 import { AddSubscriptionDialog, FolderDialog } from './subscriptions/SubscriptionDialogs'
-import type { LibraryView } from './LibraryModeNav'
+import type { LibraryView } from './PrimaryNav'
 import {
   ALL_FEEDS_SELECTION,
   loadFeedSelection,

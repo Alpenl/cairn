@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
-import { ActionPopover, NOTE_SELECTION_ACTIONS } from './ActionPopover'
+import { NOTE_SELECTION_ACTIONS } from '../lib/selection-actions'
+import { ActionPopover } from './ActionPopover'
 
 describe('ActionPopover viewport positioning', () => {
   it('keeps the full action row inside a 390px viewport', () => {

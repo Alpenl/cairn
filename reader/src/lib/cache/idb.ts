@@ -667,7 +667,7 @@ export function idbDelete(
   return idbDeleteMany([key], operation)
 }
 
-export function idbDeleteMany(
+function idbDeleteMany(
   keys: readonly string[],
   operation?: NamespaceStorageOperation,
 ): Promise<boolean> {

@@ -46,7 +46,7 @@ interface ConnectionSnapshot {
   readonly storage: ConnectionStorageState
 }
 
-export class ConnectionStorageError extends Error {
+class ConnectionStorageError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'ConnectionStorageError'
@@ -226,7 +226,7 @@ export async function initializeConnection(): Promise<ConnectionSnapshot> {
 }
 
 /** Re-read a storage-event update, scrubbing old-format credentials under lock. */
-export async function synchronizeConnectionFromStorage(): Promise<ConnectionSnapshot> {
+async function synchronizeConnectionFromStorage(): Promise<ConnectionSnapshot> {
   const snapshot = inspectConnection()
   publish(snapshot)
   return snapshot.storage.phase === 'loading' ? initializeConnection() : snapshot

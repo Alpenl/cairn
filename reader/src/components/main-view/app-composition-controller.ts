@@ -13,10 +13,10 @@ import {
 import type { CommandItem } from '../CommandPalette'
 import type { ChatDraft } from '../ChatSidebar'
 import type { IconName } from '../Icon'
-import type { LibraryView } from '../LibraryModeNav'
+import type { LibraryView } from '../PrimaryNav'
 import type { ToastAction } from '../Toast'
-import { clearFeedSessionState } from '../reader-vnext/FeedSurface'
-import { refreshPendingInboxCount } from '../reader-vnext/PendingInboxCount'
+import { clearFeedSessionState } from '../../lib/feed-session-state'
+import { refreshPendingInboxCount } from '../../lib/pending-inbox-events'
 import { type Selection, type SmartId } from '../../hooks/useLinks'
 import {
   type HistoricalArticleAnnotation,

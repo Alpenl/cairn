@@ -22,7 +22,7 @@ import {
 } from './keys'
 import { resourceStore } from './store'
 
-export { CONTENT_CACHE_PREFIX, contentCacheKey } from './keys'
+export {  contentCacheKey } from './keys'
 
 /**
  * 失效阅读库的全部聚合视图（链接列表 + 标签 + 域名摘要）。

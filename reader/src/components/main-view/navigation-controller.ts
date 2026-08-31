@@ -111,7 +111,7 @@ function sameContentEditState(
     left?.saving === right?.saving
 }
 
-export function mainViewFromRoute(route: ReaderRoute): MainViewRoute {
+function mainViewFromRoute(route: ReaderRoute): MainViewRoute {
   if (route.kind === 'surface') return route.id
   if (route.kind === 'tool') return route.id
   if (route.kind === 'library') {
@@ -170,7 +170,7 @@ export function useMainViewNavigation({
   flash,
 }: UseMainViewNavigationOptions): MainViewNavigationController {
   const initialRoute = useMemo(
-    () => parseReaderRoute(window.location.href, undefined, { identity: lease.context }),
+    () => parseReaderRoute(window.location.href, { identity: lease.context }),
     [lease],
   )
   const initialLinkTargetID = linkIDFromLocation()
@@ -233,7 +233,7 @@ export function useMainViewNavigation({
 
   useEffect(() => {
     const restoreView = () => {
-      const route = parseReaderRoute(window.location.href, undefined, { identity: lease.context })
+      const route = parseReaderRoute(window.location.href, { identity: lease.context })
       const nextLinkID = linkIDFromLocation()
       setView(mainViewFromRoute(route))
       setSiteTargetID(siteIDFromLocation())

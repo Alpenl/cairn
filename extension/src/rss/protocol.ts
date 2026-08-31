@@ -58,7 +58,7 @@ export function isRssDiscoveryGetResponse(
   )
 }
 
-export function isFeedFormat(value: unknown): value is FeedFormat {
+function isFeedFormat(value: unknown): value is FeedFormat {
   return value === 'rss' || value === 'atom' || value === 'rdf'
 }
 

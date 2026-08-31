@@ -19,7 +19,7 @@ import { foldUnicodeCase } from '@webtag/api'
 import { Icon } from './Icon'
 import type { ArticlePagerTarget } from './ArticlePager'
 import { ReaderRail } from './ReaderRail'
-import { ARTICLE_SELECTION_ACTIONS, type PopoverAction } from './ActionPopover'
+import { ARTICLE_SELECTION_ACTIONS, type PopoverAction } from '../lib/selection-actions'
 import {
   ArticleBody,
   type HistoricalAnnotationView,

@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 
-import { ActionPopover, type PopoverAction } from '../ActionPopover'
+import type { PopoverAction } from '../../lib/selection-actions'
+import { ActionPopover } from '../ActionPopover'
 import { Icon } from '../Icon'
 import type { TranslationResponse } from '../../lib/api/types'
 import type { SelectionInfo } from '../../lib/annotations'

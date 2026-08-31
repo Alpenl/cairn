@@ -33,12 +33,6 @@ interface IdentityCachedResourceOptions<T> {
   readonly equal?: FetchOptions<T>['equal']
 }
 
-export function isActiveReaderClient(
-  client: ReaderIdentityPort | null,
-): client is ReaderIdentityPort {
-  return captureActiveReaderOwnership(client, 'read identity-bound resource') !== null
-}
-
 function scopedCacheKey(
   baseKey: string | null,
   client: ReaderIdentityPort | null,

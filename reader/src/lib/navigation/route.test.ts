@@ -43,8 +43,7 @@ describe('RC-01A route model', () => {
     ['?tool=setting', { kind: 'tool', id: 'settings' }],
     ['?view=%20READING%20', { kind: 'library', id: 'reading' }],
   ])('normalizes %s', (query, expected) => {
-    const fallback: ReaderRoute = { kind: 'library', id: 'reading' }
-    const parsed = parseReaderRoute(`https://reader.invalid/${query}`, fallback)
+    const parsed = parseReaderRoute(`https://reader.invalid/${query}`)
     expect(parsed).toEqual(expected)
   })
 
@@ -63,7 +62,6 @@ describe('RC-01A route model', () => {
     })
     expect(parseReaderRoute(
       'https://reader.invalid/?surface=unknown',
-      { kind: 'surface', id: 'home' },
     )).toEqual({ kind: 'surface', id: 'home' })
     expect(parseReaderRoute('https://reader.invalid/?surface=&view=notes')).toEqual({
       kind: 'surface',
@@ -89,20 +87,19 @@ describe('RC-01A route model', () => {
 
   it('resolves missing or unknown startup routes by setting, then last location, then Home', () => {
     const storage = new StorageMock()
-    const fallback: ReaderRoute = { kind: 'library', id: 'reading' }
 
-    expect(parseReaderRoute('https://reader.invalid/', fallback, { storage })).toEqual({ kind: 'surface', id: 'home' })
+    expect(parseReaderRoute('https://reader.invalid/', { storage })).toEqual({ kind: 'surface', id: 'home' })
     rememberReaderRoute({ kind: 'surface', id: 'home' }, storage, undefined, IDENTITY_A)
     expect(resolveReaderStartupRoute(storage, IDENTITY_A)).toEqual({ kind: 'surface', id: 'home' })
-    expect(parseReaderRoute('https://reader.invalid/?view=unknown', fallback, { storage, identity: IDENTITY_A })).toEqual({ kind: 'surface', id: 'home' })
+    expect(parseReaderRoute('https://reader.invalid/?view=unknown', { storage, identity: IDENTITY_A })).toEqual({ kind: 'surface', id: 'home' })
 
     writeReaderStartupPreference('reading', storage)
     expect(readReaderStartupPreference(storage)).toBe('reading')
-    expect(parseReaderRoute('https://reader.invalid/', fallback, { storage, identity: IDENTITY_A })).toEqual({ kind: 'library', id: 'reading' })
+    expect(parseReaderRoute('https://reader.invalid/', { storage, identity: IDENTITY_A })).toEqual({ kind: 'library', id: 'reading' })
     writeReaderStartupPreference('home', storage)
-    expect(parseReaderRoute('https://reader.invalid/', fallback, { storage, identity: IDENTITY_A })).toEqual({ kind: 'surface', id: 'home' })
+    expect(parseReaderRoute('https://reader.invalid/', { storage, identity: IDENTITY_A })).toEqual({ kind: 'surface', id: 'home' })
 
-    expect(parseReaderRoute('https://reader.invalid/?surface=feed', fallback, { storage, persist: true, identity: IDENTITY_A })).toEqual({ kind: 'surface', id: 'feed' })
+    expect(parseReaderRoute('https://reader.invalid/?surface=feed', { storage, persist: true, identity: IDENTITY_A })).toEqual({ kind: 'surface', id: 'feed' })
     writeReaderStartupPreference('last', storage)
     expect(resolveReaderStartupRoute(storage, IDENTITY_A)).toEqual({ kind: 'surface', id: 'feed' })
   })
@@ -168,7 +165,7 @@ describe('RC-01A route model', () => {
     storage.setItem(READER_STARTUP_PREFERENCE_STORAGE_KEY, preference)
     if (stored !== null) storage.setItem(readerLastLocationStorageKey(IDENTITY_A), stored)
 
-    expect(parseReaderRoute(url, undefined, { storage, identity: IDENTITY_A })).toEqual(expected)
+    expect(parseReaderRoute(url, { storage, identity: IDENTITY_A })).toEqual(expected)
   })
 
   it('restores a stored pending inbox target into the current startup URL', () => {
@@ -176,7 +173,7 @@ describe('RC-01A route model', () => {
     rememberReaderRoute({ kind: 'library', id: 'pending', inboxId: 'I7' }, storage, undefined, IDENTITY_A)
     window.history.replaceState({}, '', '/')
 
-    expect(parseReaderRoute(window.location.href, { kind: 'library', id: 'reading' }, { storage: undefined })).toEqual({
+    expect(parseReaderRoute(window.location.href, { storage: undefined })).toEqual({
       kind: 'surface',
       id: 'home',
     })
@@ -184,7 +181,7 @@ describe('RC-01A route model', () => {
     // The browser-backed storage path is the one used by MainView. Keep this
     // assertion isolated from the injectable StorageMock above.
     localStorage.setItem(readerLastLocationStorageKey(IDENTITY_A), '?view=pending&inbox_id=I7')
-    expect(parseReaderRoute(window.location.href, undefined, { identity: IDENTITY_A })).toEqual({ kind: 'library', id: 'pending', inboxId: 'I7' })
+    expect(parseReaderRoute(window.location.href, { identity: IDENTITY_A })).toEqual({ kind: 'library', id: 'pending', inboxId: 'I7' })
     expect(window.location.search).toBe('?view=pending&inbox_id=I7')
   })
 
@@ -206,16 +203,16 @@ describe('RC-01A route model', () => {
       IDENTITY_B,
     )).toBe(true)
 
-    expect(parseReaderRoute('/', undefined, { storage, identity: IDENTITY_A })).toEqual({
+    expect(parseReaderRoute('/', { storage, identity: IDENTITY_A })).toEqual({
       kind: 'library',
       id: 'pending',
       inboxId: 'I-A',
     })
-    expect(parseReaderRoute('/', undefined, { storage, identity: IDENTITY_B })).toEqual({
+    expect(parseReaderRoute('/', { storage, identity: IDENTITY_B })).toEqual({
       kind: 'library',
       id: 'notes',
     })
-    expect(parseReaderRoute('/?view=notes', undefined, { storage, identity: IDENTITY_B })).toEqual({
+    expect(parseReaderRoute('/?view=notes', { storage, identity: IDENTITY_B })).toEqual({
       kind: 'library',
       id: 'notes',
     })
@@ -250,7 +247,7 @@ describe('RC-01A route model', () => {
     const storage = new StorageMock()
     storage.setItem(READER_LAST_LOCATION_STORAGE_KEY, '?view=notes&note_id=legacy')
     storage.setItem(readerLastLocationStorageKey(IDENTITY_A), '?view=pending&inbox_id=%00')
-    expect(parseReaderRoute('/', undefined, { storage, identity: IDENTITY_A })).toEqual({
+    expect(parseReaderRoute('/', { storage, identity: IDENTITY_A })).toEqual({
       kind: 'library', id: 'pending',
     })
     expect(rememberReaderRoute(

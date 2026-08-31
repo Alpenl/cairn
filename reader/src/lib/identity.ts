@@ -97,7 +97,7 @@ export class IdentityAuthority {
 
 export const readerIdentity = new IdentityAuthority()
 
-export function canonicalizeBaseURL(input: string): string {
+function canonicalizeBaseURL(input: string): string {
   let url: URL
   try {
     url = new URL(input.trim())

@@ -22,7 +22,7 @@ import { ArticleOutline } from '../detail/ArticleOutline'
 import { ReaderDialog } from '../ui/ReaderDialog'
 import { ReaderPreviewCard } from '../ui/ReaderPreviewCard'
 import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
-import { refreshPendingInboxCount } from './PendingInboxCount'
+import { refreshPendingInboxCount } from '../../lib/pending-inbox-events'
 import { inboxSourceIcon } from './inbox-source-icons'
 
 export interface InboxSurfaceProps {

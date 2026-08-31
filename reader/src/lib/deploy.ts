@@ -23,10 +23,10 @@
  */
 
 /** 与 `APISchemaVersion` 对齐。helper 与 Reader 同版本发布，但 HOLD 期间可能差一版。 */
-export const DEPLOY_API_SCHEMA_VERSION = 1
+const DEPLOY_API_SCHEMA_VERSION = 1
 
 /** Caddy 固定代理到 helper socket 的前缀。 */
-export const DEPLOY_API_PREFIX = '/api/deploy/system'
+const DEPLOY_API_PREFIX = '/api/deploy/system'
 
 /** 正式 tag 的唯一形状，与 helper 的 `formalTagPattern` 逐字对齐。 */
 const FORMAL_TAG = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/

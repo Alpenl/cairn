@@ -20,7 +20,7 @@ import {
   readerRouteIsAvailable,
   type ReaderCapabilityPolicy,
 } from '../lib/capabilities'
-import { usePendingInboxCount } from './reader-vnext/PendingInboxCount'
+import { usePendingInboxCount } from './reader-vnext/pending-inbox-count-context'
 
 export type LibraryView = 'pending' | 'reading' | 'sites' | 'subs' | 'notes'
 

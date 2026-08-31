@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { Icon } from '../Icon'
-import { LibraryModeNav, type LibraryView } from '../LibraryModeNav'
+import { PrimaryNav, type LibraryView } from '../PrimaryNav'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { feedError, feedTitle } from '../../lib/feed'
@@ -325,6 +325,14 @@ export function SubscriptionSidebar({
     />
   )
 
+  const navigatePrimary = (route: ReaderRoute) => {
+    if (onNavigate) {
+      onNavigate(route)
+      return
+    }
+    if (route.kind === 'library') onView(route.id)
+  }
+
   return (
     <aside
       ref={sidebarRef}
@@ -333,7 +341,7 @@ export function SubscriptionSidebar({
       aria-label="订阅导航"
       aria-busy={batchBusy}
     >
-      <LibraryModeNav view="subs" onView={onView} onNavigate={onNavigate} policy={capabilityPolicy} />
+      <PrimaryNav activeLibrary="subs" onNavigate={navigatePrimary} policy={capabilityPolicy} />
 
       <div className="rss-sidebar-title">
         <span>条目</span>

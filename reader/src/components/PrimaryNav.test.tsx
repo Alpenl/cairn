@@ -2,22 +2,22 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ReaderRoute } from '../lib/navigation/route'
 import { enabledReaderCapabilityPolicy } from '../test/capabilities'
-import { LibraryModeNav } from './LibraryModeNav'
+import { PrimaryNav } from './PrimaryNav'
 
-describe('LibraryModeNav', () => {
+describe('PrimaryNav', () => {
   it('marks the active mode and routes tab selections', () => {
-    const onView = vi.fn()
-    render(<LibraryModeNav view="notes" policy={enabledReaderCapabilityPolicy()} onView={onView} />)
+    const onNavigate = vi.fn<(route: ReaderRoute) => void>()
+    render(<PrimaryNav activeLibrary="notes" policy={enabledReaderCapabilityPolicy()} onNavigate={onNavigate} />)
 
     expect(screen.getByRole('tab', { name: '笔记' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tab', { name: '阅读' })).toHaveAttribute('aria-selected', 'false')
 
     fireEvent.click(screen.getByRole('tab', { name: '订阅' }))
-    expect(onView).toHaveBeenCalledWith('subs')
+    expect(onNavigate).toHaveBeenCalledWith({ kind: 'library', id: 'subs' })
   })
 
   it('highlights 阅读 for the sites route it now hosts', () => {
-    render(<LibraryModeNav view="sites" onView={vi.fn()} />)
+    render(<PrimaryNav activeLibrary="sites" onNavigate={vi.fn()} />)
 
     // 网站 lost its own entry but kept its route. The highlight has to land on
     // the library that adopted it, otherwise the rail claims the user is
@@ -28,7 +28,7 @@ describe('LibraryModeNav', () => {
 
   it('keeps exactly four library tabs and places surface/tools outside the tablist', () => {
     const onNavigate = vi.fn<(route: ReaderRoute) => void>()
-    render(<LibraryModeNav view="reading" policy={enabledReaderCapabilityPolicy()} onView={vi.fn()} onNavigate={onNavigate} />)
+    render(<PrimaryNav activeLibrary="reading" policy={enabledReaderCapabilityPolicy()} onNavigate={onNavigate} />)
 
     expect(screen.getAllByRole('tab')).toHaveLength(4)
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
@@ -62,11 +62,11 @@ describe('LibraryModeNav', () => {
 
   it('does not select a library tab when a surface route is active', () => {
     render(
-      <LibraryModeNav
-        view="reading"
+      <PrimaryNav
+        activeLibrary="reading"
         policy={enabledReaderCapabilityPolicy()}
         activeRoute={{ kind: 'surface', id: 'home' }}
-        onView={vi.fn()}
+        onNavigate={vi.fn()}
       />,
     )
 
@@ -75,7 +75,7 @@ describe('LibraryModeNav', () => {
   })
 
   it('supports roving keyboard navigation across the library tabs', () => {
-    render(<LibraryModeNav view="reading" policy={enabledReaderCapabilityPolicy()} onView={vi.fn()} />)
+    render(<PrimaryNav activeLibrary="reading" policy={enabledReaderCapabilityPolicy()} onNavigate={vi.fn()} />)
     const tabs = screen.getAllByRole('tab')
     tabs[1].focus()
 
@@ -93,10 +93,10 @@ describe('LibraryModeNav', () => {
     ['notes', 'tab', '笔记'],
   ] as const)('hides the %s-owned legacy navigation entry when unavailable', (capability, role, label) => {
     render(
-      <LibraryModeNav
-        view="reading"
+      <PrimaryNav
+        activeLibrary="reading"
         policy={enabledReaderCapabilityPolicy({ [capability]: false })}
-        onView={vi.fn()}
+        onNavigate={vi.fn()}
       />,
     )
 

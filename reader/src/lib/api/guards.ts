@@ -133,7 +133,7 @@ function isBooleanRecord(value: unknown, keys: readonly string[]): value is Reco
   return isRecord(value) && keys.every((key) => typeof value[key] === 'boolean')
 }
 
-export function isReaderCapabilitiesResponse(v: unknown): v is ReaderCapabilitiesResponse {
+function isReaderCapabilitiesResponse(v: unknown): v is ReaderCapabilitiesResponse {
   return isBooleanRecord(v, READER_CAPABILITY_KEYS)
 }
 
@@ -472,12 +472,12 @@ export function isTranslationListResponse(
   )
 }
 
-export function isReaderThoughtSearchResponse(v: unknown): v is ReaderThoughtSearchResponse {
+function isReaderThoughtSearchResponse(v: unknown): v is ReaderThoughtSearchResponse {
 	return isRecord(v) && isString(v.id) && isString(v.host_kind) && isString(v.host_id) &&
 		isOptionalNullableString(v.link_id) && isString(v.snippet) && isString(v.updated_at)
 }
 
-export function isReaderNoteSearchResponse(v: unknown): v is ReaderNoteSearchResponse {
+function isReaderNoteSearchResponse(v: unknown): v is ReaderNoteSearchResponse {
 	return isRecord(v) && isString(v.id) && isString(v.title) && isString(v.snippet) &&
 		isInteger(v.published_revision) && isString(v.updated_at)
 }
@@ -497,7 +497,7 @@ export function isGroupedSearchResponse(v: unknown): v is GroupedSearchResponse 
 	return true
 }
 
-export function isSiteListItem(v: unknown): v is SiteListItemResponse {
+function isSiteListItem(v: unknown): v is SiteListItemResponse {
 	return isRecord(v) && isString(v.id) && isString(v.name) && isString(v.intro) &&
 		isString(v.display_host) && isStringArray(v.tags) && isInteger(v.entry_count) &&
 		typeof v.pinned === 'boolean' &&
@@ -970,11 +970,11 @@ export function isReaderRelatedTagsResponse(v: unknown): v is ReaderRelatedTagsR
   return isRecord(v) && isStringArray(v.items)
 }
 
-export function isReaderTagActivityResponse(v: unknown): v is ReaderTagActivityResponse {
+function isReaderTagActivityResponse(v: unknown): v is ReaderTagActivityResponse {
   return isRecord(v) && isString(v.tag) && isString(v.last_at)
 }
 
-export function isReaderDomainActivityResponse(v: unknown): v is ReaderDomainActivityResponse {
+function isReaderDomainActivityResponse(v: unknown): v is ReaderDomainActivityResponse {
   return isRecord(v) && isString(v.domain) && isString(v.last_at)
 }
 

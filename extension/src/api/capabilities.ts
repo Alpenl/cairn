@@ -45,7 +45,7 @@ export async function createCaptureOwnerFingerprint(
 }
 
 /** Conservative floor below which token-derived recovery is disabled. */
-export const MIN_CAPTURE_RECOVERY_SECRET_LENGTH = 16
+const MIN_CAPTURE_RECOVERY_SECRET_LENGTH = 16
 
 export function isCaptureRecoverySecretEligible(accessToken: string): boolean {
   return accessToken.trim().length >= MIN_CAPTURE_RECOVERY_SECRET_LENGTH

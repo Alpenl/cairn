@@ -9,7 +9,8 @@ import type { ReaderRoute } from '../../lib/navigation/route'
 import { enabledReaderCapabilityPolicy } from '../../test/capabilities'
 import { makeReaderTodo as todo } from '../../test/fixtures'
 import { makeReaderClient } from '../../test/reader-client'
-import { sortTodos, TodoSurface } from './TodoSurface'
+import { sortTodos } from '../../lib/todo-sort'
+import { TodoSurface } from './TodoSurface'
 
 function makeClient(items: ReaderTodoResponse[]) {
   const listTodos = vi.fn(async () => ok({ items }))

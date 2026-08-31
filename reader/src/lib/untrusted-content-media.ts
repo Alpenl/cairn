@@ -1,4 +1,4 @@
-export const BLOCKED_IMAGE_FALLBACK = '图片已阻止'
+const BLOCKED_IMAGE_FALLBACK = '图片已阻止'
 
 /**
  * The accessible replacement for an untrusted image deliberately contains no

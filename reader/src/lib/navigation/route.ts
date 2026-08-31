@@ -14,7 +14,7 @@ export type ReaderRoute =
   | { readonly kind: 'tool'; readonly id: 'todo' | 'settings' | 'history' | 'trash' }
 
 export const READER_LAST_LOCATION_STORAGE_KEY = 'webtag:reader:last-location:v1'
-export const READER_LAST_LOCATION_STORAGE_PREFIX = 'webtag:reader:last-location:v2:'
+const READER_LAST_LOCATION_STORAGE_PREFIX = 'webtag:reader:last-location:v2:'
 export const READER_STARTUP_PREFERENCE_STORAGE_KEY = 'webtag:reader:startup-preference:v1'
 export const READER_HISTORY_INDEX_KEY = '__webtag_reader_history_index'
 export const READER_NAVIGATION_COMMIT_EVENT = 'webtag:reader-navigation-committed'
@@ -82,7 +82,7 @@ function historyStateRecord(state: unknown): Record<string, unknown> {
     : {}
 }
 
-export function readerHistoryIndex(state: unknown): number | undefined {
+function readerHistoryIndex(state: unknown): number | undefined {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return undefined
   const value = (state as Record<string, unknown>)[READER_HISTORY_INDEX_KEY]
   return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined
@@ -312,9 +312,6 @@ export type ReaderNavigationRequest = (
  */
 export function parseReaderRoute(
   input: URL | string,
-  // Retained for source compatibility. Startup fallback is deliberately
-  // governed only by preference, stored location, and the Home default.
-  _fallback: ReaderRoute = { kind: 'surface', id: 'home' },
   options: ParseReaderRouteOptions = {},
 ): ReaderRoute {
   const url = typeof input === 'string' ? new URL(input, 'https://reader.invalid/') : input

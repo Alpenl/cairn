@@ -13,7 +13,8 @@ import { reanchorAnnotation, type ReanchorAnnotation, type ReanchorReason } from
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { Icon } from '../Icon'
 import { ThoughtMarkdown } from '../ThoughtMarkdown'
-import { ActionPopover, NOTE_SELECTION_ACTIONS, type PopoverAction } from '../ActionPopover'
+import { NOTE_SELECTION_ACTIONS, type PopoverAction } from '../../lib/selection-actions'
+import { ActionPopover } from '../ActionPopover'
 import { NotePanel } from '../NotePanel'
 import { ChatSidebar, type ChatDraft } from '../ChatSidebar'
 import { ReadingTocControl } from '../detail/ReadingTocControl'
@@ -88,8 +89,7 @@ export type NotesLeaveResult =
     }
 
 /** Matches the publish contract: only ASCII space, tab, CR and LF are blank. */
-// eslint-disable-next-line react-refresh/only-export-components
-export function isCanonicalEmptyNoteContent(value: string): boolean {
+function isCanonicalEmptyNoteContent(value: string): boolean {
   return /^[ \t\r\n]*$/.test(value)
 }
 
@@ -118,8 +118,7 @@ function historicalReanchorOp(
   }
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
-export function buildNoteReanchorOps(
+function buildNoteReanchorOps(
   rows: readonly NoteReanchorRow[],
   previousSource: string,
   currentSource: string,

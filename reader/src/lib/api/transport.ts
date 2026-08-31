@@ -24,7 +24,7 @@ import { hasCanonicalSafeLinkMetadataRevisionTokens, isHealthResponse } from './
 import type { HealthResponse, SessionIdentity } from './types'
 import type { IdentityLease, IdentityOperationContext, IdentityOwnership } from '../identity'
 
-export const DEFAULT_TIMEOUT = 15000
+const DEFAULT_TIMEOUT = 15000
 export const SESSION_HEADER = 'X-WebTag-Session'
 export const DATA_NAMESPACE_HEADER = 'X-WebTag-Data-Namespace'
 

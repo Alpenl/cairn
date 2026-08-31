@@ -118,7 +118,7 @@ export interface TransientCaptureActivationFailure {
 export const TRANSIENT_CAPTURE_ACTIVATION_FAILURE: TransientCaptureActivationFailure =
   Object.freeze({ status: 'transient-unavailable' })
 
-export function isTransientCaptureActivationFailure(
+function isTransientCaptureActivationFailure(
   value: CaptureActivation | TransientCaptureActivationFailure | null,
 ): value is TransientCaptureActivationFailure {
   return value !== null && 'status' in value

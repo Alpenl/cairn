@@ -21,7 +21,7 @@ export interface TagsState {
 
 export {
   TAGS_CACHE_KEY,
-  TAGS_CACHE_PREFIX,
+
 } from '../lib/cache/keys'
 
 type TagsClient = ReaderIdentityPort & Pick<ReaderLibrarySitesPort, 'getTags'>

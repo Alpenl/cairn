@@ -20,7 +20,7 @@ import type { IngestSource } from '@/api/types'
 
 /** 普通浏览器采集正文的请求预算（512 KiB）。超出则截断。 */
 export const MAX_TEXT_BYTES = 512 * 1024
-export const MAX_HTML_BYTES = 512 * 1024
+const MAX_HTML_BYTES = 512 * 1024
 
 // ── 字节工具 ────────────────────────────────────────────────
 

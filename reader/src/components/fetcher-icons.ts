@@ -5,7 +5,7 @@ import { fetcherKey } from '../lib/metadata'
  * fetcher_type -> UI icon name. Keys are normalized backend fetcher types
  * (basic/arxiv/github/jina/pdf/grok/wechat).
  */
-export const FETCHER_ICON: Record<string, IconName> = {
+const FETCHER_ICON: Record<string, IconName> = {
   basic: 'globe',
   github: 'code',
   arxiv: 'doc',

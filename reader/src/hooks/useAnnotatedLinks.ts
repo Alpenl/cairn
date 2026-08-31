@@ -21,7 +21,7 @@ import type { AnnotatedLinkRecord } from '../lib/user-data/annotation-types'
 import type { LibraryReloadOptions } from './libraryReload'
 
 export {
-  ANNOTATED_LINKS_CACHE_KEY,
+
   linkDetailCacheKey,
 } from '../lib/cache/keys'
 

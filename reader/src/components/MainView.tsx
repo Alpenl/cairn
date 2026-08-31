@@ -36,7 +36,7 @@ import { SettingsSurface } from './reader-vnext/SettingsSurface'
 import { ThoughtHistorySurface } from './reader-vnext/ThoughtHistorySurface'
 import { TrashSurface } from './reader-vnext/TrashSurface'
 import { PendingInboxCountProvider } from './reader-vnext/PendingInboxCount'
-import type { LibraryView } from './LibraryModeNav'
+import type { LibraryView } from './PrimaryNav'
 import type {
   CapabilitiesResponse,
 } from '../lib/api/types'

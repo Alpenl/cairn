@@ -7,6 +7,7 @@ import { useExclusiveAction } from '../../hooks/useExclusiveAction'
 import { useSurfaceRequestGate, type SurfaceRequestToken } from '../../hooks/useSurfaceRequestGate'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
 import { asRecord, isRecord } from '../../lib/records'
+import { sortTodos, todoTimestamp } from '../../lib/todo-sort'
 import { describeTodoRow, type TodoRowDescriptor } from '../../lib/todo-row-descriptor'
 import {
   readerErrorMessage,
@@ -31,12 +32,6 @@ type TodoSurfaceClient = Pick<
   ReaderInboxTodosPort,
   'listTodos' | 'createTodo' | 'patchTodo' | 'deleteTodo' | 'isIdentityCurrent'
 >
-
-function timestamp(value: string | null | undefined): number | null {
-  if (!value) return null
-  const parsed = Date.parse(value)
-  return Number.isNaN(parsed) ? null : parsed
-}
 
 function dateTimeLocalValue(value: string | null | undefined): string {
   const parsed = value ? new Date(value) : null
@@ -138,7 +133,7 @@ function normalizeTodo(value: unknown): TodoItem | null {
 
   const dueAt = readDate(value, 'due_at', 'dueAt')
   const expiredValue = readBoolean(value, 'expired', 'is_expired', 'isExpired')
-  const expired = expiredValue ?? Boolean(dueAt && timestamp(dueAt) !== null && timestamp(dueAt)! < Date.now() && !done)
+  const expired = expiredValue ?? Boolean(dueAt && todoTimestamp(dueAt) !== null && todoTimestamp(dueAt)! < Date.now() && !done)
   const hostRevisionValue = readRevision(value, 'host_revision', 'hostRevision')
   const hostRevisionKnown = hostRevisionValue !== null || originKind === 'standalone'
   const originRef = Object.prototype.hasOwnProperty.call(value, 'origin_ref')
@@ -188,20 +183,6 @@ function normalizeTodoList(value: unknown): TodoItem[] | null {
 
 function normalizeMutationTodo(value: unknown): TodoItem | null {
   return normalizeTodo(unwrapTodo(value))
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function sortTodos(items: readonly ReaderTodoResponse[]): ReaderTodoResponse[] {
-  return [...items].sort((left, right) => {
-    if (left.done !== right.done) return Number(left.done) - Number(right.done)
-    const leftDue = timestamp(left.due_at)
-    const rightDue = timestamp(right.due_at)
-    if (leftDue !== null && rightDue !== null && leftDue !== rightDue) return leftDue - rightDue
-    if (leftDue !== null && rightDue === null) return -1
-    if (leftDue === null && rightDue !== null) return 1
-    const created = (timestamp(right.created_at) ?? Number.NEGATIVE_INFINITY) - (timestamp(left.created_at) ?? Number.NEGATIVE_INFINITY)
-    return created || left.id.localeCompare(right.id)
-  })
 }
 
 function replaceTodo(items: readonly TodoItem[], next: TodoItem): TodoItem[] {
@@ -422,7 +403,7 @@ export function TodoSurface({ client, onNavigate, onOpenLink, capabilityPolicy, 
       }
       const next = normalizeMutationTodo(result.data)
       const expectedDueAt = duePatch.due_at === undefined ? todo.due_at : duePatch.due_at
-      const dueMatches = timestamp(next?.due_at) === timestamp(expectedDueAt)
+      const dueMatches = todoTimestamp(next?.due_at) === todoTimestamp(expectedDueAt)
       if (!next || next.id !== todo.id || next.origin_kind !== 'standalone' || next.text !== nextText || !dueMatches) {
         setError(INCOMPLETE_TODO_MESSAGE)
         return

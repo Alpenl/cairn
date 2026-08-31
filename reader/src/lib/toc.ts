@@ -15,8 +15,11 @@ export interface TocHeading {
   text: string
 }
 
+/** 少于三条标题的「大纲」没有足够的导航价值。渲染与高亮共用这个门槛。 */
+export const MIN_TOC_HEADINGS = 3
+
 /** 目录只收前三级；更深的标题照样拿到 id，只是不进目录（否则大纲会被淹没）。 */
-export const TOC_MAX_LEVEL = 3
+const TOC_MAX_LEVEL = 3
 
 const HEADING_TAG = /^h([1-6])$/
 

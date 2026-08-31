@@ -5,19 +5,11 @@
  * onMouseDown preventDefault 避免点击按钮时清空选区。
  */
 import { useLayoutEffect, useRef, useState } from 'react'
+import {
+  ARTICLE_SELECTION_ACTIONS,
+  type PopoverAction,
+} from '../lib/selection-actions'
 import { Icon, type IconName } from './Icon'
-
-/** 浮层动作类型。 */
-export type PopoverAction = 'highlight' | 'note' | 'translate' | 'ai' | 'copy'
-
-// eslint-disable-next-line react-refresh/only-export-components
-export const ARTICLE_SELECTION_ACTIONS: readonly PopoverAction[] = Object.freeze([
-  'highlight', 'note', 'translate', 'ai', 'copy',
-])
-// eslint-disable-next-line react-refresh/only-export-components
-export const NOTE_SELECTION_ACTIONS: readonly PopoverAction[] = Object.freeze([
-  'highlight', 'note', 'ai', 'copy',
-])
 
 interface ActionDefinition {
   readonly action: PopoverAction

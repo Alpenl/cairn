@@ -8,7 +8,7 @@ import {
   type SurfaceRequestToken,
 } from './useSurfaceRequestGate'
 
-export const READER_IDENTITY_MISMATCH_ERROR: ApiError = Object.freeze({
+const READER_IDENTITY_MISMATCH_ERROR: ApiError = Object.freeze({
   kind: 'identity-mismatch',
   message: 'Reader client does not own the active cache identity',
 })

@@ -32,7 +32,7 @@ const TRANSLATION_POLL_MS = 1200
  * 是同一条教训的两次应用。
  */
 export {
-  TRANSLATIONS_CACHE_PREFIX,
+
   translationsKey,
 } from '../lib/cache/keys'
 

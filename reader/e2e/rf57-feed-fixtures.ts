@@ -28,7 +28,7 @@ function tuple(mode: Rf57Mode, filter: readonly Rf57Source[]): string {
 }
 
 /** Link id, stable per (mode, filter, index) so a resumed live page keeps its keys. */
-export function rf57LinkID(mode: Rf57Mode, filter: readonly Rf57Source[], index: number): string {
+function rf57LinkID(mode: Rf57Mode, filter: readonly Rf57Source[], index: number): string {
   return `rf57-${tuple(mode, filter)}-${index}`
 }
 

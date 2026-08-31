@@ -9,7 +9,7 @@ import { useIdentityPolling } from './useIdentityPolling'
 
 const PAGE_SIZE = 30
 
-export { FEED_ITEMS_CACHE_PREFIX } from '../lib/cache/keys'
+
 
 const NO_ITEMS: FeedItem[] = []
 

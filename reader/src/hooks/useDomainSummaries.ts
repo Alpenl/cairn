@@ -17,7 +17,7 @@ export interface DomainSummariesState {
 
 export {
   DOMAIN_SUMMARIES_CACHE_KEY,
-  DOMAIN_SUMMARIES_CACHE_PREFIX,
+
 } from '../lib/cache/keys'
 
 type DomainSummariesClient = ReaderIdentityPort &

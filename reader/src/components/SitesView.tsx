@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from './Icon'
-import { LibraryModeNav, type LibraryView } from './LibraryModeNav'
+import { PrimaryNav, type LibraryView } from './PrimaryNav'
 import { ReaderDialog } from './ui/ReaderDialog'
 import { useSites } from '../hooks/useSites'
 import { invalidateLibrary, invalidateLink } from '../lib/cache/invalidate'
@@ -215,9 +215,17 @@ export function SitesView({ client, onToast, initialSiteId, collapsed, onView, o
 			const refreshed = await client.getSite(result.data.source_site_id); if (!canManage()) return 'error' as const; if (refreshed.ok) setActive(refreshed.data)
 		setSplittingSite(null); void sites.reload(); onToast(`已拆出 ${result.data.moved_entries} 个入口`, 'check'); return 'success' as const
 	}
+	const navigatePrimary = (route: ReaderRoute) => {
+		if (onNavigate) {
+			onNavigate(route)
+			return
+		}
+		if (route.kind === 'library') onView(route.id)
+	}
+
 		return <section className={'sites-view' + (active ? ' has-detail' : '')}>
 			<aside className={'sites-sidebar' + (collapsed ? ' collapsed' : '')} id="primary-navigation" aria-label="网站导航">
-				<LibraryModeNav view="sites" onView={onView} onNavigate={onNavigate} policy={policy} />
+				<PrimaryNav activeLibrary="sites" onNavigate={navigatePrimary} policy={policy} />
 				<div className="sites-filter-group">
 					{/* 网站是阅读的一种聚合视图，主导航里高亮的是「阅读」，所以这里
 					    要给一条明确的回去的路。 */}

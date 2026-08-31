@@ -20,7 +20,7 @@ export async function verifyInstallArchive(
   return { archive: archivePath, fileCount: members.size }
 }
 
-export async function verifyInstallArchives(archivePaths = DEFAULT_ARCHIVES) {
+async function verifyInstallArchives(archivePaths = DEFAULT_ARCHIVES) {
   return Promise.all(archivePaths.map((path) => verifyInstallArchive(path)))
 }
 

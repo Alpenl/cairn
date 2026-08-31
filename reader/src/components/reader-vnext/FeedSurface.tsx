@@ -10,6 +10,10 @@ import type {
 } from '../../lib/reader-api-ports'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { feedScrollAnchorKey } from '../../lib/feed-scroll-anchor'
+import {
+  FEED_RESUME_STORAGE_PREFIX,
+  readerFeedIdentityNamespace,
+} from '../../lib/feed-session-state'
 import { useFeedScrollAnchor } from '../../hooks/useFeedScrollAnchor'
 import { useSurfaceRequestGate, type SurfaceRequestToken } from '../../hooks/useSurfaceRequestGate'
 import { isRecord } from '../../lib/records'
@@ -70,23 +74,6 @@ interface FeedLoadOptions {
 }
 
 const FEED_PAGE_SIZE = 30
-const FEED_RESUME_STORAGE_PREFIX = 'webtag:reader:mixed-feed:v1'
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function clearFeedSessionState(client: ReaderIdentityPort): void {
-  const namespace = identityNamespace(client)
-  if (!namespace || typeof window === 'undefined') return
-  const prefix = `${FEED_RESUME_STORAGE_PREFIX}:${encodeURIComponent(namespace)}:`
-  try {
-    for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
-      const key = window.sessionStorage.key(index)
-      if (key?.startsWith(prefix)) window.sessionStorage.removeItem(key)
-    }
-  } catch {
-    // Feed position state is best-effort and contains no durable user data.
-  }
-}
-
 function isFeedMode(value: unknown): value is FeedMode {
   return value === 'recommended' || value === 'chronological'
 }
@@ -134,12 +121,7 @@ function writeStoredSources(client: ReaderIdentityPort, sources: Iterable<FeedSo
 }
 
 function identityNamespace(client: ReaderIdentityPort): string | null {
-  try {
-    const namespace = client.identityLease.context.physicalNamespace
-    return typeof namespace === 'string' && namespace.length > 0 ? namespace : null
-  } catch {
-    return null
-  }
+  return readerFeedIdentityNamespace(client)
 }
 
 function resumeStorageKey(client: ReaderIdentityPort, mode: FeedMode, sourceFilter: readonly FeedSource[]): string | null {

@@ -20,7 +20,7 @@ type LinkContentClient = Pick<ReaderLibrarySitesPort, 'captureIdentity' | 'getCo
 const normalizedBodyCache = new WeakMap<object, LinkContentResponse>()
 
 /** Old persisted body entries predate content_source; normalize only at cache boundaries. */
-export function normalizeCachedLinkContent(
+function normalizeCachedLinkContent(
   value: LinkContentResponse | null,
 ): LinkContentResponse | null {
   if (!value || value.content_source === 'user') return value

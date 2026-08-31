@@ -1,8 +1,9 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IdentityBoundReaderClient } from '../../lib/api/client'
-import { LibraryModeNav } from '../LibraryModeNav'
-import { PendingInboxCountProvider, refreshPendingInboxCount } from './PendingInboxCount'
+import { PrimaryNav } from '../PrimaryNav'
+import { refreshPendingInboxCount } from '../../lib/pending-inbox-events'
+import { PendingInboxCountProvider } from './PendingInboxCount'
 import { SurfaceNav } from './SurfaceNav'
 import { ok } from '@webtag/api'
 import {
@@ -41,7 +42,7 @@ function renderNavigation(clientValue: IdentityBoundReaderClient, host: BadgeHos
   return render(
     <PendingInboxCountProvider client={clientValue} capabilityLease={enabledReaderCapabilityLease()}>
       <SurfaceNav active={host} capabilityPolicy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />
-      <LibraryModeNav view={host} policy={enabledReaderCapabilityPolicy()} onView={() => {}} />
+      <PrimaryNav activeLibrary={host} policy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />
     </PendingInboxCountProvider>,
   )
 }
@@ -126,7 +127,7 @@ describe('PendingInboxCountProvider', () => {
     rendered.rerender(
       <PendingInboxCountProvider client={next} capabilityLease={enabledReaderCapabilityLease()}>
         <SurfaceNav active="reading" capabilityPolicy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />
-        <LibraryModeNav view="sites" policy={enabledReaderCapabilityPolicy()} onView={() => {}} />
+        <PrimaryNav activeLibrary="sites" policy={enabledReaderCapabilityPolicy()} onNavigate={() => {}} />
       </PendingInboxCountProvider>,
     )
     expect(screen.queryByLabelText(/项收件箱/)).not.toBeInTheDocument()

@@ -26,7 +26,7 @@
 import { readFileSync } from 'node:fs'
 import type { Page, Route } from '@playwright/test'
 
-export const READER_SCALE_NAMESPACE = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+const READER_SCALE_NAMESPACE = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
 /** Frozen instant for every generated timestamp. Mirrors the Go fixture's base. */
 const NOW = '2026-06-01T00:00:00Z'

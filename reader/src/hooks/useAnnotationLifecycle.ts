@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  commitTargetAnnotationCommand,
   loadAnnotationTargets,
   type AnnotationLifecycleExtraResult,
   type AnnotationLifecycleReadContext,
-  type AnnotationMutationCommittedResult,
-  type AnnotationMutationResult,
 } from '../lib/annotation-commands'
 import type { Annotation } from '../lib/annotations'
 import type { IdentityLease } from '../lib/identity'
@@ -17,7 +14,6 @@ import {
 } from '../lib/reader-events'
 import {
   compactAnnotationOperations,
-  type AnnotationOperationInput,
   type AnnotationTarget,
 } from '../lib/user-data/annotation-store'
 import { annotationTargetKey } from '../lib/user-data/annotation-types'
@@ -56,17 +52,6 @@ export interface UseAnnotationLifecycleResult<TExtra> {
   ) => void
 }
 
-export interface CommitAnnotationMutationInput {
-  readonly lease: IdentityLease | null
-  readonly linkId: string | null
-  readonly target: AnnotationTarget
-  readonly operation: AnnotationOperationInput
-  readonly annotationId: string
-  readonly signal: AbortSignal
-  readonly refresh: () => Promise<boolean>
-  readonly afterCommit?: (result: AnnotationMutationCommittedResult) => void
-}
-
 const EMPTY_ANNOTATIONS: readonly Annotation[] = Object.freeze([])
 const DEFAULT_LIFECYCLE_EVENTS: readonly ReaderEventName[] = Object.freeze([
   READER_EVENTS.annotationsChanged,
@@ -75,8 +60,6 @@ const DEFAULT_LIFECYCLE_EVENTS: readonly ReaderEventName[] = Object.freeze([
 const pendingCompactions = new Map<string, Promise<unknown>>()
 
 export {
-  combineAnnotationSignals,
-  randomAnnotationToken,
   type AnnotationLifecycleExtraResult,
   type AnnotationLifecycleReadContext,
   type AnnotationMutationCommittedResult,
@@ -106,29 +89,6 @@ export function scheduleAnnotationCompaction(
     if (pendingCompactions.get(key) === task) pendingCompactions.delete(key)
   })
   pendingCompactions.set(key, task)
-}
-
-export async function commitAnnotationMutation({
-  lease,
-  linkId,
-  target,
-  operation,
-  annotationId,
-  signal,
-  refresh,
-  afterCommit,
-}: CommitAnnotationMutationInput): Promise<AnnotationMutationResult> {
-  return commitTargetAnnotationCommand({
-    lease,
-    linkId,
-    target,
-    operation,
-    annotationId,
-    signal,
-    refresh,
-    afterCommit,
-    scheduleCompaction: scheduleAnnotationCompaction,
-  })
 }
 
 export function useAbortableAnnotationGeneration(key: string): AbortSignal {

@@ -11,8 +11,8 @@ import { resourceStore } from '../lib/cache/store'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
 import { useIdentityCachedResource } from './useIdentityCachedResource'
 
-export { SITES_CACHE_PREFIX } from '../lib/cache/keys'
-export const SITES_PAGE_SIZE = 30
+
+const SITES_PAGE_SIZE = 30
 
 const NO_SITES: SiteListItemResponse[] = []
 const CAPABILITY_REVOKED_ERROR: ApiError = Object.freeze({

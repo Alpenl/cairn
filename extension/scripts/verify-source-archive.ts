@@ -217,7 +217,7 @@ async function assertArchivedWorkspaceLink(root: string): Promise<void> {
   }
 }
 
-export async function verifySourceArchive(
+async function verifySourceArchive(
   sourceArchive = resolve(EXTENSION_ROOT, 'dist/webtag-source.zip'),
   officialFirefoxArchive = resolve(EXTENSION_ROOT, 'dist/webtag-firefox.zip'),
 ) {

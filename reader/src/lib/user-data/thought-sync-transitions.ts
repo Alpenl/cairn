@@ -15,7 +15,7 @@ import {
 
 export const MAX_THOUGHT_PULL_PAGES_PER_ROUND = 20
 export const BASE_THOUGHT_RETRY_MS = 1000
-export const MAX_THOUGHT_RETRY_MS = 5 * 60 * 1000
+const MAX_THOUGHT_RETRY_MS = 5 * 60 * 1000
 
 export type ThoughtSyncTransitionPhase = 'offline' | 'syncing' | 'failed' | 'pending' | 'synced'
 
@@ -248,7 +248,7 @@ export function thoughtSyncFailureCode(error: ApiError): string {
     .join(':')
 }
 
-export function thoughtRetryDelay(error: ApiError, attemptCount: number): number {
+function thoughtRetryDelay(error: ApiError, attemptCount: number): number {
   if (
     error.retryAfterSeconds !== undefined &&
     Number.isFinite(error.retryAfterSeconds) &&
@@ -284,7 +284,7 @@ export function blockedThoughtFailureCode(
   return storedThoughtFailureCode(blocked.blockedReason) ?? 'blocked-operation'
 }
 
-export function earliestThoughtRetryAt(
+function earliestThoughtRetryAt(
   records: readonly Pick<ThoughtSyncTransitionRecord, 'status' | 'nextAttemptAt'>[],
 ): number | undefined {
   return records.reduce<number | undefined>((earliest, record) => {

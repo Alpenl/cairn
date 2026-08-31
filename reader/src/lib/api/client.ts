@@ -126,7 +126,7 @@ import type { IdentityLease, IdentityOwnership } from '../identity'
 
 export {
   DATA_NAMESPACE_HEADER,
-  DEFAULT_TIMEOUT,
+
   isSessionIdentity,
   SESSION_HEADER,
 } from './transport'
@@ -170,8 +170,8 @@ export type {
   ReaderActivityRequestOptions,
 } from './endpoint-helpers'
 export {
-  archiveV2Sections,
-  fullArchiveV2Selection,
+
+
   type ArchiveV2Selection,
 } from './archive-v2'
 

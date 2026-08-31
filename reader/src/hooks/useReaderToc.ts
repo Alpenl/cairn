@@ -7,10 +7,8 @@
  */
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 
-import type { TocHeading } from '../lib/toc'
+import { MIN_TOC_HEADINGS, type TocHeading } from '../lib/toc'
 
-/** 少于三条标题的「大纲」没有足够的导航价值。渲染与高亮共用这个门槛。 */
-export const MIN_TOC_HEADINGS = 3
 /** 点目录跳转时给标题上方留的呼吸位。 */
 const HEADING_JUMP_OFFSET = 18
 /**

@@ -124,9 +124,6 @@ export type ReaderSessionArchivePort = ReaderIdentityPort &
 
 export type ReaderHealthPort = Pick<ReaderSessionArchivePort, 'getHealth'>
 
-export type ReaderArchiveDownloadPort = ReaderIdentityPort &
-  Pick<ReaderSessionArchivePort, 'downloadArchiveV2'>
-
 export type ReaderTrashPort = ReaderIdentityPort &
   Pick<ReaderSessionArchivePort, 'listTrash' | 'purgeHost'> &
   Pick<ReaderLibrarySitesPort, 'restoreLink'> &

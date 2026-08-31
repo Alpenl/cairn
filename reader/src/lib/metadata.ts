@@ -15,7 +15,7 @@ export function fetcherKey(raw: string | null | undefined): string {
 }
 
 /** fetcher_type (normalized) -> Chinese display label. */
-export const FETCHER_LABEL: Record<string, string> = {
+const FETCHER_LABEL: Record<string, string> = {
   basic: '网页',
   github: 'GitHub',
   arxiv: 'arXiv',
@@ -32,7 +32,7 @@ export function fetcherLabel(raw: string | null | undefined): string | undefined
 }
 
 /** content_type -> Chinese display label. */
-export const CONTENT_TYPE_LABEL: Record<string, string> = {
+const CONTENT_TYPE_LABEL: Record<string, string> = {
   article: '文章',
   listing: '列表页',
   homepage: '主页',
@@ -46,7 +46,7 @@ export function contentTypeLabel(raw: string): string {
 }
 
 /** Inbox source_kind -> Chinese display label. */
-export const INBOX_SOURCE_LABEL: Record<string, string> = {
+const INBOX_SOURCE_LABEL: Record<string, string> = {
   browser_capture: '网页捕获',
   extension: '扩展捕获',
   rss: '订阅',

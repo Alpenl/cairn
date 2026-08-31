@@ -1231,6 +1231,58 @@ async function writeRemotePage(
   )
 }
 
+interface ActiveSyncStateContext {
+  readonly namespace: string
+  readonly stateStore: IDBObjectStore
+  readonly state: ThoughtSyncStateRecord
+  readonly outbox: readonly ThoughtOutboxRecord[]
+  readonly history: readonly ThoughtHistoryOutboxRecord[]
+  readonly records: readonly SyncOutboxRecord[]
+}
+
+function readActiveSyncStateInTransaction(
+  lease: IdentityLease,
+  transaction: IDBTransaction,
+  onReady: (context: ActiveSyncStateContext) => void,
+): void {
+  const namespace = lease.context.physicalNamespace
+  const stateStore = transaction.objectStore(THOUGHT_SYNC_STATE_STORE)
+  const stateRequest = stateStore.get(namespace) as IDBRequest<ThoughtSyncStateRecord | undefined>
+  const outboxRequest = transaction.objectStore(THOUGHT_OUTBOX_STORE)
+    .index(THOUGHT_OUTBOX_NAMESPACE_INDEX)
+    .getAll(namespace) as IDBRequest<unknown[]>
+  const historyRequest = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
+    .index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
+    .getAll(namespace) as IDBRequest<unknown[]>
+  let stateDone = false
+  let outboxDone = false
+  let historyDone = false
+  const finish = () => {
+    if (!stateDone || !outboxDone || !historyDone) return
+    const state = stateRequest.result
+    const outbox = activeOutboxRows(outboxRequest.result, namespace)
+    const history = activeHistoryOutboxRows(historyRequest.result, namespace)
+    if (!state || !isSyncState(state, namespace) || !outbox || history === null) {
+      transaction.abort()
+      return
+    }
+    onReady({
+      namespace,
+      stateStore,
+      state,
+      outbox,
+      history,
+      records: [...outbox, ...history],
+    })
+  }
+  stateRequest.onerror = () => transaction.abort()
+  outboxRequest.onerror = () => transaction.abort()
+  historyRequest.onerror = () => transaction.abort()
+  stateRequest.onsuccess = () => { stateDone = true; finish() }
+  outboxRequest.onsuccess = () => { outboxDone = true; finish() }
+  historyRequest.onsuccess = () => { historyDone = true; finish() }
+}
+
 async function markPullFailure(
   lease: IdentityLease,
   error: ApiError,
@@ -1243,44 +1295,18 @@ async function markPullFailure(
     'readwrite',
     (transaction, identity, setResult) => {
       if (!lease.isCurrent(identity)) { transaction.abort(); return }
-      const namespace = lease.context.physicalNamespace
-      const stateStore = transaction.objectStore(THOUGHT_SYNC_STATE_STORE)
-      const stateRequest = stateStore.get(namespace) as IDBRequest<ThoughtSyncStateRecord | undefined>
-      const outboxRequest = transaction.objectStore(THOUGHT_OUTBOX_STORE)
-        .index(THOUGHT_OUTBOX_NAMESPACE_INDEX)
-        .getAll(namespace) as IDBRequest<unknown[]>
-      const historyRequest = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
-        .index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
-        .getAll(namespace) as IDBRequest<unknown[]>
-      let stateDone = false
-      let outboxDone = false
-      let historyDone = false
-      const finish = () => {
-        if (!stateDone || !outboxDone || !historyDone) return
-        const state = stateRequest.result
-        const outbox = activeOutboxRows(outboxRequest.result, namespace)
-        const history = activeHistoryOutboxRows(historyRequest.result, namespace)
-        if (!state || !isSyncState(state, namespace) || !outbox || history === null) {
-          transaction.abort()
-          return
-        }
+      readActiveSyncStateInTransaction(lease, transaction, ({ stateStore, state, records }) => {
         const now = Date.now()
         const transition = failThoughtPullState({
           state,
-          records: [...outbox, ...history],
+          records,
           expectedCursor,
           error,
           now,
         })
         if (transition.state !== state) stateStore.put(transition.state)
         setResult(transition.retryAt)
-      }
-      stateRequest.onerror = () => transaction.abort()
-      outboxRequest.onerror = () => transaction.abort()
-      historyRequest.onerror = () => transaction.abort()
-      stateRequest.onsuccess = () => { stateDone = true; finish() }
-      outboxRequest.onsuccess = () => { outboxDone = true; finish() }
-      historyRequest.onsuccess = () => { historyDone = true; finish() }
+      })
     },
   )
 }
@@ -1293,46 +1319,14 @@ async function resetCursor(lease: IdentityLease): Promise<UserDataTransactionRes
     'readwrite',
     (transaction, identity, setResult) => {
       if (!lease.isCurrent(identity)) { transaction.abort(); return }
-      const store = transaction.objectStore(THOUGHT_SYNC_STATE_STORE)
-      const request = store.get(lease.context.physicalNamespace) as IDBRequest<ThoughtSyncStateRecord | undefined>
-      const outboxRequest = transaction.objectStore(THOUGHT_OUTBOX_STORE)
-        .index(THOUGHT_OUTBOX_NAMESPACE_INDEX)
-        .getAll(lease.context.physicalNamespace) as IDBRequest<unknown[]>
-      const historyRequest = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
-        .index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
-        .getAll(lease.context.physicalNamespace) as IDBRequest<unknown[]>
-      let stateDone = false
-      let outboxDone = false
-      let historyDone = false
-      const finish = () => {
-        if (!stateDone || !outboxDone || !historyDone) return
-        const state = request.result
-        const outbox = activeOutboxRows(outboxRequest.result, lease.context.physicalNamespace)
-        const history = activeHistoryOutboxRows(
-          historyRequest.result,
-          lease.context.physicalNamespace,
-        )
-        if (!state || !isSyncState(state, lease.context.physicalNamespace) ||
-          !outbox || history === null) {
-          transaction.abort()
-          return
-        }
-        store.put(resetThoughtPullState({
+      readActiveSyncStateInTransaction(lease, transaction, ({ stateStore, state, records }) => {
+        stateStore.put(resetThoughtPullState({
           state,
-          records: [...outbox, ...history],
+          records,
           now: Date.now(),
         }))
         setResult(undefined)
-      }
-      request.onsuccess = () => {
-        stateDone = true
-        finish()
-      }
-      request.onerror = () => transaction.abort()
-      outboxRequest.onsuccess = () => { outboxDone = true; finish() }
-      outboxRequest.onerror = () => transaction.abort()
-      historyRequest.onsuccess = () => { historyDone = true; finish() }
-      historyRequest.onerror = () => transaction.abort()
+      })
     },
   )
 }
@@ -1348,51 +1342,18 @@ async function markPullComplete(
     'readwrite',
     (transaction, identity, setResult) => {
       if (!lease.isCurrent(identity)) { transaction.abort(); return }
-      const store = transaction.objectStore(THOUGHT_SYNC_STATE_STORE)
-      const request = store.get(lease.context.physicalNamespace) as IDBRequest<ThoughtSyncStateRecord | undefined>
-      const outboxRequest = transaction.objectStore(THOUGHT_OUTBOX_STORE)
-        .index(THOUGHT_OUTBOX_NAMESPACE_INDEX)
-        .getAll(lease.context.physicalNamespace) as IDBRequest<unknown[]>
-      const historyRequest = transaction.objectStore(THOUGHT_HISTORY_OUTBOX_STORE)
-        .index(THOUGHT_HISTORY_OUTBOX_NAMESPACE_INDEX)
-        .getAll(lease.context.physicalNamespace) as IDBRequest<unknown[]>
-      let stateDone = false
-      let outboxDone = false
-      let historyDone = false
-      const finish = () => {
-        if (!stateDone || !outboxDone || !historyDone) return
-        const state = request.result
-        const outbox = activeOutboxRows(outboxRequest.result, lease.context.physicalNamespace)
-        const history = activeHistoryOutboxRows(
-          historyRequest.result,
-          lease.context.physicalNamespace,
-        )
-        if (!state || !isSyncState(state, lease.context.physicalNamespace) ||
-          !outbox || history === null) {
-          transaction.abort()
-          return
-        }
+      readActiveSyncStateInTransaction(lease, transaction, ({ stateStore, state, records }) => {
         if (state.cursor !== expectedCursor) {
           setResult(undefined)
           return
         }
-        const remaining = [...outbox, ...history]
-        store.put(completeThoughtPullState({
+        stateStore.put(completeThoughtPullState({
           state,
-          records: remaining,
+          records,
           now: Date.now(),
         }))
         setResult(undefined)
-      }
-      request.onsuccess = () => {
-        stateDone = true
-        finish()
-      }
-      request.onerror = () => transaction.abort()
-      outboxRequest.onsuccess = () => { outboxDone = true; finish() }
-      outboxRequest.onerror = () => transaction.abort()
-      historyRequest.onsuccess = () => { historyDone = true; finish() }
-      historyRequest.onerror = () => transaction.abort()
+      })
     },
   )
 }
@@ -1615,10 +1576,11 @@ function mergePushDueResults(left: PushDueResult, right: PushDueResult): PushDue
 
 async function recordPushFailure(
   lease: IdentityLease,
-  records: readonly ThoughtOutboxRecord[],
+  outboxStoreName: SyncOutboxStore,
+  records: readonly DispatchableSyncOutboxRecord[],
   error: ApiError,
 ): Promise<PushDueResult> {
-  const marked = await markPushFailure(lease, THOUGHT_OUTBOX_STORE, records, error)
+  const marked = await markPushFailure(lease, outboxStoreName, records, error)
   if (!marked.ok) {
     return { pushed: 0, completedIDs: [], stale: true, halt: true }
   }
@@ -1629,6 +1591,85 @@ async function recordPushFailure(
     retryAt: marked.value,
     error,
     halt: !permanent,
+  }
+}
+
+interface PushDueOutboxPlan<TRecord extends DispatchableSyncOutboxRecord> {
+  readonly storeName: SyncOutboxStore
+  readonly toWireOperation: (record: TRecord) => ReaderThoughtOpRequest
+  readonly networkErrorMessage: string
+  readonly acknowledgementErrorMessage: string
+}
+
+async function pushDueOutboxOperations<TRecord extends DispatchableSyncOutboxRecord>(
+  lease: IdentityLease,
+  client: ReaderThoughtsNotesPort,
+  records: readonly TRecord[],
+  label: string,
+  plan: PushDueOutboxPlan<TRecord>,
+): Promise<PushDueResult> {
+  if (records.length === 0) return { pushed: 0, completedIDs: [], halt: false }
+  const operation = lease.capture(label)
+  if (!lease.isCurrent(operation)) {
+    return { pushed: 0, completedIDs: [], stale: true, halt: true }
+  }
+  let result: Awaited<ReturnType<ReaderThoughtsNotesPort['pushThoughtOps']>>
+  try {
+    result = await client.pushThoughtOps(
+      { ops: records.map(plan.toWireOperation) },
+      { signal: operation.signal },
+    )
+  } catch (error) {
+    if (!lease.isCurrent(operation)) {
+      return { pushed: 0, completedIDs: [], stale: true, halt: true }
+    }
+    return recordPushFailure(lease, plan.storeName, records, {
+      kind: 'network-unreachable',
+      message: error instanceof Error ? error.message : plan.networkErrorMessage,
+    })
+  }
+  if (!lease.isCurrent(operation)) {
+    return { pushed: 0, completedIDs: [], stale: true, halt: true }
+  }
+  if (!result.ok) {
+    if (result.error.kind === 'identity-mismatch') {
+      return { pushed: 0, completedIDs: [], stale: true, halt: true }
+    }
+    if (isIsolatablePermanentThoughtPushFailure(result.error) && records.length > 1) {
+      const midpoint = Math.ceil(records.length / 2)
+      const left = await pushDueOutboxOperations(
+        lease,
+        client,
+        records.slice(0, midpoint),
+        `${label} left`,
+        plan,
+      )
+      if (left.stale || left.halt) return left
+      const right = await pushDueOutboxOperations(
+        lease,
+        client,
+        records.slice(midpoint),
+        `${label} right`,
+        plan,
+      )
+      return mergePushDueResults(left, right)
+    }
+    return recordPushFailure(lease, plan.storeName, records, result.error)
+  }
+  const acknowledged = await acknowledge(lease, plan.storeName, records, result.data)
+  if (!acknowledged.ok) {
+    if (!lease.isCurrent(lease.capture(`${label} after acknowledgement`))) {
+      return { pushed: 0, completedIDs: [], stale: true, halt: true }
+    }
+    return recordPushFailure(lease, plan.storeName, records, {
+      kind: 'other',
+      message: plan.acknowledgementErrorMessage,
+    })
+  }
+  return {
+    pushed: acknowledged.value.length,
+    completedIDs: result.data.map((ack) => ack.op_id),
+    halt: false,
   }
 }
 
@@ -1643,76 +1684,12 @@ async function pushDueOperations(
   records: readonly ThoughtOutboxRecord[],
   label: string,
 ): Promise<PushDueResult> {
-  if (records.length === 0) return { pushed: 0, completedIDs: [], halt: false }
-  const operation = lease.capture(label)
-  if (!lease.isCurrent(operation)) {
-    return { pushed: 0, completedIDs: [], stale: true, halt: true }
-  }
-  let result: Awaited<ReturnType<ReaderThoughtsNotesPort['pushThoughtOps']>>
-  try {
-    result = await client.pushThoughtOps(
-      { ops: records.map(toWireOperation) },
-      { signal: operation.signal },
-    )
-  } catch (error) {
-    if (!lease.isCurrent(operation)) {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    return recordPushFailure(lease, records, {
-      kind: 'network-unreachable',
-      message: error instanceof Error ? error.message : '想法推送失败',
-    })
-  }
-  if (!lease.isCurrent(operation)) {
-    return { pushed: 0, completedIDs: [], stale: true, halt: true }
-  }
-  if (!result.ok) {
-    if (result.error.kind === 'identity-mismatch') {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    if (isIsolatablePermanentThoughtPushFailure(result.error) && records.length > 1) {
-      const midpoint = Math.ceil(records.length / 2)
-      const left = await pushDueOperations(lease, client, records.slice(0, midpoint), `${label} left`)
-      if (left.stale || left.halt) return left
-      const right = await pushDueOperations(lease, client, records.slice(midpoint), `${label} right`)
-      return mergePushDueResults(left, right)
-    }
-    return recordPushFailure(lease, records, result.error)
-  }
-  const acknowledged = await acknowledge(lease, THOUGHT_OUTBOX_STORE, records, result.data)
-  if (!acknowledged.ok) {
-    if (!lease.isCurrent(lease.capture(`${label} after acknowledgement`))) {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    return recordPushFailure(lease, records, {
-      kind: 'other',
-      message: '无法保存想法同步确认',
-    })
-  }
-  return {
-    pushed: acknowledged.value.length,
-    completedIDs: result.data.map((ack) => ack.op_id),
-    halt: false,
-  }
-}
-
-async function recordHistoryPushFailure(
-  lease: IdentityLease,
-  records: readonly ThoughtHistoryOutboxRecord[],
-  error: ApiError,
-): Promise<PushDueResult> {
-  const marked = await markPushFailure(lease, THOUGHT_HISTORY_OUTBOX_STORE, records, error)
-  if (!marked.ok) {
-    return { pushed: 0, completedIDs: [], stale: true, halt: true }
-  }
-  const permanent = isPermanentThoughtPushFailure(error)
-  return {
-    pushed: 0,
-    completedIDs: permanent ? records.map((record) => record.opId) : [],
-    retryAt: marked.value,
-    error,
-    halt: !permanent,
-  }
+  return pushDueOutboxOperations(lease, client, records, label, {
+    storeName: THOUGHT_OUTBOX_STORE,
+    toWireOperation,
+    networkErrorMessage: '想法推送失败',
+    acknowledgementErrorMessage: '无法保存想法同步确认',
+  })
 }
 
 async function pushDueHistoryOperations(
@@ -1721,74 +1698,12 @@ async function pushDueHistoryOperations(
   records: readonly ThoughtHistoryOutboxRecord[],
   label: string,
 ): Promise<PushDueResult> {
-  if (records.length === 0) return { pushed: 0, completedIDs: [], halt: false }
-  const operation = lease.capture(label)
-  if (!lease.isCurrent(operation)) {
-    return { pushed: 0, completedIDs: [], stale: true, halt: true }
-  }
-  let result: Awaited<ReturnType<ReaderThoughtsNotesPort['pushThoughtOps']>>
-  try {
-    result = await client.pushThoughtOps(
-      { ops: records.map(toHistoryWireOperation) },
-      { signal: operation.signal },
-    )
-  } catch (error) {
-    if (!lease.isCurrent(operation)) {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    return recordHistoryPushFailure(lease, records, {
-      kind: 'network-unreachable',
-      message: error instanceof Error ? error.message : '历史想法推送失败',
-    })
-  }
-  if (!lease.isCurrent(operation)) {
-    return { pushed: 0, completedIDs: [], stale: true, halt: true }
-  }
-  if (!result.ok) {
-    if (result.error.kind === 'identity-mismatch') {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    if (isIsolatablePermanentThoughtPushFailure(result.error) && records.length > 1) {
-      const midpoint = Math.ceil(records.length / 2)
-      const left = await pushDueHistoryOperations(
-        lease,
-        client,
-        records.slice(0, midpoint),
-        `${label} left`,
-      )
-      if (left.stale || left.halt) return left
-      const right = await pushDueHistoryOperations(
-        lease,
-        client,
-        records.slice(midpoint),
-        `${label} right`,
-      )
-      return mergePushDueResults(left, right)
-    }
-    return recordHistoryPushFailure(lease, records, result.error)
-  }
-  const acknowledged = await acknowledge(
-    lease,
-    THOUGHT_HISTORY_OUTBOX_STORE,
-    records,
-    result.data,
-  )
-  if (!acknowledged.ok) {
-    if (!lease.isCurrent(lease.capture(`${label} after acknowledgement`))) {
-      return { pushed: 0, completedIDs: [], stale: true, halt: true }
-    }
-    return recordHistoryPushFailure(lease, records, {
-      kind: 'other',
-      message: '无法保存历史想法同步确认',
-    })
-  }
-  return {
-    pushed: acknowledged.value.length,
-    // A superseded command is durably blocked rather than deleted, but it is
-    // complete for this round and must never be selected again immediately.
-    completedIDs: result.data.map((ack) => ack.op_id),
-    halt: false,
-  }
+  return pushDueOutboxOperations(lease, client, records, label, {
+    storeName: THOUGHT_HISTORY_OUTBOX_STORE,
+    toWireOperation: toHistoryWireOperation,
+    networkErrorMessage: '历史想法推送失败',
+    acknowledgementErrorMessage: '无法保存历史想法同步确认',
+  })
 }
 
 async function performSync(

@@ -11,10 +11,10 @@ export {
   annotationLocator,
   annotationLocatorTargetKey,
   annotationMatchesLocator,
-  annotationTargetKey,
-  canonicalAnnotationTarget,
+
+
   isContentAnchored,
-  isSavedContentAnnotationBlockKey,
+
 } from './annotations-domain'
 export type {
   Annotation,
@@ -63,7 +63,7 @@ export interface SelectionInfo {
 
 const ANNOTATION_QUOTE_CONTEXT = 32
 
-export function buildAnnotationQuote(
+function buildAnnotationQuote(
   source: string,
   start: number,
   end: number,

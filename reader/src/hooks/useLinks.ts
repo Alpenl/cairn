@@ -36,7 +36,7 @@ import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryRel
 import { registerReaderClient } from './useReaderClient'
 import { useIdentityPolling } from './useIdentityPolling'
 
-export { LINKS_CACHE_PREFIX } from '../lib/cache/keys'
+
 
 /** 智能视图 id 枚举。 */
 export type SmartId = 'all' | 'today' | 'annotated'

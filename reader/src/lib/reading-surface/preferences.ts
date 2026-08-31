@@ -14,8 +14,8 @@ export const READING_SIZES = [14.5, 16, 17.5, 19] as const
 export const READING_LINE_HEIGHTS = [1.72, 1.92, 2.12] as const
 export const READING_LINE_HEIGHT_LABELS = ['紧凑', '舒适', '宽松'] as const
 
-export const READING_SIZE_COUNT = 4
-export const READING_LINE_HEIGHT_COUNT = 3
+const READING_SIZE_COUNT = 4
+const READING_LINE_HEIGHT_COUNT = 3
 
 export function normalizeReadingPreference(
   value: Partial<ReadingPreference> | null | undefined,

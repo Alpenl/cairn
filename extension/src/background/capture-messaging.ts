@@ -57,7 +57,7 @@ export const CAPTURE_WATCHDOG_ALARM = 'webtag:capture-watchdog'
  * 看门狗 alarm 的周期（分钟）。chrome.alarms 周期最小 1 分钟。
  * SW 中途被回收的采集会在最多约 1 分钟内被这个 alarm 唤醒续跑。
  */
-export const CAPTURE_WATCHDOG_PERIOD_MIN = 1
+const CAPTURE_WATCHDOG_PERIOD_MIN = 1
 
 // ── 叶子适配器：注入抓取脚本到活动标签 ───────────────────────
 

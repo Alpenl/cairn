@@ -7,19 +7,19 @@ import { readZipFiles, sha256 } from './release-artifacts'
 const execFileAsync = promisify(execFile)
 
 export const SOURCE_CLOSURE_MANIFEST = 'SOURCE-CLOSURE.json'
-export const SOURCE_NODE_VERSION = '22.x'
-export const SOURCE_ALLOWLIST_EXACT = [
+const SOURCE_NODE_VERSION = '22.x'
+const SOURCE_ALLOWLIST_EXACT = [
   'LICENSE',
   'package.json',
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
   'internal/app/assets/openapi.json',
 ] as const
-export const SOURCE_ALLOWLIST_PREFIXES = [
+const SOURCE_ALLOWLIST_PREFIXES = [
   'extension/',
   'packages/webtag-api/',
 ] as const
-export const SOURCE_GIT_PATHS = [
+const SOURCE_GIT_PATHS = [
   ...SOURCE_ALLOWLIST_EXACT,
   'extension',
   'packages/webtag-api',
@@ -208,7 +208,7 @@ function commandsMatch(
   )
 }
 
-export function parseSourceClosureManifest(
+function parseSourceClosureManifest(
   contents: Buffer,
 ): SourceClosureManifest {
   const value = JSON.parse(

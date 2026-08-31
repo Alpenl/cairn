@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { NoteMarkdownEditor, positionSlashMenu } from './NoteMarkdownEditor'
+import { positionSlashMenu } from '../../lib/note-markdown/slash-menu-position'
+import { NoteMarkdownEditor } from './NoteMarkdownEditor'
 
 function EditorHarness({
   documentKey = 'test-note',

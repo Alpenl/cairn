@@ -8,7 +8,7 @@ import { memo } from 'react'
 import type { CSSProperties } from 'react'
 
 /** 全量图标 path 字典（与 components.jsx PATHS 逐项一致，不增删）。 */
-export const PATHS = {
+const PATHS = {
   sidebar: '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><path d="M15.8 9.6L13.4 12l2.4 2.4"/>',
   focus: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   focus_exit: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
