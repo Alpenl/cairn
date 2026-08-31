@@ -11,7 +11,13 @@
  */
 
 import { ownedDatabaseName } from '../storage-ownership'
-import { abortIDBTransaction, requestToResult, runIDBTransaction } from '../idb-core'
+import {
+  abortIDBTransaction,
+  collectIDBRequestList,
+  collectIDBRequestResults,
+  requestToResult,
+  runIDBTransaction,
+} from '../idb-core'
 import type { NamespaceStorageOperation } from './io-queue'
 
 const LEGACY_STORE_NAME = 'resources'
@@ -335,34 +341,32 @@ export function idbGetAll(operation?: NamespaceStorageOperation): Promise<Persis
       const metaRequest = (operation
         ? metadata.getAll(namespaceRecordRange(operation.context.physicalNamespace))
         : metadata.getAll()) as IDBRequest<CacheMetadata[]>
-      metaRequest.onsuccess = () => {
-        const rows = metaRequest.result
+      requestToResult(transaction, metaRequest, (rows) => {
         if (rows.length === 0) {
           setResult([])
           return
         }
-        const records: PersistedRecord[] = []
-        let pending = rows.length
-        for (const meta of rows) {
-          const payloadRequest = payloads.get(meta.key) as IDBRequest<CachePayload | undefined>
-          payloadRequest.onsuccess = () => {
-            if (payloadRequest.result) {
-              records.push({
+        const payloadRequests = rows.map((meta) =>
+          payloads.get(meta.key) as IDBRequest<CachePayload | undefined>)
+        collectIDBRequestList(transaction, payloadRequests, (payloadRows) => {
+          const records = rows.flatMap((meta, index): PersistedRecord[] => {
+            const payload = payloadRows[index]
+            return payload
+              ? [{
                 key: meta.key,
                 namespace: meta.namespace,
                 logicalKey: meta.logicalKey,
                 schema: meta.schema,
-                data: payloadRequest.result.data,
+                data: payload.data,
                 updatedAt: meta.lastAccess,
                 size: meta.size,
                 generation: meta.generation,
-              })
-            }
-            pending -= 1
-            if (pending === 0) setResult(records.sort((a, b) => a.key.localeCompare(b.key)))
-          }
-        }
-      }
+              }]
+              : []
+          })
+          setResult(records.sort((a, b) => a.key.localeCompare(b.key)))
+        })
+      })
     },
   ).then((records) => records ?? [])
 }
@@ -409,12 +413,12 @@ export function idbAdvanceInvalidation(
       const clockRequest = controls.get(clockKey(namespace)) as IDBRequest<
         DurableGenerationClock | undefined
       >
-      clockRequest.onsuccess = () => {
+      requestToResult(transaction, clockRequest, (storedClock) => {
         if (!operation.isCurrent()) {
           abortIDBTransaction(transaction)
           return
         }
-        const generation = (clockRequest.result?.generation ?? 0) + 1
+        const generation = (storedClock?.generation ?? 0) + 1
         const clock: DurableGenerationClock = {
           key: clockKey(namespace),
           kind: 'clock',
@@ -435,7 +439,7 @@ export function idbAdvanceInvalidation(
         payloads.delete(range)
         metadata.delete(range)
         setResult(generation)
-      }
+      })
     },
   )
 }
@@ -569,11 +573,14 @@ export function idbPutWithinQuota(
       const invalidationsRequest = controls.getAll(
         controlNamespaceRange(operation.context.physicalNamespace),
       ) as IDBRequest<DurableInvalidation[]>
-      let metadataRows: CacheMetadata[] | null = null
-      let invalidations: DurableInvalidation[] | null = null
 
-      const admit = () => {
-        if (!metadataRows || !invalidations) return
+      collectIDBRequestResults<{
+        metadataRows: CacheMetadata[]
+        invalidations: DurableInvalidation[]
+      }>(
+        transaction,
+        { metadataRows: metadataRequest, invalidations: invalidationsRequest },
+        ({ metadataRows, invalidations }) => {
         try {
           if (!operation.isCurrent()) {
             abortIDBTransaction(transaction)
@@ -644,16 +651,7 @@ export function idbPutWithinQuota(
         } catch {
           abortIDBTransaction(transaction)
         }
-      }
-
-      metadataRequest.onsuccess = () => {
-        metadataRows = metadataRequest.result
-        admit()
-      }
-      invalidationsRequest.onsuccess = () => {
-        invalidations = invalidationsRequest.result
-        admit()
-      }
+      })
     },
   )
 }

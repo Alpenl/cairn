@@ -53,6 +53,72 @@ export function requestToResult<T>(
   }
 }
 
+type IDBRequestResults<T extends Record<string, unknown>> = {
+  readonly [K in keyof T]: T[K]
+}
+
+export function collectIDBRequestResults<T extends Record<string, unknown>>(
+  transaction: IDBTransaction,
+  requests: { readonly [K in keyof T]: IDBRequest<T[K]> },
+  onSuccess: (results: IDBRequestResults<T>) => void,
+): void {
+  const keys = Object.keys(requests) as Array<keyof T>
+  if (keys.length === 0) {
+    onSuccess({} as IDBRequestResults<T>)
+    return
+  }
+
+  const results = {} as { [K in keyof T]: T[K] }
+  let pending = keys.length
+  const finish = () => {
+    try {
+      onSuccess(results)
+    } catch {
+      abortIDBTransaction(transaction)
+    }
+  }
+
+  for (const key of keys) {
+    const request = requests[key]
+    request.onerror = () => abortIDBTransaction(transaction)
+    request.onsuccess = () => {
+      results[key] = request.result
+      pending -= 1
+      if (pending === 0) finish()
+    }
+  }
+}
+
+export function collectIDBRequestList<T>(
+  transaction: IDBTransaction,
+  requests: readonly IDBRequest<T>[],
+  onSuccess: (results: readonly T[]) => void,
+): void {
+  if (requests.length === 0) {
+    onSuccess([])
+    return
+  }
+
+  const results = new Array<T>(requests.length)
+  let pending = requests.length
+  const finish = () => {
+    try {
+      onSuccess(results)
+    } catch {
+      abortIDBTransaction(transaction)
+    }
+  }
+
+  requests.forEach((request, index) => {
+    request.onerror = () => abortIDBTransaction(transaction)
+    request.onsuccess = () => {
+      results[index] = request.result
+      pending -= 1
+      if (pending === 0) finish()
+    }
+  })
+}
+
 export function transactionComplete(transaction: IDBTransaction): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false
