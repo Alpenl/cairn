@@ -503,7 +503,6 @@ export function createCaptureController(deps: CaptureDeps): CaptureController {
   ): Promise<CaptureSnapshot> {
     if (!(await activationIsCurrent(activation)))
       return abandonCapture(activation)
-    const client = activation.client
     const url = source.url ?? ''
     const title = source.title ?? ''
 

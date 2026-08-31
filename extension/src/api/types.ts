@@ -11,7 +11,6 @@
 import type {
   paths as WirePaths,
   CapabilitiesResponse as WireCapabilitiesResponse,
-  ErrorDetail as WireErrorDetail,
   ErrorResponse as WireErrorResponse,
   IngestRequest as WireIngestRequest,
   IngestSource as WireIngestSource,
@@ -117,11 +116,6 @@ export interface SubscriptionSummary {
   url: string
   title: string
 }
-
-/**
- * 后端统一错误体的内层细节。对应 internal/dto/response.go 的 ErrorDetail。
- * 客户端应基于稳定的 `error_code` slug 分支，而非解析 `message`。
- */
 
 /** 后端所有失败响应的统一外层包裹。对应 internal/dto/response.go 的 ErrorResponse。 */
 export type ApiErrorResponse = WireErrorResponse

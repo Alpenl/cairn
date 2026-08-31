@@ -751,7 +751,6 @@ describe('createCaptureController — 提交阶段', () => {
   })
 
   it('微信公众号采集完成时自动保存浏览器中已渲染的原文', async () => {
-    let savedLinkId = ''
     const { deps, saveLinkContentCalls } = makeDeps({
       captureDestination: 'library',
       inject: {
@@ -768,9 +767,6 @@ describe('createCaptureController — 提交阶段', () => {
         link_id: 'wechat-link-1',
         status: 'done',
       }),
-      onSaveLinkContent: (linkId) => {
-        savedLinkId = linkId
-      },
     })
 
     const controller = createCaptureController(deps)
@@ -838,7 +834,6 @@ describe('createCaptureController — 提交阶段', () => {
 describe('createCaptureController — 轮询阶段', () => {
   it('轮询到后端 done 时推送 done 快照', async () => {
     vi.useFakeTimers()
-    let savedLinkId = ''
     const { deps, saveLinkContentCalls } = makeDeps({
       captureDestination: 'library',
       ingest: ok<SubmitResponse>({
@@ -846,9 +841,6 @@ describe('createCaptureController — 轮询阶段', () => {
         status: 'pending',
       }),
       getLink: ok(doneLink()),
-      onSaveLinkContent: (linkId) => {
-        savedLinkId = linkId
-      },
     })
     const controller = createCaptureController(deps)
     await controller.startCapture('')
@@ -1191,7 +1183,7 @@ describe('createCaptureController — resumeIfNeeded 看门狗', () => {
       ),
     )
     const ingest = vi.fn(
-      (body: IngestRequest, options?: { idempotencyKey?: string }) =>
+      (_body: IngestRequest, _options?: { idempotencyKey?: string }) =>
         Promise.resolve(
           ok<SubmitResponse>({
             link_id: 'site-link-after-restart',
@@ -1769,7 +1761,7 @@ describe('createCaptureController — 并发守卫', () => {
     let ingestCount = 0
     const client: WebTagClient = {
       getCapabilities: capabilities,
-      ingest: (body, options) => {
+      ingest: (body: IngestRequest, options?: { idempotencyKey?: string }) => {
         bodies.push(body)
         keys.push(options?.idempotencyKey ?? '')
         ingestCount += 1
