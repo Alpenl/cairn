@@ -4,6 +4,8 @@ import type { IdentityLease } from '../identity'
 import {
   abortIDBTransaction as abortTransaction,
   attachIDBTransactionAbortSignal as attachTransactionAbortSignal,
+  collectIDBRequestResults,
+  requestToResult,
 } from '../idb-core'
 import { asRecord } from '../records'
 import {
@@ -678,62 +680,54 @@ function readAnnotationProjection(
   const stateRequest = stores.state.get(address.stateKey) as IDBRequest<
     AnnotationLinkStateRecord | undefined
   >
-  let currentDone = false
-  let stateDone = false
-  const finish = () => {
-    if (!currentDone || !stateDone) return
-    try {
-      if (!isCurrent()) {
-        abortTransaction(transaction)
-        return
-      }
-      const current = currentRequest.result
-      if (
-        current !== undefined &&
-        !validMaterializedRecord(
-          current,
-          address.namespace,
-          address.linkId,
-          address.target,
-          address.targetKey,
-          address.annotationId,
-        )
-      ) {
-        abortTransaction(transaction)
-        return
-      }
-      const storedState = stateRequest.result
-      if (
-        (requireStateForCurrent && current !== undefined && storedState === undefined) ||
-        (
-          storedState !== undefined &&
-          !validLinkState(
-            storedState,
+  collectIDBRequestResults<{
+    current: AnnotationMaterializedRecord | undefined
+    storedState: AnnotationLinkStateRecord | undefined
+  }>(
+    transaction,
+    { current: currentRequest, storedState: stateRequest },
+    ({ current, storedState }) => {
+      try {
+        if (!isCurrent()) {
+          abortTransaction(transaction)
+          return
+        }
+        if (
+          current !== undefined &&
+          !validMaterializedRecord(
+            current,
             address.namespace,
             address.linkId,
             address.target,
             address.targetKey,
+            address.annotationId,
           )
-        )
-      ) {
+        ) {
+          abortTransaction(transaction)
+          return
+        }
+        if (
+          (requireStateForCurrent && current !== undefined && storedState === undefined) ||
+          (
+            storedState !== undefined &&
+            !validLinkState(
+              storedState,
+              address.namespace,
+              address.linkId,
+              address.target,
+              address.targetKey,
+            )
+          )
+        ) {
+          abortTransaction(transaction)
+          return
+        }
+        onReady({ address, stores, current, storedState })
+      } catch {
         abortTransaction(transaction)
-        return
       }
-      onReady({ address, stores, current, storedState })
-    } catch {
-      abortTransaction(transaction)
-    }
-  }
-  currentRequest.onerror = () => abortTransaction(transaction)
-  stateRequest.onerror = () => abortTransaction(transaction)
-  currentRequest.onsuccess = () => {
-    currentDone = true
-    finish()
-  }
-  stateRequest.onsuccess = () => {
-    stateDone = true
-    finish()
-  }
+    },
+  )
 }
 
 /**
@@ -794,35 +788,30 @@ function writeAnnotationProjection(
     }
     const materializedWrite = stores.materialized.put(materialized)
     const stateWrite = stores.state.put(nextState)
-    const indexWrite = activeCount === 0
-      ? stores.annotatedLinks.delete(address.stateKey)
-      : stores.annotatedLinks.put({
-          key: address.stateKey,
-          namespace: address.namespace,
-          linkId: address.linkId,
-          target: address.target,
-          targetKey: address.targetKey,
-          annotationCount: activeCount,
-          annotationStoreVersion: sequence,
-        } satisfies AnnotatedLinkRecord)
-
     let completedWrites = 0
     const markWritten = () => {
-      try {
-        completedWrites += 1
-        if (completedWrites !== 3) return
-        if (!isCurrent()) {
-          abortTransaction(transaction)
-          return
-        }
-        onWritten(value.annotation, value.fallbackAnnotation, activeCount)
-      } catch {
+      completedWrites += 1
+      if (completedWrites !== 3) return
+      if (!isCurrent()) {
         abortTransaction(transaction)
+        return
       }
+      onWritten(value.annotation, value.fallbackAnnotation, activeCount)
     }
-    for (const request of [materializedWrite, stateWrite, indexWrite]) {
-      request.onerror = () => abortTransaction(transaction)
-      request.onsuccess = markWritten
+    requestToResult(transaction, materializedWrite, markWritten)
+    requestToResult(transaction, stateWrite, markWritten)
+    if (activeCount === 0) {
+      requestToResult(transaction, stores.annotatedLinks.delete(address.stateKey), markWritten)
+    } else {
+      requestToResult(transaction, stores.annotatedLinks.put({
+        key: address.stateKey,
+        namespace: address.namespace,
+        linkId: address.linkId,
+        target: address.target,
+        targetKey: address.targetKey,
+        annotationCount: activeCount,
+        annotationStoreVersion: sequence,
+      } satisfies AnnotatedLinkRecord), markWritten)
     }
   } catch {
     abortTransaction(transaction)
@@ -856,110 +845,111 @@ export function allocateThoughtClocks(
     .getAll(namespace) as IDBRequest<unknown[]>
   const materializedRequest = materializedStore.index(THOUGHT_MATERIALIZED_NAMESPACE_INDEX)
     .getAll(namespace) as IDBRequest<unknown[]>
-  let stateDone = false
-  let outboxDone = false
-  let historyOutboxDone = false
-  let materializedDone = false
-  const finish = () => {
-    if (!stateDone || !outboxDone || !historyOutboxDone || !materializedDone) return
-    if (!lease.isCurrent(lease.capture('allocate thought logical clock'))) {
-      abortTransaction(transaction)
-      return
-    }
-    const rawState = asRecord(stateRequest.result)
-    if (rawState && rawState.namespace !== namespace) {
-      abortTransaction(transaction)
-      return
-    }
-    const outbox = outboxRequest.result.filter((value): value is ThoughtOutboxRecord =>
-      isValidThoughtOutboxRecord(value, namespace))
-    const historyOutbox = historyOutboxRequest.result.filter(
-      (value): value is ThoughtHistoryOutboxRecord =>
-        isValidThoughtHistoryOutboxRecord(value, namespace),
-    )
-    const materialized = materializedRequest.result.filter((value): value is ThoughtMaterializedRecord =>
-      isValidThoughtMaterializedRecord(value, namespace))
-    if (outbox.length !== outboxRequest.result.length ||
-      historyOutbox.length !== historyOutboxRequest.result.length ||
-      materialized.length !== materializedRequest.result.length) {
-      abortTransaction(transaction)
-      return
-    }
-    try {
-      const deviceId = stableThoughtDeviceID(lease, rawState)
-      const priorFloor = rawState?.deviceId === deviceId
-        ? rawState.logicalClockFloor ?? 0
-        : 0
-      let floor = maximumThoughtClock([
-        priorFloor as number,
-        ...materialized.map((record) => record.winnerKey.logicalClock),
-        ...outbox.map((record) => record.logicalClock),
-        ...historyOutbox.map((record) => record.logicalClock),
-        ...historyOutbox.map((record) => record.snapshot.winnerKey.logicalClock),
-        ...observedClocks,
-      ])
-      const clocks: number[] = []
-      for (let index = 0; index < count; index += 1) {
-        floor = nextThoughtLogicalClock([floor])
-        clocks.push(floor)
-      }
-      const state: ThoughtSyncStateRecord = {
-        namespace,
-        cursor: typeof rawState?.cursor === 'string' ? rawState.cursor : '',
-        deviceId,
-        tabToken: typeof rawState?.tabToken === 'string' && rawState.tabToken.length > 0
-          ? rawState.tabToken
-          : randomThoughtToken('tab'),
-        logicalClockFloor: floor,
-        updatedAt: Date.now(),
-        ...(typeof rawState?.lastAckSequence === 'number'
-          ? { lastAckSequence: rawState.lastAckSequence }
-          : {}),
-        ...(typeof rawState?.pullAttemptCount === 'number'
-          ? { pullAttemptCount: rawState.pullAttemptCount }
-          : {}),
-        ...(typeof rawState?.pullRetryAt === 'number'
-          ? { pullRetryAt: rawState.pullRetryAt }
-          : {}),
-        ...(typeof rawState?.pullLastError === 'string'
-          ? { pullLastError: rawState.pullLastError }
-          : {}),
-        ...(typeof rawState?.retryAt === 'number' ? { retryAt: rawState.retryAt } : {}),
-        ...(typeof rawState?.lastError === 'string' ? { lastError: rawState.lastError } : {}),
-        ...(typeof rawState?.lastErrorCode === 'string'
-          ? { lastErrorCode: rawState.lastErrorCode }
-          : {}),
-        ...(typeof rawState?.lastSuccessfulSyncAt === 'number'
-          ? { lastSuccessfulSyncAt: rawState.lastSuccessfulSyncAt }
-          : {}),
-        ...(typeof rawState?.resyncRequired === 'boolean'
-          ? { resyncRequired: rawState.resyncRequired }
-          : {}),
-        ...(typeof rawState?.lastServerSequence === 'number'
-          ? { lastServerSequence: rawState.lastServerSequence }
-          : {}),
-        ...(typeof rawState?.retentionCutoff === 'number'
-          ? { retentionCutoff: rawState.retentionCutoff }
-          : {}),
-      }
-      stateStore.put(state)
-      onAllocated(deviceId, clocks)
-    } catch (error) {
-      if (error instanceof ThoughtClockError) {
-        onFailure(error.code)
+  collectIDBRequestResults<{
+    rawState: unknown
+    rawOutbox: unknown[]
+    rawHistoryOutbox: unknown[]
+    rawMaterialized: unknown[]
+  }>(
+    transaction,
+    {
+      rawState: stateRequest,
+      rawOutbox: outboxRequest,
+      rawHistoryOutbox: historyOutboxRequest,
+      rawMaterialized: materializedRequest,
+    },
+    ({ rawState: stateValue, rawOutbox, rawHistoryOutbox, rawMaterialized }) => {
+      if (!lease.isCurrent(lease.capture('allocate thought logical clock'))) {
+        abortTransaction(transaction)
         return
       }
-      abortTransaction(transaction)
-    }
-  }
-  stateRequest.onerror = () => abortTransaction(transaction)
-  outboxRequest.onerror = () => abortTransaction(transaction)
-  historyOutboxRequest.onerror = () => abortTransaction(transaction)
-  materializedRequest.onerror = () => abortTransaction(transaction)
-  stateRequest.onsuccess = () => { stateDone = true; finish() }
-  outboxRequest.onsuccess = () => { outboxDone = true; finish() }
-  historyOutboxRequest.onsuccess = () => { historyOutboxDone = true; finish() }
-  materializedRequest.onsuccess = () => { materializedDone = true; finish() }
+      const rawState = asRecord(stateValue)
+      if (rawState && rawState.namespace !== namespace) {
+        abortTransaction(transaction)
+        return
+      }
+      const outbox = rawOutbox.filter((value): value is ThoughtOutboxRecord =>
+        isValidThoughtOutboxRecord(value, namespace))
+      const historyOutbox = rawHistoryOutbox.filter(
+        (value): value is ThoughtHistoryOutboxRecord =>
+          isValidThoughtHistoryOutboxRecord(value, namespace),
+      )
+      const materialized = rawMaterialized.filter((value): value is ThoughtMaterializedRecord =>
+        isValidThoughtMaterializedRecord(value, namespace))
+      if (outbox.length !== rawOutbox.length ||
+        historyOutbox.length !== rawHistoryOutbox.length ||
+        materialized.length !== rawMaterialized.length) {
+        abortTransaction(transaction)
+        return
+      }
+      try {
+        const deviceId = stableThoughtDeviceID(lease, rawState)
+        const priorFloor = rawState?.deviceId === deviceId
+          ? rawState.logicalClockFloor ?? 0
+          : 0
+        let floor = maximumThoughtClock([
+          priorFloor as number,
+          ...materialized.map((record) => record.winnerKey.logicalClock),
+          ...outbox.map((record) => record.logicalClock),
+          ...historyOutbox.map((record) => record.logicalClock),
+          ...historyOutbox.map((record) => record.snapshot.winnerKey.logicalClock),
+          ...observedClocks,
+        ])
+        const clocks: number[] = []
+        for (let index = 0; index < count; index += 1) {
+          floor = nextThoughtLogicalClock([floor])
+          clocks.push(floor)
+        }
+        const state: ThoughtSyncStateRecord = {
+          namespace,
+          cursor: typeof rawState?.cursor === 'string' ? rawState.cursor : '',
+          deviceId,
+          tabToken: typeof rawState?.tabToken === 'string' && rawState.tabToken.length > 0
+            ? rawState.tabToken
+            : randomThoughtToken('tab'),
+          logicalClockFloor: floor,
+          updatedAt: Date.now(),
+          ...(typeof rawState?.lastAckSequence === 'number'
+            ? { lastAckSequence: rawState.lastAckSequence }
+            : {}),
+          ...(typeof rawState?.pullAttemptCount === 'number'
+            ? { pullAttemptCount: rawState.pullAttemptCount }
+            : {}),
+          ...(typeof rawState?.pullRetryAt === 'number'
+            ? { pullRetryAt: rawState.pullRetryAt }
+            : {}),
+          ...(typeof rawState?.pullLastError === 'string'
+            ? { pullLastError: rawState.pullLastError }
+            : {}),
+          ...(typeof rawState?.retryAt === 'number' ? { retryAt: rawState.retryAt } : {}),
+          ...(typeof rawState?.lastError === 'string' ? { lastError: rawState.lastError } : {}),
+          ...(typeof rawState?.lastErrorCode === 'string'
+            ? { lastErrorCode: rawState.lastErrorCode }
+            : {}),
+          ...(typeof rawState?.lastSuccessfulSyncAt === 'number'
+            ? { lastSuccessfulSyncAt: rawState.lastSuccessfulSyncAt }
+            : {}),
+          ...(typeof rawState?.resyncRequired === 'boolean'
+            ? { resyncRequired: rawState.resyncRequired }
+            : {}),
+          ...(typeof rawState?.lastServerSequence === 'number'
+            ? { lastServerSequence: rawState.lastServerSequence }
+            : {}),
+          ...(typeof rawState?.retentionCutoff === 'number'
+            ? { retentionCutoff: rawState.retentionCutoff }
+            : {}),
+        }
+        stateStore.put(state)
+        onAllocated(deviceId, clocks)
+      } catch (error) {
+        if (error instanceof ThoughtClockError) {
+          onFailure(error.code)
+          return
+        }
+        abortTransaction(transaction)
+      }
+    },
+  )
 }
 
 interface ThoughtRecoveryOutboxMetadata {
@@ -1006,8 +996,7 @@ function enqueueThoughtOutbox(
     }),
   }
   const request = transaction.objectStore(THOUGHT_OUTBOX_STORE).put(record)
-  request.onerror = () => abortTransaction(transaction)
-  request.onsuccess = () => onQueued()
+  requestToResult(transaction, request, onQueued)
 }
 
 function finishDuplicate(
@@ -1028,53 +1017,45 @@ function finishDuplicate(
       operation.annotationId,
     ),
   ) as IDBRequest<AnnotationMaterializedRecord | undefined>
-  let stateDone = false
-  let annotationDone = false
-  const finish = () => {
-    if (!stateDone || !annotationDone) return
-    const state = stateRequest.result
-    const materialized = annotationRequest.result
-    if (
-      !state ||
-      !validLinkState(
-        state,
-        namespace,
-        operation.linkId,
-        operation.target,
-        operation.targetKey,
-      ) ||
-      (
-        materialized === undefined ||
-        !validMaterializedRecord(
-          materialized,
+  collectIDBRequestResults<{
+    state: AnnotationLinkStateRecord | undefined
+    materialized: AnnotationMaterializedRecord | undefined
+  }>(
+    transaction,
+    { state: stateRequest, materialized: annotationRequest },
+    ({ state, materialized }) => {
+      if (
+        !state ||
+        !validLinkState(
+          state,
           namespace,
           operation.linkId,
           operation.target,
           operation.targetKey,
-          operation.annotationId,
+        ) ||
+        (
+          materialized === undefined ||
+          !validMaterializedRecord(
+            materialized,
+            namespace,
+            operation.linkId,
+            operation.target,
+            operation.targetKey,
+            operation.annotationId,
+          )
         )
-      )
-    ) {
-      abortTransaction(transaction)
-      return
-    }
-    setResult({
-      status: 'duplicate',
-      sequence: existing.sequence,
-      annotationStoreVersion: state.version,
-      annotation: materialized.annotation,
-    })
-  }
-  stateRequest.onerror = () => abortTransaction(transaction)
-  annotationRequest.onerror = () => abortTransaction(transaction)
-  stateRequest.onsuccess = () => {
-    stateDone = true
-    finish()
-  }
-  annotationRequest.onsuccess = () => {
-    annotationDone = true
-    finish()
-  }
+      ) {
+        abortTransaction(transaction)
+        return
+      }
+      setResult({
+        status: 'duplicate',
+        sequence: existing.sequence,
+        annotationStoreVersion: state.version,
+        annotation: materialized.annotation,
+      })
+    },
+  )
 }
 
 /**
@@ -1116,39 +1097,41 @@ export async function commitAnnotationOperation(
       const receiptsRequest = transaction.objectStore(ANNOTATION_IMPORTS_STORE).getAll(
         operationReceiptRange(namespace, operation.opId),
       ) as IDBRequest<AnnotationOperationReceipt[]>
-      let existingDone = false
-      let receiptsDone = false
-      const appendOrReturnExisting = () => {
-        if (!existingDone || !receiptsDone) return
+      collectIDBRequestResults<{
+        existing: StoredAnnotationOperationRecord | undefined
+        receipts: AnnotationOperationReceipt[]
+      }>(
+        transaction,
+        { existing: existingRequest, receipts: receiptsRequest },
+        ({ existing, receipts }) => {
         try {
           if (!lease.isCurrent(identity)) {
             abortTransaction(transaction)
             return
           }
-          if (!receiptsRequest.result.every(validOperationReceipt) ||
-            receiptsRequest.result.length > 1) {
+          if (!receipts.every(validOperationReceipt) || receipts.length > 1) {
             abortTransaction(transaction)
             return
           }
-          if (existingRequest.result !== undefined) {
-            if (receiptsRequest.result.length !== 0) {
+          if (existing !== undefined) {
+            if (receipts.length !== 0) {
               abortTransaction(transaction)
               return
             }
-            if (!existingOperationMatches(existingRequest.result, namespace, operation)) {
+            if (!existingOperationMatches(existing, namespace, operation)) {
               setResult({ status: 'op-id-conflict' })
               return
             }
             finishDuplicate(
               transaction,
               setResult,
-              existingRequest.result,
+              existing,
               namespace,
               operation,
             )
             return
           }
-          const receipt = receiptsRequest.result[0]
+          const receipt = receipts[0]
           if (receipt) {
             if (!receiptMatches(receipt, namespace, operation)) {
               setResult({ status: 'op-id-conflict' })
@@ -1241,17 +1224,7 @@ export async function commitAnnotationOperation(
         } catch {
           abortTransaction(transaction)
         }
-      }
-      existingRequest.onerror = () => abortTransaction(transaction)
-      existingRequest.onsuccess = () => {
-        existingDone = true
-        appendOrReturnExisting()
-      }
-      receiptsRequest.onerror = () => abortTransaction(transaction)
-      receiptsRequest.onsuccess = () => {
-        receiptsDone = true
-        appendOrReturnExisting()
-      }
+      })
     },
   )
 }
@@ -1333,38 +1306,45 @@ export async function commitSupersessionRecovery(
       const winnerRequest = transaction.objectStore(THOUGHT_MATERIALIZED_STORE).get(
         [namespace, event.annotationId],
       ) as IDBRequest<unknown>
-      let existingDone = false
-      let receiptsDone = false
-      let eventDone = false
-      let winnerDone = false
-      const finish = () => {
-        if (!existingDone || !receiptsDone || !eventDone || !winnerDone) return
+      collectIDBRequestResults<{
+        existing: unknown
+        receipts: unknown[]
+        storedEvent: unknown
+        winnerValue: unknown
+      }>(
+        transaction,
+        {
+          existing: existingRequest,
+          receipts: receiptsRequest,
+          storedEvent: eventRequest,
+          winnerValue: winnerRequest,
+        },
+        ({ existing, receipts, storedEvent, winnerValue }) => {
         try {
           if (!lease.isCurrent(identity)) {
             abortTransaction(transaction)
             return
           }
-          const storedEvent = eventRequest.result
           if (!isValidThoughtSupersessionEventRecord(storedEvent, namespace) ||
             storedEvent.eventSequence !== event.eventSequence ||
             storedEvent.annotationId !== event.annotationId ||
-            !receiptsRequest.result.every(validOperationReceipt) || receiptsRequest.result.length > 1) {
+            !receipts.every(validOperationReceipt) || receipts.length > 1) {
             abortTransaction(transaction)
             return
           }
-          if (existingRequest.result !== undefined) {
-            if (!isRecoveryOperationRecord(existingRequest.result, namespace, operationID)) {
+          if (existing !== undefined) {
+            if (!isRecoveryOperationRecord(existing, namespace, operationID)) {
               setResult({ status: 'op-id-conflict' })
               return
             }
             setResult({
               status: 'duplicate',
-              sequence: existingRequest.result.sequence,
+              sequence: existing.sequence,
               annotation: null,
             })
             return
           }
-          const receipt = receiptsRequest.result[0]
+          const receipt = receipts[0]
           if (receipt !== undefined) {
             if (receipt.namespace !== namespace || receipt.opId !== operationID) {
               setResult({ status: 'op-id-conflict' })
@@ -1373,12 +1353,12 @@ export async function commitSupersessionRecovery(
             setResult({ status: 'duplicate', sequence: receipt.sequence, annotation: null })
             return
           }
-          if (!isValidThoughtMaterializedRecord(winnerRequest.result, namespace) ||
-            winnerRequest.result.annotationId !== event.annotationId) {
+          if (!isValidThoughtMaterializedRecord(winnerValue, namespace) ||
+            winnerValue.annotationId !== event.annotationId) {
             setResult({ status: 'unrecoverable', reason: 'missing-current-winner' })
             return
           }
-          const winner = winnerRequest.result
+          const winner = winnerValue
           if (!isAnnotationThoughtTarget(winner.target)) {
             setResult({ status: 'unrecoverable', reason: 'target-or-quote-incomplete' })
             return
@@ -1499,14 +1479,7 @@ export async function commitSupersessionRecovery(
         } catch {
           abortTransaction(transaction)
         }
-      }
-      for (const request of [existingRequest, receiptsRequest, eventRequest, winnerRequest]) {
-        request.onerror = () => abortTransaction(transaction)
-      }
-      existingRequest.onsuccess = () => { existingDone = true; finish() }
-      receiptsRequest.onsuccess = () => { receiptsDone = true; finish() }
-      eventRequest.onsuccess = () => { eventDone = true; finish() }
-      winnerRequest.onsuccess = () => { winnerDone = true; finish() }
+      })
     },
   )
 }
@@ -1621,14 +1594,12 @@ export function importAnnotationOperations(
       const markerRequest = imports.get(markerKey) as IDBRequest<
         AnnotationImportMarker | undefined
       >
-      markerRequest.onerror = () => abortTransaction(transaction)
-      markerRequest.onsuccess = () => {
+      requestToResult(transaction, markerRequest, (existingMarker) => {
         try {
           if (!lease.isCurrent(identity)) {
             abortTransaction(transaction)
             return
           }
-          const existingMarker = markerRequest.result
           if (existingMarker !== undefined) {
             if (!validImportMarker(
               existingMarker,
@@ -1673,8 +1644,7 @@ export function importAnnotationOperations(
               lastSequence,
             }
             const markerWrite = imports.add(marker)
-            markerWrite.onerror = () => abortTransaction(transaction)
-            markerWrite.onsuccess = () => {
+            requestToResult(transaction, markerWrite, () => {
               if (!isCurrent()) {
                 abortTransaction(transaction)
                 return
@@ -1685,7 +1655,7 @@ export function importAnnotationOperations(
                 applied,
                 lastSequence,
               })
-            }
+            })
           }
 
           const applyAt = (index: number) => {
@@ -1783,7 +1753,7 @@ export function importAnnotationOperations(
         } catch {
           abortTransaction(transaction)
         }
-      }
+      })
     },
   )
 }
@@ -1899,19 +1869,26 @@ export function readAnnotationSnapshot(
       const outboxRequest = transaction.objectStore(THOUGHT_OUTBOX_STORE)
         .index(THOUGHT_OUTBOX_NAMESPACE_INDEX)
         .getAll(namespace) as IDBRequest<ThoughtOutboxRecord[]>
-      let operationsDone = false
-      let stateDone = false
-      let remoteDone = false
-      let outboxDone = false
-      const finish = () => {
-        if (!operationsDone || !stateDone || !remoteDone || !outboxDone) return
+      collectIDBRequestResults<{
+        operations: StoredAnnotationOperationRecord[]
+        storedState: AnnotationLinkStateRecord | undefined
+        remoteRows: ThoughtMaterializedRecord[]
+        outboxRows: ThoughtOutboxRecord[]
+      }>(
+        transaction,
+        {
+          operations: operationsRequest,
+          storedState: stateRequest,
+          remoteRows: remoteRequest,
+          outboxRows: outboxRequest,
+        },
+        ({ operations, storedState, remoteRows, outboxRows }) => {
         try {
-          if (!operationsRequest.result.every((operation) =>
+          if (!operations.every((operation) =>
             validStoredOperationRecord(operation, namespace, linkId, target, targetKey))) {
             abortTransaction(transaction)
             return
           }
-          const storedState = stateRequest.result
           if (
             storedState !== undefined &&
             !validLinkState(storedState, namespace, linkId, target, targetKey)
@@ -1920,17 +1897,17 @@ export function readAnnotationSnapshot(
             return
           }
           const state = storedState ?? emptyLinkState(namespace, linkId, target, targetKey)
-          const annotations = replayAnnotations(state, operationsRequest.result)
+          const annotations = replayAnnotations(state, operations)
           if (annotations === null) {
             abortTransaction(transaction)
             return
           }
-          const pendingIDs = new Set(outboxRequest.result
+          const pendingIDs = new Set(outboxRows
             .filter((record) =>
               record.linkId === linkId && record.targetKey === targetKey)
             .map((record) => record.annotationId))
           const merged = new Map(annotations.map((annotation) => [annotation.id, annotation]))
-          for (const remote of [...remoteRequest.result].sort((left, right) =>
+          for (const remote of [...remoteRows].sort((left, right) =>
             left.serverSequence - right.serverSequence)) {
             if (pendingIDs.has(remote.annotationId)) continue
             if (remote.deleted) {
@@ -1952,27 +1929,7 @@ export function readAnnotationSnapshot(
         } catch {
           abortTransaction(transaction)
         }
-      }
-      operationsRequest.onerror = () => abortTransaction(transaction)
-      stateRequest.onerror = () => abortTransaction(transaction)
-      operationsRequest.onsuccess = () => {
-        operationsDone = true
-        finish()
-      }
-      stateRequest.onsuccess = () => {
-        stateDone = true
-        finish()
-      }
-      remoteRequest.onerror = () => abortTransaction(transaction)
-      outboxRequest.onerror = () => abortTransaction(transaction)
-      remoteRequest.onsuccess = () => {
-        remoteDone = true
-        finish()
-      }
-      outboxRequest.onsuccess = () => {
-        outboxDone = true
-        finish()
-      }
+      })
     },
   )
 }
@@ -2053,16 +2010,15 @@ export function listAnnotatedLinks(
       const request = transaction.objectStore(ANNOTATED_LINKS_STORE)
         .index(ANNOTATED_LINKS_NAMESPACE_INDEX)
         .getAll(namespace) as IDBRequest<AnnotatedLinkRecord[]>
-      request.onerror = () => abortTransaction(transaction)
-      request.onsuccess = () => {
-        if (!request.result.every((record) => validAnnotatedLinkRecord(record, namespace))) {
+      requestToResult(transaction, request, (records) => {
+        if (!records.every((record) => validAnnotatedLinkRecord(record, namespace))) {
           abortTransaction(transaction)
           return
         }
-        setResult([...request.result].sort((left, right) =>
+        setResult([...records].sort((left, right) =>
           left.linkId.localeCompare(right.linkId) ||
           left.targetKey.localeCompare(right.targetKey)))
-      }
+      })
     },
   )
 }
@@ -2147,25 +2103,32 @@ export function compactAnnotationOperations(
       const outboxRequest = transaction.objectStore(THOUGHT_OUTBOX_STORE)
         .index(THOUGHT_OUTBOX_NAMESPACE_INDEX)
         .getAll(namespace) as IDBRequest<ThoughtOutboxRecord[]>
-      let operationsDone = false
-      let materializedDone = false
-      let stateDone = false
-      let outboxDone = false
-      const compact = () => {
-        if (!operationsDone || !materializedDone || !stateDone || !outboxDone) return
+      collectIDBRequestResults<{
+        operations: StoredAnnotationOperationRecord[]
+        materializedRows: AnnotationMaterializedRecord[]
+        storedState: AnnotationLinkStateRecord | undefined
+        outboxRows: ThoughtOutboxRecord[]
+      }>(
+        transaction,
+        {
+          operations: operationsRequest,
+          materializedRows: materializedRequest,
+          storedState: stateRequest,
+          outboxRows: outboxRequest,
+        },
+        ({ operations, materializedRows, storedState }) => {
         try {
           if (!lease.isCurrent(identity)) {
             abortTransaction(transaction)
             return
           }
-          if (!operationsRequest.result.every((operation) =>
+          if (!operations.every((operation) =>
             validStoredOperationRecord(operation, namespace, linkId, target, targetKey)) ||
-            !materializedRequest.result.every((record) =>
+            !materializedRows.every((record) =>
               validMaterializedRecord(record, namespace, linkId, target, targetKey))) {
             abortTransaction(transaction)
             return
           }
-          const storedState = stateRequest.result
           if (
             storedState !== undefined &&
             !validLinkState(storedState, namespace, linkId, target, targetKey)
@@ -2174,16 +2137,16 @@ export function compactAnnotationOperations(
             return
           }
           const state = storedState ?? emptyLinkState(namespace, linkId, target, targetKey)
-          const activeCount = materializedRequest.result.filter(
+          const activeCount = materializedRows.filter(
             (record) => record.annotation !== null,
           ).length
           if (activeCount !== state.activeCount) {
             abortTransaction(transaction)
             return
           }
-          const operations = [...operationsRequest.result]
+          const sortedOperations = [...operations]
             .sort((left, right) => left.sequence - right.sequence)
-          if (operations.length <= threshold) {
+          if (sortedOperations.length <= threshold) {
             setResult({
               status: 'skipped',
               highWaterMark: state.compactedThroughSequence,
@@ -2200,19 +2163,19 @@ export function compactAnnotationOperations(
             return
           }
 
-          const highWaterMark = operations[operations.length - 1]?.sequence
+          const highWaterMark = sortedOperations[sortedOperations.length - 1]?.sequence
           if (highWaterMark === undefined || highWaterMark > state.version) {
             abortTransaction(transaction)
             return
           }
-          const snapshot = compactionSnapshot(materializedRequest.result)
+          const snapshot = compactionSnapshot(materializedRows)
           const receipts = transaction.objectStore(ANNOTATION_IMPORTS_STORE)
           stateStore.put({
             ...state,
             compactedThroughSequence: highWaterMark,
             snapshot,
           } satisfies AnnotationLinkStateRecord)
-          for (const operation of operations) {
+          for (const operation of sortedOperations) {
             receipts.add(operationReceipt(operation))
             operationsStore.delete(operation.sequence)
           }
@@ -2225,27 +2188,7 @@ export function compactAnnotationOperations(
         } catch {
           abortTransaction(transaction)
         }
-      }
-      operationsRequest.onerror = () => abortTransaction(transaction)
-      materializedRequest.onerror = () => abortTransaction(transaction)
-      stateRequest.onerror = () => abortTransaction(transaction)
-      outboxRequest.onerror = () => abortTransaction(transaction)
-      operationsRequest.onsuccess = () => {
-        operationsDone = true
-        compact()
-      }
-      materializedRequest.onsuccess = () => {
-        materializedDone = true
-        compact()
-      }
-      stateRequest.onsuccess = () => {
-        stateDone = true
-        compact()
-      }
-      outboxRequest.onsuccess = () => {
-        outboxDone = true
-        compact()
-      }
+      })
     },
   )
 }
