@@ -71,7 +71,6 @@ import type {
   ReaderNoteHistoryResponse,
   ReaderHostKind,
   ReaderHostLifecycleResponse,
-  ReaderHostPurgeRequest,
   ReaderTrashResponse,
   ReaderInboxCreateRequest,
   ReaderInboxPatchRequest,
@@ -103,29 +102,20 @@ import type {
   HealthResponse,
 } from './types'
 import {
-  isReaderHostLifecycleResponse,
-  isReaderTrashResponse,
-  isReaderHomeResponse,
-  isReaderAIResponse,
-  normalizeCapabilitiesResponse,
-} from './guards'
-import {
   fullArchiveV2Selection,
   type ArchiveV2Selection,
 } from './archive-v2'
 import {
   ReaderHttpTransport,
-  shapeMismatch,
 } from './transport'
 import {
-  buildReaderQuery,
-  readerLimit,
   type ReaderFeedSource,
 } from './endpoint-helpers'
 import * as librarySitesEndpoints from './library-sites-endpoints'
 import * as subscriptionsFeedEndpoints from './subscriptions-feed-endpoints'
 import * as thoughtNoteEndpoints from './thought-note-endpoints'
 import * as inboxTodoEndpoints from './inbox-todo-endpoints'
+import * as sessionArchiveEndpoints from './session-archive-endpoints'
 import type {
   ReaderReadOptions,
   ReaderRequestOptions,
@@ -234,9 +224,7 @@ export class ReaderClient {
    * interpreted as support for routes the server does not expose.
    */
   async getCapabilities(signal?: AbortSignal): Promise<ApiResult<CapabilitiesResponse>> {
-    const r = await this.send('GET', '/api/capabilities', undefined, undefined, undefined, signal)
-    if (!r.ok) return r
-    return ok(normalizeCapabilitiesResponse(r.data))
+    return sessionArchiveEndpoints.getCapabilities(this.transport, signal)
   }
 
   /** Session negotiation uses this to clean up malformed successful exchanges. */
@@ -250,28 +238,6 @@ export class ReaderClient {
   /** 结束会话：让后端清掉 cookie。失败不阻塞前端登出。 */
   async logout(): Promise<void> {
     return this.transport.logout()
-  }
-
-  /**
-   * 发一次请求并把结果收敛为 ApiResult<unknown>（已解析 body）。
-   * 网络异常 / 超时 / 非 2xx / body 解析失败统一归一化，不抛异常。
-   */
-  private async send(
-    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
-    path: string,
-    requestBody?: unknown,
-    extraHeaders?: Record<string, string>,
-    readOptions?: ReaderReadOptions,
-    callerSignal?: AbortSignal,
-    rawJSONContract?: 'link-metadata-revision',
-  ): Promise<ApiResult<unknown>> {
-    return this.transport.send(method, path, {
-      body: requestBody,
-      headers: extraHeaders,
-      readOptions,
-      signal: callerSignal,
-      rawJSONContract,
-    })
   }
 
   /**
@@ -631,14 +597,7 @@ export class ReaderClient {
     params: { hostKind?: ReaderHostKind; after?: string; limit?: number } = {},
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderTrashResponse>> {
-    const query = buildReaderQuery({
-      host_kind: params.hostKind,
-      after: params.after,
-      limit: readerLimit(params.limit, 50),
-    })
-    const r = await this.send('GET', `/api/trash${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderTrashResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderTrashResponse')
+    return sessionArchiveEndpoints.listTrash(this.transport, params, options)
   }
 
   /**
@@ -649,17 +608,14 @@ export class ReaderClient {
    * 不必在删除前弹确认框——真正不可逆的是 purge，不是这里。
    */
   async deleteLink(id: string, options: ReaderRequestOptions = {}): Promise<ApiResult<true>> {
-    const r = await this.send('DELETE', `/api/links/${encodeURIComponent(id)}`, undefined, undefined, undefined, options.signal)
-    return r.ok ? ok(true) : r
+    return sessionArchiveEndpoints.deleteLink(this.transport, id, options)
   }
 
   async restoreLink(
     id: string,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderHostLifecycleResponse>> {
-    const r = await this.send('POST', `/api/links/${encodeURIComponent(id)}/restore`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderHostLifecycleResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderHostLifecycleResponse')
+    return sessionArchiveEndpoints.restoreLink(this.transport, id, options)
   }
 
   async purgeHost(
@@ -668,17 +624,7 @@ export class ReaderClient {
     operationID: string,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<true>> {
-    const collection = kind === 'link' ? 'links' : kind === 'note' ? 'notes' : 'inbox'
-    const request: ReaderHostPurgeRequest = { operation_id: operationID }
-    const r = await this.send(
-      'DELETE',
-      `/api/${collection}/${encodeURIComponent(id)}/purge`,
-      request,
-      undefined,
-      undefined,
-      options.signal,
-    )
-    return r.ok ? ok(true) : r
+    return sessionArchiveEndpoints.purgeHost(this.transport, kind, id, operationID, options)
   }
 
   async listNoteHistory(
@@ -800,9 +746,7 @@ export class ReaderClient {
   }
 
   async getHome(options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderHomeResponse>> {
-    const r = await this.send('GET', '/api/home', undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderHomeResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderHomeResponse')
+    return sessionArchiveEndpoints.getHome(this.transport, options)
   }
 
   async getReaderFeed(
@@ -853,9 +797,7 @@ export class ReaderClient {
     request: ReaderAIRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderAIResponse>> {
-    const r = await this.send('POST', '/api/ai', request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderAIResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderAIResponse')
+    return sessionArchiveEndpoints.completeReaderAI(this.transport, request, options)
   }
 
   /**
