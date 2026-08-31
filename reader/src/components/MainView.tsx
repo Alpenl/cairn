@@ -19,7 +19,6 @@ import { ListPane } from './ListPane'
 import {
   DetailPane,
   type ContentEditState,
-  type MetadataEditOutcome,
 } from './DetailPane'
 import { Toast, type ToastAction } from './Toast'
 import { CommandPalette, type CommandItem } from './CommandPalette'
@@ -42,17 +41,12 @@ import { ThoughtHistorySurface } from './reader-vnext/ThoughtHistorySurface'
 import { TrashSurface } from './reader-vnext/TrashSurface'
 import { PendingInboxCountProvider, refreshPendingInboxCount } from './reader-vnext/PendingInboxCount'
 import type { LibraryView } from './LibraryModeNav'
-import { useLinks, type Selection, type SmartId } from '../hooks/useLinks'
-import { useAnnotatedLinkCount } from '../hooks/useAnnotatedLinks'
-import { useTags } from '../hooks/useTags'
-import { useDomainSummaries } from '../hooks/useDomainSummaries'
+import { type Selection, type SmartId } from '../hooks/useLinks'
 import { invalidateSites } from '../hooks/useSites'
-import { useSidebarData } from '../hooks/useSidebarData'
 import { invalidateReaderActivity } from '../hooks/useReaderActivity'
 import { invalidateReaderRelatedTags } from '../hooks/useReaderRelatedTags'
 import { useAppShortcuts } from '../hooks/useAppChrome'
-import { translationsKey, useTranslations } from '../hooks/useTranslations'
-import { usePrefetch, type PrefetchTarget } from '../hooks/usePrefetch'
+import { useTranslations } from '../hooks/useTranslations'
 import {
   annotationMatchesLocator,
   isContentAnchored,
@@ -73,7 +67,6 @@ import {
   getThoughtSyncController,
   type ThoughtSyncSnapshot,
 } from '../lib/user-data/thought-sync'
-import { useSavedArticleDocument } from '../hooks/useSavedArticleDocument'
 import { usePins } from '../lib/meta'
 import { readingFocusStore } from '../lib/reading-surface'
 import { applyServiceWorkerUpdate } from '../lib/sw'
@@ -83,13 +76,6 @@ import {
   invalidateLinkContent,
   invalidateLinkProjection,
 } from '../lib/cache/invalidate'
-import { loadLinkContent } from '../lib/cache/link-content'
-import {
-  loadRevisionFloors,
-  mergeRevisionFloors,
-  noteRevisionFloor,
-  revisionFloorStorageKey,
-} from '../lib/cache/revision-floor'
 import { resourceStore } from '../lib/cache/store'
 import { readOwnedStorage, writeOwnedStorage } from '../lib/storage-ownership'
 import {
@@ -102,17 +88,14 @@ import type {
   ContentEditRequest,
   LinkContentResponse,
   LinkResponse,
-  ReaderLinkMetadataRequest,
   TranslationResponse,
 } from '../lib/api/types'
 import { err, type ApiError, type ApiResult } from '@webtag/api'
 import type {
   DocumentCommandContext,
-  SavedArticleDocumentController,
   SavedContentSource,
 } from '../lib/article/document'
 import { isSavedContentTranslationSource } from '../lib/article/document'
-import type { SourceBlockId } from '../lib/article/source-block'
 import type {
   ReaderAIPort,
   ReaderHomePort,
@@ -128,12 +111,14 @@ import {
   readerCapabilityFingerprint,
 } from '../lib/capabilities'
 import {
-  type OpenLinkOptions,
   useMainViewNavigation,
 } from './main-view/navigation-controller'
+import {
+  contentRevisionOrUndefined,
+  useActiveResourceController,
+} from './main-view/active-resource-controller'
 
 type Theme = 'light' | 'dark'
-const CORPUS_LIMIT = 100
 const LIBRARY_SYNC_RESOURCES = ['links', 'tags', 'domains'] as const
 const EMPTY_ANNOTATIONS: readonly Annotation[] = []
 type LibrarySyncResource = typeof LIBRARY_SYNC_RESOURCES[number]
@@ -178,89 +163,6 @@ function thoughtSyncOutcome(snapshot: ThoughtSyncSnapshot): string {
   }
 }
 
-interface SummarySourceIdentity {
-  linkId: string
-  source: string | null
-  hash: string | null
-}
-
-type DetailRequestState =
-  | {
-      readonly id: string
-      readonly sequence: number
-      readonly status: 'loading'
-    }
-  | {
-      readonly id: string
-      readonly sequence: number
-      readonly status: 'error'
-      readonly error: ApiError
-    }
-
-interface OwnedDetailRequest {
-  readonly id: string
-  readonly sequence: number
-  readonly controller: SavedArticleDocumentController
-  readonly context: DocumentCommandContext
-}
-
-/**
- * A metadata write only returns its new revision, not a complete LinkResponse.
- * Keep that tuple locally until every older list/detail response has had a
- * chance to arrive, otherwise a request started before the write can erase the
- * user's just-saved title, summary, or tags.
- */
-interface MetadataProjection {
-  readonly metadataRevision: number
-  readonly title: string | null
-  readonly summary: string | null
-  readonly tags: readonly string[]
-}
-
-function metadataProjectionFrom(value: Partial<LinkResponse>): MetadataProjection | null {
-  const revision = value.metadata_revision
-  const title = value.title
-  const summary = value.summary
-  const tags = value.tags
-  if (
-    typeof revision !== 'number' ||
-    !Number.isSafeInteger(revision) ||
-    revision < 1 ||
-    (title !== null && typeof title !== 'string') ||
-    (summary !== null && typeof summary !== 'string') ||
-    !Array.isArray(tags) ||
-    !tags.every((tag) => typeof tag === 'string')
-  ) {
-    return null
-  }
-  return {
-    metadataRevision: revision,
-    title,
-    summary,
-    tags: [...tags],
-  }
-}
-
-function sameMetadataProjection(
-  left: MetadataProjection | undefined,
-  right: MetadataProjection,
-): boolean {
-  return left?.metadataRevision === right.metadataRevision &&
-    left.title === right.title &&
-    left.summary === right.summary &&
-    left.tags.length === right.tags.length &&
-    left.tags.every((tag, index) => tag === right.tags[index])
-}
-
-function metadataPatchTouchesTuple(patch: Partial<LinkResponse>): boolean {
-  return (
-    Object.prototype.hasOwnProperty.call(patch, 'metadata_revision') ||
-    Object.prototype.hasOwnProperty.call(patch, 'title') ||
-    Object.prototype.hasOwnProperty.call(patch, 'summary') ||
-    Object.prototype.hasOwnProperty.call(patch, 'tags')
-  )
-}
-
 function annotationCommandCommitted(
   result: ArticleAnnotationCommandResult,
 ): result is Extract<ArticleAnnotationCommandResult, { readonly sequence: number }> {
@@ -277,67 +179,6 @@ function sameDocumentCommandContext(
     left.id.namespace === right.id.namespace &&
     left.id.linkId === right.id.linkId &&
     left.id.contentRevision === right.id.contentRevision
-}
-
-async function sha256Hex(text: string): Promise<string> {
-  if (!globalThis.crypto?.subtle) throw new Error('Web Crypto is unavailable')
-  const digest = await globalThis.crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(text),
-  )
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
-/** 当前/最近已见链接的有界去重缓存；新数据优先，避免长期会话无界增长。 */
-function mergeCorpus(
-  current: LinkResponse[],
-  incoming: LinkResponse[],
-): LinkResponse[] {
-  if (incoming.length === 0) return current
-  const byID = new Map<string, LinkResponse>()
-  incoming.forEach((link) => byID.set(link.id, link))
-  current.forEach((link) => {
-    if (!byID.has(link.id)) byID.set(link.id, link)
-  })
-  const merged = [...byID.values()].slice(0, CORPUS_LIMIT)
-  // 结果与原来逐项同一引用时返回**原数组**。
-  //
-  // corpus 是 DetailPane / CommandPalette / BrowsePanel 的 prop，而这个函数
-  // 每次都新建数组——于是列表每一次校验（哪怕后端一个字节都没变）都会换掉
-  // corpus 的引用，把刚加上的那几层 memo 全部击穿。PF3 之后列表校验在数据
-  // 未变时已经不再通知，但「同一批链接重新合并一次」的路径仍然存在。
-  if (merged.length === current.length && merged.every((link, index) => link === current[index])) {
-    return current
-  }
-  return merged
-}
-
-function pagerTitle(link: LinkResponse): string {
-  return link.title?.trim() || link.domain?.trim() || link.url
-}
-
-/**
- * 按 content_revision 下界抬升一条链接的代次；已经不低于下界时原样返回，
- * 不制造多余的新对象（`active` 会流向已 memo 的 DetailPane）。
- */
-function liftContentRevision(
-  link: LinkResponse | undefined,
-  floor: number | undefined,
-): LinkResponse | undefined {
-  if (!link || floor === undefined || (link.content_revision ?? 0) >= floor) return link
-  return {
-    ...link,
-    content_revision: floor,
-    content: undefined,
-    content_document: undefined,
-    content_format: undefined,
-  }
-}
-
-function contentRevisionOrUndefined(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0
-    ? value
-    : undefined
 }
 
 type MainViewClient = ReaderLibrarySitesPort &
@@ -430,17 +271,61 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     reportNotesPrepareToLeave,
     reportInboxDraftState,
   } = useMainViewNavigation({ lease, capabilityPolicy, flash })
+  const {
+    selection: sel,
+    setSelection: setSel,
+    list,
+    reloadLinks,
+    reloadTags,
+    reloadDomains,
+    protectedListLinks,
+    corpus,
+    renderedActive,
+    aiContentContext,
+    savedArticle,
+    savedDocument,
+    captureSavedDocumentContext,
+    loadSavedDocumentBody,
+    detailLoading,
+    summaryBlock,
+    activeSummarySourceHash,
+    summaryProjectionEpoch,
+    onSummaryBlockText,
+    resetSummarySourceHash,
+    revisionFloor,
+    noteContentRevision,
+    patchKnownLink,
+    onSaveLinkMetadata,
+    getActiveLink,
+    openLink,
+    onDeleteLink,
+    clearActiveResource,
+    sidebarCounts,
+    tagStatList,
+    domainStatList,
+    tagsAvailable,
+    domainsAvailable,
+    previousPager,
+    nextPager,
+  } = useActiveResourceController({
+    client,
+    lease,
+    capabilityLease,
+    activeId,
+    setActiveId,
+    view,
+    pendingLinkTarget,
+    commitRoute,
+    confirmDiscardNavigation,
+    confirmDiscardContentEdit,
+    setMobilePane,
+    setMobileNavOpen,
+    flash,
+    dismissToast,
+  })
 	const homeScrollRef = useRef<HTMLDivElement>(null)
 	const [todoCompletedExpanded, setTodoCompletedExpanded] = useState(false)
   const [subsSyncRequest, setSubsSyncRequest] = useState(0)
-  const [sel, setSel] = useState<Selection>({ type: 'smart', id: 'all', name: '全部链接' })
-  const [activeFallback, setActiveFallback] = useState<LinkResponse | null>(null)
-  const [activeDetail, setActiveDetail] = useState<LinkResponse | null>(null)
-  const [summarySourceIdentity, setSummarySourceIdentity] =
-    useState<SummarySourceIdentity | null>(null)
-  const [summaryProjectionEpoch, setSummaryProjectionEpoch] = useState(0)
-  const [metadataProjectionEpoch, setMetadataProjectionEpoch] = useState(0)
-  const [corpus, setCorpus] = useState<LinkResponse[]>([])
   const [chatOpen, setChatOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readOwnedStorage('sidebarCollapsed') === '1')
   const focusMode = useSyncExternalStore(
@@ -462,15 +347,10 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
   const [archiveDownloading, setArchiveDownloading] = useState(false)
   const [convertingLink, setConvertingLink] = useState<LinkResponse | null>(null)
-  const [detailRequest, setDetailRequest] = useState<DetailRequestState | null>(null)
   const [pins, togglePin] = usePins()
   const librarySyncInFlight = useRef<Promise<void> | null>(null)
   const librarySyncController = useRef<AbortController | null>(null)
   const draftNonce = useRef(0)
-  const detailRequestSeq = useRef(0)
-  const ownedDetailRequest = useRef<OwnedDetailRequest | null>(null)
-  const flashedDetailError = useRef<number | null>(null)
-  const automaticOpenRef = useRef<string | null>(null)
   const canCreateNote = capabilityPolicy.notes
   const createNoteIntent = useRef<Promise<void> | null>(null)
   const [creatingNote, setCreatingNote] = useState(false)
@@ -497,84 +377,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     getThoughtSyncSnapshot,
     getThoughtSyncSnapshot,
   )
-
-  // 数据流
-  const list = useLinks(client, sel)
   useEffect(() => thoughtSyncController?.start(), [thoughtSyncController])
-  const { patchLink } = list
-  const tagsData = useTags(client)
-  const domainData = useDomainSummaries(client)
-  const reloadLinks = list.reload
-  const reloadTags = tagsData.reload
-  const reloadDomains = domainData.reload
-  const metadataProjectionRef = useRef(new Map<string, MetadataProjection>())
-
-  const recordMetadataProjection = useCallback((id: string, value: Partial<LinkResponse>) => {
-    const next = metadataProjectionFrom(value)
-    if (!next) return
-    const current = metadataProjectionRef.current.get(id)
-    if (current && current.metadataRevision > next.metadataRevision) return
-    if (sameMetadataProjection(current, next)) return
-    metadataProjectionRef.current.set(id, next)
-    setMetadataProjectionEpoch((epoch) => epoch + 1)
-  }, [])
-
-  const protectMetadataLink = useCallback((link: LinkResponse): LinkResponse => {
-    const projection = metadataProjectionRef.current.get(link.id)
-    if (!projection || link.metadata_revision >= projection.metadataRevision) return link
-    return {
-      ...link,
-      title: projection.title,
-      summary: projection.summary,
-      tags: [...projection.tags],
-      metadata_revision: projection.metadataRevision,
-    }
-  }, [])
-
-  const protectMetadataPatch = useCallback((id: string, patch: Partial<LinkResponse>) => {
-    recordMetadataProjection(id, patch)
-    const projection = metadataProjectionRef.current.get(id)
-    if (!projection || !metadataPatchTouchesTuple(patch)) return patch
-    if (
-      typeof patch.metadata_revision === 'number' &&
-      patch.metadata_revision >= projection.metadataRevision
-    ) {
-      return patch
-    }
-    return {
-      ...patch,
-      title: projection.title,
-      summary: projection.summary,
-      tags: [...projection.tags],
-      metadata_revision: projection.metadataRevision,
-    }
-  }, [recordMetadataProjection])
-
-  const acceptMetadataLink = useCallback((link: LinkResponse): LinkResponse => {
-    recordMetadataProjection(link.id, link)
-    return protectMetadataLink(link)
-  }, [protectMetadataLink, recordMetadataProjection])
-
-  // The projection map is ref-backed so writes can fence an in-flight response
-  // synchronously. Its epoch deliberately re-runs this overlay after a write.
-  const protectedListLinks = useMemo(
-    () => list.links.map(protectMetadataLink),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [list.links, metadataProjectionEpoch, protectMetadataLink],
-  )
-
-  useEffect(() => {
-    for (const link of list.links) recordMetadataProjection(link.id, link)
-  }, [list.links, recordMetadataProjection])
-  const knownLinksRef = useRef<{ list: LinkResponse[]; corpus: LinkResponse[] }>({
-    list: [],
-    corpus: [],
-  })
-  knownLinksRef.current = { list: protectedListLinks, corpus }
-
-  useEffect(() => {
-    setCorpus((current) => mergeCorpus(current, protectedListLinks))
-  }, [protectedListLinks])
 
   useEffect(() => {
     const onUpdateReady = () => setUpdateReady(true)
@@ -652,263 +455,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     } else if (result) onOpenSettings()
   }, [confirmDiscardNavigation, onOpenSettings])
 
-  // 每条链接的 content_revision 下界。
-  //
-  // 代次由服务端单调自增（写正文 +1、`convertReadingToSiteSQL` / 转回阅读 +1、
-  // 历史迁移置空 +1，全仓无递减路径，schema 里还有 CHECK > 0），所以「本机见过的
-  // 最大值」永远是安全的下界。保存 / 重抓的响应是**目前唯一被接进下界的来源**
-  // ——不是唯一带代次的响应：转换执行（ConversionExecuteResponse）与
-  // `GET /api/links/{id}/content` 也带，只是两处的消费侧都把它扔了：
-  // LinkConversionDialog 的 onConverted 签名不带参（转换后整条 active 都清掉了），
-  // DetailPane 调 onLoadContent 之后也只读正文、不读代次。
-  //
-  // 表存在 state 里而不是 ref 里，且每次变化都换一个新 Map。
-  //
-  // 跨标签页那条路**必须**如此：storage 回调里 `loadRevisionFloors()` 产出新引用，
-  // `active` 的 memo 靠它重算。同页写入那条今天其实不靠它——两个调用点后面都紧跟
-  // `patchKnownLink`，那次 state 写本身就会触发重渲染，就地改 Map 也能work（实测：
-  // 改成就地改，22 条用例全绿）。仍然换新引用，是不想把正确性挂在「调用点后面恰好
-  // 跟着一次 state 写」这种调用顺序上——接第三个来源时那是会静默失效的。
-  //
-  // 为什么是一张按 id 的表，而不是在某个合并点取 max：切走再切回同一篇时，
-  // activeDetail 早被另一篇覆盖了，「当前持有的更大值」根本不存在，取 max 无从
-  // 取起。而 `useLinks` 在列表数据换引用时会清掉全部乐观补丁，陈旧列表随即把
-  // 代次拖回写操作之前。
-  //
-  // 代次退一步的代价不是短暂显示错乱，而是文档身份错乱：
-  // `useArticleAnnotations` 会按错误 revision 读取 durable snapshot，用户还可能把
-  // 新正文的 offsets 提交到旧 revision。历史划线不会被删除，但当前文档不得读错代次。
-  //
-  // 表落盘（见 cache/revision-floor.ts）：列表缓存持久化在 IndexedDB，下界若只在
-  // 内存里，窗口期内刷新一次页面就会 hydrate 出旧代次、下界同时蒸发，丢划线的
-  // 那条链原样重演。
-  //
-  // 初值传的是**函数本身**而不是 `loadRevisionFloors()`：后者每次渲染都会求值，
-  // 等于每帧读一遍 localStorage 再 JSON.parse 一遍，而只有第一次的结果会被采用。
-  const [revisionFloor, setRevisionFloor] = useState<Map<string, number>>(loadRevisionFloors)
-  // ⚠ updater 里调 noteRevisionFloor 是**有 IO 的**（读盘合并 + 写盘），严格说
-  // 不纯，而 main.tsx 开着 StrictMode，dev 下 updater 会被双调用。之所以无害，
-  // 靠的是 noteRevisionFloor 本身幂等：两次调用各自 max 合并，收敛到同一张表，
-  // 只是多写一次盘。改动它之前先确认这条幂等性还在。
-  const noteContentRevision = useCallback((id: string, revision: number) => {
-    setRevisionFloor((current) => {
-      const next = new Map(current)
-      return noteRevisionFloor(next, id, revision) ? next : current
-    })
-  }, [])
-
-  // 跟进**其他标签页**写的下界。annotation channel 只发低延迟提示，
-  // `useArticleAnnotations` 始终从 durable store 重读权威 snapshot；这条 storage 订阅
-  // 只负责让文档 revision 跟进。revision 变化后 hook 会以新 target 重读，
-  // 不把 storage/BroadcastChannel payload 当成划线真值。
-  //
-  // RF5A 还要求正文一起服从这个下界：liftContentRevision 会在抬代次时撤下未绑定
-  // revision 的 l.content，DetailPane 的 loadedContent 与落盘缓存都按
-  // (linkId, revision) 读取。这样跨页先到达的 revision floor 不会把旧正文冒充成
-  // 新一代正文，也不会允许用户在旧文本上写入新代次 offsets。
-  useEffect(() => {
-    const onStorage = (event: StorageEvent) => {
-      // key 为 null 表示 storage 被整体清空（clear()），也要跟进。
-      if (event.key !== null && event.key !== revisionFloorStorageKey()) return
-      // 按 max 并进来，不是整表替换：本页可能持有盘上没有的更高值（落盘失败，
-      // 或本页那条被另一页挤出上限），替换会让下界下降。
-      setRevisionFloor((current) => mergeRevisionFloors(current, loadRevisionFloors()))
-    }
-    window.addEventListener('storage', onStorage)
-    return () => window.removeEventListener('storage', onStorage)
-  }, [])
-
-  // Mail 原则：详情 active 仅随 activeId 变；筛选 sel 变化不动 active。
-  //
-  // Keep the server projection's reported revision separate from the UI floor.
-  // The lifted object is useful fallback metadata for rendering and commands,
-  // but it is not an authoritative detail for that newer revision.
-  const activeProjection = useMemo(
-    () =>
-      (activeDetail?.id === activeId ? activeDetail : undefined) ??
-      protectedListLinks.find((link) => link.id === activeId) ??
-      (activeFallback?.id === activeId ? activeFallback : undefined) ??
-      corpus.find((link) => link.id === activeId),
-    [protectedListLinks, activeFallback, activeDetail, corpus, activeId],
-  )
-  const activeRevisionFloor = activeId ? revisionFloor.get(activeId) : undefined
-  const active = useMemo(
-    () => liftContentRevision(activeProjection, activeRevisionFloor),
-    [activeProjection, activeRevisionFloor],
-  )
-  // onConvertToSite 需要「点下去那一刻的当前文章」，但它必须是稳定引用
-  // （DetailPane 已 memo）。把 active 走 ref 读，回调就不必把 active 列进依赖。
-  const activeRef = useRef<LinkResponse | undefined>(undefined)
-  activeRef.current = active
-  const activeSummarySourceHash =
-    active &&
-    summarySourceIdentity?.linkId === active.id &&
-    summarySourceIdentity.source === (active.summary ?? null)
-      ? summarySourceIdentity.hash
-      : null
-  const onSummaryBlockText = useCallback(
-    (linkId: string, source: string | null, renderedText: string | null) => {
-      if (renderedText === null) {
-        setSummarySourceIdentity({ linkId, source, hash: null })
-        return
-      }
-      void sha256Hex(renderedText).then(
-        (hash) => {
-          const current = activeRef.current
-          if (current?.id !== linkId || (current.summary ?? null) !== source) return
-          setSummarySourceIdentity((previous) =>
-            previous?.linkId === linkId &&
-            previous.source === source &&
-            previous.hash === hash
-              ? previous
-              : { linkId, source, hash },
-          )
-        },
-        () => {
-          const current = activeRef.current
-          if (current?.id !== linkId || (current.summary ?? null) !== source) return
-          setSummarySourceIdentity({ linkId, source, hash: null })
-        },
-      )
-    },
-    [],
-  )
-  const loadSavedBody = useCallback(
-    async (context: DocumentCommandContext) => {
-      const res = await loadLinkContent(
-        client,
-        context.id.linkId,
-        context.id.contentRevision,
-      )
-      if (!res.ok && res.error.kind === 'unauthorized') {
-        flash('鉴权失败，请检查连接配置', 'alert')
-      }
-      return res
-    },
-    [client, flash],
-  )
-  const savedArticle = useSavedArticleDocument({
-    lease,
-    detail: activeProjection,
-    revisionFloor: activeRevisionFloor,
-    loadBody: loadSavedBody,
-  })
-  const savedDocument = savedArticle.document
-  const captureSavedDocumentContext = savedArticle.captureContext
-  const loadSavedDocumentBody = savedArticle.loadBody
-
-  // `openLink` starts before React can install the controller for the newly
-  // selected article. Bind the request to that controller once it exists and
-  // retain the exact generation context for the terminal error transition.
-  // A revision advance or identity change aborts that context, so a late
-  // failure cannot replace a newer detail resource with an error.
-  useLayoutEffect(() => {
-    if (!detailRequest) {
-      ownedDetailRequest.current = null
-      return
-    }
-
-    let owned = ownedDetailRequest.current
-    if (
-      owned &&
-      (owned.id !== detailRequest.id || owned.sequence !== detailRequest.sequence)
-    ) {
-      ownedDetailRequest.current = null
-      owned = null
-    }
-
-    const controller = savedArticle.controller
-    if (!controller || controller.getSnapshot().id.linkId !== detailRequest.id) return
-    // The only normal controller replacement for the same link/request is an
-    // identity-lease replacement. Never rebind an old request to that owner.
-    if (owned && owned.controller !== controller) return
-
-    if (!owned) {
-      const context = controller.captureContext()
-      if (!controller.beginDetailLoad(context)) return
-      owned = {
-        id: detailRequest.id,
-        sequence: detailRequest.sequence,
-        controller,
-        context,
-      }
-      ownedDetailRequest.current = owned
-    }
-
-    if (detailRequest.status === 'error') {
-      controller.failDetail(detailRequest.error, owned.context)
-    }
-  }, [detailRequest, savedArticle.controller])
-
-  const documentDetail =
-    savedDocument?.detail.status === 'ready' && savedDocument.detail.data.id === active?.id
-      ? savedDocument.detail.data
-      : null
-  const documentFallback =
-    savedDocument && active && savedDocument.id.linkId === active.id
-      ? liftContentRevision(active, savedDocument.id.contentRevision)
-      : active
-  const renderedActive = documentDetail ?? documentFallback
-  const aiContentContext = (() => {
-    if (!savedDocument || !renderedActive) {
-      return renderedActive?.content_document ?? renderedActive?.content ?? renderedActive?.summary ?? null
-    }
-    if (
-      savedDocument.id.linkId === renderedActive.id &&
-      savedDocument.body.status === 'ready' &&
-      savedDocument.body.revision === savedDocument.id.contentRevision &&
-      (renderedActive.content_revision === undefined ||
-        renderedActive.content_revision === savedDocument.id.contentRevision)
-    ) {
-      return savedDocument.body.data.content_document ?? savedDocument.body.data.content
-    }
-    return renderedActive.content_document ?? renderedActive.content ?? renderedActive.summary ?? null
-  })()
-  const documentOwnsDetailRequest = Boolean(
-    detailRequest && savedDocument?.id.linkId === detailRequest.id,
-  )
-  const detailLoading = detailRequest?.status === 'loading' && detailRequest.id === activeId
-    ? documentOwnsDetailRequest
-      ? savedDocument?.detail.status === 'loading'
-      : true
-    : false
-
-  useEffect(() => {
-    if (
-      detailRequest?.status !== 'error' ||
-      flashedDetailError.current === detailRequest.sequence
-    ) {
-      return
-    }
-
-    const activeCanOwnDocument =
-      active?.id === detailRequest.id &&
-      contentRevisionOrUndefined(active.content_revision) !== undefined
-    let error = detailRequest.error
-    if (activeCanOwnDocument) {
-      if (
-        savedDocument?.id.linkId !== detailRequest.id ||
-        savedDocument.detail.status !== 'error'
-      ) {
-        return
-      }
-      error = savedDocument.detail.error
-    }
-
-    flashedDetailError.current = detailRequest.sequence
-    flash('加载链接详情失败：' + error.message, 'alert')
-  }, [active, detailRequest, flash, savedDocument])
-
-  activeRef.current = renderedActive
-  const summaryBlock = useMemo<SourceBlockId | null>(() => {
-    if (!renderedActive?.summary || !activeSummarySourceHash) return null
-    return {
-      namespace: lease.context.physicalNamespace,
-      linkId: renderedActive.id,
-      blockKind: 'summary',
-      sourceHash: activeSummarySourceHash,
-    }
-  }, [activeSummarySourceHash, lease.context.physicalNamespace, renderedActive])
   const translationContentRevision = savedDocument?.id.contentRevision ??
     contentRevisionOrUndefined(renderedActive?.content_revision) ??
     null
@@ -1133,396 +679,12 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       (savedDocument.translations.status === 'idle' && translationSnapshotLoading)
     : translationSnapshotLoading
 
-  useEffect(() => {
-    const latest = protectedListLinks.find((link) => link.id === activeId)
-    if (latest) {
-      setActiveFallback(latest)
-      setActiveDetail((current) => {
-        if (current?.id !== latest.id) return current
-        const merged = { ...current, ...latest }
-        const advancesContentRevision =
-          typeof latest.content_revision === 'number' &&
-          latest.content_revision > (current.content_revision ?? 0)
-        if (latest.content === undefined) {
-          merged.content = advancesContentRevision ? undefined : current.content
-        }
-        if (latest.content_document === undefined) {
-          merged.content_document = advancesContentRevision
-            ? undefined
-            : current.content_document
-        }
-        if (latest.content_format === undefined) {
-          merged.content_format = advancesContentRevision
-            ? undefined
-            : current.content_format
-        }
-        // PF6 起列表如实汇报 has_content 与两项计数（后端落成了列，
-        // has_content 还是生成列），因此这里不再需要「把详情端的真值保住、
-        // 别被列表刷新冲掉」那段补丁——它当初存在的唯一理由是列表在撒谎。
-        //
-        // content_revision 同样不在这里护：陈旧列表确实会把它拖回去，但护在这里
-        // 只能盖住「当前正开着这一篇」这一种路径，切走再切回就漏。统一由上面的
-        // revisionFloor 在 active 汇合点抬升。
-        //
-        // has_content 也会被同一段窗口拖回旧值。那是可自愈的短暂闪烁，而且
-        // **不能**照代次那样保住：revision 是单调身份，has_content 是当前正文
-        // 是否存在的权威状态。RF5A 已让 requeue/site-complete 等 clear 路径也推进
-        // revision，但若把 true 变成粘性值，服务端返回的正文删除仍会被本地旧值
-        // 遮住，DetailPane 也就无法及时撤下旧正文。
-        return merged
-      })
-    }
-  }, [protectedListLinks, activeId])
-
-  const patchKnownLink = useCallback(
-    (id: string, patch: Partial<LinkResponse>) => {
-      const protectedPatch = protectMetadataPatch(id, patch)
-      patchLink(id, protectedPatch)
-      setActiveFallback((current) =>
-        current?.id === id
-          ? protectMetadataLink({ ...current, ...protectedPatch })
-          : current,
-      )
-      setActiveDetail((current) =>
-        current?.id === id
-          ? protectMetadataLink({ ...current, ...protectedPatch })
-          : current,
-      )
-      setCorpus((current) =>
-        current.map((link) => (
-          link.id === id
-            ? protectMetadataLink({ ...link, ...protectedPatch })
-            : link
-        )),
-      )
-    },
-    [patchLink, protectMetadataLink, protectMetadataPatch],
-  )
-
-  const refreshMetadataViews = useCallback((id: string) => {
-    invalidateLibrary()
-    invalidateLinkProjection(id)
-    invalidateReaderRelatedTags()
-    invalidateReaderActivity()
-    void Promise.allSettled([
-      Promise.resolve(list.reload()),
-      Promise.resolve(tagsData.reload()),
-      Promise.resolve(domainData.reload()),
-    ])
-  }, [domainData, list, tagsData])
-
-  const onSaveLinkMetadata = useCallback(
-    async (
-      id: string,
-      revision: number,
-      request: ReaderLinkMetadataRequest,
-    ): Promise<MetadataEditOutcome> => {
-      const result = await client.patchLinkMetadata(id, revision, request)
-      if (!client.isIdentityCurrent()) {
-        return {
-          status: 'error',
-          error: { kind: 'identity-mismatch', message: 'Reader identity changed' },
-        }
-      }
-
-      if (result.ok) {
-        if (result.data.link_id !== id) {
-          return {
-            status: 'error',
-            error: { kind: 'other', message: '链接信息保存响应与当前链接不一致' },
-          }
-        }
-
-        const metadataRevision = result.data.metadata_revision
-        patchKnownLink(id, {
-          title: request.title,
-          summary: request.summary,
-          tags: [...request.tags],
-          metadata_revision: metadataRevision,
-        })
-        refreshMetadataViews(id)
-
-        // PATCH returns only a revision. Re-read the normalized tuple in the
-        // background, but never let a response from before this write lower the
-        // local metadata projection.
-        void client.getLink(id).then((refreshed) => {
-          if (
-            !client.isIdentityCurrent() ||
-            !refreshed.ok ||
-            refreshed.data.id !== id ||
-            refreshed.data.metadata_revision < metadataRevision
-          ) {
-            return
-          }
-          patchKnownLink(id, {
-            title: refreshed.data.title,
-            summary: refreshed.data.summary,
-            tags: [...refreshed.data.tags],
-            metadata_revision: refreshed.data.metadata_revision,
-          })
-        })
-
-        return { status: 'saved', metadataRevision }
-      }
-
-      if (result.error.errorCode !== 'metadata_revision_conflict') {
-        return { status: 'error', error: result.error }
-      }
-
-      refreshMetadataViews(id)
-      const refreshed = await client.getLink(id)
-      if (!client.isIdentityCurrent()) {
-        return {
-          status: 'error',
-          error: { kind: 'identity-mismatch', message: 'Reader identity changed' },
-        }
-      }
-      if (!refreshed.ok) {
-        return {
-          status: 'error',
-          error: {
-            ...refreshed.error,
-            message: `链接信息已变化，但无法读取最新版本：${refreshed.error.message}`,
-          },
-        }
-      }
-      if (
-        refreshed.data.id !== id ||
-        refreshed.data.metadata_revision <= revision
-      ) {
-        return {
-          status: 'error',
-          error: {
-            kind: 'other',
-            status: result.error.status,
-            errorCode: result.error.errorCode,
-            message: '链接信息已变化，但读取的最新版本无效，请刷新后重试',
-          },
-        }
-      }
-
-      patchKnownLink(id, {
-        title: refreshed.data.title,
-        summary: refreshed.data.summary,
-        tags: [...refreshed.data.tags],
-        metadata_revision: refreshed.data.metadata_revision,
-      })
-      return {
-        status: 'conflict',
-        metadataRevision: refreshed.data.metadata_revision,
-        error: result.error,
-      }
-    },
-    [client, patchKnownLink, refreshMetadataViews],
-  )
-
-  useEffect(() => {
-    const linkId = savedDocument?.id.linkId
-    const documentRevision = savedDocument?.id.contentRevision
-    if (
-      !linkId ||
-      documentRevision === undefined ||
-      activeProjection?.id !== linkId ||
-      documentRevision <= (activeProjection.content_revision ?? 0)
-    ) {
-      return
-    }
-
-    noteContentRevision(linkId, documentRevision)
-    let cancelled = false
-    void client.getLink(linkId).then((result) => {
-      if (cancelled || !client.isIdentityCurrent() || !result.ok) return
-      const responseRevision = contentRevisionOrUndefined(result.data.content_revision)
-      if (
-        result.data.id !== linkId ||
-        responseRevision === undefined ||
-        responseRevision < documentRevision
-      ) {
-        return
-      }
-      patchKnownLink(linkId, result.data)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [
-    activeProjection?.content_revision,
-    activeProjection?.id,
-    client,
-    noteContentRevision,
-    patchKnownLink,
-    savedDocument?.id.contentRevision,
-    savedDocument?.id.linkId,
-  ])
-
   // 切换文章时清掉笔记面板与问 AI 草稿，避免跨链接误写。
   useEffect(() => {
     setNoteEd(null)
     setHistoricalNote(null)
     setChatDraft(null)
   }, [activeId])
-
-  // 侧栏摘要：标签/域名 count 来自后端；corpus 只补 recent 元数据。
-  const {
-    counts,
-    tags: tagStatList,
-    domains: domainStatList,
-    tagsAvailable,
-    domainsAvailable,
-  } = useSidebarData(
-    corpus,
-    tagsData.tags,
-    domainData.summaries,
-    domainData.total,
-    {
-      links: list.links,
-      total: list.authoritativeTotal,
-      complete: list.corpusComplete,
-    },
-  )
-  // Durable annotation membership is resolved through current link truth so
-  // site, non-done, and deleted rows cannot inflate the Reading count.
-  const annotationCount = useAnnotatedLinkCount(client)
-  const sidebarCounts = useMemo(() => {
-    return {
-      ...counts,
-      annotated: annotationCount,
-    }
-  }, [annotationCount, counts])
-
-  const openLink = useCallback(
-    (id: string, candidate?: LinkResponse, revealMobileDetail = true, options: OpenLinkOptions = {}) => {
-      const normalizedID = id.trim()
-      if (!normalizedID) return
-      const commitOpen = () => {
-        if (!client.isIdentityCurrent() || !capabilityLease.isCurrent()) return false
-        const historyMode = options.history ?? 'push'
-        const addressLink = options.address ?? historyMode === 'push'
-        commitRoute(
-          { kind: 'library', id: 'reading' },
-          { linkId: normalizedID },
-          historyMode,
-          addressLink,
-        )
-        // The route commit owns both the address and the state update. The
-        // detail loader below owns the same target, so it must not be replayed
-        // by the location-target effect on the next render.
-        pendingLinkTarget.current = null
-        // Every navigation invalidates an earlier detail request, including the
-        // fast path that can render a settled list projection synchronously.
-        const requestSeq = ++detailRequestSeq.current
-        const knownLinks = knownLinksRef.current
-        const candidateLink =
-          candidate ??
-          knownLinks.list.find((item) => item.id === normalizedID) ??
-          knownLinks.corpus.find((item) => item.id === normalizedID)
-        const link = candidateLink ? acceptMetadataLink(candidateLink) : undefined
-        if (link) {
-          setActiveFallback(link)
-          setCorpus((current) => mergeCorpus(current, [link]))
-        }
-        setActiveDetail(null)
-        if (revealMobileDetail) setMobilePane('detail')
-        setMobileNavOpen(false)
-
-        // PF6：列表如今如实汇报 has_content 与两项计数，LinkResponse 的其余字段
-        // 列表投影也都覆盖了。因此**手上已有这条链接的列表数据时，不必再发一次
-        // 详情请求**——直接用它渲染，冷启动少一个 API、点击已加载的链接少一个。
-        //
-        // 仍然发请求的两种情况：这条链接不在当前列表里（从 ⌘K 或站点页跳进来），
-        // 或者它还在解析中（pending/processing 的字段会变，值得一次权威读取）。
-        const known = link ?? knownLinks.list.find((item) => item.id === normalizedID)
-        const settled = known && known.status !== 'pending' && known.status !== 'processing'
-        if (known && settled) {
-          setActiveDetail(acceptMetadataLink(known))
-          if (!known.has_content) {
-            setDetailRequest(null)
-            return true
-          }
-
-          // content_source is intentionally absent from list projections. Hydrate
-          // only the detail metadata here; the body endpoint remains deferred until
-          // the user expands the saved-original section.
-          setDetailRequest({ id: normalizedID, sequence: requestSeq, status: 'loading' })
-          void client.getLink(normalizedID).then((res) => {
-            if (!client.isIdentityCurrent() || requestSeq !== detailRequestSeq.current) return
-            if (res.ok) {
-              const accepted = acceptMetadataLink(res.data)
-              setDetailRequest(null)
-              setActiveDetail(accepted)
-              patchKnownLink(normalizedID, accepted)
-              return
-            }
-            setDetailRequest({
-              id: normalizedID,
-              sequence: requestSeq,
-              status: 'error',
-              error: res.error,
-            })
-          })
-          return true
-        }
-
-        setDetailRequest({ id: normalizedID, sequence: requestSeq, status: 'loading' })
-        void client.getLink(normalizedID).then((res) => {
-          if (!client.isIdentityCurrent()) return
-          if (requestSeq !== detailRequestSeq.current) return
-          if (res.ok) {
-            const accepted = acceptMetadataLink(res.data)
-            setDetailRequest(null)
-            setActiveDetail(accepted)
-            patchKnownLink(normalizedID, accepted)
-            return
-          }
-          setDetailRequest({
-            id: normalizedID,
-            sequence: requestSeq,
-            status: 'error',
-            error: res.error,
-          })
-        })
-        return true
-      }
-
-      if (normalizedID === activeId || options.guard === false) return commitOpen()
-      const allowed = confirmDiscardNavigation()
-      if (typeof (allowed as Promise<boolean>)?.then === 'function') {
-        return Promise.resolve(allowed).then((ready) => ready ? commitOpen() : false)
-      }
-      return allowed ? commitOpen() : false
-    },
-    [
-      acceptMetadataLink,
-      activeId,
-      capabilityLease,
-      client,
-      commitRoute,
-      confirmDiscardNavigation,
-      patchKnownLink,
-      pendingLinkTarget,
-      setMobileNavOpen,
-      setMobilePane,
-    ],
-  )
-
-  useEffect(() => {
-    const target = pendingLinkTarget.current
-    if (!target || list.loading) return
-    const candidate = protectedListLinks.find((link) => link.id === target)
-    openLink(target, candidate, false, { history: 'none', address: true, guard: false })
-  }, [pendingLinkTarget, protectedListLinks, list.loading, openLink])
-
-  useEffect(() => {
-    if (activeId) {
-      automaticOpenRef.current = null
-      return
-    }
-    if (view !== 'reading' || list.loading || protectedListLinks.length === 0) return
-    const first = protectedListLinks[0]
-    if (automaticOpenRef.current === first.id) return
-    automaticOpenRef.current = first.id
-    openLink(first.id, first, false, { history: 'none', address: false, guard: false })
-  }, [activeId, protectedListLinks, list.loading, openLink, view])
 
   // 右栏互斥：打开 AI 助手则关笔记面板，反之亦然。
   const toggleChat = useCallback(() => {
@@ -1833,7 +995,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       // 复用共享的 isContentAnchored 判据，不手抄 block key 列表。换正文会
       // 递增 content_revision；旧 revision 的正文/译文划线仍保留在 durable store，
       // 但不再应用到新正文。摘要有独立 source hash，不受 saved revision 前进影响。
-      const current = activeRef.current
+      const current = getActiveLink()
       const projectedContentAnnotations = anns.filter((ann) => isContentAnchored(ann.blockKey))
       let contentAnnotationCount = projectedContentAnnotations.length
 
@@ -1898,6 +1060,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       captureSavedDocumentContext,
       client,
       flash,
+      getActiveLink,
       lease,
       noteContentRevision,
       patchKnownLink,
@@ -2007,16 +1170,11 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
         blockKey === 'content' ||
         blockKey === 'content-document'
       if (!refreshSavedContent) {
-        const current = activeRef.current
-        setSummarySourceIdentity({
-          linkId: requestedLinkId,
-          source: current?.id === requestedLinkId ? (current.summary ?? null) : null,
-          hash: null,
-        })
-        // The canonical text may be unchanged, or getLink may fail. Force the
-        // already-mounted DOM projection to report again instead of relying on
-        // a source/text mutation to invalidate DetailPane's deduplication key.
-        setSummaryProjectionEpoch((epoch) => epoch + 1)
+        const current = getActiveLink()
+        resetSummarySourceHash(
+          requestedLinkId,
+          current?.id === requestedLinkId ? (current.summary ?? null) : null,
+        )
       }
       if (refreshSavedContent) {
         invalidateLinkContent(requestedLinkId)
@@ -2054,7 +1212,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           }
           noteContentRevision(requestedLinkId, contentResult.data.content_revision)
           patchKnownLink(requestedLinkId, patch)
-          if (activeRef.current?.id === requestedLinkId) {
+          if (getActiveLink()?.id === requestedLinkId) {
             flash('翻译来源已更新，请重新确认后再翻译', 'refresh')
           }
           return true
@@ -2089,7 +1247,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           noteContentRevision(requestedLinkId, blockedRevision)
         }
         patchKnownLink(requestedLinkId, blockedPatch)
-        if (activeRef.current?.id === requestedLinkId) {
+        if (getActiveLink()?.id === requestedLinkId) {
           flash('翻译来源已变化，原文刷新失败，请重试', 'alert')
         }
         return true
@@ -2103,7 +1261,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
         patchKnownLink(requestedLinkId, patch)
       }
 
-      if (activeRef.current?.id === requestedLinkId) {
+      if (getActiveLink()?.id === requestedLinkId) {
         flash(
           linkResult.ok
             ? '翻译来源已更新，请重新选择后再翻译'
@@ -2113,12 +1271,12 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       }
       return true
     },
-    [client, flash, noteContentRevision, patchKnownLink],
+    [client, flash, getActiveLink, noteContentRevision, patchKnownLink, resetSummarySourceHash],
   )
 
   const onTranslateSelection = useCallback(
     async (info: SelectionInfo, force: boolean): Promise<string | null> => {
-      const sourceLink = activeRef.current
+      const sourceLink = getActiveLink()
       if (!sourceLink) return null
       const request = {
         scope: 'selection',
@@ -2144,7 +1302,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
         flash('该内容块暂不支持翻译', 'alert')
         return null
       }
-      if (activeRef.current?.id !== sourceLink.id) return null
+      if (getActiveLink()?.id !== sourceLink.id) return null
 
       const res = savedSelection
         ? await runSavedTranslationCommand(async (context) => {
@@ -2171,6 +1329,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       createTranslation,
       flash,
       flashTranslationError,
+      getActiveLink,
       refreshAfterTranslationConflict,
       runSavedTranslationCommand,
     ],
@@ -2178,7 +1337,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
 
   const onTranslateFull = useCallback(
     async (force: boolean) => {
-      const sourceLink = activeRef.current
+      const sourceLink = getActiveLink()
       const revision = sourceLink?.content_revision
       if (!sourceLink || revision === undefined || !Number.isInteger(revision) || revision <= 0) {
         flash('后端未返回正文版本，无法安全创建翻译', 'alert')
@@ -2214,6 +1373,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
       createTranslation,
       flashTranslationError,
       flash,
+      getActiveLink,
       refreshAfterTranslationConflict,
       runSavedTranslationCommand,
     ],
@@ -2296,7 +1456,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
           break
       }
     },
-    [capabilityLease, createEmptyNote, navigateRoute, onSync, openLink, setMobileNavOpen],
+    [capabilityLease, createEmptyNote, navigateRoute, onSync, openLink, setMobileNavOpen, setSel],
   )
 
   // 采纳某条 AI 回复为划线笔记（ChatSidebar 草稿模式调用）。
@@ -2321,7 +1481,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     setSel(next)
     setMobilePane('list')
     setMobileNavOpen(false)
-  }, [setMobileNavOpen, setMobilePane])
+  }, [setMobileNavOpen, setMobilePane, setSel])
 
   const onSidebarView = useCallback((next: LibraryView | ReaderRoute) => {
     if (typeof next === 'string') {
@@ -2381,14 +1541,6 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
     [anns, noteEd],
   )
   const notePanelAnnotation = editingAnn ?? historicalNote?.annotation ?? null
-  const activeListIndex = activeId
-    ? protectedListLinks.findIndex((link) => link.id === activeId)
-    : -1
-  const previousLink = activeListIndex > 0 ? protectedListLinks[activeListIndex - 1] : null
-  const nextLink =
-    activeListIndex >= 0 && activeListIndex < protectedListLinks.length - 1
-      ? protectedListLinks[activeListIndex + 1]
-      : null
 
   // 以下几个回调与两个 pager 对象过去都是 JSX 里的内联字面量，每渲染新建一次。
   // DetailPane 加上 memo 之后它们必须稳定，否则 memo 的浅比较每次都判定
@@ -2396,90 +1548,15 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
   const onPickTag = useCallback((tag: string) => {
     setSel({ type: 'tag', id: tag, name: '#' + tag })
     setMobilePane('list')
-  }, [setMobilePane])
+  }, [setMobilePane, setSel])
 
   const onToggleFocus = useCallback(() => readingFocusStore.toggle(), [])
 
   const onConvertToSite = useCallback(() => {
     if (!capabilityLease.isCurrent('siteWrite')) return
     if (!confirmDiscardContentEdit()) return
-    setConvertingLink((current) => current ?? activeRef.current ?? null)
-  }, [capabilityLease, confirmDiscardContentEdit])
-
-  // 删除当前文章。后端是软删（进回收站），所以这里不弹确认框，而是给一次
-  // 撤销机会——真正不可逆的是 purge，不是这一步。失败时不动任何本地状态，
-  // 否则列表会显示一条实际还在服务端的记录。
-  const onDeleteLink = useCallback(() => {
-    const target = activeRef.current
-    if (!target) return
-    if (!confirmDiscardContentEdit()) return
-    const { id, title, url } = target
-    void (async () => {
-      const result = await client.deleteLink(id)
-      if (!result.ok) {
-        flash(`删除失败：${result.error.message}`, 'alert')
-        return
-      }
-      invalidateLibrary()
-      invalidateLink(id)
-      setActiveId(null)
-      setActiveDetail(null)
-      setActiveFallback(null)
-      void list.reload()
-      flash(`已删除「${title || url}」`, 'trash', {
-        label: '撤销',
-        onAction: () => {
-          dismissToast()
-          void (async () => {
-            const restored = await client.restoreLink(id)
-            if (!restored.ok) {
-              flash(`撤销失败：${restored.error.message}`, 'alert')
-              return
-            }
-            invalidateLibrary()
-            invalidateLink(id)
-            void list.reload()
-            flash('已恢复', 'check')
-          })()
-        },
-      })
-    })()
-  }, [client, confirmDiscardContentEdit, dismissToast, flash, list, setActiveId])
-
-  // 空闲预取上一篇 / 下一篇：用户点「下一篇」时是 0 个网络请求。
-  // 预取的是译文列表——详情本身已经能从列表数据直接渲染（PF6 让列表说了真话）。
-  const prefetchTargets = useMemo<PrefetchTarget[]>(() => {
-    const targets: PrefetchTarget[] = []
-    for (const candidate of [nextLink, previousLink]) {
-      if (!candidate) continue
-      const key = translationsKey(candidate.id, candidate.content_revision)
-      targets.push({
-        key,
-        load: () =>
-          resourceStore.fetch(key, () =>
-            client.getTranslations(candidate.id),
-          ),
-      })
-    }
-    return targets
-  }, [client, nextLink, previousLink])
-  usePrefetch(prefetchTargets)
-
-  const previousPager = useMemo(
-    () =>
-      previousLink
-        ? { title: pagerTitle(previousLink), onSelect: () => openLink(previousLink.id, previousLink) }
-        : null,
-    [previousLink, openLink],
-  )
-
-  const nextPager = useMemo(
-    () =>
-      nextLink
-        ? { title: pagerTitle(nextLink), onSelect: () => openLink(nextLink.id, nextLink) }
-        : null,
-    [nextLink, openLink],
-  )
+    setConvertingLink((current) => current ?? getActiveLink() ?? null)
+  }, [capabilityLease, confirmDiscardContentEdit, getActiveLink])
 
   return (
     <div className="stage">
@@ -2734,7 +1811,7 @@ export function MainView({ client, capabilities, onOpenSettings, onRefreshCapabi
               }}
             />
           )}
-			{capabilityPolicy.siteWrite && convertingLink && <LinkConversionDialog capabilityLease={capabilityLease} client={client} link={convertingLink} initialNote={anns.map((ann) => ann.note.trim()).filter(Boolean).join('\n\n')} onClose={() => setConvertingLink(null)} onToast={flash} onConverted={() => { if (!capabilityLease.isCurrent('siteWrite')) return; invalidateLibrary(); invalidateLink(convertingLink.id); setConvertingLink(null); setActiveId(null); setActiveDetail(null); setActiveFallback(null); navigateRoute({ kind: 'library', id: 'sites' }); list.reload() }} />}
+			{capabilityPolicy.siteWrite && convertingLink && <LinkConversionDialog capabilityLease={capabilityLease} client={client} link={convertingLink} initialNote={anns.map((ann) => ann.note.trim()).filter(Boolean).join('\n\n')} onClose={() => setConvertingLink(null)} onToast={flash} onConverted={() => { if (!capabilityLease.isCurrent('siteWrite')) return; invalidateLibrary(); invalidateLink(convertingLink.id); setConvertingLink(null); clearActiveResource(); navigateRoute({ kind: 'library', id: 'sites' }); list.reload() }} />}
           {capabilityPolicy.ai && chatOpen && displayedView === 'reading' && !notePanelAnnotation && (
             <ChatSidebar
               client={client}
