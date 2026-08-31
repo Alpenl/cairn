@@ -30,11 +30,11 @@ import {
   readerErrorMessage,
   SURFACE_IDENTITY_ERROR,
 } from '../../lib/reader-surface'
-import type { ReaderClient } from '../../lib/api/client'
 import type { ReaderTrashItemResponse, ReaderHostKind } from '../../lib/api/types'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
 import { invalidateLibrary, invalidateLink } from '../../lib/cache/invalidate'
+import type { ReaderTrashPort } from '../../lib/reader-api-ports'
 
 const PAGE_SIZE = 50
 
@@ -55,7 +55,7 @@ const KIND_META: Record<ReaderHostKind, { readonly label: string; readonly icon:
 }
 
 export interface TrashSurfaceProps {
-  readonly client: ReaderClient
+  readonly client: ReaderTrashPort
   readonly onNavigate: (route: ReaderRoute) => void
   readonly capabilityPolicy: ReaderCapabilityPolicy
   readonly onToast: (msg: string, icon?: IconName) => void

@@ -17,10 +17,14 @@
  * 累积状态自然作废。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ListLinksParams } from '../lib/api/client'
 import type { ApiError, ApiResult } from '@webtag/api'
 import type { LinkResponse, PaginatedLinksResponse } from '../lib/api/types'
+import type {
+  ReaderAmbientClientPort,
+  ReaderIdentityPort,
+  ReaderLibrarySitesPort,
+} from '../lib/reader-api-ports'
 import {
   linkDetailCacheKey,
   linksFirstPageCacheKey,
@@ -98,6 +102,9 @@ export type LocalDayCreatedRange = Readonly<{
   created_from: string
   created_before: string
 }>
+
+type UseLinksClient = ReaderAmbientClientPort &
+  Pick<ReaderLibrarySitesPort, 'getLinks' | 'getLink'>
 
 /** Convert one browser-local natural day to the UTC instants understood by the server. */
 export function localDayCreatedRange(now = new Date()): LocalDayCreatedRange {
@@ -205,7 +212,7 @@ function isAllReadingSelection(selection: Selection): boolean {
 }
 
 function primeLinkPointCache(
-  client: IdentityBoundReaderClient,
+  client: ReaderIdentityPort,
   links: readonly LinkResponse[],
   logicalKey: string,
 ): void {
@@ -219,7 +226,7 @@ function primeLinkPointCache(
 }
 
 export function useLinks(
-  client: IdentityBoundReaderClient,
+  client: UseLinksClient,
   sel: Selection,
 ): LinksState {
   useEffect(() => registerReaderClient(client), [client])

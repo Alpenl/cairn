@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import type {
-  IdentityBoundReaderClient,
   ReaderActivityKind,
   ReaderActivityRequestOptions,
 } from '../lib/api/client'
 import { err, ok, type ApiError, type ApiResult } from '@webtag/api'
 import type { LinkResponse, ReaderActivityResponse } from '../lib/api/types'
+import type { ReaderAmbientClientPort } from '../lib/reader-api-ports'
 import {
   READER_ACTIVITY_CACHE_PREFIX,
   readerActivityCacheKey,
@@ -167,7 +167,7 @@ function firstPageCache(
 }
 
 async function fetchActivity(
-  client: IdentityBoundReaderClient,
+  client: ReaderAmbientClientPort,
   kind: ReaderActivityKind,
   allPages: boolean,
   signal: AbortSignal | undefined,
@@ -210,7 +210,7 @@ async function fetchActivity(
 }
 
 export function useReaderActivity(
-  explicitClient?: IdentityBoundReaderClient,
+  explicitClient?: ReaderAmbientClientPort,
   fallbackLinks: LinkResponse[] = [],
   options: ReaderActivityOptions = {},
 ): ReaderActivityState {
@@ -227,11 +227,11 @@ export function useReaderActivity(
   const {
     canFetch,
     resource,
-  } = useFinalIdentityCachedResource<CachedReaderActivity>(
+  } = useFinalIdentityCachedResource<CachedReaderActivity, ReaderAmbientClientPort>(
     client,
     cacheKey,
     ({ client, signal }) => fetchActivity(
-      client as IdentityBoundReaderClient,
+      client,
       kind,
       allPages,
       signal,

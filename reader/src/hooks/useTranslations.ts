@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import type { ReaderClient } from '../lib/api/client'
 import type {
   TranslationCreateRequest,
   TranslationListResponse,
   TranslationResponse,
 } from '../lib/api/types'
+import type { ReaderLibrarySitesPort } from '../lib/reader-api-ports'
 import { err, type ApiError, type ApiResult } from '@webtag/api'
 import { translationsKey } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
@@ -143,6 +143,11 @@ export type TranslationCommandRequest = Omit<
   'expected_content_revision' | 'expected_source_hash'
 >
 
+type TranslationsClient = Pick<
+  ReaderLibrarySitesPort,
+  'getTranslations' | 'createTranslation' | 'isIdentityCurrent'
+>
+
 function buildTranslationRequest(
   command: TranslationCommandRequest,
   identity: TranslationSourceIdentity | undefined,
@@ -186,7 +191,7 @@ function buildTranslationRequest(
  * 轮询在数据未变时也不再产生任何重渲染（store 只在内容真的变了才通知）。
  */
 export function useTranslations(
-  client: ReaderClient,
+  client: TranslationsClient,
   linkId: string | null | undefined,
   sourceIdentity?: TranslationSourceIdentity,
 ): UseTranslationsResult {

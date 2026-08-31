@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ApiError, ApiResult } from '@webtag/api'
 import type { LinkResponse } from '../lib/api/types'
 import { isLinkResponse } from '../lib/api/guards'
+import type { ReaderIdentityPort, ReaderLibrarySitesPort } from '../lib/reader-api-ports'
 import {
   AnnotationDocumentChannel,
   type AnnotationChangeHint,
@@ -73,6 +73,8 @@ interface AnnotatedIndexSnapshot {
   readonly versionByLinkId: ReadonlyMap<string, number>
 }
 
+type AnnotatedLinksClient = ReaderIdentityPort & Pick<ReaderLibrarySitesPort, 'getLink'>
+
 function sortByCreatedDesc(links: readonly LinkResponse[]): readonly LinkResponse[] {
   return [...links].sort((left, right) =>
     left.created_at < right.created_at ? 1 : left.created_at > right.created_at ? -1 : 0)
@@ -140,7 +142,7 @@ function useAnnotationVersionHighWater(identityKey: string | null): Map<string, 
 }
 
 export function useAnnotatedLinks(
-  client: IdentityBoundReaderClient,
+  client: AnnotatedLinksClient,
   enabled = true,
 ): AnnotatedLinksState {
   const lease = client.identityLease
@@ -447,7 +449,7 @@ export function useAnnotatedLinks(
 }
 
 export function useAnnotatedLinkCount(
-  client: IdentityBoundReaderClient,
+  client: AnnotatedLinksClient,
 ): number | undefined {
   const annotated = useAnnotatedLinks(client)
   if (annotated.loading || annotated.error) return undefined

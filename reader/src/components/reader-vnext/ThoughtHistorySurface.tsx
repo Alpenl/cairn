@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderThoughtResponse, ReaderTodoResponse } from '../../lib/api/types'
 import type { IdentityLease } from '../../lib/identity'
+import type { ReaderInboxTodosPort, ReaderThoughtsNotesPort } from '../../lib/reader-api-ports'
 import {
   readerRouteIsAvailable,
   type ReaderCapabilityLease,
@@ -228,11 +228,13 @@ function mergeThoughts(
 type ThoughtRequestChannel = 'list' | 'focused'
 
 export interface ThoughtHistorySurfaceProps {
-  readonly client: IdentityBoundReaderClient
+  readonly client: ThoughtHistoryClient
   readonly lease: IdentityLease
   readonly onNavigate: ReaderNavigationRequest
   readonly capabilityLease: ReaderCapabilityLease
 }
+
+type ThoughtHistoryClient = ReaderThoughtsNotesPort & Pick<ReaderInboxTodosPort, 'listTodos'>
 
 export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLease }: ThoughtHistorySurfaceProps) {
   const capabilityPolicy = capabilityLease.policy
@@ -279,7 +281,7 @@ export function ThoughtHistorySurface({ client, lease, onNavigate, capabilityLea
   const deleteButtonRefs = useRef(new Map<string, HTMLButtonElement>())
   // 闸门只记得「有没有更新的请求」，不记得请求的是什么。补齐读取还需要一个
   // 「同一 client + 同一 thoughtID 就不要再发一次」的去重键，由这个 ref 单独持有。
-  const focusedTargetRef = useRef<{ readonly client: IdentityBoundReaderClient; readonly thoughtID: string } | null>(null)
+  const focusedTargetRef = useRef<{ readonly client: ThoughtHistoryClient; readonly thoughtID: string } | null>(null)
   const focusedThoughtIDRef = useRef(focusedThoughtID)
 
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReaderClient } from '../lib/api/client'
 import type { ApiError } from '@webtag/api'
 import type { FeedItem, ListFeedItemsParams, PaginatedFeedItemsResponse } from '../lib/api/types'
+import type { ReaderSubscriptionsFeedPort } from '../lib/reader-api-ports'
 import { feedItemsCacheKey } from '../lib/cache/keys'
 import { useFinalIdentityCachedResource } from './useIdentityCachedResource'
 import { useIdentityBoundOperationGate } from './identityBoundOperation'
@@ -12,6 +12,11 @@ const PAGE_SIZE = 30
 export { FEED_ITEMS_CACHE_PREFIX } from '../lib/cache/keys'
 
 const NO_ITEMS: FeedItem[] = []
+
+type FeedItemsClient = Pick<
+  ReaderSubscriptionsFeedPort,
+  'identityLease' | 'isIdentityCurrent' | 'captureIdentity' | 'getFeedItems'
+>
 
 function mergeUnique(current: FeedItem[], incoming: FeedItem[]): FeedItem[] {
   const byID = new Map(current.map((item) => [item.id, item]))
@@ -25,7 +30,7 @@ function mergeUnique(current: FeedItem[], incoming: FeedItem[]): FeedItem[] {
  * PF3 起第 1 页走共享缓存（切走再切回来不重拉、60 秒轮询在数据未变时零重渲染）；
  * 第 2 页起仍是本地累积——一次性追加动作，缓存它只会让键随页码膨胀。
  */
-export function useFeedItems(client: ReaderClient, filters: ListFeedItemsParams) {
+export function useFeedItems(client: FeedItemsClient, filters: ListFeedItemsParams) {
   const stableFilters = useMemo<ListFeedItemsParams>(
     () => ({
       view: filters.view,
@@ -41,7 +46,7 @@ export function useFeedItems(client: ReaderClient, filters: ListFeedItemsParams)
   const {
     canFetch,
     resource: first,
-  } = useFinalIdentityCachedResource<PaginatedFeedItemsResponse>(
+  } = useFinalIdentityCachedResource<PaginatedFeedItemsResponse, FeedItemsClient>(
     client,
     key,
     ({ client, signal }) => client.getFeedItems({ ...stableFilters, page: 1 }, { signal }),

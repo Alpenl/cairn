@@ -1,10 +1,10 @@
-import type { IdentityBoundReaderClient } from '../api/client'
 import { isReaderThoughtSupersessionEventsResponse } from '../api/guards'
 import type {
   ReaderThoughtSupersessionEventResponse,
   ReaderThoughtSupersessionOperationResponse,
 } from '../api/types'
 import type { IdentityLease } from '../identity'
+import type { ReaderThoughtsNotesPort } from '../reader-api-ports'
 import { isRecord } from '../records'
 import {
   annotationTargetKey,
@@ -347,7 +347,7 @@ async function writePage(
 
 async function performSync(
   lease: IdentityLease,
-  client: IdentityBoundReaderClient,
+  client: ReaderThoughtsNotesPort,
 ): Promise<ThoughtSupersessionSyncResult> {
   const initial = await readState(lease)
   if (!initial.ok) return { status: 'stale', pulled: 0, cursor: '' }
@@ -357,7 +357,7 @@ async function performSync(
   for (let page = 0; page < MAX_PULL_PAGES; page += 1) {
     const operation = lease.capture(`pull thought supersession page ${page}`)
     if (!lease.isCurrent(operation)) return { status: 'stale', pulled, cursor }
-    let response: Awaited<ReturnType<IdentityBoundReaderClient['listThoughtSupersessions']>>
+    let response: Awaited<ReturnType<ReaderThoughtsNotesPort['listThoughtSupersessions']>>
     try {
       response = await client.listThoughtSupersessions(
         { after: cursor, limit: MAX_BATCH },
@@ -420,7 +420,7 @@ async function performSync(
 /** Pull the immutable supersession stream using its own identity-scoped cursor. */
 export function syncThoughtSupersessions(
   lease: IdentityLease,
-  client: IdentityBoundReaderClient,
+  client: ReaderThoughtsNotesPort,
 ): Promise<ThoughtSupersessionSyncResult> {
   const current = inFlight.get(lease)
   if (current) return current

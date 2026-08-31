@@ -27,7 +27,6 @@ import {
   patchItemState,
 } from '../lib/feed'
 import { ok, type ApiResult } from '@webtag/api'
-import type { ReaderClient } from '../lib/api/client'
 import type {
   FeedFolder,
   FeedItem,
@@ -36,9 +35,10 @@ import type {
 } from '../lib/api/types'
 import type { IdentityOwnership } from '../lib/identity'
 import type { ReaderCapabilityPolicy } from '../lib/capabilities'
+import type { ReaderSubscriptionsFeedPort } from '../lib/reader-api-ports'
 
 export interface SubsViewProps {
-  client: ReaderClient
+  client: SubsViewClient
   navigationOpen: boolean
   onCloseNavigation: () => void
   onView: (view: LibraryView) => void
@@ -51,6 +51,30 @@ export interface SubsViewProps {
   syncRequest?: number
   capabilityPolicy: ReaderCapabilityPolicy
 }
+
+type SubsViewClient = Pick<
+  ReaderSubscriptionsFeedPort,
+  | 'getSubscriptions'
+  | 'getFeedItems'
+  | 'getFeedItem'
+  | 'updateFeedItem'
+  | 'markFeedItemsRead'
+  | 'analyzeFeedItem'
+  | 'discoverFeeds'
+  | 'createSubscription'
+  | 'updateSubscription'
+  | 'deleteSubscription'
+  | 'refreshSubscription'
+  | 'refreshSubscriptions'
+  | 'createFeedFolder'
+  | 'updateFeedFolder'
+  | 'deleteFeedFolder'
+  | 'exportSubscriptionsOPML'
+  | 'importSubscriptionsOPML'
+  | 'identityLease'
+  | 'isIdentityCurrent'
+  | 'captureIdentity'
+>
 
 interface SubscriptionBatchResult {
   succeeded: FeedSubscription[]

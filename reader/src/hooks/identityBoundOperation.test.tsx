@@ -1,16 +1,16 @@
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { ReaderClient } from '../lib/api/client'
 import type { IdentityLease } from '../lib/identity'
 import { readerIdentity } from '../lib/identity'
 import { resourceStore } from '../lib/cache/store'
+import type { ReaderIdentityPort } from '../lib/reader-api-ports'
 import { useIdentityBoundOperationGate } from './identityBoundOperation'
 import { useIdentityPolling } from './useIdentityPolling'
 
 function clientFor(
   lease: IdentityLease,
   current: () => boolean = () => true,
-): ReaderClient {
+): ReaderIdentityPort {
   return {
     identityLease: lease,
     isIdentityCurrent: vi.fn(() => current()),
@@ -19,7 +19,7 @@ function clientFor(
       const ownership = lease.captureOwnership(logicalKey)
       return lease.isOwnershipCurrent(ownership) ? ownership : null
     }),
-  } as unknown as ReaderClient
+  }
 }
 
 describe('identity-bound operation gate', () => {

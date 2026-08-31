@@ -1,8 +1,8 @@
 import { useCallback, useMemo } from 'react'
 import type { ApiError, ApiResult } from '@webtag/api'
-import type { ReaderClient } from '../lib/api/client'
 import { resourceStore } from '../lib/cache/store'
 import type { IdentityLease, IdentityOwnership } from '../lib/identity'
+import type { ReaderIdentityPort } from '../lib/reader-api-ports'
 import {
   useSurfaceRequestGate,
   type SurfaceRequestToken,
@@ -35,7 +35,7 @@ export interface IdentityBoundOperationGate<Channel extends PropertyKey> {
   readonly finish: (token: IdentityBoundOperationToken<Channel>, release: () => void) => boolean
 }
 
-type IdentityCapableReaderClient = ReaderClient & {
+type IdentityCapableReaderClient = ReaderIdentityPort & {
   readonly identityLease?: IdentityLease | null
   readonly isIdentityCurrent?: () => boolean
   readonly captureIdentity?: (logicalKey: string) => IdentityOwnership | null
@@ -48,7 +48,7 @@ export function readerIdentityMismatch<T>(): ApiResult<T> {
   }
 }
 
-function readIdentityLease(client: ReaderClient | null): IdentityLease | null {
+function readIdentityLease(client: ReaderIdentityPort | null): IdentityLease | null {
   if (!client) return null
   try {
     return (client as IdentityCapableReaderClient).identityLease ?? null
@@ -57,7 +57,7 @@ function readIdentityLease(client: ReaderClient | null): IdentityLease | null {
   }
 }
 
-function clientStillCurrent(client: ReaderClient): boolean {
+function clientStillCurrent(client: ReaderIdentityPort): boolean {
   try {
     const current = (client as IdentityCapableReaderClient).isIdentityCurrent
     return typeof current === 'function' ? current.call(client) : false
@@ -81,7 +81,7 @@ export function isActiveReaderOwnership(
 }
 
 export function captureActiveReaderOwnership(
-  client: ReaderClient | null,
+  client: ReaderIdentityPort | null,
   logicalKey: string,
 ): IdentityOwnership | null {
   if (!client) return null
@@ -101,7 +101,7 @@ export function captureActiveReaderOwnership(
   }
 }
 
-function identityOwnerParts(client: ReaderClient | null): readonly unknown[] {
+function identityOwnerParts(client: ReaderIdentityPort | null): readonly unknown[] {
   const lease = readIdentityLease(client)
   const context = lease?.context
   return [
@@ -114,7 +114,7 @@ function identityOwnerParts(client: ReaderClient | null): readonly unknown[] {
 }
 
 export function useIdentityBoundOperationGate<Channel extends PropertyKey>(
-  client: ReaderClient | null,
+  client: ReaderIdentityPort | null,
   owner: readonly unknown[] = [],
 ): IdentityBoundOperationGate<Channel> {
   const gate = useSurfaceRequestGate<Channel>({

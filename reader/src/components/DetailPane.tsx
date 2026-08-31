@@ -37,7 +37,7 @@ import { readingMinutes } from '../lib/reading-time'
 import { annotationLocator, annotationMatchesLocator, getSelectionInfo, isContentAnchored, NO_ANNOTATIONS, type Annotation, type AnnotationInput, type AnnotationLocator, type SelectionInfo } from '../lib/annotations'
 import { useReadingSurface } from '../hooks/useReadingSurface'
 import { useReaderRelatedTags } from '../hooks/useReaderRelatedTags'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
+import type { ReaderAmbientClientPort } from '../lib/reader-api-ports'
 import {
   READING_LINE_HEIGHTS,
   READING_LINE_HEIGHT_LABELS,
@@ -314,7 +314,7 @@ export interface DetailPaneProps {
   /** 相关标签语料（已加载链接集合）。 */
   corpus: LinkResponse[]
   /** Optional explicit client; the mounted Reader supplies the active one through the client hook. */
-  readerClient?: IdentityBoundReaderClient
+  readerClient?: ReaderAmbientClientPort
   annotationsEnabled: boolean
   aiEnabled: boolean
   relatedTagsEnabled: boolean

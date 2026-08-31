@@ -17,9 +17,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon, type IconName } from './Icon'
 import { ChatMsg } from './ChatMsg'
 import { aiAvailable, askAI, UNAVAILABLE_REPLY, type ChatMessage } from '../lib/ai'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { LinkResponse } from '../lib/api/types'
 import type { AnnotationLocator } from '../lib/annotations'
+import type { ReaderAIPort } from '../lib/reader-api-ports'
 import {
   buildSelectionAIRequest,
   selectionAISourceKey,
@@ -30,7 +30,7 @@ import {
 export type ChatDraft = SelectionAIDraft
 
 export interface ChatSidebarProps {
-  client: IdentityBoundReaderClient
+  client: ReaderAIPort
   link: LinkResponse | null | undefined
   /** 保留给旧宿主调用方的上下文参数；Reader API 会按 link_id 读取权威正文。 */
   contentContext?: string | null

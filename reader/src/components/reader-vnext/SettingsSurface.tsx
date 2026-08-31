@@ -7,7 +7,6 @@ import {
 } from '../../lib/navigation/route'
 import { Icon } from '../Icon'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import {
   coreBuildIdentity,
   formatBuildTime,
@@ -17,6 +16,7 @@ import {
   type CoreBuildIdentity,
   type CoreReleaseLookup,
 } from '../../lib/core-version'
+import type { ReaderHealthPort } from '../../lib/reader-api-ports'
 import { CoreUpdatePanel } from './CoreUpdatePanel'
 import { SurfaceShell } from './SurfaceShell'
 
@@ -24,7 +24,7 @@ export interface SettingsSurfaceProps {
   readonly onNavigate: ReaderNavigationRequest
   readonly onOpenConnectionSettings: () => void
   readonly capabilityPolicy: ReaderCapabilityPolicy
-  readonly client: IdentityBoundReaderClient
+  readonly client: ReaderHealthPort
 }
 
 const STARTUP_PREFERENCES: ReadonlyArray<{
@@ -56,7 +56,7 @@ type ReleaseState =
  * 精确对应的那条 Release。这里既没有升级动作，也没有任何凭证输入——
  * 无论 GitHub 是否可达，当前版本的展示都不受影响。
  */
-function AboutCore({ client }: { readonly client: IdentityBoundReaderClient }) {
+function AboutCore({ client }: { readonly client: ReaderHealthPort }) {
   const [identityState, setIdentityState] = useState<CoreIdentityState>({ kind: 'loading' })
   const [release, setRelease] = useState<ReleaseState>({ kind: 'idle' })
   const [retryToken, setRetryToken] = useState(0)

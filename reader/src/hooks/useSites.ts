@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import { err, type ApiError } from '@webtag/api'
 import type { ListSitesParams, PaginatedSitesResponse, SiteListItemResponse } from '../lib/api/types'
+import type { ReaderIdentityPort, ReaderLibrarySitesPort } from '../lib/reader-api-ports'
 import {
   SITES_CACHE_PREFIX,
   sitesCacheKey,
@@ -22,6 +22,8 @@ const CAPABILITY_REVOKED_ERROR: ApiError = Object.freeze({
 const clientIDs = new WeakMap<object, number>()
 let nextClientID = 1
 
+type SitesClient = ReaderIdentityPort & Pick<ReaderLibrarySitesPort, 'getSites'>
+
 interface SitesPaginationState {
   streamKey: string
   extraPages: SiteListItemResponse[]
@@ -35,7 +37,7 @@ interface PageRequest {
   epoch: number
 }
 
-function clientKey(client: IdentityBoundReaderClient): number {
+function clientKey(client: SitesClient): number {
   const object = client as object
   const known = clientIDs.get(object)
   if (known !== undefined) return known
@@ -88,7 +90,7 @@ function emptyPagination(streamKey: string): SitesPaginationState {
  * the filter or identity changes.
  */
 export function useSites(
-  client: IdentityBoundReaderClient,
+  client: SitesClient,
   capabilityLease: ReaderCapabilityLease,
   params: ListSitesParams = {},
 ) {
@@ -107,7 +109,7 @@ export function useSites(
     resource: first,
     cacheKey,
     canFetch,
-  } = useIdentityCachedResource<PaginatedSitesResponse>(
+  } = useIdentityCachedResource<PaginatedSitesResponse, SitesClient>(
     client,
     pageOneKey,
     async ({ client }) => {

@@ -5,16 +5,16 @@ import { ReaderDialog } from './ui/ReaderDialog'
 import { useSites } from '../hooks/useSites'
 import { invalidateLibrary, invalidateLink } from '../lib/cache/invalidate'
 import type { ReaderRoute } from '../lib/navigation/route'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
 import type { SiteDetailResponse, SiteEntryResponse, SiteListItemResponse, SiteMergePreviewResponse, SiteSplitPreviewResponse, SiteSplitRequest, SiteUpdateRequest } from '../lib/api/types'
+import type { ReaderLibrarySitesPort } from '../lib/reader-api-ports'
 
 type SiteView = 'all' | 'pinned' | 'recent'
 const labels: Record<SiteView, string> = { all: '全部网站', pinned: '已置顶', recent: '最近收藏' }
 type SiteSplitOutcome = 'success' | 'conflict' | 'error'
 
 interface SitesViewProps {
-	client: IdentityBoundReaderClient
+	client: SitesViewClient
 	onToast: (message: string, icon?: import('./Icon').IconName) => void
 	initialSiteId?: string
 	collapsed: boolean
@@ -24,6 +24,26 @@ interface SitesViewProps {
 	onCloseNavigation: () => void
 	capabilityLease: ReaderCapabilityLease
 }
+
+type SitesViewClient = Pick<
+	ReaderLibrarySitesPort,
+	| 'getSites'
+	| 'getSite'
+	| 'updateSite'
+	| 'updateSiteEntry'
+	| 'setPrimarySiteEntry'
+	| 'deleteSiteEntry'
+	| 'deleteSite'
+	| 'previewSiteMerge'
+	| 'executeSiteMerge'
+	| 'previewSiteSplit'
+	| 'executeSiteSplit'
+	| 'getLink'
+	| 'convertLink'
+	| 'identityLease'
+	| 'isIdentityCurrent'
+	| 'captureIdentity'
+>
 
 export function SitesView({ client, onToast, initialSiteId, collapsed, onView, onNavigate, navigationOpen, onCloseNavigation, capabilityLease }: SitesViewProps) {
 	const policy = capabilityLease.policy
@@ -86,7 +106,7 @@ export function SitesView({ client, onToast, initialSiteId, collapsed, onView, o
 			setMobileDetail(true)
 		})()
 	}, [capabilityLease, client, initialSiteId, onToast])
-		const apply = async (request: ReturnType<IdentityBoundReaderClient['updateSite']>) => {
+		const apply = async (request: ReturnType<SitesViewClient['updateSite']>) => {
 			const result = await request
 			if (!canWrite()) return false
 			if (!result.ok) { onToast(result.error.errorCode === 'site_revision_conflict' ? '网站已在其他窗口修改，请重新打开' : `保存失败：${result.error.message}`, 'alert'); return false }
@@ -162,7 +182,7 @@ export function SitesView({ client, onToast, initialSiteId, collapsed, onView, o
 			if (!result.ok) { onToast(`删除网站失败：${result.error.message}`, 'alert'); return }
 		setActive(null); void sites.reload(); onToast('网站已删除', 'trash')
 	}
-		const mergeSite = async (request: Parameters<IdentityBoundReaderClient['executeSiteMerge']>[0]) => {
+		const mergeSite = async (request: Parameters<SitesViewClient['executeSiteMerge']>[0]) => {
 			if (!canManage()) return false
 			const result = await client.executeSiteMerge(request)
 			if (!canManage()) return false
@@ -172,7 +192,7 @@ export function SitesView({ client, onToast, initialSiteId, collapsed, onView, o
 		if (refreshed.ok) setActive(refreshed.data)
 		setMergingSite(null); void sites.reload(); onToast(`已合并 ${result.data.moved_entries} 个入口`, 'check'); return true
 	}
-		const splitSite = async (siteID: string, request: Parameters<IdentityBoundReaderClient['executeSiteSplit']>[1]) => {
+		const splitSite = async (siteID: string, request: Parameters<SitesViewClient['executeSiteSplit']>[1]) => {
 			if (!canManage()) return 'error' as const
 			const result = await client.executeSiteSplit(siteID, request)
 			if (!canManage()) return 'error' as const
@@ -246,7 +266,7 @@ function SiteDetail({ site, loading, canWrite, canManage, onBack, onPin, onEdit,
 
 function RelatedReadings({ items }: { items: SiteDetailResponse['related_readings'] }) { const [open, setOpen] = useState(false); if (!items.length) return null; return <section className="related-readings"><button type="button" onClick={() => setOpen((current) => !current)}>{open ? '收起相关阅读' : `相关阅读 (${items.length})`}</button>{open && <ul>{items.map((item) => <li key={item.id}><a href={`?view=reading&link_id=${encodeURIComponent(item.id)}`}>{item.title}</a></li>)}</ul>}</section> }
 
-function SiteMergeDialog({ client, capabilityLease, target, onClose, onMerge, onToast }: { client: IdentityBoundReaderClient; capabilityLease: ReaderCapabilityLease; target: SiteDetailResponse; onClose: () => void; onMerge: (request: Parameters<IdentityBoundReaderClient['executeSiteMerge']>[0]) => Promise<boolean>; onToast: (message: string, icon?: import('./Icon').IconName) => void }) {
+function SiteMergeDialog({ client, capabilityLease, target, onClose, onMerge, onToast }: { client: SitesViewClient; capabilityLease: ReaderCapabilityLease; target: SiteDetailResponse; onClose: () => void; onMerge: (request: Parameters<SitesViewClient['executeSiteMerge']>[0]) => Promise<boolean>; onToast: (message: string, icon?: import('./Icon').IconName) => void }) {
 	const candidatesPage = useSites(client, capabilityLease, { view: 'all' })
 	const candidates = useMemo(() => candidatesPage.items.filter((item) => item.id !== target.id), [candidatesPage.items, target.id])
 	const [selected, setSelected] = useState<string[]>([])
@@ -261,7 +281,7 @@ function SiteMergeDialog({ client, capabilityLease, target, onClose, onMerge, on
 	return <ReaderDialog title={`合并到 ${target.name}`} titleId="site-merge-title" busy={busy} dismissOnEscape={false} onClose={onClose}>{!preview ? <><p>选择要并入当前网站的来源。重复 URL 的来源收藏会被删除，其余入口、标签和站点身份会迁移。</p>{candidatesPage.loading && candidates.length === 0 ? <div className="sites-empty">正在加载可合并网站</div> : candidatesPage.error && candidates.length === 0 ? <div className="sites-page-error">加载可合并网站失败：{candidatesPage.error.message}<button type="button" onClick={() => void candidatesPage.reload()}>重试</button></div> : <><ul className="site-selection-list">{candidates.map((site) => <li key={site.id}><label><input type="checkbox" checked={selected.includes(site.id)} onChange={() => toggle(site.id)} /> <strong>{site.name}</strong><small>{site.entry_count} 个入口 · {site.display_host}</small></label></li>)}</ul>{candidatesPage.pageError && <div className="sites-page-error" role="alert">加载更多可合并网站失败：{candidatesPage.pageError.message}<button type="button" onClick={() => void candidatesPage.loadMore()}>重试加载更多可合并网站</button></div>}{candidatesPage.hasMore && <button type="button" className="rvx-load-more sites-load-more" onClick={() => void candidatesPage.loadMore()} disabled={candidatesPage.loadingMore}>{candidatesPage.loadingMore ? '正在加载更多可合并网站' : '加载更多可合并网站'}</button>}</>}</> : <><p>将迁移 {preview.entries.filter((entry) => !entry.duplicate).length} 个入口，删除 {preview.entries.filter((entry) => entry.duplicate).length} 个重复收藏。</p>{preview.field_conflicts.map((conflict) => { const key = `${conflict.field}:${conflict.source_site_id}`; return <label key={key}>{conflict.field}<select value={choices[key] ?? 'target'} onChange={(event) => setChoices((current) => ({ ...current, [key]: event.target.value as 'target' | 'source' }))}><option value="target">保留当前值：{conflict.target_value}</option><option value="source">采用来源值：{conflict.source_value}</option></select></label> })}</>}<footer><button type="button" onClick={onClose} disabled={busy}>取消</button>{preview ? <button type="button" onClick={() => void execute()} disabled={busy}>{busy ? '合并中' : '确认合并'}</button> : <button type="button" onClick={() => void loadPreview()} disabled={busy || !selected.length}>{busy ? '加载中' : '预览合并'}</button>}</footer></ReaderDialog>
 }
 
-function SiteSplitDialog({ client, capabilityLease, site, onClose, onSplit, onToast }: { client: IdentityBoundReaderClient; capabilityLease: ReaderCapabilityLease; site: SiteDetailResponse; onClose: () => void; onSplit: (siteID: string, request: SiteSplitRequest) => Promise<SiteSplitOutcome>; onToast: (message: string, icon?: import('./Icon').IconName) => void }) {
+function SiteSplitDialog({ client, capabilityLease, site, onClose, onSplit, onToast }: { client: SitesViewClient; capabilityLease: ReaderCapabilityLease; site: SiteDetailResponse; onClose: () => void; onSplit: (siteID: string, request: SiteSplitRequest) => Promise<SiteSplitOutcome>; onToast: (message: string, icon?: import('./Icon').IconName) => void }) {
 	const [selected, setSelected] = useState<string[]>([])
 	const [name, setName] = useState('')
 	const [intro, setIntro] = useState('')

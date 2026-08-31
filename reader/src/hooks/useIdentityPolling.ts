@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { ReaderClient } from '../lib/api/client'
+import type { ReaderIdentityPort } from '../lib/reader-api-ports'
 import { useIdentityBoundOperationGate } from './identityBoundOperation'
 
 interface IdentityPollingOptions {
@@ -13,7 +13,7 @@ interface IdentityPollingOptions {
 }
 
 export function useIdentityPolling(
-  client: ReaderClient | null,
+  client: ReaderIdentityPort | null,
   options: IdentityPollingOptions,
 ): void {
   const {

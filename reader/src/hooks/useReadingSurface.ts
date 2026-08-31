@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore, type RefObject } from 'react'
 import { useReaderToc, type ReaderTocState } from './useReaderToc'
 import { useReadingProgress, type ReadingProgressState } from './useReadingProgress'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
+import type { ReaderAmbientClientPort } from '../lib/reader-api-ports'
 import {
   DEFAULT_READING_PREFERENCE,
   capabilitySet,
@@ -29,7 +29,7 @@ export interface UseReadingSurfaceOptions {
   readonly progressSourceKey?: string
   /** Persist progress/read state for a saved Reader link when present. */
   readonly engagementLinkID?: string
-  readonly readerClient?: IdentityBoundReaderClient
+  readonly readerClient?: ReaderAmbientClientPort
 }
 
 export interface ReadingSurfaceState {

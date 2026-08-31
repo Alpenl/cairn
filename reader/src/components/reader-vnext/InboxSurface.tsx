@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
 import type {
 	ReaderInboxBulkResponse,
@@ -8,6 +7,7 @@ import type {
   ReaderInboxPartition,
   ReaderInboxResponse,
 } from '../../lib/api/types'
+import type { ReaderInboxTodosPort } from '../../lib/reader-api-ports'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import type { TocHeading } from '../../lib/toc'
 import { useReaderToc } from '../../hooks/useReaderToc'
@@ -26,7 +26,7 @@ import { refreshPendingInboxCount } from './PendingInboxCount'
 import { inboxSourceIcon } from './inbox-source-icons'
 
 export interface InboxSurfaceProps {
-  readonly client: IdentityBoundReaderClient
+  readonly client: ReaderInboxTodosPort
   readonly onNavigate: (route: ReaderRoute) => void
   readonly onOpenLink: (id: string) => void
   readonly capabilityPolicy: ReaderCapabilityPolicy

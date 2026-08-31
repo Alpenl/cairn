@@ -12,7 +12,6 @@ import { FoldGroup, SbRow } from './SidebarRows'
 import type { Selection } from '../hooks/useLinks'
 import type { DomainStat, TagStat } from '../lib/stats'
 import type { Pins, PinKind } from '../lib/meta'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import {
   compareReaderActivityKeyAsc,
   compareReaderActivityLastAtDesc,
@@ -20,6 +19,7 @@ import {
 } from '../hooks/useReaderActivity'
 import type { ReaderCapabilityPolicy } from '../lib/capabilities'
 import type { ReaderRoute } from '../lib/navigation/route'
+import type { ReaderAmbientClientPort } from '../lib/reader-api-ports'
 
 export interface SidebarProps {
   sel: Selection
@@ -39,7 +39,7 @@ export interface SidebarProps {
   /** 仅包含后端可证明为全库值的计数。 */
   counts: { all?: number; annotated?: number }
   /** Optional explicit client for isolated surfaces; production passes the active Reader client. */
-  readerClient?: IdentityBoundReaderClient
+  readerClient?: ReaderAmbientClientPort
   /** Canonical route owner shared with the vNext surface rail. */
   onNavigate?: (route: ReaderRoute) => void
   capabilityPolicy: ReaderCapabilityPolicy

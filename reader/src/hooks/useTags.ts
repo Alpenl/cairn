@@ -5,9 +5,9 @@
  * PF3 起走共享缓存：切走再切回来不重拉，同键并发合并为一次往返。
  */
 import { useCallback, useMemo } from 'react'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ApiError, ApiResult } from '@webtag/api'
 import type { TagCountResponse } from '../lib/api/types'
+import type { ReaderIdentityPort, ReaderLibrarySitesPort } from '../lib/reader-api-ports'
 import { TAGS_CACHE_KEY } from '../lib/cache/keys'
 import { useCachedResource } from '../lib/cache/useCachedResource'
 import { reloadForActiveIdentity, type LibraryReloadOptions } from './libraryReload'
@@ -24,7 +24,9 @@ export {
   TAGS_CACHE_PREFIX,
 } from '../lib/cache/keys'
 
-export function useTags(client: IdentityBoundReaderClient): TagsState {
+type TagsClient = ReaderIdentityPort & Pick<ReaderLibrarySitesPort, 'getTags'>
+
+export function useTags(client: TagsClient): TagsState {
   const resource = useCachedResource<TagCountResponse[]>(TAGS_CACHE_KEY, (conditional) =>
     client.getTags('reading', conditional),
   )

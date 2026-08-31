@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderCapabilityFeature, ReaderCapabilityLease } from '../../lib/capabilities'
 import { isReaderFeedItemResponse } from '../../lib/api/guards'
 import type { ReaderFeedItemResponse, ReaderTodoResponse } from '../../lib/api/types'
+import type {
+  ReaderIdentityPort,
+  ReaderInboxTodosPort,
+  ReaderLibrarySitesPort,
+  ReaderSubscriptionsFeedPort,
+} from '../../lib/reader-api-ports'
 import type { ReaderRoute } from '../../lib/navigation/route'
 import { feedScrollAnchorKey } from '../../lib/feed-scroll-anchor'
 import { useFeedScrollAnchor } from '../../hooks/useFeedScrollAnchor'
@@ -22,7 +27,7 @@ import { ListEmptyState, ListStateView } from './ListStateView'
 import { SurfaceShell } from './SurfaceShell'
 
 export interface FeedSurfaceProps {
-  readonly client: IdentityBoundReaderClient
+  readonly client: FeedSurfaceClient
   readonly onNavigate: (route: ReaderRoute) => void
   readonly onOpenLink: (id: string) => void
   readonly capabilityLease: ReaderCapabilityLease
@@ -38,6 +43,10 @@ export interface FeedSurfaceProps {
 type FeedMode = 'recommended' | 'chronological'
 type FeedFeedbackAction = 'save' | 'unsave' | 'hide'
 type FeedSource = 'inbox' | 'reading' | 'subscription'
+type FeedSurfaceClient = ReaderIdentityPort &
+  Pick<ReaderSubscriptionsFeedPort, 'getReaderFeed' | 'sendReaderFeedFeedback' | 'updateFeedItem'> &
+  Pick<ReaderInboxTodosPort, 'listTodos' | 'confirmInbox' | 'discardInbox' | 'confirmAIProposals'> &
+  Pick<ReaderLibrarySitesPort, 'patchEngagement'>
 /** 两条互相独立的请求线：Feed 与右栏 TODO，各自按代次判断迟到回包。 */
 type FeedRequestChannel = 'feed' | 'todos'
 type FeedRequestToken = SurfaceRequestToken<FeedRequestChannel>
@@ -64,7 +73,7 @@ const FEED_PAGE_SIZE = 30
 const FEED_RESUME_STORAGE_PREFIX = 'webtag:reader:mixed-feed:v1'
 
 // eslint-disable-next-line react-refresh/only-export-components
-export function clearFeedSessionState(client: IdentityBoundReaderClient): void {
+export function clearFeedSessionState(client: ReaderIdentityPort): void {
   const namespace = identityNamespace(client)
   if (!namespace || typeof window === 'undefined') return
   const prefix = `${FEED_RESUME_STORAGE_PREFIX}:${encodeURIComponent(namespace)}:`
@@ -93,14 +102,14 @@ function normalizeSourceFilter(values: Iterable<FeedSource>): FeedSource[] {
     .filter((source) => selected.has(source))
 }
 
-function sourceFilterStorageKey(client: IdentityBoundReaderClient): string | null {
+function sourceFilterStorageKey(client: ReaderIdentityPort): string | null {
   const namespace = identityNamespace(client)
   return namespace
     ? `${FEED_RESUME_STORAGE_PREFIX}:${encodeURIComponent(namespace)}:sources`
     : null
 }
 
-function readStoredSources(client: IdentityBoundReaderClient): Set<FeedSource> {
+function readStoredSources(client: ReaderIdentityPort): Set<FeedSource> {
   const key = sourceFilterStorageKey(client)
   if (!key || typeof window === 'undefined') return new Set(FEED_SOURCES.map((source) => source.id))
   try {
@@ -114,7 +123,7 @@ function readStoredSources(client: IdentityBoundReaderClient): Set<FeedSource> {
   }
 }
 
-function writeStoredSources(client: IdentityBoundReaderClient, sources: Iterable<FeedSource>): void {
+function writeStoredSources(client: ReaderIdentityPort, sources: Iterable<FeedSource>): void {
   const key = sourceFilterStorageKey(client)
   if (!key || typeof window === 'undefined') return
   try {
@@ -124,7 +133,7 @@ function writeStoredSources(client: IdentityBoundReaderClient, sources: Iterable
   }
 }
 
-function identityNamespace(client: IdentityBoundReaderClient): string | null {
+function identityNamespace(client: ReaderIdentityPort): string | null {
   try {
     const namespace = client.identityLease.context.physicalNamespace
     return typeof namespace === 'string' && namespace.length > 0 ? namespace : null
@@ -133,21 +142,21 @@ function identityNamespace(client: IdentityBoundReaderClient): string | null {
   }
 }
 
-function resumeStorageKey(client: IdentityBoundReaderClient, mode: FeedMode, sourceFilter: readonly FeedSource[]): string | null {
+function resumeStorageKey(client: ReaderIdentityPort, mode: FeedMode, sourceFilter: readonly FeedSource[]): string | null {
   const namespace = identityNamespace(client)
   return namespace
     ? `${FEED_RESUME_STORAGE_PREFIX}:${encodeURIComponent(namespace)}:${mode}:${sourceFilter.length > 0 ? sourceFilter.join(',') : 'none'}`
     : null
 }
 
-function modeStorageKey(client: IdentityBoundReaderClient): string | null {
+function modeStorageKey(client: ReaderIdentityPort): string | null {
   const namespace = identityNamespace(client)
   return namespace
     ? `${FEED_RESUME_STORAGE_PREFIX}:${encodeURIComponent(namespace)}:mode`
     : null
 }
 
-function readStoredMode(client: IdentityBoundReaderClient): FeedMode {
+function readStoredMode(client: ReaderIdentityPort): FeedMode {
   const key = modeStorageKey(client)
   if (!key || typeof window === 'undefined') return 'recommended'
   try {
@@ -158,7 +167,7 @@ function readStoredMode(client: IdentityBoundReaderClient): FeedMode {
   }
 }
 
-function writeStoredMode(client: IdentityBoundReaderClient, mode: FeedMode): void {
+function writeStoredMode(client: ReaderIdentityPort, mode: FeedMode): void {
   const key = modeStorageKey(client)
   if (!key || typeof window === 'undefined') return
   try {
@@ -168,7 +177,7 @@ function writeStoredMode(client: IdentityBoundReaderClient, mode: FeedMode): voi
   }
 }
 
-function readResume(client: IdentityBoundReaderClient, mode: FeedMode, sourceFilter: readonly FeedSource[]): FeedResumeState | null {
+function readResume(client: ReaderIdentityPort, mode: FeedMode, sourceFilter: readonly FeedSource[]): FeedResumeState | null {
   const key = resumeStorageKey(client, mode, sourceFilter)
   if (!key || typeof window === 'undefined') return null
   try {
@@ -190,7 +199,7 @@ function readResume(client: IdentityBoundReaderClient, mode: FeedMode, sourceFil
 }
 
 function writeResume(
-  client: IdentityBoundReaderClient,
+  client: ReaderIdentityPort,
   mode: FeedMode,
   sourceFilter: readonly FeedSource[],
   nextCursor: string | undefined,

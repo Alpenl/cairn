@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderCapabilityLease } from '../../lib/capabilities'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
+import type { ReaderInboxTodosPort } from '../../lib/reader-api-ports'
 
 const PendingInboxCountContext = createContext<number | null>(null)
 
@@ -11,7 +11,7 @@ export function refreshPendingInboxCount(): void {
 }
 
 async function readPendingCount(
-  client: IdentityBoundReaderClient,
+  client: Pick<ReaderInboxTodosPort, 'listInbox' | 'isIdentityCurrent'>,
   capabilityLease: ReaderCapabilityLease,
 ): Promise<number | null> {
   if (!client.isIdentityCurrent() || !capabilityLease.isCurrent('inbox')) return null
@@ -20,9 +20,11 @@ async function readPendingCount(
   return page.data.active_count
 }
 
-export function PendingInboxCountProvider({ client, capabilityLease, children }: { readonly client: IdentityBoundReaderClient; readonly capabilityLease: ReaderCapabilityLease; readonly children: ReactNode }) {
+type PendingInboxCountClient = Pick<ReaderInboxTodosPort, 'listInbox' | 'isIdentityCurrent'>
+
+export function PendingInboxCountProvider({ client, capabilityLease, children }: { readonly client: PendingInboxCountClient; readonly capabilityLease: ReaderCapabilityLease; readonly children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<{
-    readonly client: IdentityBoundReaderClient
+    readonly client: PendingInboxCountClient
     readonly count: number | null
   }>({ client, count: null })
 

@@ -1,12 +1,17 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { Icon } from './Icon'
 import { ReaderDialog } from './ui/ReaderDialog'
-import type { ReaderClient } from '../lib/api/client'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
 import type { ConversionPreviewResponse, LinkResponse } from '../lib/api/types'
+import type { ReaderLibrarySitesPort } from '../lib/reader-api-ports'
+
+type LinkConversionClient = Pick<
+  ReaderLibrarySitesPort,
+  'previewLinkConversion' | 'convertLink' | 'isIdentityCurrent'
+>
 
 export function LinkConversionDialog({ client, capabilityLease, link, initialNote, onClose, onConverted, onToast }: {
-  client: ReaderClient
+  client: LinkConversionClient
   capabilityLease: ReaderCapabilityLease
   link: LinkResponse
   initialNote: string

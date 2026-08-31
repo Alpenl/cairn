@@ -18,8 +18,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Icon } from '../Icon'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import { shortCommit } from '../../lib/core-version'
+import type { ReaderHealthPort } from '../../lib/reader-api-ports'
 import {
   confirmableTarget,
   createDeployClient,
@@ -38,7 +38,7 @@ import { ReaderDialog } from '../ui/ReaderDialog'
 
 export interface CoreUpdatePanelProps {
   /** 用于成功后按目标 commit 探活 `/health`。 */
-  readonly client: IdentityBoundReaderClient
+  readonly client: ReaderHealthPort
   /** 部署客户端。默认同源，测试用来注入假 helper。 */
   readonly deployClient?: DeployClient
   readonly jobPollIntervalMs?: number

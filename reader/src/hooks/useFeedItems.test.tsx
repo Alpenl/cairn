@@ -2,10 +2,11 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { useFeedItems } from './useFeedItems'
 import { ok, type ApiResult } from '@webtag/api'
-import type { ReaderClient } from '../lib/api/client'
 import type { FeedItem, ListFeedItemsParams, PaginatedFeedItemsResponse } from '../lib/api/types'
 import { readerIdentity } from '../lib/identity'
 import { resourceStore } from '../lib/cache/store'
+
+type FeedItemsClient = Parameters<typeof useFeedItems>[0]
 
 function makeItem(id: string, title: string): FeedItem {
   return { id, subscription_id: 'feed', title, url: `https://example.com/${id}` }
@@ -18,9 +19,9 @@ function deferred<T>() {
 }
 
 function bindClient(
-  methods: Partial<ReaderClient>,
+  methods: Partial<FeedItemsClient>,
   current: () => boolean = () => true,
-): ReaderClient {
+): FeedItemsClient {
   const lease = readerIdentity.activeLease!
   return {
     ...methods,
@@ -31,10 +32,10 @@ function bindClient(
       const ownership = lease.captureOwnership(logicalKey)
       return lease.isOwnershipCurrent(ownership) ? ownership : null
     }),
-  } as unknown as ReaderClient
+  } as FeedItemsClient
 }
 
-function Harness({ client, q }: { client: ReaderClient; q: string }) {
+function Harness({ client, q }: { client: FeedItemsClient; q: string }) {
   const result = useFeedItems(client, { view: 'all', q })
   return (
     <div>
@@ -57,7 +58,7 @@ describe('useFeedItems pagination ownership', () => {
     })
     const client = bindClient({
       getFeedItems,
-    } as unknown as Partial<ReaderClient>)
+    })
     const rendered = render(<Harness client={client} q="old" />)
 
     await screen.findByText('旧筛选首页')
@@ -87,7 +88,7 @@ describe('useFeedItems pagination ownership', () => {
               limit: 30,
             })),
       ),
-    } as unknown as Partial<ReaderClient>, () => leaseA.isCurrent(ownershipA))
+    }, () => leaseA.isCurrent(ownershipA))
     const rendered = render(<Harness client={clientA} q="same" />)
     await screen.findByText('A 首页')
     fireEvent.click(screen.getByRole('button', { name: 'more' }))
@@ -95,7 +96,7 @@ describe('useFeedItems pagination ownership', () => {
       expect.objectContaining({ q: 'same', page: 2 }),
     ))
 
-    let clientB!: ReaderClient
+    let clientB!: FeedItemsClient
     act(() => {
       const leaseB = readerIdentity.install({
         serverClientDataNamespace: 'server-B',
@@ -109,7 +110,7 @@ describe('useFeedItems pagination ownership', () => {
           page: 1,
           limit: 30,
         })),
-      } as unknown as Partial<ReaderClient>)
+      })
       rendered.rerender(<Harness client={clientB} q="same" />)
     })
     await screen.findByText('B 首页')
@@ -143,7 +144,7 @@ describe('useFeedItems pagination ownership', () => {
       }
       return Promise.resolve(ok({ items: [makeItem('new-1', '新筛选首页')], total: 2, page: 1, limit: 30 }))
     })
-    const client = bindClient({ getFeedItems } as unknown as Partial<ReaderClient>)
+    const client = bindClient({ getFeedItems })
     const rendered = render(<Harness client={client} q="old" />)
 
     await screen.findByText('旧筛选首页')

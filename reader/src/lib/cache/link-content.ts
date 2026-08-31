@@ -9,13 +9,13 @@
  */
 import { useCallback, useSyncExternalStore } from 'react'
 
-import type { ReaderClient } from '../api/client'
 import { ok, type ApiResult } from '@webtag/api'
 import type { LinkContentResponse } from '../api/types'
+import type { ReaderLibrarySitesPort } from '../reader-api-ports'
 import { contentCacheKey } from './keys'
 import { resourceStore } from './store'
 
-type LinkContentClient = Pick<ReaderClient, 'captureIdentity' | 'getContent'>
+type LinkContentClient = Pick<ReaderLibrarySitesPort, 'captureIdentity' | 'getContent'>
 
 const normalizedBodyCache = new WeakMap<object, LinkContentResponse>()
 

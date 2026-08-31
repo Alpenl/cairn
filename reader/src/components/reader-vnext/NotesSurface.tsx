@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderNoteHistoryResponse, ReaderNoteResponse, ReaderTrashItemResponse } from '../../lib/api/types'
 import type { IdentityLease } from '../../lib/identity'
 import type { ReaderCapabilityLease } from '../../lib/capabilities'
+import type {
+  ReaderAIPort,
+  ReaderSessionArchivePort,
+  ReaderThoughtsNotesPort,
+} from '../../lib/reader-api-ports'
 import { listRemoteThoughtsForHost } from '../../lib/user-data/thought-sync'
 import type { ThoughtMaterializedRecord } from '../../lib/user-data/thought-types'
 import { reanchorAnnotation, type ReanchorAnnotation, type ReanchorReason } from '../../lib/reanchor'
@@ -42,7 +46,7 @@ import { NoteMarkdownPreview } from './NoteMarkdownPreview'
 import { NoteWorkspaceTabs } from './NoteWorkspaceTabs'
 
 export interface NotesSurfaceProps {
-  readonly client: IdentityBoundReaderClient
+  readonly client: NotesSurfaceClient
   readonly lease: IdentityLease
   readonly capabilityLease: ReaderCapabilityLease
   readonly onNavigate: (route: ReaderRoute) => void
@@ -59,6 +63,22 @@ export interface NotesSurfaceProps {
   readonly aiEnabled?: boolean
   readonly trashEnabled?: boolean
 }
+
+type NotesSurfaceClient = ReaderAIPort &
+  Pick<
+    ReaderThoughtsNotesPort,
+    | 'saveNoteDraft'
+    | 'discardNoteDraft'
+    | 'listNotes'
+    | 'getNote'
+    | 'deleteNote'
+    | 'publishNote'
+    | 'restoreNote'
+    | 'listNoteHistory'
+    | 'restoreNoteRevision'
+    | 'isIdentityCurrent'
+  > &
+  Pick<ReaderSessionArchivePort, 'listTrash' | 'purgeHost'>
 
 export type NotesLeaveResult =
   | { readonly status: 'ready' }

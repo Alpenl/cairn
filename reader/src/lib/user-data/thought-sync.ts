@@ -2,10 +2,10 @@ import type {
   ReaderThoughtAckResponse,
   ReaderThoughtOpRequest,
 } from '../api/types'
-import type { IdentityBoundReaderClient } from '../api/client'
 import type { ApiError } from '@webtag/api'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../reader-events'
 import { isRecord } from '../records'
+import type { ReaderThoughtsNotesPort } from '../reader-api-ports'
 import {
   cloneTargetAnnotation,
   decodeAnnotationWire,
@@ -1407,7 +1407,7 @@ function isCursorRetentionError(error: ApiError): boolean {
 
 async function pullThoughts(
   lease: IdentityLease,
-  client: IdentityBoundReaderClient,
+  client: ReaderThoughtsNotesPort,
 ): Promise<{
   pulled: number
   cursor: string
@@ -1451,7 +1451,7 @@ async function pullThoughts(
   for (let page = 0; page < MAX_PULL_PAGES_PER_ROUND; page += 1) {
     const operation = lease.capture(`pull thought page ${page}`)
     if (!lease.isCurrent(operation)) return { pulled, cursor, stale: true }
-    let result: Awaited<ReturnType<IdentityBoundReaderClient['syncThoughts']>>
+    let result: Awaited<ReturnType<ReaderThoughtsNotesPort['syncThoughts']>>
     try {
       result = await client.syncThoughts(
         { after: cursor, limit: MAX_BATCH },
@@ -1639,7 +1639,7 @@ async function recordPushFailure(
  */
 async function pushDueOperations(
   lease: IdentityLease,
-  client: IdentityBoundReaderClient,
+  client: ReaderThoughtsNotesPort,
   records: readonly ThoughtOutboxRecord[],
   label: string,
 ): Promise<PushDueResult> {
@@ -1648,7 +1648,7 @@ async function pushDueOperations(
   if (!lease.isCurrent(operation)) {
     return { pushed: 0, completedIDs: [], stale: true, halt: true }
   }
-  let result: Awaited<ReturnType<IdentityBoundReaderClient['pushThoughtOps']>>
+  let result: Awaited<ReturnType<ReaderThoughtsNotesPort['pushThoughtOps']>>
   try {
     result = await client.pushThoughtOps(
       { ops: records.map(toWireOperation) },
@@ -1717,7 +1717,7 @@ async function recordHistoryPushFailure(
 
 async function pushDueHistoryOperations(
   lease: IdentityLease,
-  client: IdentityBoundReaderClient,
+  client: ReaderThoughtsNotesPort,
   records: readonly ThoughtHistoryOutboxRecord[],
   label: string,
 ): Promise<PushDueResult> {
@@ -1726,7 +1726,7 @@ async function pushDueHistoryOperations(
   if (!lease.isCurrent(operation)) {
     return { pushed: 0, completedIDs: [], stale: true, halt: true }
   }
-  let result: Awaited<ReturnType<IdentityBoundReaderClient['pushThoughtOps']>>
+  let result: Awaited<ReturnType<ReaderThoughtsNotesPort['pushThoughtOps']>>
   try {
     result = await client.pushThoughtOps(
       { ops: records.map(toHistoryWireOperation) },
@@ -1793,7 +1793,7 @@ async function pushDueHistoryOperations(
 
 async function performSync(
   lease: IdentityLease,
-  client: IdentityBoundReaderClient,
+  client: ReaderThoughtsNotesPort,
 ): Promise<ThoughtSyncResult> {
   const prepared = await prepareState(lease)
   if (!prepared.ok) return { status: 'stale', pushed: 0, pulled: 0, cursor: '', pending: 0 }
@@ -2042,7 +2042,7 @@ async function withCrossTabLock(
 
 function runThoughtSyncExecution(
   lease: IdentityLease,
-  client: IdentityBoundReaderClient,
+  client: ReaderThoughtsNotesPort,
 ): Promise<SyncExecution> {
   const existing = inFlight.get(lease)
   if (existing) return existing
@@ -2051,7 +2051,7 @@ function runThoughtSyncExecution(
     if (synced.status === 'stale' || synced.status === 'failed') return synced
     // Older embedded Readers can still retain their local durable queue. They
     // do not receive an event page until their client adapter is upgraded.
-    if (typeof (client as Partial<IdentityBoundReaderClient>).listThoughtSupersessions !== 'function') {
+    if (typeof (client as Partial<ReaderThoughtsNotesPort>).listThoughtSupersessions !== 'function') {
       return synced
     }
     const supersessions = await syncThoughtSupersessions(lease, client)
@@ -2075,7 +2075,7 @@ function runThoughtSyncExecution(
 /** Pushes local annotation operations and replays server thoughts once. */
 export function syncThoughts(
   lease: IdentityLease,
-  client: IdentityBoundReaderClient,
+  client: ReaderThoughtsNotesPort,
 ): Promise<ThoughtSyncResult> {
   return runThoughtSyncExecution(lease, client).then(({ result }) => result)
 }
@@ -2158,7 +2158,7 @@ class NamespaceThoughtSyncController implements ThoughtSyncController {
 
   constructor(
     private readonly lease: IdentityLease,
-    private readonly client: IdentityBoundReaderClient,
+    private readonly client: ReaderThoughtsNotesPort,
   ) {
     this.leaseSignal = lease.capture('observe thought sync lease').signal
     this.leaseSignal.addEventListener('abort', this.onLeaseRevoked, { once: true })
@@ -2457,7 +2457,7 @@ const controllers = new WeakMap<IdentityLease, NamespaceThoughtSyncController>()
 /** Returns the single observable controller owned by the supplied identity lease. */
 export function getThoughtSyncController(
   lease: IdentityLease,
-  client: IdentityBoundReaderClient,
+  client: ReaderThoughtsNotesPort,
 ): ThoughtSyncController {
   const existing = controllers.get(lease)
   if (existing) return existing
@@ -2469,7 +2469,7 @@ export function getThoughtSyncController(
 /** Backward-compatible lifecycle entrypoint used by existing Reader surfaces. */
 export function startThoughtSync(
   lease: IdentityLease,
-  client: IdentityBoundReaderClient,
+  client: ReaderThoughtsNotesPort,
 ): () => void {
   return getThoughtSyncController(lease, client).start()
 }

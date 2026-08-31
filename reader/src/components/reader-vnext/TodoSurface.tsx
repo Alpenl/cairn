@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import type { ReaderCapabilityPolicy } from '../../lib/capabilities'
 import type { ReaderTodoResponse } from '../../lib/api/types'
 import type { ReaderNavigationRequest } from '../../lib/navigation/route'
+import type { ReaderInboxTodosPort } from '../../lib/reader-api-ports'
 import { useExclusiveAction } from '../../hooks/useExclusiveAction'
 import { useSurfaceRequestGate, type SurfaceRequestToken } from '../../hooks/useSurfaceRequestGate'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
@@ -19,13 +19,18 @@ import { Icon } from '../Icon'
 import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 
 export interface TodoSurfaceProps {
-  readonly client: IdentityBoundReaderClient
+  readonly client: TodoSurfaceClient
   readonly onNavigate: ReaderNavigationRequest
   readonly onOpenLink: (id: string) => void
   readonly capabilityPolicy: ReaderCapabilityPolicy
   readonly completedExpanded: boolean
   readonly onCompletedExpandedChange: (expanded: boolean) => void
 }
+
+type TodoSurfaceClient = Pick<
+  ReaderInboxTodosPort,
+  'listTodos' | 'createTodo' | 'patchTodo' | 'deleteTodo' | 'isIdentityCurrent'
+>
 
 function timestamp(value: string | null | undefined): number | null {
   if (!value) return null

@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { SubsView, type SubsViewProps } from './SubsView'
 import { err, ok, type ApiResult } from '@webtag/api'
-import type { ReaderClient } from '../lib/api/client'
 import type { FeedItem, FeedSubscription, SubscriptionsResponse } from '../lib/api/types'
 import { SUBSCRIPTIONS_CACHE_KEY } from '../hooks/useSubscriptions'
 import { readerIdentity } from '../lib/identity'
@@ -88,9 +87,10 @@ function makeClient(
     deleteFeedFolder: vi.fn(async () => ok(true)),
     importSubscriptionsOPML,
     exportSubscriptionsOPML: vi.fn(async () => ok('<opml version="2.0"/>')),
+    identityLease,
     isIdentityCurrent,
     captureIdentity,
-  } as unknown as ReaderClient
+  } as unknown as SubsViewProps['client']
   return {
     client,
     getFeedItem,
@@ -103,7 +103,7 @@ function makeClient(
 }
 
 function renderView(
-  client: ReaderClient,
+  client: SubsViewProps['client'],
   onToast: SubsViewProps['onToast'] = () => {},
   onNavigate: SubsViewProps['onNavigate'] = undefined,
 ) {

@@ -14,12 +14,12 @@ import { Icon } from './Icon'
 import { relDate } from '../lib/metadata'
 import type { Pins, PinKind } from '../lib/meta'
 import type { TagStat, DomainStat } from '../lib/stats'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import {
   compareReaderActivityKeyAsc,
   compareReaderActivityLastAtDesc,
   useReaderActivity,
 } from '../hooks/useReaderActivity'
+import type { ReaderAmbientClientPort } from '../lib/reader-api-ports'
 
 type BrowseKind = 'tags' | 'domains'
 type SortKey = 'count' | 'recent' | 'alpha'
@@ -42,7 +42,7 @@ export interface BrowsePanelProps {
   /** 域名全集（派生 / 后端聚合）。 */
   domains: DomainStat[]
   /** Optional explicit client for isolated surfaces; production passes the active Reader client. */
-  readerClient?: IdentityBoundReaderClient
+  readerClient?: ReaderAmbientClientPort
   /** Disabled or unknown activity support stays entirely local. */
   activityEnabled?: boolean
 }

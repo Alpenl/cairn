@@ -32,7 +32,7 @@ function useTestLinks(client: ReaderClient, selection: Parameters<typeof useLink
   return useLinks(client as IdentityBoundReaderClient, selection)
 }
 
-function bindTestClient(client: ReaderClient): ReaderClient {
+function bindTestClient(client: ReaderClient): IdentityBoundReaderClient {
   const lease = readerIdentity.activeLease
   if (!lease) throw new Error('test identity lease is not active')
   Object.defineProperty(client, 'identityLease', {
@@ -50,7 +50,7 @@ function bindTestClient(client: ReaderClient): ReaderClient {
     configurable: true,
     value: () => true,
   })
-  return client
+  return client as IdentityBoundReaderClient
 }
 
 function linksClient(items: LinkResponse[]) {

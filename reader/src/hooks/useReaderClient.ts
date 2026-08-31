@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import { resourceStore } from '../lib/cache/store'
+import type { ReaderAmbientClientPort } from '../lib/reader-api-ports'
 
 /**
  * MainView owns the authenticated client, while the reading surface
@@ -12,14 +12,14 @@ import { resourceStore } from '../lib/cache/store'
  * credentials, and a client is usable only while its lease owns the active
  * resource-store partition.
  */
-let registeredClient: IdentityBoundReaderClient | null = null
+let registeredClient: ReaderAmbientClientPort | null = null
 const listeners = new Set<() => void>()
 
 function notify(): void {
   for (const listener of [...listeners]) listener()
 }
 
-function isCurrentClient(client: IdentityBoundReaderClient | null): client is IdentityBoundReaderClient {
+function isCurrentClient(client: ReaderAmbientClientPort | null): client is ReaderAmbientClientPort {
   if (!client) return false
   try {
     const lease = client.identityLease
@@ -34,7 +34,7 @@ function isCurrentClient(client: IdentityBoundReaderClient | null): client is Id
 }
 
 /** Register the client already owned by the mounted MainView. */
-export function registerReaderClient(client: IdentityBoundReaderClient): () => void {
+export function registerReaderClient(client: ReaderAmbientClientPort): () => void {
   registeredClient = client
   notify()
   return () => {
@@ -44,7 +44,7 @@ export function registerReaderClient(client: IdentityBoundReaderClient): () => v
   }
 }
 
-function getRegisteredClient(): IdentityBoundReaderClient | null {
+function getRegisteredClient(): ReaderAmbientClientPort | null {
   return isCurrentClient(registeredClient) ? registeredClient : null
 }
 
@@ -54,8 +54,8 @@ function getRegisteredClient(): IdentityBoundReaderClient | null {
  * partition check above.
  */
 export function useReaderClient(
-  explicitClient?: IdentityBoundReaderClient,
-): IdentityBoundReaderClient | null {
+  explicitClient?: ReaderAmbientClientPort,
+): ReaderAmbientClientPort | null {
   const registered = useSyncExternalStore(
     (listener) => {
       listeners.add(listener)

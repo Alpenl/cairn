@@ -7,13 +7,13 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react'
-import type { IdentityBoundReaderClient } from '../../lib/api/client'
 import {
   readerRouteIsAvailable,
   type ReaderCapabilityLease,
 } from '../../lib/capabilities'
 import type { ReaderHomeResponse, ReaderTodoResponse } from '../../lib/api/types'
 import type { IdentityLease } from '../../lib/identity'
+import type { ReaderHomePort } from '../../lib/reader-api-ports'
 import { useExclusiveAction } from '../../hooks/useExclusiveAction'
 import { useSurfaceRequestGate } from '../../hooks/useSurfaceRequestGate'
 import { emitReaderEvent, READER_EVENTS, subscribeReaderEvents } from '../../lib/reader-events'
@@ -42,7 +42,7 @@ import { ReaderListRow } from '../ui/ReaderListRow'
 import { SurfaceError, SurfaceLoading, SurfaceShell } from './SurfaceShell'
 
 export interface HomeSurfaceProps {
-  readonly client: IdentityBoundReaderClient
+  readonly client: ReaderHomePort
   /** Optional only for the unauthenticated component harness; mounted Reader passes a lease. */
   readonly lease?: IdentityLease
   readonly onNavigate: ReaderNavigationRequest

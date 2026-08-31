@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
+import type { ReaderAmbientClientPort } from '../lib/reader-api-ports'
 import { useReaderClient } from './useReaderClient'
 
 function clampProgress(value: number): number {
@@ -14,7 +14,7 @@ export interface UseReadingProgressOptions {
   /** Saved-link identity whose progress/read state is shared with the server. */
   engagementLinkID?: string
   /** Explicit client for isolated surfaces and tests. */
-  readerClient?: IdentityBoundReaderClient
+  readerClient?: ReaderAmbientClientPort
 }
 
 export interface ReadingProgressState {
@@ -26,7 +26,7 @@ export interface ReadingProgressState {
 
 const PROGRESS_WRITE_DELAY_MS = 700
 
-function clientIsCurrent(client: IdentityBoundReaderClient): boolean {
+function clientIsCurrent(client: ReaderAmbientClientPort): boolean {
   try {
     return typeof client.isIdentityCurrent !== 'function' || client.isIdentityCurrent()
   } catch {
@@ -35,7 +35,7 @@ function clientIsCurrent(client: IdentityBoundReaderClient): boolean {
 }
 
 function supportsEngagement(
-  client: IdentityBoundReaderClient | null,
+  client: ReaderAmbientClientPort | null,
   method: 'getEngagement' | 'patchEngagement',
 ): boolean {
   return typeof (client as unknown as Record<string, unknown> | null)?.[method] === 'function'

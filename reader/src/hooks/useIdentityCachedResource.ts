@@ -1,5 +1,5 @@
 import type { ApiResult } from '@webtag/api'
-import type { ReaderClient } from '../lib/api/client'
+import type { ReaderIdentityPort } from '../lib/reader-api-ports'
 import {
   type FetchContext,
   type FetchOptions,
@@ -15,8 +15,10 @@ import {
   isActiveReaderOwnership,
 } from './identityBoundOperation'
 
-export interface IdentityCachedResourceContext extends FetchContext {
-  readonly client: ReaderClient
+export interface IdentityCachedResourceContext<
+  TClient extends ReaderIdentityPort = ReaderIdentityPort,
+> extends FetchContext {
+  readonly client: TClient
   readonly cacheKey: string
 }
 
@@ -32,14 +34,14 @@ interface IdentityCachedResourceOptions<T> {
 }
 
 export function isActiveReaderClient(
-  client: ReaderClient | null,
-): client is ReaderClient {
+  client: ReaderIdentityPort | null,
+): client is ReaderIdentityPort {
   return captureActiveReaderOwnership(client, 'read identity-bound resource') !== null
 }
 
 function scopedCacheKey(
   baseKey: string | null,
-  client: ReaderClient | null,
+  client: ReaderIdentityPort | null,
 ): string | null {
   const ownership = captureActiveReaderOwnership(client, 'build identity-scoped cache key')
   if (!baseKey || !ownership) return null
@@ -47,7 +49,7 @@ function scopedCacheKey(
 }
 
 export function cacheKeyForActiveReaderIdentity(
-  client: ReaderClient | null,
+  client: ReaderIdentityPort | null,
   logicalKey: string,
   build: (context: IdentityContext | null | undefined) => string,
 ): string | null {
@@ -60,20 +62,20 @@ export function cacheKeyForActiveReaderIdentity(
   }
 }
 
-export function useIdentityCachedResource<T>(
-  client: ReaderClient | null,
+export function useIdentityCachedResource<T, TClient extends ReaderIdentityPort = ReaderIdentityPort>(
+  client: TClient | null,
   baseKey: string | null,
-  fetcher: (context: IdentityCachedResourceContext) => Promise<ApiResult<T>>,
+  fetcher: (context: Omit<IdentityCachedResourceContext, 'client'> & { readonly client: TClient }) => Promise<ApiResult<T>>,
   options: IdentityCachedResourceOptions<T> = {},
 ): IdentityCachedResource<T> {
   const cacheKey = scopedCacheKey(baseKey, client)
   return useFinalIdentityCachedResource(client, cacheKey, fetcher, options)
 }
 
-export function useFinalIdentityCachedResource<T>(
-  client: ReaderClient | null,
+export function useFinalIdentityCachedResource<T, TClient extends ReaderIdentityPort = ReaderIdentityPort>(
+  client: TClient | null,
   finalKey: string | null,
-  fetcher: (context: IdentityCachedResourceContext) => Promise<ApiResult<T>>,
+  fetcher: (context: IdentityCachedResourceContext<TClient>) => Promise<ApiResult<T>>,
   options: IdentityCachedResourceOptions<T> = {},
 ): IdentityCachedResource<T> {
   const ownership = captureActiveReaderOwnership(client, 'use final identity cache key')

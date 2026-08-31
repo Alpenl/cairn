@@ -1,11 +1,13 @@
 import { useRef, useState, type FormEvent } from 'react'
 import { Icon } from './Icon'
 import { ReaderDialog } from './ui/ReaderDialog'
-import type { ReaderClient } from '../lib/api/client'
 import type { ReaderCapabilityLease } from '../lib/capabilities'
+import type { ReaderLibrarySitesPort } from '../lib/reader-api-ports'
+
+type AddLinkClient = Pick<ReaderLibrarySitesPort, 'submitLink' | 'isIdentityCurrent'>
 
 export interface AddLinkDialogProps {
-  client: ReaderClient
+  client: AddLinkClient
   capabilityLease: ReaderCapabilityLease
   destination: 'inbox' | 'library'
   onClose: () => void

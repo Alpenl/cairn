@@ -12,7 +12,6 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Icon, type IconName } from './Icon'
 import { fetcherIcon } from './fetcher-icons'
 import { useCommandSearch } from '../hooks/useCommandSearch'
-import type { ReaderClient } from '../lib/api/client'
 import type {
   LinkResponse,
   ReaderNoteSearchResponse,
@@ -26,6 +25,7 @@ import {
   readerRouteIsAvailable,
   type ReaderCapabilityPolicy,
 } from '../lib/capabilities'
+import type { ReaderCommandSearchPort } from '../lib/reader-api-ports'
 
 /** 命令项的归一形态（视图 / AI / 链接 / 标签 / 域名统一结构）。 */
 export interface CommandItem {
@@ -63,7 +63,7 @@ export interface CommandPaletteProps {
   open: boolean
   onClose: () => void
   onCommand: (c: CommandItem) => void
-  client: ReaderClient
+  client: ReaderCommandSearchPort
   /** 本地语料（已加载链接快照），用于即时预览 + 降级 + open: 标签生成。 */
   corpus: LinkResponse[]
   /** 派生标签统计（taxResults 候选）。 */

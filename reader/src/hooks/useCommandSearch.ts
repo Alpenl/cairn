@@ -12,7 +12,6 @@
  * stale 防护：用递增请求序号丢弃过期响应。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ReaderClient } from '../lib/api/client'
 import type {
   GroupedSearchResponse,
   LinkResponse,
@@ -20,6 +19,11 @@ import type {
   ReaderThoughtSearchResponse,
   SiteSearchResultResponse,
 } from '../lib/api/types'
+import type { ReaderCommandSearchPort } from '../lib/reader-api-ports'
+
+type SearchableReaderCommandSearchPort = ReaderCommandSearchPort & {
+  readonly searchLibrary: NonNullable<ReaderCommandSearchPort['searchLibrary']>
+}
 
 /** 本地过滤：标题 / url / 域名 / 摘要 / 标签命中关键词。对齐 cmdk.jsx linkResults。 */
 export function localFilterLinks(links: LinkResponse[], q: string): LinkResponse[] {
@@ -65,7 +69,7 @@ const THOUGHT_PAGE_SIZE = 20
  * @param corpus 本地语料（已加载链接快照），用于即时预览 + 降级
  */
 export function useCommandSearch(
-  client: ReaderClient,
+  client: ReaderCommandSearchPort,
   q: string,
   corpus: LinkResponse[],
   options: { readonly remoteEnabled?: boolean } = {},
@@ -97,9 +101,10 @@ export function useCommandSearch(
       setDegraded(true)
       return
     }
+    const searchClient = client as SearchableReaderCommandSearchPort
     const timer = window.setTimeout(() => {
       void Promise.resolve()
-        .then(() => client.searchLibrary(trimmed, 50, 10, THOUGHT_PAGE_SIZE))
+        .then(() => searchClient.searchLibrary(trimmed, 50, 10, THOUGHT_PAGE_SIZE))
         .then((res) => {
           if (!client.isIdentityCurrent()) return
           if (seq !== seqRef.current) return // stale

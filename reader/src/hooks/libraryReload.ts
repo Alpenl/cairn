@@ -1,6 +1,6 @@
-import type { ReaderClient } from '../lib/api/client'
 import type { ApiResult } from '@webtag/api'
 import type { FetchOptions } from '../lib/cache/store'
+import type { ReaderIdentityPort } from '../lib/reader-api-ports'
 import {
   captureActiveReaderOwnership,
   isActiveReaderOwnership,
@@ -11,7 +11,7 @@ export type LibraryReloadOptions = Pick<FetchOptions, 'signal' | 'silent'>
 
 /** Keep one manual reload tied to the exact identity that started it. */
 export async function reloadForActiveIdentity<T>(
-  client: ReaderClient,
+  client: ReaderIdentityPort,
   logicalKey: string,
   reload: (options?: LibraryReloadOptions) => Promise<ApiResult<T> | null>,
   options: LibraryReloadOptions = {},

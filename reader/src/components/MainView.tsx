@@ -108,7 +108,6 @@ import {
   type ReaderRoute,
 } from '../lib/navigation/route'
 import { ReaderNavigationGuardRegistry } from '../lib/navigation/guard'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ArchiveV2Selection } from '../lib/api/archive-v2'
 import type {
   CapabilitiesResponse,
@@ -126,6 +125,15 @@ import type {
 } from '../lib/article/document'
 import { isSavedContentTranslationSource } from '../lib/article/document'
 import type { SourceBlockId } from '../lib/article/source-block'
+import type {
+  ReaderAIPort,
+  ReaderHomePort,
+  ReaderInboxTodosPort,
+  ReaderLibrarySitesPort,
+  ReaderSessionArchivePort,
+  ReaderSubscriptionsFeedPort,
+  ReaderThoughtsNotesPort,
+} from '../lib/reader-api-ports'
 import {
   deriveReaderCapabilityPolicy,
   firstAvailableReaderRoute,
@@ -418,8 +426,16 @@ function contentRevisionOrUndefined(value: unknown): number | undefined {
     : undefined
 }
 
+type MainViewClient = ReaderLibrarySitesPort &
+  ReaderSubscriptionsFeedPort &
+  ReaderThoughtsNotesPort &
+  ReaderInboxTodosPort &
+  ReaderHomePort &
+  ReaderSessionArchivePort &
+  ReaderAIPort
+
 export interface MainViewProps {
-  client: IdentityBoundReaderClient
+  client: MainViewClient
   /** Capabilities are fetched after identity; omitted keeps legacy tests local. */
   capabilities?: CapabilitiesResponse
   /** 打开连接配置编辑（titlebar 齿轮）。 */

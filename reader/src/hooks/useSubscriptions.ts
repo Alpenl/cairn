@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react'
-import type { ReaderClient } from '../lib/api/client'
 import type { ApiError } from '@webtag/api'
 import type { FeedSubscription, SubscriptionsResponse } from '../lib/api/types'
+import type { ReaderSubscriptionsFeedPort } from '../lib/reader-api-ports'
 import type { IdentityOwnership } from '../lib/identity'
 import { SUBSCRIPTIONS_CACHE_KEY } from '../lib/cache/keys'
 import { resourceStore } from '../lib/cache/store'
@@ -17,17 +17,22 @@ const EMPTY_SUBSCRIPTIONS: SubscriptionsResponse = {
 
 export { SUBSCRIPTIONS_CACHE_KEY } from '../lib/cache/keys'
 
+type SubscriptionsClient = Pick<
+  ReaderSubscriptionsFeedPort,
+  'identityLease' | 'isIdentityCurrent' | 'captureIdentity' | 'getSubscriptions'
+>
+
 /**
  * RSS navigation data with retained-data refresh errors and a 60-second poll.
  *
  * PF3 起走共享缓存：SubsView 卸载重挂不再全量重拉，60 秒轮询在数据未变时
  * 也不再产生任何重渲染。
  */
-export function useSubscriptions(client: ReaderClient) {
+export function useSubscriptions(client: SubscriptionsClient) {
   const {
     canFetch,
     resource,
-  } = useFinalIdentityCachedResource<SubscriptionsResponse>(
+  } = useFinalIdentityCachedResource<SubscriptionsResponse, SubscriptionsClient>(
     client,
     SUBSCRIPTIONS_CACHE_KEY,
     ({ client, signal }) => client.getSubscriptions(undefined, { signal }),

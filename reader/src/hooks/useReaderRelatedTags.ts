@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react'
-import type { IdentityBoundReaderClient } from '../lib/api/client'
 import type { ApiError } from '@webtag/api'
 import type { LinkResponse, ReaderRelatedTagsResponse } from '../lib/api/types'
+import type { ReaderAmbientClientPort } from '../lib/reader-api-ports'
 import {
   READER_RELATED_TAGS_CACHE_PREFIX,
   readerRelatedTagsCacheKey,
@@ -23,7 +23,7 @@ export interface ReaderRelatedTagsState {
   readonly reload: () => void
 }
 
-function supportsRelatedTags(client: IdentityBoundReaderClient | null): boolean {
+function supportsRelatedTags(client: ReaderAmbientClientPort | null): boolean {
   return typeof (client as unknown as { getRelatedTags?: unknown } | null)?.getRelatedTags === 'function'
 }
 
@@ -66,7 +66,7 @@ function normalizeTags(items: readonly string[] | undefined): string[] {
 export function useReaderRelatedTags(
   link: LinkResponse | null | undefined,
   corpus: LinkResponse[],
-  explicitClient?: IdentityBoundReaderClient,
+  explicitClient?: ReaderAmbientClientPort,
   options: { readonly enabled?: boolean } = {},
 ): ReaderRelatedTagsState {
   const client = useReaderClient(explicitClient)
@@ -80,7 +80,7 @@ export function useReaderRelatedTags(
     )
   const {
     resource,
-  } = useFinalIdentityCachedResource<ReaderRelatedTagsResponse>(
+  } = useFinalIdentityCachedResource<ReaderRelatedTagsResponse, ReaderAmbientClientPort>(
     client,
     cacheKey,
     ({ client }) => client.getRelatedTags(linkID!, LOCAL_FALLBACK_LIMIT),
