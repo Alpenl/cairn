@@ -12,9 +12,7 @@
  */
 import {
   buildLinksQuery,
-  buildQueryString,
   type ApiResult,
-  err,
   ok,
 } from '@webtag/api'
 import { isRecord } from '../records'
@@ -107,31 +105,13 @@ import type {
 } from './types'
 import {
   isDiscoverFeedsResponse,
-  isDomainTreeSummaryEnvelope,
   isFeedFolder,
   isFeedItem,
   isFeedItemAnalyzeResponse,
   isFeedSubscription,
-  isLinkContentResponse,
-	isConversionPreviewResponse,
-	isConversionExecuteResponse,
-	isGroupedSearchResponse,
-  isLinkResponse,
   isOPMLImportResponse,
   isPaginatedFeedItems,
-  isPaginatedLinks,
-	isPaginatedSites,
-	isSiteDetail,
-	isSiteEntryDeleteResponse,
-	isSiteMergePreviewResponse,
-	isSiteMergeExecuteResponse,
-	isSiteSplitPreviewResponse,
-	isSiteSplitExecuteResponse,
   isSubscriptionsResponse,
-  isSubmitResponse,
-  isTagCountArray,
-  isTranslationListResponse,
-  isTranslationResponse,
   isReaderThoughtAckResponse,
   isReaderThoughtResponse,
   isReaderThoughtsResponse,
@@ -148,13 +128,9 @@ import {
   isReaderConfirmResponse,
   isReaderTodoResponse,
   isReaderTodosResponse,
-  isReaderEngagementResponse,
   isReaderFeedFeedbackResponse,
   isReaderFeedResponse,
   isReaderHomeResponse,
-  isReaderLinkMetadataResponse,
-  isReaderRelatedTagsResponse,
-  isReaderActivityResponse,
   isReaderAIResponse,
   normalizeCapabilitiesResponse,
 } from './guards'
@@ -166,6 +142,15 @@ import {
   ReaderHttpTransport,
   shapeMismatch,
 } from './transport'
+import {
+  buildFeedItemsQuery,
+  buildReaderQuery,
+  normalizeReaderFeedSources,
+  readerIdempotencyHeaders,
+  readerLimit,
+  type ReaderFeedSource,
+} from './endpoint-helpers'
+import * as librarySitesEndpoints from './library-sites-endpoints'
 import type {
   ReaderReadOptions,
   ReaderRequestOptions,
@@ -213,6 +198,7 @@ export type IdentityBoundReaderClientConfig = Omit<ReaderClientConfig, 'identity
 
 export type { ListLinksParams } from './types'
 export { buildLinksQuery }
+export { buildFeedItemsQuery } from './endpoint-helpers'
 export {
   archiveV2Sections,
   fullArchiveV2Selection,
@@ -224,79 +210,6 @@ export type ReaderActivityKind = 'all' | 'tag' | 'domain'
 export interface ReaderActivityRequestOptions extends ReaderRequestOptions {
   readonly kind?: ReaderActivityKind
   readonly after?: string
-}
-
-function readerIdempotencyHeaders(options: ReaderRequestOptions): Record<string, string> | undefined {
-	const key = options.idempotencyKey?.trim()
-	return key ? { 'Idempotency-Key': key } : undefined
-}
-
-/** Build the RSS item filter query without emitting empty/default values. */
-export function buildFeedItemsQuery(params: ListFeedItemsParams): string {
-  const normalize = (value: string | number | undefined): string | undefined => {
-    if (value === undefined) return undefined
-    const normalized = String(value).trim()
-    return normalized || undefined
-  }
-  return buildQueryString(
-    {
-      view: normalize(params.view),
-      subscription_id: normalize(params.subscription_id),
-      folder_id: normalize(params.folder_id),
-      q: normalize(params.q),
-      page:
-        params.page !== undefined && params.page > 1 ? params.page : undefined,
-      limit:
-        params.limit !== undefined && params.limit > 0
-          ? params.limit
-          : undefined,
-    },
-    true,
-  )
-}
-
-function buildReaderQuery(values: Record<string, string | number | readonly string[] | undefined>): string {
-  const query = new URLSearchParams()
-  for (const [key, value] of Object.entries(values)) {
-    if (value === undefined) continue
-    if (Array.isArray(value)) {
-      for (const candidate of value) {
-        const normalized = String(candidate).trim()
-        if (normalized) query.append(key, normalized)
-      }
-      continue
-    }
-    const normalized = String(value).trim()
-    if (normalized) query.set(key, normalized)
-  }
-  return query.size > 0 ? `?${query.toString()}` : ''
-}
-
-const READER_FEED_SOURCE_ORDER = ['inbox', 'reading', 'subscription'] as const
-type ReaderFeedSource = typeof READER_FEED_SOURCE_ORDER[number]
-
-function normalizeReaderFeedSources(values: readonly string[] | undefined): ReaderFeedSource[] | undefined {
-  if (values === undefined) return undefined
-  const selected = new Set<ReaderFeedSource>()
-  for (const value of values) {
-    for (const part of value.split(',')) {
-      const normalized = part.trim().toLowerCase()
-      const source: ReaderFeedSource | null = normalized === 'pending'
-        ? 'inbox'
-        : normalized === 'saved'
-          ? 'reading'
-          : normalized === 'inbox' || normalized === 'reading' || normalized === 'subscription'
-            ? normalized
-            : null
-      if (source) selected.add(source)
-    }
-  }
-  return READER_FEED_SOURCE_ORDER.filter((source) => selected.has(source))
-}
-
-function readerLimit(limit: number | undefined, fallback: number): number | undefined {
-  if (limit === undefined) return fallback
-  return limit > 0 ? Math.min(Math.floor(limit), 200) : fallback
 }
 
 export class ReaderClient {
@@ -402,26 +315,12 @@ export class ReaderClient {
     params: ListLinksParams = {},
     options?: ReaderReadOptions,
   ): Promise<ApiResult<PaginatedLinksResponse>> {
-    const r = await this.send(
-      'GET',
-      `/api/links${buildLinksQuery(params)}`,
-      undefined,
-      undefined,
-      options,
-      undefined,
-      'link-metadata-revision',
-    )
-    if (!r.ok) return r
-    if (!isPaginatedLinks(r.data)) return shapeMismatch('PaginatedLinksResponse')
-    return ok(r.data)
+    return librarySitesEndpoints.getLinks(this.transport, params, options)
   }
 
   /** POST /api/links -- submit one URL to the parse pipeline. */
   async submitLink(request: LinkCreateRequest): Promise<ApiResult<SubmitResponse>> {
-    const r = await this.send('POST', '/api/links', request)
-    if (!r.ok) return r
-    if (!isSubmitResponse(r.data)) return shapeMismatch('SubmitResponse')
-    return ok(r.data)
+    return librarySitesEndpoints.submitLink(this.transport, request)
   }
 
   /** GET /api/search —— grouped reading, website, and cursor-paged thought search. */
@@ -432,24 +331,14 @@ export class ReaderClient {
     thoughtLimit = 20,
     thoughtAfter = '',
   ): Promise<ApiResult<GroupedSearchResponse>> {
-    const query = new URLSearchParams({
-      q: q.trim(),
-      reading_limit: String(readingLimit),
-      site_limit: String(siteLimit),
-      thought_limit: String(thoughtLimit),
-    })
-    if (thoughtAfter.trim()) query.set('thought_after', thoughtAfter)
-    const r = await this.send(
-      'GET',
-      `/api/search?${query}`,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      'link-metadata-revision',
+    return librarySitesEndpoints.searchLibrary(
+      this.transport,
+      q,
+      readingLimit,
+      siteLimit,
+      thoughtLimit,
+      thoughtAfter,
     )
-    if (!r.ok) return r
-    return isGroupedSearchResponse(r.data) ? ok(r.data) : shapeMismatch('GroupedSearchResponse')
   }
 
   /** GET /api/links/{id} —— 单条详情；包含按需保存的原文。 */
@@ -462,26 +351,12 @@ export class ReaderClient {
     id: string,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<LinkResponse>> {
-    const r = await this.send(
-      'GET',
-      `/api/links/${encodeURIComponent(id)}?include_content=false`,
-      undefined,
-      undefined,
-      undefined,
-      options.signal,
-      'link-metadata-revision',
-    )
-    if (!r.ok) return r
-    if (!isLinkResponse(r.data)) return shapeMismatch('LinkResponse')
-    return ok(r.data)
+    return librarySitesEndpoints.getLink(this.transport, id, options)
   }
 
   /** GET /api/links/{id}/content —— 按需读已保存原文（不触发抓取）。 */
   async getContent(id: string): Promise<ApiResult<LinkContentResponse>> {
-    const r = await this.send('GET', `/api/links/${encodeURIComponent(id)}/content`)
-    if (!r.ok) return r
-    if (!isLinkContentResponse(r.data)) return shapeMismatch('LinkContentResponse')
-    return ok(r.data)
+    return librarySitesEndpoints.getContent(this.transport, id)
   }
 
   /** PATCH /api/links/{id}/content - replace saved content without fetching. */
@@ -489,102 +364,61 @@ export class ReaderClient {
     id: string,
     request: ContentEditRequest,
   ): Promise<ApiResult<LinkContentResponse>> {
-    const r = await this.send(
-      'PATCH',
-      `/api/links/${encodeURIComponent(id)}/content`,
-      request,
-    )
-    if (!r.ok) return r
-    if (!isLinkContentResponse(r.data)) return shapeMismatch('LinkContentResponse')
-    return ok(r.data)
+    return librarySitesEndpoints.editContent(this.transport, id, request)
   }
 
 	async getSites(params: ListSitesParams = {}): Promise<ApiResult<PaginatedSitesResponse>> {
-		const query = new URLSearchParams()
-		if (params.view) query.set('view', params.view)
-		if (params.tags?.trim()) query.set('tags', params.tags.trim())
-		if (params.recentCutoff?.trim()) query.set('recent_cutoff', params.recentCutoff.trim())
-		if (params.page && params.page > 1) query.set('page', String(params.page))
-		if (params.limit && params.limit > 0) query.set('limit', String(params.limit))
-		const suffix = query.size ? `?${query}` : ''
-		const r = await this.send('GET', `/api/sites${suffix}`)
-		if (!r.ok) return r
-		return isPaginatedSites(r.data) ? ok(r.data) : shapeMismatch('PaginatedSitesResponse')
+		return librarySitesEndpoints.getSites(this.transport, params)
 	}
 
 	async getSite(id: string): Promise<ApiResult<SiteDetailResponse>> {
-		const r = await this.send('GET', `/api/sites/${encodeURIComponent(id)}`)
-		if (!r.ok) return r
-		return isSiteDetail(r.data) ? ok(r.data) : shapeMismatch('SiteDetailResponse')
+		return librarySitesEndpoints.getSite(this.transport, id)
 	}
 
 	async updateSite(id: string, revision: number, patch: SiteUpdateRequest): Promise<ApiResult<SiteDetailResponse>> {
-		const r = await this.send('PATCH', `/api/sites/${encodeURIComponent(id)}`, patch, { 'If-Match': `"${revision}"` })
-		if (!r.ok) return r
-		return isSiteDetail(r.data) ? ok(r.data) : shapeMismatch('SiteDetailResponse')
+		return librarySitesEndpoints.updateSite(this.transport, id, revision, patch)
 	}
 
 	async updateSiteEntry(siteID: string, entryID: string, revision: number, patch: SiteEntryUpdateRequest): Promise<ApiResult<SiteDetailResponse>> {
-		const r = await this.send('PATCH', `/api/sites/${encodeURIComponent(siteID)}/entries/${encodeURIComponent(entryID)}`, patch, { 'If-Match': `"${revision}"` })
-		if (!r.ok) return r
-		return isSiteDetail(r.data) ? ok(r.data) : shapeMismatch('SiteDetailResponse')
+		return librarySitesEndpoints.updateSiteEntry(this.transport, siteID, entryID, revision, patch)
 	}
 
 	async setPrimarySiteEntry(siteID: string, entryID: string, revision: number): Promise<ApiResult<SiteDetailResponse>> {
-		const r = await this.send('POST', `/api/sites/${encodeURIComponent(siteID)}/entries/${encodeURIComponent(entryID)}/set-primary`, undefined, { 'If-Match': `"${revision}"` })
-		if (!r.ok) return r
-		return isSiteDetail(r.data) ? ok(r.data) : shapeMismatch('SiteDetailResponse')
+		return librarySitesEndpoints.setPrimarySiteEntry(this.transport, siteID, entryID, revision)
 	}
 
 	async deleteSiteEntry(siteID: string, entryID: string, revision: number): Promise<ApiResult<SiteEntryDeleteResponse>> {
-		const r = await this.send('DELETE', `/api/sites/${encodeURIComponent(siteID)}/entries/${encodeURIComponent(entryID)}`, undefined, { 'If-Match': `"${revision}"` })
-		if (!r.ok) return r
-		return isSiteEntryDeleteResponse(r.data) ? ok(r.data) : shapeMismatch('SiteEntryDeleteResponse')
+		return librarySitesEndpoints.deleteSiteEntry(this.transport, siteID, entryID, revision)
 	}
 
 	async deleteSite(id: string, revision: number, entryCount: number): Promise<ApiResult<void>> {
-		const query = new URLSearchParams({ confirm_entry_count: String(entryCount) })
-		const r = await this.send('DELETE', `/api/sites/${encodeURIComponent(id)}?${query}`, undefined, { 'If-Match': `"${revision}"` })
-		if (!r.ok) return r
-		return ok(undefined)
+		return librarySitesEndpoints.deleteSite(this.transport, id, revision, entryCount)
 	}
 
 	async previewSiteMerge(request: SiteMergePreviewRequest): Promise<ApiResult<SiteMergePreviewResponse>> {
-		const r = await this.send('POST', '/api/sites/merge-preview', request)
-		if (!r.ok) return r
-		return isSiteMergePreviewResponse(r.data) ? ok(r.data) : shapeMismatch('SiteMergePreviewResponse')
+		return librarySitesEndpoints.previewSiteMerge(this.transport, request)
 	}
 
 	async executeSiteMerge(request: SiteMergeExecuteRequest): Promise<ApiResult<SiteMergeExecuteResponse>> {
-		const r = await this.send('POST', '/api/sites/merge', request)
-		if (!r.ok) return r
-		return isSiteMergeExecuteResponse(r.data) ? ok(r.data) : shapeMismatch('SiteMergeExecuteResponse')
+		return librarySitesEndpoints.executeSiteMerge(this.transport, request)
 	}
 
 	async previewSiteSplit(siteID: string, request: SiteSplitRequest): Promise<ApiResult<SiteSplitPreviewResponse>> {
-		const r = await this.send('POST', `/api/sites/${encodeURIComponent(siteID)}/split-preview`, request)
-		if (!r.ok) return r
-		return isSiteSplitPreviewResponse(r.data) ? ok(r.data) : shapeMismatch('SiteSplitPreviewResponse')
+		return librarySitesEndpoints.previewSiteSplit(this.transport, siteID, request)
 	}
 
 	async executeSiteSplit(siteID: string, request: SiteSplitRequest): Promise<ApiResult<SiteSplitExecuteResponse>> {
-		const r = await this.send('POST', `/api/sites/${encodeURIComponent(siteID)}/split`, request)
-		if (!r.ok) return r
-		return isSiteSplitExecuteResponse(r.data) ? ok(r.data) : shapeMismatch('SiteSplitExecuteResponse')
+		return librarySitesEndpoints.executeSiteSplit(this.transport, siteID, request)
 	}
 
 	/** POST /api/links/{id}/conversion-preview — pure conversion consequences. */
 	async previewLinkConversion(id: string, request: ConversionPreviewRequest): Promise<ApiResult<ConversionPreviewResponse>> {
-		const r = await this.send('POST', `/api/links/${encodeURIComponent(id)}/conversion-preview`, request)
-		if (!r.ok) return r
-		return isConversionPreviewResponse(r.data) ? ok(r.data) : shapeMismatch('ConversionPreviewResponse')
+		return librarySitesEndpoints.previewLinkConversion(this.transport, id, request)
 	}
 
 	/** POST /api/links/{id}/convert — apply a confirmed revision-bound conversion. */
 	async convertLink(id: string, request: ConversionExecuteRequest): Promise<ApiResult<ConversionExecuteResponse>> {
-		const r = await this.send('POST', `/api/links/${encodeURIComponent(id)}/convert`, request)
-		if (!r.ok) return r
-		return isConversionExecuteResponse(r.data) ? ok(r.data) : shapeMismatch('ConversionExecuteResponse')
+		return librarySitesEndpoints.convertLink(this.transport, id, request)
 	}
 
   /** GET /api/tags —— 标签聚合；省略 scope 时返回全部资料库计数。 */
@@ -592,24 +426,7 @@ export class ReaderClient {
     scope?: 'reading' | 'site' | 'all',
     options?: ReaderReadOptions,
   ): Promise<ApiResult<TagCountResponse[]>> {
-    const query = scope ? `?library_kind=${encodeURIComponent(scope)}` : ''
-    const r = await this.send('GET', '/api/tags' + query, undefined, undefined, options)
-    if (!r.ok) return r
-    if (!isTagCountArray(r.data)) return shapeMismatch('TagCountResponse[]')
-    // Scoped tag rows carry both partition components. Their presence lets
-    // Reader reject an older server that silently ignores library_kind and
-    // returns the legacy bare all-library counts.
-    if (scope && r.data.some((tag) => {
-      const readingCount = tag.reading_count
-      const siteCount = tag.site_count
-      if (typeof readingCount !== 'number' || typeof siteCount !== 'number') return true
-      if (scope === 'reading') return tag.count !== readingCount
-      if (scope === 'site') return tag.count !== siteCount
-      return tag.count !== readingCount + siteCount
-    })) {
-      return shapeMismatch('scoped TagCountResponse[]')
-    }
-    return ok(r.data)
+    return librarySitesEndpoints.getTags(this.transport, scope, options)
   }
 
   /** GET /api/tree?view=domains —— truthful 域名聚合。 */
@@ -617,62 +434,29 @@ export class ReaderClient {
     scope?: 'reading' | 'site',
     options?: ReaderReadOptions,
   ): Promise<ApiResult<DomainTreeSummaryEnvelope>> {
-    const query = scope ? `?view=domains&library_kind=${encodeURIComponent(scope)}` : '?view=domains'
-    const r = await this.send('GET', '/api/tree' + query, undefined, undefined, options)
-    if (!r.ok) return r
-    if (!isDomainTreeSummaryEnvelope(r.data)) {
-      return shapeMismatch('DomainTreeSummaryEnvelope')
-    }
-    // A legacy server can ignore an additive query parameter and return a
-    // plausible but unscoped all-library aggregate. The scoped response echo
-    // is therefore part of the authority proof, not display metadata.
-    if (scope && r.data.library_kind !== scope) {
-      return shapeMismatch('scoped DomainTreeSummaryEnvelope')
-    }
-    return ok(r.data)
+    return librarySitesEndpoints.getDomainSummaries(this.transport, scope, options)
   }
 
   /** POST /api/links/{id}/refresh —— 重新入队解析。 */
   async refreshLink(id: string): Promise<ApiResult<SubmitResponse>> {
-    const r = await this.send('POST', `/api/links/${encodeURIComponent(id)}/refresh`)
-    if (!r.ok) return r
-    if (!isSubmitResponse(r.data)) return shapeMismatch('SubmitResponse')
-    return ok(r.data)
+    return librarySitesEndpoints.refreshLink(this.transport, id)
   }
 
   /** POST /api/links/{id}/content —— 抓取并保存网页原文，返回保存后的原文。 */
   async saveContent(id: string): Promise<ApiResult<LinkContentResponse>> {
-    const r = await this.send('POST', `/api/links/${encodeURIComponent(id)}/content`)
-    if (!r.ok) return r
-    if (!isLinkContentResponse(r.data)) {
-      return shapeMismatch('LinkContentResponse')
-    }
-    return ok(r.data)
+    return librarySitesEndpoints.saveContent(this.transport, id)
   }
 
   /** PUT /api/links/{id}/content —— 重新抓取并明确替换已保存原文。 */
   async replaceContent(id: string): Promise<ApiResult<LinkContentResponse>> {
-    const r = await this.send('PUT', `/api/links/${encodeURIComponent(id)}/content`)
-    if (!r.ok) return r
-    if (!isLinkContentResponse(r.data)) {
-      return shapeMismatch('LinkContentResponse')
-    }
-    return ok(r.data)
+    return librarySitesEndpoints.replaceContent(this.transport, id)
   }
 
   /** GET /api/links/{id}/translations —— 读取数据库中的选段与全文译文。 */
   async getTranslations(
     id: string,
   ): Promise<ApiResult<TranslationListResponse>> {
-    const r = await this.send(
-      'GET',
-      `/api/links/${encodeURIComponent(id)}/translations`,
-    )
-    if (!r.ok) return r
-    if (!isTranslationListResponse(r.data)) {
-      return shapeMismatch('TranslationListResponse')
-    }
-    return ok(r.data)
+    return librarySitesEndpoints.getTranslations(this.transport, id)
   }
 
   /** POST /api/links/{id}/translations —— 创建或复用异步中文翻译。 */
@@ -680,16 +464,7 @@ export class ReaderClient {
     id: string,
     request: TranslationCreateRequest,
   ): Promise<ApiResult<TranslationResponse>> {
-    const r = await this.send(
-      'POST',
-      `/api/links/${encodeURIComponent(id)}/translations`,
-      request,
-    )
-    if (!r.ok) return r
-    if (!isTranslationResponse(r.data)) {
-      return shapeMismatch('TranslationResponse')
-    }
-    return ok(r.data)
+    return librarySitesEndpoints.createTranslation(this.transport, id, request)
   }
 
   /** GET /api/subscriptions -- RSS navigation metadata and truthful counts. */
@@ -1214,9 +989,7 @@ export class ReaderClient {
   }
 
   async getEngagement(linkID: string, options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderEngagementResponse>> {
-    const r = await this.send('GET', `/api/engagement/${encodeURIComponent(linkID)}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderEngagementResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderEngagementResponse')
+    return librarySitesEndpoints.getEngagement(this.transport, linkID, options)
   }
 
   async patchEngagement(
@@ -1224,9 +997,7 @@ export class ReaderClient {
     request: ReaderEngagementRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderEngagementResponse>> {
-    const r = await this.send('PATCH', `/api/engagement/${encodeURIComponent(linkID)}`, request, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderEngagementResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderEngagementResponse')
+    return librarySitesEndpoints.patchEngagement(this.transport, linkID, request, options)
   }
 
   async getHome(options: ReaderRequestOptions = {}): Promise<ApiResult<ReaderHomeResponse>> {
@@ -1272,20 +1043,7 @@ export class ReaderClient {
     request: ReaderLinkMetadataRequest,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderLinkMetadataResponse>> {
-    if (!Number.isSafeInteger(revision) || revision < 1) {
-      return err({ kind: 'other', message: 'metadata revision must be a positive JavaScript-safe integer' })
-    }
-    const r = await this.send(
-      'PATCH',
-      `/api/links/${encodeURIComponent(linkID)}/metadata`,
-      request,
-      { 'If-Match': `"${revision}"` },
-      undefined,
-      options.signal,
-      'link-metadata-revision',
-    )
-    if (!r.ok) return r
-    return isReaderLinkMetadataResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderLinkMetadataResponse')
+    return librarySitesEndpoints.patchLinkMetadata(this.transport, linkID, revision, request, options)
   }
 
   async getRelatedTags(
@@ -1293,24 +1051,14 @@ export class ReaderClient {
     limit = 12,
     options: ReaderRequestOptions = {},
   ): Promise<ApiResult<ReaderRelatedTagsResponse>> {
-    const query = buildReaderQuery({ link_id: linkID, limit: readerLimit(limit, 12) })
-    const r = await this.send('GET', `/api/reader/related-tags${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderRelatedTagsResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderRelatedTagsResponse')
+    return librarySitesEndpoints.getRelatedTags(this.transport, linkID, limit, options)
   }
 
   async getReaderActivity(
     limit = 100,
     options: ReaderActivityRequestOptions = {},
   ): Promise<ApiResult<ReaderActivityResponse>> {
-    const query = buildReaderQuery({
-      kind: options.kind,
-      after: options.after,
-      limit: readerLimit(limit, 100),
-    })
-    const r = await this.send('GET', `/api/reader/activity${query}`, undefined, undefined, undefined, options.signal)
-    if (!r.ok) return r
-    return isReaderActivityResponse(r.data) ? ok(r.data) : shapeMismatch('ReaderActivityResponse')
+    return librarySitesEndpoints.getReaderActivity(this.transport, limit, options)
   }
 
   async completeReaderAI(
