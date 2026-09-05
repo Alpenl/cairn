@@ -18,7 +18,7 @@ github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/strikethrough
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/table
-# github.com/PuerkitoBio/goquery v1.12.0
+# github.com/PuerkitoBio/goquery v1.13.0
 ## explicit; go 1.25.0
 github.com/PuerkitoBio/goquery
 # github.com/andybalholm/cascadia v1.3.4
@@ -240,7 +240,7 @@ github.com/quic-go/quic-go/qlog
 github.com/quic-go/quic-go/qlogwriter
 github.com/quic-go/quic-go/qlogwriter/jsontext
 github.com/quic-go/quic-go/quicvarint
-# github.com/riverqueue/river v0.45.0
+# github.com/riverqueue/river v0.47.0
 ## explicit; go 1.26.0
 github.com/riverqueue/river
 github.com/riverqueue/river/internal/dblist
@@ -261,14 +261,14 @@ github.com/riverqueue/river/internal/riverplugin
 github.com/riverqueue/river/internal/util/chanutil
 github.com/riverqueue/river/internal/workunit
 github.com/riverqueue/river/rivermigrate
-# github.com/riverqueue/river/riverdriver v0.45.0
+# github.com/riverqueue/river/riverdriver v0.47.0
 ## explicit; go 1.26.0
 github.com/riverqueue/river/riverdriver
-# github.com/riverqueue/river/riverdriver/riverpgxv5 v0.45.0
+# github.com/riverqueue/river/riverdriver/riverpgxv5 v0.47.0
 ## explicit; go 1.26.0
 github.com/riverqueue/river/riverdriver/riverpgxv5
 github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc
-# github.com/riverqueue/river/rivershared v0.45.0
+# github.com/riverqueue/river/rivershared v0.47.0
 ## explicit; go 1.26.0
 github.com/riverqueue/river/rivershared/baseservice
 github.com/riverqueue/river/rivershared/circuitbreaker
@@ -290,7 +290,7 @@ github.com/riverqueue/river/rivershared/util/testutil
 github.com/riverqueue/river/rivershared/util/timeoututil
 github.com/riverqueue/river/rivershared/util/timeutil
 github.com/riverqueue/river/rivershared/util/valutil
-# github.com/riverqueue/river/rivertype v0.45.0
+# github.com/riverqueue/river/rivertype v0.47.0
 ## explicit; go 1.26.0
 github.com/riverqueue/river/rivertype
 # github.com/rogpeppe/go-internal v1.14.1
