@@ -10,10 +10,10 @@ require (
 	github.com/PuerkitoBio/goquery v1.13.0
 	github.com/bytedance/sonic v1.15.3
 	github.com/gin-gonic/gin v1.12.0
-	github.com/go-playground/validator/v10 v10.30.3
+	github.com/go-playground/validator/v10 v10.30.4
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/mmcdole/gofeed v1.4.2
@@ -21,11 +21,11 @@ require (
 	github.com/riverqueue/river v0.47.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.47.0
 	github.com/riverqueue/river/rivertype v0.47.0
-	github.com/yuin/goldmark v1.8.5
-	golang.org/x/net v0.58.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/text v0.41.0
-	golang.org/x/time v0.15.0
+	github.com/yuin/goldmark v1.8.6
+	golang.org/x/net v0.59.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/text v0.42.0
+	golang.org/x/time v0.16.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -69,7 +69,7 @@ require (
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.8.0 // indirect
 	golang.org/x/arch v0.29.0 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
