@@ -10,7 +10,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.13.0
 	github.com/bytedance/sonic v1.15.4
 	github.com/gin-gonic/gin v1.12.0
-	github.com/go-playground/validator/v10 v10.30.4
+	github.com/go-playground/validator/v10 v10.30.5
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
