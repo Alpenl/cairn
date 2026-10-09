@@ -30,7 +30,7 @@ RUN pnpm --filter webtag-reader build
 # 经 GOARCH=$TARGETARCH 纯交叉编译产出（CGO 已关）——多架构构建时避免
 # 整个 Go 编译在 QEMU 模拟下慢一个数量级；runtime 阶段仍按目标平台运行
 # （仅 apk add 等轻量步骤走模拟）。
-FROM --platform=$BUILDPLATFORM golang:1.27.0-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS builder
 
 WORKDIR /src
 
