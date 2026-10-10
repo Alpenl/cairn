@@ -1739,11 +1739,11 @@ func (ps *Parser) isPhrasingContent(node *html.Node, descend bool) bool {
 	}
 
 	switch node.DataAtom {
-	case atom.Iframe, atom.Picture, atom.Svg, atom.Video:
+	case atom.Iframe, atom.Picture, atom.Video:
 		// These are _technically_ phrasing elements, but they are special-cased here for backwards
 		// compatibility.
 		return false
-	case atom.Math:
+	case atom.Math, atom.Svg:
 		// Avoid checking descendants of these elements.
 		return true
 	case atom.A,
