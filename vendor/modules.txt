@@ -80,8 +80,8 @@ github.com/cloudwego/base64x/internal/native
 github.com/cloudwego/base64x/internal/native/avx2
 github.com/cloudwego/base64x/internal/native/sse
 github.com/cloudwego/base64x/internal/rt
-# github.com/gabriel-vasile/mimetype v1.4.15
-## explicit; go 1.21
+# github.com/gabriel-vasile/mimetype v1.4.16
+## explicit; go 1.24
 github.com/gabriel-vasile/mimetype
 github.com/gabriel-vasile/mimetype/internal/cdf
 github.com/gabriel-vasile/mimetype/internal/charset
@@ -102,14 +102,14 @@ github.com/gin-gonic/gin/codec/json
 github.com/gin-gonic/gin/internal/bytesconv
 github.com/gin-gonic/gin/internal/fs
 github.com/gin-gonic/gin/render
-# github.com/go-playground/locales v0.14.1
+# github.com/go-playground/locales v0.14.2
 ## explicit; go 1.17
 github.com/go-playground/locales
 github.com/go-playground/locales/currency
-# github.com/go-playground/universal-translator v0.18.1
-## explicit; go 1.18
+# github.com/go-playground/universal-translator v0.18.2
+## explicit; go 1.26
 github.com/go-playground/universal-translator
-# github.com/go-playground/validator/v10 v10.30.5
+# github.com/go-playground/validator/v10 v10.30.6
 ## explicit; go 1.26.0
 github.com/go-playground/validator/v10
 # github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c
@@ -155,7 +155,7 @@ github.com/jackc/pgpassfile
 # github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761
 ## explicit; go 1.14
 github.com/jackc/pgservicefile
-# github.com/jackc/pgx/v5 v5.11.0
+# github.com/jackc/pgx/v5 v5.12.0
 ## explicit; go 1.25.0
 github.com/jackc/pgx/v5
 github.com/jackc/pgx/v5/internal/iobufpool
@@ -241,7 +241,7 @@ github.com/quic-go/quic-go/qlog
 github.com/quic-go/quic-go/qlogwriter
 github.com/quic-go/quic-go/qlogwriter/jsontext
 github.com/quic-go/quic-go/quicvarint
-# github.com/riverqueue/river v0.50.0
+# github.com/riverqueue/river v0.51.0
 ## explicit; go 1.26.0
 github.com/riverqueue/river
 github.com/riverqueue/river/internal/dblist
@@ -262,14 +262,14 @@ github.com/riverqueue/river/internal/riverplugin
 github.com/riverqueue/river/internal/util/chanutil
 github.com/riverqueue/river/internal/workunit
 github.com/riverqueue/river/rivermigrate
-# github.com/riverqueue/river/riverdriver v0.50.0
+# github.com/riverqueue/river/riverdriver v0.51.0
 ## explicit; go 1.26.0
 github.com/riverqueue/river/riverdriver
-# github.com/riverqueue/river/riverdriver/riverpgxv5 v0.50.0
+# github.com/riverqueue/river/riverdriver/riverpgxv5 v0.51.0
 ## explicit; go 1.26.0
 github.com/riverqueue/river/riverdriver/riverpgxv5
 github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc
-# github.com/riverqueue/river/rivershared v0.50.0
+# github.com/riverqueue/river/rivershared v0.51.0
 ## explicit; go 1.26.0
 github.com/riverqueue/river/rivershared/baseservice
 github.com/riverqueue/river/rivershared/circuitbreaker
@@ -291,7 +291,7 @@ github.com/riverqueue/river/rivershared/util/testutil
 github.com/riverqueue/river/rivershared/util/timeoututil
 github.com/riverqueue/river/rivershared/util/timeutil
 github.com/riverqueue/river/rivershared/util/valutil
-# github.com/riverqueue/river/rivertype v0.50.0
+# github.com/riverqueue/river/rivertype v0.51.0
 ## explicit; go 1.26.0
 github.com/riverqueue/river/rivertype
 # github.com/rogpeppe/go-internal v1.14.1
@@ -330,7 +330,7 @@ github.com/twitchyliquid64/golang-asm/unsafeheader
 # github.com/ugorji/go/codec v1.3.1
 ## explicit; go 1.21
 github.com/ugorji/go/codec
-# github.com/yuin/goldmark v1.8.6
+# github.com/yuin/goldmark v1.8.7
 ## explicit; go 1.22
 github.com/yuin/goldmark
 github.com/yuin/goldmark/ast

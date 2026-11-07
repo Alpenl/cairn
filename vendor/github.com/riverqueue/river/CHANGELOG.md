@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-10-31
+
+### Added
+
+- Added `JobDeleteManyParams.Where`, an escape hatch for deleting jobs by an arbitrary SQL predicate, like `JobListParams.Where` does for lists. For example, it can select queued jobs whose args name a given customer. A `Where` predicate counts as a filter, so it doesn't need `UnsafeAll`, and each predicate is wrapped in parentheses so that an `OR` in it can't widen the deletion past other filters or to running jobs. The existing batch limit (100 jobs by default) and Postgres behavior of skipping locked jobs still apply. [PR #1570](https://github.com/riverqueue/river/pull/1570).
+
+### Fixed
+
+- Fixed a running job not being cancelled after `Client.JobCancel` when the cancellation notification was lost, as happens if it's sent while the client's notifier is reconnecting. Clients with a notifier now also check their running jobs for cancellation requests once a minute. `Client.JobRetry` now clears an earlier attempt's cancellation request so that the retried job isn't cancelled again. [PR #1564](https://github.com/riverqueue/river/pull/1564).
+- Fixed `Client.InsertManyFast` panicking after its transaction committed on a client configured with queues when the driver doesn't support a listener, such as a `riverdatabasesql` driver created with `New` instead of `NewWithPgxListener`. It now wakes producers for the inserted jobs' queues right away, like `Client.InsertMany`. [PR #1558](https://github.com/riverqueue/river/pull/1558).
+- Fixed `Client.QueueUpdate` without metadata crashing the program when the client works that queue and the driver doesn't support a listener. [PR #1558](https://github.com/riverqueue/river/pull/1558).
+- Fixed the notifier's run loop blocking forever when a topic `LISTEN` or `UNLISTEN` handed to it finished after its caller had stopped waiting (after 5 seconds, with `timed out waiting for interrupt operation`), as can happen on a slow or unresponsive connection. `Client.Stop` then never completed, and neither did a `Client.Start` that failed this way. [PR #1559](https://github.com/riverqueue/river/pull/1559).
+
 ## [0.50.0] - 2026-10-26
 
 ### Changed
