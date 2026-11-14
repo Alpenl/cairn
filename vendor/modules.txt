@@ -241,7 +241,7 @@ github.com/quic-go/quic-go/qlog
 github.com/quic-go/quic-go/qlogwriter
 github.com/quic-go/quic-go/qlogwriter/jsontext
 github.com/quic-go/quic-go/quicvarint
-# github.com/riverqueue/river v0.51.0
+# github.com/riverqueue/river v0.51.2
 ## explicit; go 1.26.0
 github.com/riverqueue/river
 github.com/riverqueue/river/internal/dblist
@@ -262,14 +262,14 @@ github.com/riverqueue/river/internal/riverplugin
 github.com/riverqueue/river/internal/util/chanutil
 github.com/riverqueue/river/internal/workunit
 github.com/riverqueue/river/rivermigrate
-# github.com/riverqueue/river/riverdriver v0.51.0
+# github.com/riverqueue/river/riverdriver v0.51.2
 ## explicit; go 1.26.0
 github.com/riverqueue/river/riverdriver
-# github.com/riverqueue/river/riverdriver/riverpgxv5 v0.51.0
+# github.com/riverqueue/river/riverdriver/riverpgxv5 v0.51.2
 ## explicit; go 1.26.0
 github.com/riverqueue/river/riverdriver/riverpgxv5
 github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc
-# github.com/riverqueue/river/rivershared v0.51.0
+# github.com/riverqueue/river/rivershared v0.51.2
 ## explicit; go 1.26.0
 github.com/riverqueue/river/rivershared/baseservice
 github.com/riverqueue/river/rivershared/circuitbreaker
@@ -291,7 +291,7 @@ github.com/riverqueue/river/rivershared/util/testutil
 github.com/riverqueue/river/rivershared/util/timeoututil
 github.com/riverqueue/river/rivershared/util/timeutil
 github.com/riverqueue/river/rivershared/util/valutil
-# github.com/riverqueue/river/rivertype v0.51.0
+# github.com/riverqueue/river/rivertype v0.51.2
 ## explicit; go 1.26.0
 github.com/riverqueue/river/rivertype
 # github.com/rogpeppe/go-internal v1.14.1
@@ -375,7 +375,7 @@ golang.org/x/net/internal/iana
 golang.org/x/net/internal/socket
 golang.org/x/net/ipv4
 golang.org/x/net/ipv6
-# golang.org/x/sync v0.24.0
+# golang.org/x/sync v0.25.0
 ## explicit; go 1.26.0
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
@@ -385,7 +385,7 @@ golang.org/x/sync/singleflight
 golang.org/x/sys/cpu
 golang.org/x/sys/unix
 golang.org/x/sys/windows
-# golang.org/x/text v0.43.0
+# golang.org/x/text v0.44.0
 ## explicit; go 1.26.0
 golang.org/x/text/cases
 golang.org/x/text/encoding
