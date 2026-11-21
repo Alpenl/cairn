@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.2] - 2026-11-09
+
+### Fixed
+
+- Accept `sqlite:path` and `sqlite::memory:` in the CLI alongside the existing `sqlite://` forms, including offline migration SQL export. [PR #1588](https://github.com/riverqueue/river/pull/1588).
+- Reject empty SQLite paths in commands that connect to a database; bare prefixes remain valid for offline migration SQL export. [PR #1588](https://github.com/riverqueue/river/pull/1588).
+- Fixed `JobListParams.Where` writing into the first `NamedArgs` it's given when merging multiple sets of named arguments, which could leak arguments into a map the caller reused for another query. It also no longer panics when the first set is `nil`. [PR #1575](https://github.com/riverqueue/river/pull/1575).
+
+## [0.51.1] - 2026-11-05
+
+### Fixed
+
+- Fixed a client ignoring queue pause, resume, or metadata changes until it restarted when the queue control notification was lost, as happens if it's sent while the client's notifier is reconnecting. Clients with a notifier now also check their queues' settings once a minute. [Issue #1579](https://github.com/riverqueue/river/issues/1579).
+- Fixed the notifier never reconnecting when its connection went silent without an error, like after a dropped network path, because its health check ping had no timeout. The ping now times out after 10 seconds. [Issue #1579](https://github.com/riverqueue/river/issues/1579).
+- Fixed maintenance services logging errors during normal shutdown or leadership loss, including `PeriodicJobEnqueuer` reporting `Error starting transaction: context canceled` when stopped during staggered startup. Genuine query timeouts and database failures are still logged, and periodic job transactions now roll back even after cancellation. [PR #1577](https://github.com/riverqueue/river/pull/1577).
+
 ## [0.51.0] - 2026-10-31
 
 ### Added
